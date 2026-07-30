@@ -68,9 +68,19 @@ def approve_property_match(lead_id: int):
         if isinstance(body, dict) and isinstance(body.get('pin'), str)
         else None
     )
+    use_assessor_street = (
+        bool(body.get('use_assessor_street'))
+        if isinstance(body, dict)
+        else False
+    )
     # PIN length/format rules are market-specific (Cook 14-digit vs DuPage native);
     # validate in PropertyMatchReviewService after resolving the GIS connector.
-    return jsonify(_match_svc.approve_match(lead_id, actor=actor, pin=pin)), 200
+    return jsonify(_match_svc.approve_match(
+        lead_id,
+        actor=actor,
+        pin=pin,
+        use_assessor_street=use_assessor_street,
+    )), 200
 
 
 @property_match_bp.route('/<int:lead_id>/property-match/reject', methods=['POST'])

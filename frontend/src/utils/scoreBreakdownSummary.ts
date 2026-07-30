@@ -102,13 +102,10 @@ export function buildScorePathSummary(
       ? Math.round(storedBase * 10) / 10
       : null
 
-  if (baseApprox == null) {
-    // Fallback when older score rows lack weighted_base — only when unclamped.
-    const inferred = Math.round((total - adjSum) * 10) / 10
-    const unclampedProbe = inferred + adjSum
-    if (Math.abs(unclampedProbe - total) < 0.05) {
-      baseApprox = inferred
-    }
+  if (baseApprox == null && total > 0 && total < 100) {
+    // Older score rows lack weighted_base: back-solving is only meaningful
+    // when the total was demonstrably not clamped.
+    baseApprox = Math.round((total - adjSum) * 10) / 10
   }
 
   const unclamped =

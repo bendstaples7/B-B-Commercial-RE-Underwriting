@@ -88,7 +88,7 @@ def _normalise_address(address: str) -> str:
     # Strip trailing locality when city/state/ZIP were concatenated into street.
     # Keep through the first street-type token (AVE/ST/PL/…), drop the rest.
     street_part = re.sub(
-        r'^(.+\b(?:AVE|BLVD|CIR|CT|DR|LN|PL|RD|ST|TER|WAY))\b.*$',
+        r'^(.+?\b(?:AVE|BLVD|CIR|CT|DR|LN|PL|RD|ST|TER|WAY))\b.*$',
         r'\1',
         street_part,
     )

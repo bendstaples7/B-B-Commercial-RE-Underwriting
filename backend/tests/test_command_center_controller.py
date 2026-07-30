@@ -1942,6 +1942,31 @@ class TestParkLead:
             db.session.refresh(task)
             assert task.status == 'cancelled'
 
+    def test_park_syncs_hubspot_backed_cancelled_tasks(self, client, app, monkeypatch):
+        """Park cancels HubSpot-backed open tasks and syncs CRM completions."""
+        with app.app_context():
+            lead = _make_lead(app, '32c Park Hs St', lead_status='mailing_no_contact_made')
+            task = _make_task(app, lead.id, hubspot_task_id='hs-park-1')
+            synced: list[list[str]] = []
+
+            def _capture(ids):
+                synced.append(list(ids))
+
+            monkeypatch.setattr(
+                'app.services.hubspot_task_completion_service.sync_pending_hubspot_completions',
+                _capture,
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/park',
+                data=json.dumps({}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            db.session.refresh(task)
+            assert task.status == 'cancelled'
+            assert synced == [['hs-park-1']]
+
     def test_park_with_future_reactivation_date_accepted(self, client, app):
         """POST /api/leads/<id>/park with a future reactivation_date returns 200."""
         with app.app_context():

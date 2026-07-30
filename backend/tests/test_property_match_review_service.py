@@ -275,3 +275,11 @@ def test_direction_tokens_do_not_force_aka():
     )
     assert street_name_key('100 N Main St') == street_name_key('100 NORTH MAIN STREET')
     assert not assessor_street_differs_from_lead('100 N Main St', '100 NORTH Main Street')
+
+
+def test_parkway_suffix_does_not_force_aka():
+    from app.services.property_match_review_service import assessor_street_differs_from_lead
+    assert not assessor_street_differs_from_lead(
+        '1000 W Foster Parkway',
+        '1000 W FOSTER PKWY',
+    )

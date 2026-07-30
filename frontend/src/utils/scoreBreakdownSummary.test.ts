@@ -51,4 +51,17 @@ describe('buildScorePathSummary', () => {
     expect(path.equation).toContain('→ 0 (floored at 0)')
     expect(path.floored).toBe(true)
   })
+
+  it('reports floored for legacy rows without fabricating a clamped base', () => {
+    const path = buildScorePathSummary(
+      {
+        pipeline_stage_bonus: -15,
+        hubspot_engagement: -40,
+      },
+      0,
+    )
+    expect(path.floored).toBe(true)
+    expect(path.equation).toContain('→ 0 (floored at 0)')
+    expect(path.equation).not.toMatch(/Base ~55/)
+  })
 })

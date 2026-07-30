@@ -570,15 +570,6 @@ class LeadScoringEngine:
                 'most_recent_sale': getattr(lead, 'most_recent_sale', None),
             }
 
-        # Unresolved residential entity owner → Research LLC before phone nurture /
-        # mail_ready. Company phones must not bury Illinois SOS research.
-        entity_research = _cold_mail_ready_outcome(lead)
-        if (
-            entity_research is not None
-            and entity_research[1] == 'research_entity_owner'
-        ):
-            return entity_research
-
         if lead.lead_status == 'skip_trace':
             # Returned / USPS-failed owner mailing is not "no contact" — prefer phone/email.
             if current_owner_mailing_was_returned(lead):
@@ -657,6 +648,16 @@ class LeadScoringEngine:
                 'lead_status': lead.lead_status,
                 'has_phone': has_phone,
             }
+
+        # Unresolved residential entity owner → Research LLC before phone nurture /
+        # mail_ready. Runs after warm / overdue / engaged so follow-up work wins.
+        # Company phones must not bury Illinois SOS research.
+        entity_research = _cold_mail_ready_outcome(lead)
+        if (
+            entity_research is not None
+            and entity_research[1] == 'research_entity_owner'
+        ):
+            return entity_research
 
         if score_tier == "D":
             # Low investment score ≠ missing data. Contactable/mailable leads stay relationship work.

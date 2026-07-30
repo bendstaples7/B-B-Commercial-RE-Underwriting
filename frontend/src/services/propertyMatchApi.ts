@@ -10,9 +10,15 @@ export const propertyMatchService = {
         params: options?.pin ? { pin: options.pin } : undefined,
       })
       .then(r => r.data),
-  approve: (leadId: number, options?: { pin?: string }) =>
+  approve: (
+    leadId: number,
+    options?: { pin?: string; use_assessor_street?: boolean },
+  ) =>
     api
-      .post(`/leads/${leadId}/property-match/approve`, options?.pin ? { pin: options.pin } : {})
+      .post(`/leads/${leadId}/property-match/approve`, {
+        ...(options?.pin ? { pin: options.pin } : {}),
+        ...(options?.use_assessor_street ? { use_assessor_street: true } : {}),
+      })
       .then(r => r.data),
   reject: (leadId: number, action: string, note?: string) =>
     api.post(`/leads/${leadId}/property-match/reject`, { action, note }).then(r => r.data),

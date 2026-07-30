@@ -424,6 +424,9 @@ export function RecommendedActionPanel({
 
   const unavailableReasonFor = (btn: ActionButton): string | null => {
     if (btn.action === 'deprioritize') {
+      if (typeof onDeprioritize !== 'function') {
+        return 'Deprioritize is not available here'
+      }
       if (
         leadStatus === 'deprioritize'
         || leadStatus === 'suppressed'
@@ -846,6 +849,11 @@ export function RecommendedActionPanel({
         {confirmCondoDeprioritize ? 'Confirm deprioritize' : 'Deprioritize lead'}
       </DialogTitle>
       <DialogContent>
+        {actionError && (
+          <Alert severity="error" sx={{ mb: 1.5 }} data-testid="deprioritize-error">
+            {actionError}
+          </Alert>
+        )}
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
           Park this lead from active queues. You can change status later.
         </Typography>
@@ -909,7 +917,7 @@ export function RecommendedActionPanel({
           </Typography>
         )}
         {renderEntityResearch()}
-        {actionError && (
+        {actionError && !deprioritizeOpen && (
           <Alert
             severity="error"
             sx={{ mt: 2, mb: 0 }}
@@ -1116,8 +1124,9 @@ export function RecommendedActionPanel({
         </Alert>
       )}
 
-      {/* Inline error — shown on action failure, does NOT change RA or Timeline */}
-      {actionError && (
+      {/* Inline error — shown on action failure, does NOT change RA or Timeline.
+          Deprioritize failures render inside the dialog while it is open. */}
+      {actionError && !deprioritizeOpen && (
         <Alert
           severity="error"
           sx={{ mb: 2 }}

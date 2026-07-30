@@ -24,6 +24,8 @@ _SUFFIX_CANON = {
     'DRIVE': 'DR', 'DR': 'DR', 'LANE': 'LN', 'LN': 'LN',
     'PLACE': 'PL', 'PL': 'PL', 'ROAD': 'RD', 'RD': 'RD',
     'STREET': 'ST', 'ST': 'ST', 'TERRACE': 'TER', 'TER': 'TER',
+    'PARKWAY': 'PKWY', 'PKWY': 'PKWY', 'HIGHWAY': 'HWY', 'HWY': 'HWY',
+    'WAY': 'WAY', 'SQUARE': 'SQ', 'SQ': 'SQ', 'TRAIL': 'TRL', 'TRL': 'TRL',
 }
 
 _DIRECTION_CANON = {

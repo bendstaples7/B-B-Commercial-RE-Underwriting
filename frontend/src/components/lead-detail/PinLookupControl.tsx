@@ -248,29 +248,35 @@ export function usePinLookup(
           && (preview.tax_situs_street || preview.require_explicit_apply),
         )
         if (multiTaxSitus) {
-          // Immediately demote LLC research in the header while condo check runs.
-          queryClient.setQueryData<CommandCenterPayload>(
-            ['commandCenter', leadId],
-            (current) => {
-              if (!current) return current
-              return {
-                ...current,
-                needs_entity_research: false,
-                condo_risk_status: current.condo_risk_status === 'likely_condo'
-                  ? current.condo_risk_status
-                  : 'likely_condo',
-                recommended_action: {
-                  ...(current.recommended_action || {}),
-                  value: 'needs_manual_review',
-                  label: 'Confirm deprioritize?',
-                  explanation:
-                    'Likely condoized / multi-PIN tax situs — confirm deprioritize.',
-                  winning_rule: 'likely_condo',
-                  winning_rule_label: 'Commercial lead flagged as likely condo',
-                },
-              }
-            },
+          const isCommercial = (
+            (queryClient.getQueryData<CommandCenterPayload>(['commandCenter', leadId])
+              ?.lead_category ?? '').toLowerCase() === 'commercial'
           )
+          // Immediately demote LLC research in the header while condo check runs.
+          if (isCommercial) {
+            queryClient.setQueryData<CommandCenterPayload>(
+              ['commandCenter', leadId],
+              (current) => {
+                if (!current) return current
+                return {
+                  ...current,
+                  needs_entity_research: false,
+                  condo_risk_status: current.condo_risk_status === 'likely_condo'
+                    ? current.condo_risk_status
+                    : 'likely_condo',
+                  recommended_action: {
+                    ...(current.recommended_action || {}),
+                    value: 'needs_manual_review',
+                    label: 'Confirm deprioritize?',
+                    explanation:
+                      'Likely condoized / multi-PIN tax situs — confirm deprioritize.',
+                    winning_rule: 'likely_condo',
+                    winning_rule_label: 'Commercial lead flagged as likely condo',
+                  },
+                }
+              },
+            )
+          }
           try {
             const taxStreet = (
               preview.tax_situs_street
@@ -287,8 +293,13 @@ export function usePinLookup(
               persist_aka: !quiet,
             })
             await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-          } catch {
-            // Keep optimistic RA — do not invalidate (would wipe Confirm deprioritize).
+          } catch (error) {
+            // Analyze failed — drop optimistic Confirm deprioritize rather than
+            // leaving a status/action the server never produced.
+            await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+            if (!quiet) {
+              onSnack(error instanceof Error ? error.message : 'Condo check failed')
+            }
           }
         }
         return

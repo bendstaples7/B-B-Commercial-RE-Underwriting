@@ -65,6 +65,33 @@ def _format_lead_score(value) -> str | None:
         return None
 
 
+def _cancel_open_lead_tasks(lead_id: int) -> set[str]:
+    """Cancel open LeadTask rows; return HubSpot IDs for post-commit CRM sync."""
+    hs_ids = {
+        str(task.hubspot_task_id)
+        for task in LeadTask.query.filter(
+            LeadTask.lead_id == lead_id,
+            LeadTask.status == 'open',
+            LeadTask.hubspot_task_id.isnot(None),
+        ).all()
+        if task.hubspot_task_id
+    }
+    LeadTask.query.filter_by(lead_id=lead_id, status='open').update(
+        {'status': 'cancelled'},
+    )
+    return hs_ids
+
+
+def _sync_cancelled_hubspot_tasks(hubspot_task_ids: set[str]) -> None:
+    """Mirror HubSpot completions for tasks cancelled locally (post-commit)."""
+    if not hubspot_task_ids:
+        return
+    from app.services.hubspot_task_completion_service import (
+        sync_pending_hubspot_completions,
+    )
+    sync_pending_hubspot_completions(sorted(hubspot_task_ids))
+
+
 def _display_street(street: str | None) -> str | None:
     """Street-only form for display — delegates to canonical helper."""
     from app.services.property_address_service import display_street
@@ -1187,11 +1214,10 @@ def update_status(lead_id: int):
     # Terminal park statuses cancel open next-action work (same invariant as DNC),
     # whether from Quick Actions, Confirm deprioritize, or the status selector.
     # Deprioritize is then rescored below → terminal RA `suppress` (not left null).
+    cancelled_open_task_hs_ids: set[str] = set()
     if new_status in ('do_not_contact', 'suppressed', 'deprioritize'):
         lead.recommended_action = None
-        LeadTask.query.filter_by(lead_id=lead_id, status='open').update(
-            {'status': 'cancelled'},
-        )
+        cancelled_open_task_hs_ids = _cancel_open_lead_tasks(lead_id)
 
     db.session.add(lead)
 
@@ -1217,11 +1243,12 @@ def update_status(lead_id: int):
 
     # Mirror move_to_skip_trace: after the transaction commits, complete the
     # HubSpot-backed chores we cleared and clear due-dates on converted handoffs.
-    if skip_trace_pending_hubspot_ids:
+    hubspot_complete_ids = set(skip_trace_pending_hubspot_ids) | cancelled_open_task_hs_ids
+    if hubspot_complete_ids:
         from app.services.hubspot_task_completion_service import (
             sync_pending_hubspot_completions,
         )
-        sync_pending_hubspot_completions(sorted(skip_trace_pending_hubspot_ids))
+        sync_pending_hubspot_completions(sorted(hubspot_complete_ids))
     if skip_trace_handoff_clear_ids:
         from app.services.hubspot_task_completion_service import (
             sync_hubspot_task_properties,
@@ -1712,7 +1739,7 @@ def do_not_contact(lead_id: int):
     old_status = lead.lead_status
     lead.lead_status = 'do_not_contact'
     lead.recommended_action = None
-    LeadTask.query.filter_by(lead_id=lead_id, status='open').update({'status': 'cancelled'})
+    cancelled_hs_ids = _cancel_open_lead_tasks(lead_id)
 
     entry = LeadTimelineEntry(
         lead_id=lead_id,
@@ -1726,6 +1753,7 @@ def do_not_contact(lead_id: int):
     db.session.add(lead)
     db.session.add(entry)
     db.session.commit()
+    _sync_cancelled_hubspot_tasks(cancelled_hs_ids)
 
     _rescore_after_status_change(lead_id)
 
@@ -1766,9 +1794,7 @@ def park_lead(lead_id: int):
     if reactivation_date:
         lead.follow_up_date = reactivation_date
 
-    LeadTask.query.filter_by(lead_id=lead_id, status='open').update(
-        {'status': 'cancelled'},
-    )
+    cancelled_hs_ids = _cancel_open_lead_tasks(lead_id)
 
     entry = LeadTimelineEntry(
         lead_id=lead_id,
@@ -1786,6 +1812,7 @@ def park_lead(lead_id: int):
     db.session.add(lead)
     db.session.add(entry)
     db.session.commit()
+    _sync_cancelled_hubspot_tasks(cancelled_hs_ids)
 
     # Rescore first, then recompute RA (inside _rescore_after_status_change).
     _rescore_after_status_change(lead_id)
@@ -1853,9 +1880,7 @@ def suppress_lead(lead_id: int):
     old_status = lead.lead_status
     lead.lead_status = 'suppressed'
     lead.recommended_action = None
-    LeadTask.query.filter_by(lead_id=lead_id, status='open').update(
-        {'status': 'cancelled'},
-    )
+    cancelled_hs_ids = _cancel_open_lead_tasks(lead_id)
 
     entry = LeadTimelineEntry(
         lead_id=lead_id,
@@ -1869,6 +1894,7 @@ def suppress_lead(lead_id: int):
     db.session.add(lead)
     db.session.add(entry)
     db.session.commit()
+    _sync_cancelled_hubspot_tasks(cancelled_hs_ids)
 
     _rescore_after_status_change(lead_id)
 

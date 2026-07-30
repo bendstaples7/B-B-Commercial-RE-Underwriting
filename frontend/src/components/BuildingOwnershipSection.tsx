@@ -301,7 +301,6 @@ export function BuildingOwnershipSection({
   const pinCount = detail?.pin_count ?? assessorPins.length
   const saleDisplay = commandCenterData.most_recent_sale_display ?? null
   const needsDecision = statusNeedsDecision(displayRisk)
-  const hasResults = Boolean(detail || analyzeSnapshot || displayRisk)
   const lastCheckedAt =
     detail?.analyzed_at
     || (analyzeSnapshot?.analysis_details as { analyzed_at?: string } | undefined)?.analyzed_at
@@ -538,16 +537,6 @@ export function BuildingOwnershipSection({
           </Typography>
         </Box>
       </Box>
-
-      {hasResults && classification?.reason != null && (
-        // Prefer driver chips in CondoCheckSummary; keep plain reason only when
-        // neither CC nor detail supplied triggered_rules (summary falls back to reason).
-        !condoSummaryData.condo_check_drivers?.length ? (
-          <Typography sx={{ ...ccMetaSx, mb: 1.5 }} data-testid="building-ownership-reason">
-            {String(classification.reason)}
-          </Typography>
-        ) : null
-      )}
 
       {isLoading && hasAnalysisId && !analyzeSnapshot && (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>

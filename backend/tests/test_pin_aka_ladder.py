@@ -31,6 +31,14 @@ def test_normalise_strips_concatenated_city_state_zip():
     ) == '3715-3721 N LEAVITT ST'
 
 
+def test_normalise_keeps_through_first_street_suffix():
+    # Locality itself contains a suffix token (ST CHARLES) — do not greedily
+    # truncate after the last ST.
+    assert _normalise_address(
+        '7 W Madison St St Charles IL 60174'
+    ) == '7 W MADISON ST'
+
+
 def test_house_number_range_even_step():
     variants = _house_number_range_variants('100-108 W MAIN ST')
     assert '100 W MAIN ST' in variants
