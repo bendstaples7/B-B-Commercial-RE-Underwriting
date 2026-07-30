@@ -12,7 +12,12 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Stack,
+  TextField,
   Tooltip,
   Typography,
 } from '@mui/material'
@@ -29,6 +34,8 @@ import ContactMailOutlinedIcon from '@mui/icons-material/ContactMailOutlined'
 import PinDropOutlinedIcon from '@mui/icons-material/PinDropOutlined'
 import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlined'
 import DoNotDisturbOnOutlinedIcon from '@mui/icons-material/DoNotDisturbOnOutlined'
+import BusinessOutlinedIcon from '@mui/icons-material/BusinessOutlined'
+import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline'
 import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction, OutreachContact, EntityResearchSummary, OwnerMailingReadiness } from '@/types'
 import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
 import { OutreachContactInline, OutreachContactMissingHint } from '@/components/OutreachContactCallout'
@@ -59,6 +66,7 @@ const ACTION_ICONS: Record<string, ReactElement> = {
   log_email: <EmailOutlinedIcon fontSize="small" />,
   add_to_mail_batch: <LocalPostOfficeOutlinedIcon fontSize="small" />,
   move_to_skip_trace: <PersonSearchOutlinedIcon fontSize="small" />,
+  research_llc: <BusinessOutlinedIcon fontSize="small" />,
   create_task: <AddTaskIcon fontSize="small" />,
   run_analysis: <AnalyticsOutlinedIcon fontSize="small" />,
   research_property: <TravelExploreOutlinedIcon fontSize="small" />,
@@ -68,7 +76,11 @@ const ACTION_ICONS: Record<string, ReactElement> = {
   adjust_for_recent_sale: <EventAvailableOutlinedIcon fontSize="small" />,
   suppress: <DoNotDisturbOnOutlinedIcon fontSize="small" />,
   do_not_contact: <BlockIcon fontSize="small" />,
+  deprioritize: <PauseCircleOutlineIcon fontSize="small" />,
 }
+
+const CONDO_DEPRIORITIZE_REASON =
+  'Likely condoized / multi-PIN tax situs — confirm deprioritize.'
 
 /** Fixed Quick actions order for every lead — unavailable actions stay visible but disabled. */
 const UNIVERSAL_ACTIONS: ActionButton[] = [
@@ -85,6 +97,11 @@ const UNIVERSAL_ACTIONS: ActionButton[] = [
     action: 'move_to_skip_trace',
     isOutreach: true,
     title: 'Complete the current task, change status to Skip Trace, and create awaiting skip-trace work',
+  },
+  {
+    label: 'Deprioritize',
+    action: 'deprioritize',
+    title: 'Park this lead from active queues',
   },
 ]
 
@@ -167,12 +184,10 @@ const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
   hold: [
     { label: 'Adjust for Recent Sale', action: 'adjust_for_recent_sale' },
   ],
-  suppress: [
-    { label: 'Suppress Lead', action: 'suppress' },
-  ],
-  do_not_contact: [
-    { label: 'Mark DNC', action: 'do_not_contact' },
-  ],
+  // Terminal RA values — lead is already parked/DNC; no extra CTA.
+  // Suppress/DNC dialogs remain reachable via the status selector in CC.
+  suppress: [],
+  do_not_contact: [],
 }
 
 // ---------------------------------------------------------------------------
@@ -201,7 +216,11 @@ export interface RecommendedActionPanelProps {
   /** Illinois LLC / org research status for visibility + refresh. */
   entityResearch?: EntityResearchSummary | null
   onRefreshEntityResearch?: () => Promise<void>
+  /** Owner looks like unresolved LLC/org — show Research LLC tile (independent of RA). */
+  needsEntityResearch?: boolean
   onAction: (action: string) => Promise<void>
+  /** Park lead with optional reason (universal Deprioritize / Confirm deprioritize). */
+  onDeprioritize?: (reason: string) => Promise<void>
   onCreateTask?: () => void
 }
 
@@ -234,17 +253,41 @@ export function RecommendedActionPanel({
   showActionCenterTiles = false,
   entityResearch = null,
   onRefreshEntityResearch,
+  needsEntityResearch = false,
   onAction,
+  onDeprioritize,
   onCreateTask,
 }: RecommendedActionPanelProps) {
   const [actionError, setActionError] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [researchPending, setResearchPending] = useState(false)
   const [applyMailingPending, setApplyMailingPending] = useState(false)
+  const [deprioritizeOpen, setDeprioritizeOpen] = useState(false)
+  const [deprioritizeReason, setDeprioritizeReason] = useState('')
+  const [deprioritizePending, setDeprioritizePending] = useState(false)
 
   const isDNC = leadStatus === 'do_not_contact'
   const isInMailBatch = mailQueueStatus === 'queued'
-  const universalActions = UNIVERSAL_ACTIONS
+  const confirmCondoDeprioritize = recommendedAction?.winning_rule === 'likely_condo'
+  const universalActions = UNIVERSAL_ACTIONS.map((btn) => {
+    if (btn.action !== 'deprioritize') return btn
+    if (!confirmCondoDeprioritize) return btn
+    return {
+      ...btn,
+      label: 'Confirm deprioritize',
+      title: CONDO_DEPRIORITIZE_REASON,
+    }
+  })
+  const llcResearchPrimary =
+    typeof onRefreshEntityResearch === 'function'
+    && !confirmCondoDeprioritize
+    && (
+      needsEntityResearch
+      || (
+        recommendedAction?.value === 'enrich_data'
+        && recommendedAction?.winning_rule === 'research_entity_owner'
+      )
+    )
   const eligibilityCtx = {
     leadStatus,
     mailQueueStatus,
@@ -354,6 +397,19 @@ export function RecommendedActionPanel({
 
   const handleAction = async (action: string) => {
     setActionError(null)
+    if (action === 'research_llc' && typeof onRefreshEntityResearch === 'function') {
+      setResearchPending(true)
+      try {
+        await onRefreshEntityResearch()
+      } catch (err) {
+        setActionError(
+          err instanceof Error ? err.message : 'Entity research failed.',
+        )
+      } finally {
+        setResearchPending(false)
+      }
+      return
+    }
     setPendingAction(action)
     try {
       await onAction(action)
@@ -367,6 +423,18 @@ export function RecommendedActionPanel({
   }
 
   const unavailableReasonFor = (btn: ActionButton): string | null => {
+    if (btn.action === 'deprioritize') {
+      if (
+        leadStatus === 'deprioritize'
+        || leadStatus === 'suppressed'
+        || leadStatus === 'deal_won'
+        || leadStatus === 'deal_lost'
+        || leadStatus === 'do_not_contact'
+      ) {
+        return 'Not available for this lead status'
+      }
+      return null
+    }
     if (
       btn.action === 'log_call'
       || btn.action === 'log_note'
@@ -386,10 +454,32 @@ export function RecommendedActionPanel({
     return null
   }
 
-  const renderActionButton = (btn: ActionButton, testIdPrefix = 'ra-action-btn') => {
+  const openDeprioritizeDialog = () => {
+    setDeprioritizeReason(confirmCondoDeprioritize ? CONDO_DEPRIORITIZE_REASON : '')
+    setDeprioritizeOpen(true)
+  }
+
+  const confirmDeprioritize = async () => {
+    if (!onDeprioritize) return
+    setDeprioritizePending(true)
+    setActionError(null)
+    try {
+      await onDeprioritize(deprioritizeReason.trim())
+      setDeprioritizeOpen(false)
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Could not deprioritize lead.')
+    } finally {
+      setDeprioritizePending(false)
+    }
+  }
+
+  const renderActionButton = (btn: ActionButton, testIdPrefix = 'ra-action-btn', primary = false) => {
     const unavailableReason = unavailableReasonFor(btn)
     const isDisabled = unavailableReason != null
-    const isLoading = pendingAction === btn.action
+      || (btn.action === 'research_llc' && researchPending)
+    const isLoading =
+      pendingAction === btn.action
+      || (btn.action === 'research_llc' && researchPending)
     const title =
       unavailableReason
       ?? btn.title
@@ -400,10 +490,16 @@ export function RecommendedActionPanel({
     const button = (
       <Button
         key={btn.action}
-        variant="outlined"
+        variant={primary ? 'contained' : 'outlined'}
         size="small"
-        disabled={isDisabled || pendingAction !== null}
-        onClick={() => handleAction(btn.action)}
+        disabled={isDisabled || (pendingAction !== null && pendingAction !== btn.action)}
+        onClick={() => {
+          if (btn.action === 'deprioritize') {
+            openDeprioritizeDialog()
+            return
+          }
+          void handleAction(btn.action)
+        }}
         title={isDisabled ? undefined : title}
         startIcon={
           isLoading ? (
@@ -496,8 +592,32 @@ export function RecommendedActionPanel({
     )
   }
 
-  const renderActionCenterTiles = () => {
+  const renderActionCenterTiles = (extraTiles: ActionButton[] = []) => {
     if (!showActionCenterTiles) return null
+
+    const tileButtons: ActionButton[] = [
+      ...(llcResearchPrimary
+        ? [{
+            label: researchPending ? 'Researching…' : 'Research LLC',
+            action: 'research_llc',
+            title: 'Look up Illinois LLC / organization records for this owner',
+          } satisfies ActionButton]
+        : []),
+      ...universalActions,
+      ...extraTiles.filter(
+        (btn) => (
+          btn.action !== 'research_llc'
+          && btn.action !== 'move_to_skip_trace'
+          && btn.action !== 'deprioritize'
+          // Terminal RA values map to Suppress/DNC buttons — never float those as
+          // Action Center tiles (Deprioritize is already universal; lead may already be parked).
+          && btn.action !== 'suppress'
+          && btn.action !== 'do_not_contact'
+          && !universalActions.some((u) => u.action === btn.action)
+          && !(llcResearchPrimary && btn.action === 'research_llc')
+        ),
+      ),
+    ]
 
     const renderUniversalTile = (btn: ActionButton) => {
       if (btn.action === 'add_to_mail_batch' && isInMailBatch) {
@@ -537,7 +657,7 @@ export function RecommendedActionPanel({
         const reason = skipEval.message ?? 'Already in the Skip Trace work queue'
         return (
           <Tooltip key="already-skip-trace" title={reason}>
-            <span style={{ display: 'inline-flex', flex: '1 1 0', minWidth: '42%' }}>
+            <span style={{ display: 'inline-flex', flex: '1 1 0', minWidth: 0 }}>
               <Button
                 disabled
                 title={reason}
@@ -554,19 +674,41 @@ export function RecommendedActionPanel({
       }
 
       const unavailableReason = unavailableReasonFor(btn)
-      const isDisabled = unavailableReason != null || pendingAction !== null
-      const isLoading = pendingAction === btn.action
+      const isDisabled =
+        unavailableReason != null
+        || pendingAction !== null
+        || deprioritizePending
+        || (btn.action === 'research_llc' && researchPending)
+      const isLoading =
+        pendingAction === btn.action
+        || (btn.action === 'research_llc' && researchPending)
       const title = unavailableReason ?? btn.title
+      const highlightConfirm = btn.action === 'deprioritize' && confirmCondoDeprioritize
 
       const tileBtn = (
         <Button
           key={btn.action}
-          onClick={() => { void handleAction(btn.action) }}
+          onClick={() => {
+            if (btn.action === 'deprioritize') {
+              openDeprioritizeDialog()
+              return
+            }
+            void handleAction(btn.action)
+          }}
           disabled={isDisabled}
           data-testid={`action-center-tile-${btn.action}`}
           aria-label={btn.label}
           title={isDisabled ? undefined : title}
-          sx={ccActionTileSx}
+          sx={{
+            ...ccActionTileSx,
+            ...(highlightConfirm
+              ? {
+                  bgcolor: 'primary.main',
+                  color: 'primary.contrastText',
+                  '&:hover': { bgcolor: 'primary.dark', borderColor: 'primary.dark' },
+                }
+              : {}),
+          }}
         >
           {isLoading ? <CircularProgress size={22} color="inherit" /> : (ACTION_ICONS[btn.action] ?? null)}
           {isLoading ? 'Working…' : btn.label}
@@ -580,7 +722,7 @@ export function RecommendedActionPanel({
             role="button"
             aria-disabled="true"
             aria-label={`${btn.label} unavailable: ${unavailableReason}`}
-            style={{ display: 'inline-flex', flex: '1 1 0', minWidth: '42%' }}
+            style={{ display: 'inline-flex', flex: '1 1 0', minWidth: 0 }}
           >
             {tileBtn}
           </span>
@@ -596,11 +738,12 @@ export function RecommendedActionPanel({
         <Box
           sx={{
             display: 'flex',
-            flexWrap: 'wrap',
+            flexWrap: { xs: 'wrap', sm: 'nowrap' },
             gap: 1,
+            width: '100%',
           }}
         >
-          {universalActions.map((btn) => renderUniversalTile(btn))}
+          {tileButtons.map((btn) => renderUniversalTile(btn))}
         </Box>
       </Box>
     )
@@ -642,6 +785,7 @@ export function RecommendedActionPanel({
 
   const renderEntityResearch = () => {
     if (!entityResearch) return null
+    const llcPrimaryActive = llcResearchPrimary
     return (
       <Box sx={{ mb: 2 }} data-testid="entity-research-status">
         <Typography variant="caption" color="text.secondary" display="block">
@@ -660,7 +804,7 @@ export function RecommendedActionPanel({
             {entityResearch.entity_lookup_error}
           </Typography>
         )}
-        {typeof onRefreshEntityResearch === 'function' && (
+        {!llcPrimaryActive && typeof onRefreshEntityResearch === 'function' && (
           <Button
             size="small"
             variant="outlined"
@@ -687,6 +831,53 @@ export function RecommendedActionPanel({
       </Box>
     )
   }
+
+  const deprioritizeDialog = (
+    <Dialog
+      open={deprioritizeOpen}
+      onClose={() => {
+        if (!deprioritizePending) setDeprioritizeOpen(false)
+      }}
+      fullWidth
+      maxWidth="xs"
+      data-testid="deprioritize-confirm-dialog"
+    >
+      <DialogTitle>
+        {confirmCondoDeprioritize ? 'Confirm deprioritize' : 'Deprioritize lead'}
+      </DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          Park this lead from active queues. You can change status later.
+        </Typography>
+        <TextField
+          label="Reason"
+          value={deprioritizeReason}
+          onChange={(e) => setDeprioritizeReason(e.target.value.slice(0, 500))}
+          fullWidth
+          multiline
+          minRows={2}
+          inputProps={{ maxLength: 500 }}
+          data-testid="deprioritize-reason"
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button
+          onClick={() => setDeprioritizeOpen(false)}
+          disabled={deprioritizePending}
+        >
+          Cancel
+        </Button>
+        <Button
+          variant="contained"
+          onClick={() => { void confirmDeprioritize() }}
+          disabled={deprioritizePending || !onDeprioritize}
+          data-testid="deprioritize-confirm"
+        >
+          {deprioritizePending ? 'Saving…' : 'Deprioritize'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  )
 
   // No RA assigned — still show entity research + universal quick actions
   if (!recommendedAction || !recommendedAction.value) {
@@ -729,22 +920,91 @@ export function RecommendedActionPanel({
           </Alert>
         )}
         {renderUniversalActions()}
+        {deprioritizeDialog}
       </Box>
     )
   }
 
   const { value, label, explanation, recommended_contact_method: contactMethod, outreach_contact: outreachContact, winning_rule_label: winningRuleLabel } = recommendedAction
   const hasOpenTasks = openTasks.length > 0
-  const displayLabel = label ?? (value ? outreachDisplayLabel(value, contactMethod) : 'No recommended action')
-  // Nurture has no actionable system suggestion — hide the label; keep explanation if present.
-  const hideRaLabel = value === 'nurture'
-  const raButtons = (ACTION_BUTTONS[value] ?? []).filter(
+  const displayLabel = (() => {
+    if (llcResearchPrimary) {
+      return 'Research LLC'
+    }
+    if (leadStatus === 'deprioritize') {
+      return 'Deprioritized'
+    }
+    if (leadStatus === 'suppressed') {
+      return 'Suppressed'
+    }
+    if (leadStatus === 'deal_won' || leadStatus === 'deal_lost') {
+      return leadStatus === 'deal_won' ? 'Deal won' : 'Deal lost'
+    }
+    return label ?? (value ? outreachDisplayLabel(value, contactMethod) : 'No recommended action')
+  })()
+  const displayExplanation = (() => {
+    if (llcResearchPrimary) {
+      return explanation && recommendedAction.winning_rule === 'research_entity_owner'
+        ? explanation
+        : 'Owner looks like a company — research Illinois LLC / org records'
+    }
+    if (leadStatus === 'deprioritize') {
+      return 'Parked from active queues.'
+    }
+    if (leadStatus === 'suppressed') {
+      return 'Removed from active queues.'
+    }
+    if (leadStatus === 'deal_won' || leadStatus === 'deal_lost') {
+      return null
+    }
+    return explanation
+  })()
+  // Nurture / terminal park — hide empty system suggestion chrome when appropriate.
+  // Entity Research LLC path always keeps the recommended line visible.
+  const hideRaLabel = (
+    (value === 'nurture' && !llcResearchPrimary)
+    || leadStatus === 'deprioritize'
+    || leadStatus === 'suppressed'
+    || leadStatus === 'deal_won'
+    || leadStatus === 'deal_lost'
+  )
+  const skipTracePrimary = value === 'add_contact_info'
+  const baseRaButtons = (ACTION_BUTTONS[value] ?? []).filter(
     (btn) => (
       !universalActions.some((u) => u.action === btn.action)
       && (btn.action !== 'move_to_skip_trace' || evaluateMoveToSkipTrace(leadStatus).ok)
     ),
   )
-  const prioritizedRaButtons = prioritizeButtonsForMethod(raButtons, contactMethod)
+  // Action Center tiles already include universals (+ Research LLC when primary).
+  // Do not re-render a second outlined button row in tile mode.
+  const raButtons = (() => {
+    if (showActionCenterTiles) {
+      // Extra RA-only tiles (not already in Action Center / Research LLC).
+      // Create Task stays on its dedicated CTA, not as a tile.
+      return baseRaButtons.filter(
+        (btn) => (
+          btn.action !== 'move_to_skip_trace'
+          && btn.action !== 'research_llc'
+          && btn.action !== 'create_task'
+        ),
+      )
+    }
+    if (llcResearchPrimary) {
+      const llcBtn: ActionButton = {
+        label: researchPending ? 'Researching…' : 'Research LLC',
+        action: 'research_llc',
+      }
+      // Skip Trace stays in Quick actions / universals — do not duplicate.
+      return [llcBtn, ...baseRaButtons.filter((b) => b.action !== 'move_to_skip_trace')]
+    }
+    if (skipTracePrimary) {
+      const skipFirst = baseRaButtons.filter((b) => b.action === 'move_to_skip_trace')
+      const rest = baseRaButtons.filter((b) => b.action !== 'move_to_skip_trace')
+      return [...skipFirst, ...rest]
+    }
+    return prioritizeButtonsForMethod(baseRaButtons, contactMethod)
+  })()
+  const prioritizedRaButtons = raButtons
   const showCreateTaskCTA = value === 'create_task' && !hasOpenTasks && typeof onCreateTask === 'function'
 
   return (
@@ -766,10 +1026,10 @@ export function RecommendedActionPanel({
         />
       )}
 
-      {renderActionCenterTiles()}
+      {renderActionCenterTiles(showActionCenterTiles ? prioritizedRaButtons : [])}
 
       {/* Action Center: one line = label + explanation (no second sentence row). */}
-      {showActionCenterTiles ? (
+      {showActionCenterTiles && !hideRaLabel ? (
         <Typography
           sx={{
             fontSize: '0.8rem',
@@ -786,10 +1046,10 @@ export function RecommendedActionPanel({
             Recommended next action:{' '}
           </Box>
           {displayLabel}
-          {explanation ? (
+          {displayExplanation ? (
             <Box component="span" data-testid="ra-explanation" sx={{ fontWeight: 500 }}>
               {' — '}
-              {explanation}
+              {displayExplanation}
             </Box>
           ) : null}
         </Typography>
@@ -818,7 +1078,7 @@ export function RecommendedActionPanel({
         <OutreachContactMissingHint channel={contactMethod as OutreachContact['channel']} />
       )}
 
-      {!showActionCenterTiles && explanation && (
+      {!showActionCenterTiles && displayExplanation && (
         <Typography
           variant="body2"
           color="text.secondary"
@@ -830,7 +1090,7 @@ export function RecommendedActionPanel({
           }}
           data-testid="ra-explanation"
         >
-          {explanation}
+          {displayExplanation}
         </Typography>
       )}
 
@@ -886,8 +1146,8 @@ export function RecommendedActionPanel({
       {/* Universal quick actions — always available unless DNC blocks outreach */}
       {renderUniversalActions(prioritizedRaButtons)}
 
-      {/* RA-specific action buttons */}
-      {prioritizedRaButtons.length > 0 && (
+      {/* RA-specific action buttons — only when Action Center tiles are off */}
+      {!showActionCenterTiles && prioritizedRaButtons.length > 0 && (
         <Stack
           direction={{ xs: 'column', sm: 'row' }}
           spacing={1}
@@ -895,9 +1155,15 @@ export function RecommendedActionPanel({
           useFlexGap
           sx={actionStackSx}
         >
-          {prioritizedRaButtons.map((btn) => renderActionButton(btn))}
+          {prioritizedRaButtons.map((btn) => renderActionButton(
+            btn,
+            'ra-action-btn',
+            false,
+          ))}
         </Stack>
       )}
+
+      {deprioritizeDialog}
     </Box>
   )
 }

@@ -94,7 +94,11 @@ class HubSpotMatcherService:
         """
         if not address:
             return ""
-        result = address.strip().upper()
+        # Peel glued City/ST/ZIP so HubSpot one-liners match Listsource streets.
+        from app.services.lead_merge_utils import street_line_from_address
+
+        street_only = street_line_from_address(address) or address
+        result = street_only.strip().upper()
         for pattern, expansion in _ABBREV_PATTERNS:
             result = pattern.sub(expansion, result)
 
@@ -106,8 +110,9 @@ class HubSpotMatcherService:
             '',
             result,
         )
-        # Also strip trailing bare number that follows the street name
-        # (e.g. '4263 W MONTROSE AVENUE 1' → '4263 W MONTROSE AVENUE')
+        # Trailing alphanumeric unit (e.g. '2834 N DRAKE AVE 1R') and bare
+        # trailing unit numbers ('… AVENUE 1').
+        result = re.sub(r'\s+\d+[A-Z]\s*$', '', result)
         result = re.sub(r'\s+\d+\s*$', '', result)
 
         result = _PUNCT_RE.sub("", result)
@@ -117,7 +122,10 @@ class HubSpotMatcherService:
     @classmethod
     def _address_matches_for(cls, raw_address: str) -> list:
         """Return leads whose normalized street matches *raw_address*."""
-        from app.services.lead_merge_utils import dedup_street_key
+        from app.services.lead_merge_utils import (
+            dedup_street_key,
+            streets_match_normalized,
+        )
 
         norm_address = cls.normalize_address(raw_address)
         dedup_key = dedup_street_key(raw_address)
@@ -146,9 +154,12 @@ class HubSpotMatcherService:
             if not lead.property_street:
                 continue
             norm_lead = cls.normalize_address(lead.property_street)
-            if norm_lead == norm_address or \
-               norm_lead.startswith(norm_address + " ") or \
-               norm_address.startswith(norm_lead + " "):
+            if (
+                norm_lead == norm_address
+                or norm_lead.startswith(norm_address + " ")
+                or norm_address.startswith(norm_lead + " ")
+                or streets_match_normalized(raw_address, lead.property_street)
+            ):
                 matches.append(lead)
         return matches
 
@@ -310,6 +321,13 @@ class HubSpotMatcherService:
             if lead.deal_description != deal_description:
                 lead.deal_description = deal_description
                 updated_fields.append("deal_description")
+
+        # CoStar / description unit counts — fill blanks only (GIS wins when set).
+        from app.services.helpers.import_signal_fills import apply_import_signal_fills
+
+        for field in apply_import_signal_fills(lead):
+            if field not in updated_fields:
+                updated_fields.append(field)
 
         lead.last_hubspot_sync_at = datetime.utcnow()
         if 'last_hubspot_sync_at' not in updated_fields:

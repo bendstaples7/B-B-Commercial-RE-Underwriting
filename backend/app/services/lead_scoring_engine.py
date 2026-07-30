@@ -440,6 +440,8 @@ class LeadScoringEngine:
         # total via structured_motivation; do not add notes_keywords into total).
         score_details["hubspot_engagement"] = hubspot_mod
         score_details["notes_keywords"] = notes_kw
+        # Meta for UI "How we got to N" (excluded from helps/adjustments lists).
+        score_details["weighted_base"] = round(base_score, 2)
 
         total = base_score + pipeline_bonus + engagement_mod + hubspot_mod
         if getattr(lead, "suppression_flag", False):
@@ -520,9 +522,12 @@ class LeadScoringEngine:
             if condo_status:
                 condo_lower = condo_status.strip().lower()
                 if condo_lower == "likely_condo":
-                    return 'suppress', 'likely_condo', {'condo_risk_status': condo_status}
+                    return 'needs_manual_review', 'likely_condo', {
+                        'condo_risk_status': condo_status,
+                        'confirm_deprioritize': True,
+                    }
                 # Mail already queued: wait on the batch instead of Needs Manual Review.
-                # Do not override likely_condo suppress above.
+                # Do not override likely_condo confirm-deprioritize above.
                 if condo_lower in ("needs_review", "partial_condo_possible"):
                     lead_id_condo = getattr(lead, "id", None)
                     if isinstance(lead_id_condo, int) and _mail_work_in_flight(lead_id_condo):
@@ -564,6 +569,15 @@ class LeadScoringEngine:
                 'contacts_likely_prior_owner': True,
                 'most_recent_sale': getattr(lead, 'most_recent_sale', None),
             }
+
+        # Unresolved residential entity owner → Research LLC before phone nurture /
+        # mail_ready. Company phones must not bury Illinois SOS research.
+        entity_research = _cold_mail_ready_outcome(lead)
+        if (
+            entity_research is not None
+            and entity_research[1] == 'research_entity_owner'
+        ):
+            return entity_research
 
         if lead.lead_status == 'skip_trace':
             # Returned / USPS-failed owner mailing is not "no contact" — prefer phone/email.

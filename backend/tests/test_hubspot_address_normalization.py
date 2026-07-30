@@ -50,3 +50,19 @@ def test_address_normalization_deterministic(s):
     result_2 = HubSpotMatcherService.normalize_address(s)
     result_3 = HubSpotMatcherService.normalize_address(s)
     assert result_1 == result_2 == result_3
+
+
+def test_normalize_strips_alphanumeric_unit_suffix():
+    """'2834 N Drake Ave 1R' matches bare street (Solis/Drake class)."""
+    with_unit = HubSpotMatcherService.normalize_address('2834 N Drake Ave 1R')
+    bare = HubSpotMatcherService.normalize_address('2834 N Drake Ave')
+    assert with_unit == bare
+    assert '1R' not in with_unit
+
+
+def test_normalize_peels_glued_city_state_zip():
+    """HubSpot one-liner with City/ST/ZIP peels to street-only for matching."""
+    glued = HubSpotMatcherService.normalize_address('1116 W Wellington Chicago IL 60657')
+    bare = HubSpotMatcherService.normalize_address('1116 W Wellington')
+    assert glued == bare
+    assert 'CHICAGO' not in glued

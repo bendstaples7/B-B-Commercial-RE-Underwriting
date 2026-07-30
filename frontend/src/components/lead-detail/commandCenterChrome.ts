@@ -21,8 +21,9 @@ export const ccHeroAddressSx: SxProps<Theme> = {
   letterSpacing: -0.02,
   lineHeight: 1.25,
   color: 'text.primary',
-  overflowWrap: 'anywhere',
-  wordBreak: 'break-word',
+  // Prefer natural word breaks only — do not shatter mid-token on wide layouts.
+  overflowWrap: 'break-word',
+  wordBreak: 'normal',
 }
 
 /** City / state / zip under the hero address. */
@@ -84,7 +85,7 @@ export const ccCardSx: SxProps<Theme> = {
   boxSizing: 'border-box',
 }
 
-/** Quieter supporting block (building ownership, secondary context). */
+/** Quieter supporting block for secondary nested context (not primary CC cards). */
 export const ccSupportCardSx: SxProps<Theme> = {
   ...ccCardSx,
   bgcolor: 'action.hover',
@@ -97,9 +98,11 @@ export const ccStackGap = 2.5
 
 /** Action Center icon tile button. */
 export const ccActionTileSx: SxProps<Theme> = {
+  // Grow equally; do not cap width — a maxWidth leaves empty row space that
+  // is still too small for the next tile's minWidth, so Deprioritize wraps.
   flex: '1 1 0',
-  minWidth: { xs: '42%', sm: 100 },
-  maxWidth: { sm: 140 },
+  minWidth: { xs: 'calc(50% - 4px)', sm: 0 },
+  maxWidth: { xs: 'calc(50% - 4px)', sm: 'none' },
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
@@ -116,6 +119,7 @@ export const ccActionTileSx: SxProps<Theme> = {
   fontWeight: 600,
   fontSize: '0.8rem',
   lineHeight: 1.2,
+  whiteSpace: 'normal',
   '&:hover': {
     bgcolor: 'grey.200',
     borderColor: 'divider',

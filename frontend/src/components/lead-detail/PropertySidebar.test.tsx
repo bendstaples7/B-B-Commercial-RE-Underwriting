@@ -4,8 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { PropertySidebar, saleVerifyPollDelaysMs } from '@/components/lead-detail/PropertySidebar'
 import type { CommandCenterPayload } from '@/types'
-import { commandCenterService, leadTaskService } from '@/services/api'
-import { propertyMatchService } from '@/services/propertyMatchApi'
+import { commandCenterService } from '@/services/api'
 
 vi.mock('@/services/api', async () => {
   const actual = await vi.importActual<typeof import('@/services/api')>('@/services/api')
@@ -28,7 +27,9 @@ vi.mock('@/services/propertyMatchApi', () => ({
     preview: vi.fn(),
     approve: vi.fn(),
   },
-  buildingOwnershipService: {},
+  buildingOwnershipService: {
+    analyze: vi.fn().mockResolvedValue({}),
+  },
 }))
 
 vi.stubGlobal('navigator', {
@@ -395,7 +396,7 @@ describe('PropertySidebar always-visible sale and PIN', () => {
     vi.useRealTimers()
   })
 
-  it('shows None for missing Most Recent Sale and PIN', () => {
+  it('shows None for missing Most Recent Sale and PIN lookup hint when PIN missing', () => {
     renderSidebar(
       makePayload({
         county_assessor_pin: null,
@@ -406,7 +407,9 @@ describe('PropertySidebar always-visible sale and PIN', () => {
     expect(screen.getByTestId('sidebar-most-recent-sale')).toHaveTextContent('Most Recent Sale')
     expect(screen.getByTestId('sidebar-most-recent-sale')).toHaveTextContent('None')
     expect(screen.getByTestId('sidebar-county-assessor-pin')).toHaveTextContent('PIN')
-    expect(screen.getByTestId('sidebar-county-assessor-pin')).toHaveTextContent('None')
+    expect(screen.getByTestId('sidebar-pin-lookup-hint')).toHaveTextContent(
+      'Look up PIN in Property Overview',
+    )
   })
 
   it('shows sale date and PIN when present', () => {
@@ -641,148 +644,17 @@ describe('PropertySidebar always-visible sale and PIN', () => {
     expect(screen.queryByTestId('sidebar-verify-sale-date')).not.toBeInTheDocument()
   })
 
-  it('shows Look up PIN when PIN is missing and queues research when no match', async () => {
-    vi.mocked(propertyMatchService.preview).mockResolvedValue({
-      found: false,
-      entered_address: {
-        property_street: '123 Test St',
-        property_city: 'Chicago',
-        property_state: 'IL',
-        property_zip: '60601',
-      },
-      recommended_address: null,
-      pin: null,
-      connector: 'cook_county',
-      address_complete: true,
-      reason: 'no_match',
-      message: 'No assessor match found',
-    })
-    vi.mocked(leadTaskService.createTask).mockResolvedValue({} as never)
-
+  it('points to Property Overview for PIN lookup when PIN is missing', () => {
     renderSidebar(
       makePayload({
         county_assessor_pin: null,
       } as Partial<CommandCenterPayload>),
     )
 
-    expect(screen.getByTestId('sidebar-look-up-pin')).toBeInTheDocument()
-    fireEvent.click(screen.getByTestId('sidebar-look-up-pin'))
-
-    await waitFor(() => {
-      expect(propertyMatchService.preview).toHaveBeenCalledWith(1)
-      expect(leadTaskService.createTask).toHaveBeenCalledWith(1, {
-        title: 'Research missing PIN',
-        task_type: 'research_missing_pin',
-      })
-    })
-  })
-
-  it('does not create research PIN task when address is incomplete', async () => {
-    vi.mocked(propertyMatchService.preview).mockResolvedValue({
-      found: false,
-      entered_address: {
-        property_street: '1239 N Hoyne',
-        property_city: null,
-        property_state: null,
-        property_zip: null,
-      },
-      recommended_address: null,
-      pin: null,
-      connector: null,
-      address_complete: false,
-      reason: 'incomplete_address',
-      message: 'Add city, state, and ZIP before looking up a PIN',
-    })
-
-    renderSidebar(
-      makePayload({
-        county_assessor_pin: null,
-      } as Partial<CommandCenterPayload>),
+    expect(screen.getByTestId('sidebar-pin-lookup-hint')).toHaveTextContent(
+      /Look up PIN in Property Overview/i,
     )
-
-    fireEvent.click(screen.getByTestId('sidebar-look-up-pin'))
-
-    await waitFor(() => {
-      expect(propertyMatchService.preview).toHaveBeenCalledWith(1)
-    })
-    expect(leadTaskService.createTask).not.toHaveBeenCalled()
-    expect(await screen.findByText(/Add city, state, and ZIP/i)).toBeInTheDocument()
-  })
-
-    it('auto-applies a PIN found by Look up PIN', async () => {
-    vi.mocked(propertyMatchService.preview).mockResolvedValue({
-      found: true,
-      entered_address: {
-        property_street: '123 Test St',
-        property_city: 'Chicago',
-        property_state: 'IL',
-        property_zip: null,
-      },
-      recommended_address: {
-        property_street: '123 Test St',
-        property_city: 'Chicago',
-        property_state: 'IL',
-        property_zip: '60601',
-        county_assessor_pin: '14211234560000',
-      },
-      pin: '14211234560000',
-      pin_count: 1,
-      connector: 'cook_county',
-    })
-    vi.mocked(propertyMatchService.approve).mockResolvedValue({
-      lead_id: 1,
-      has_property_match: true,
-      county_assessor_pin: '14-21-123-456-0000',
-      recommended_action: 'call_ready',
-      removed_from_queue: true,
-    })
-
-    renderSidebar(
-      makePayload({
-        county_assessor_pin: null,
-      } as Partial<CommandCenterPayload>),
-    )
-
-    fireEvent.click(screen.getByTestId('sidebar-look-up-pin'))
-    await waitFor(() => {
-      expect(propertyMatchService.approve).toHaveBeenCalledWith(1, {
-        pin: '14-21-123-456-0000',
-      })
-    })
-  })
-
-  it('does not auto-apply when pin_count is absent', async () => {
-    vi.mocked(propertyMatchService.preview).mockResolvedValue({
-      found: true,
-      entered_address: {
-        property_street: '123 Test St',
-        property_city: 'Chicago',
-        property_state: 'IL',
-        property_zip: '60601',
-      },
-      recommended_address: {
-        property_street: '123 Test St',
-        property_city: 'Chicago',
-        property_state: 'IL',
-        property_zip: '60601',
-        county_assessor_pin: '14211234560000',
-      },
-      pin: '14211234560000',
-      connector: 'other_county',
-    })
-
-    renderSidebar(
-      makePayload({
-        county_assessor_pin: null,
-      } as Partial<CommandCenterPayload>),
-    )
-
-    fireEvent.click(screen.getByTestId('sidebar-look-up-pin'))
-    await waitFor(() => {
-      expect(propertyMatchService.preview).toHaveBeenCalledWith(1)
-    })
-    expect(propertyMatchService.approve).not.toHaveBeenCalled()
-    expect(screen.getByTestId('sidebar-apply-pin')).toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-look-up-pin')).not.toBeInTheDocument()
   })
 
   it('shows a checkmark when sale date was verified within the last month', () => {

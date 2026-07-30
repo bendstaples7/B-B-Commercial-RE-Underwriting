@@ -800,6 +800,7 @@ def complete_property_address(
     commit: bool = False,
     write_timeline: bool = True,
     set_review_flag: bool = True,
+    preserve_street: bool = False,
 ) -> dict[str, Any]:
     """Fill missing property city/state/ZIP on *lead*; flag if still incomplete.
 
@@ -809,6 +810,8 @@ def complete_property_address(
     batch heal paths that intend to spend Google/Nominatim budget.
     Pass ``apply_market_defaults=False`` before a separate GIS enrichment pass
     so blank cities are not assumed Chicago.
+    Pass ``preserve_street=True`` to fill locality only — used when cleaning a
+    glued street would collide on ``uq_leads_owner_normalized_street``.
     """
     was_complete = is_property_address_complete(lead=lead)
     before = {
@@ -837,6 +840,8 @@ def complete_property_address(
         'property_state',
         'property_zip',
     ):
+        if preserve_street and field == 'property_street':
+            continue
         new_val = result.get(field)
         old_val = getattr(lead, field, None)
         if new_val and _clean(new_val) != _clean(old_val):
@@ -1115,9 +1120,11 @@ def heal_incomplete_property_addresses(
             )
 
     completed_ids: list[int] = []
-    # Advance past attempted leads only; hard errors leave the cursor so Beat
-    # retries them on the next pass instead of burning the backlog once.
+    # Always advance past attempted leads — IntegrityError on street cleanup
+    # (uq_leads_owner_normalized_street) must not jam the hourly cursor forever.
     advanced_cursor = cursor
+    from sqlalchemy.exc import IntegrityError
+
     for lead in leads:
         summary['processed'] += 1
         summary['lead_ids'].append(lead.id)
@@ -1157,14 +1164,33 @@ def heal_incomplete_property_addresses(
                     advanced_cursor = lead.id
                 continue
 
-            with db.session.begin_nested():
-                result = complete_property_address(
-                    lead,
-                    try_gis=try_gis,
-                    try_geocode=effective_try_geocode,
-                    actor=actor,
-                    commit=False,
+            try:
+                with db.session.begin_nested():
+                    result = complete_property_address(
+                        lead,
+                        try_gis=try_gis,
+                        try_geocode=effective_try_geocode,
+                        actor=actor,
+                        commit=False,
+                    )
+                    db.session.flush()
+            except IntegrityError as street_exc:
+                logger.info(
+                    'property address heal street collision lead=%s; '
+                    'retrying locality-only: %s',
+                    lead.id,
+                    street_exc,
                 )
+                with db.session.begin_nested():
+                    result = complete_property_address(
+                        lead,
+                        try_gis=try_gis,
+                        try_geocode=effective_try_geocode,
+                        actor=actor,
+                        commit=False,
+                        preserve_street=True,
+                    )
+                    db.session.flush()
             if result.get('complete'):
                 summary['completed'] += 1
                 completed_ids.append(lead.id)
@@ -1179,7 +1205,9 @@ def heal_incomplete_property_addresses(
                 lead.id,
                 exc,
             )
-            break
+            if lead_id is None:
+                advanced_cursor = lead.id
+            continue
 
     if commit and not dry_run and leads:
         db.session.commit()

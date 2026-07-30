@@ -17,9 +17,11 @@ import { SCORING_ACTION_LABELS, outreachDisplayLabel } from '@/constants/scoring
 import { humanize } from '@/utils/formatters'
 import { LeadScoreBadge } from './LeadScoreBadge'
 import { getDimensionMeta, getScoreVersionMeta } from '@/utils/scoreDimensionMeta'
-
-/** Keys that attribute a slice already counted in another dimension (do not look additive). */
-const ATTRIBUTION_ONLY_KEYS = new Set(['notes_keywords'])
+import {
+  buildScorePathSummary,
+  formatSignedPoints,
+  partitionScoreDetails,
+} from '@/utils/scoreBreakdownSummary'
 
 export interface ScoreBreakdownCardProps {
   score: PropertyScoreRecord
@@ -99,7 +101,9 @@ export function ScoreBreakdownCard({ score, className, compact = false }: ScoreB
   const actionColor = ACTION_COLORS[recommended_action] ?? 'default'
   const versionMeta = getScoreVersionMeta(score_version)
 
-  const breakdownEntries = Object.entries(score_details).sort(([, a], [, b]) => b - a)
+  const path = buildScorePathSummary(score_details, total_score)
+  const { helps, adjustments, attribution } = partitionScoreDetails(score_details)
+  const hasRows = helps.length + adjustments.length + attribution.length > 0
 
   return (
     <Card
@@ -173,91 +177,181 @@ export function ScoreBreakdownCard({ score, className, compact = false }: ScoreB
 
         {!compact && <Divider sx={{ my: 2 }} />}
 
-        <Typography variant="subtitle2" gutterBottom>
-          Score Breakdown
-        </Typography>
+        <Box
+          data-testid="score-how-we-got-to"
+          sx={{
+            mb: 2,
+            p: compact ? 1 : 1.5,
+            borderRadius: 1,
+            bgcolor: compact ? 'transparent' : 'action.hover',
+            border: compact ? 0 : 1,
+            borderColor: 'divider',
+          }}
+        >
+          <Typography
+            component="h2"
+            variant="subtitle2"
+            sx={{ mb: 0.5 }}
+            data-testid="score-how-we-got-to-title"
+          >
+            {path.title}
+          </Typography>
+          <Typography
+            variant="body2"
+            fontWeight={600}
+            sx={{ fontVariantNumeric: 'tabular-nums' }}
+            data-testid="score-how-we-got-to-equation"
+          >
+            {path.equation}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+            {path.caption}
+          </Typography>
+        </Box>
 
-        {breakdownEntries.length === 0 ? (
+        {!hasRows ? (
           <Typography variant="body2" color="text.secondary">
             No score details available.
           </Typography>
         ) : (
-          <Box
-            component="ul"
-            sx={{
-              listStyle: 'none',
-              m: 0,
-              p: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 1.25,
-            }}
-            data-testid="score-breakdown-details"
-          >
-            {breakdownEntries.map(([dimension, points]) => {
-              const meta = getDimensionMeta(dimension, score_version)
-              return (
-                <Box
-                  component="li"
-                  key={dimension}
-                  sx={{
-                    display: 'grid',
-                    gridTemplateColumns: { xs: '1fr auto', sm: 'minmax(0, 1fr) 72px' },
-                    columnGap: 2,
-                    rowGap: 0.25,
-                    alignItems: 'start',
-                    py: 1.25,
-                    borderTop: 1,
-                    borderColor: 'divider',
-                    '&:first-of-type': { borderTop: 0, pt: 0 },
-                  }}
+          <Box data-testid="score-breakdown-details">
+            {helps.length > 0 && (
+              <Box sx={{ mb: 2 }}>
+                <Typography
+                  component="h2"
+                  variant="subtitle2"
+                  gutterBottom
+                  data-testid="score-what-helps"
                 >
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography variant="body2" fontWeight={600}>
-                      {meta.label}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
-                      {meta.description}
-                    </Typography>
-                    <Typography variant="caption" color="text.disabled" display="block" sx={{ mt: 0.25 }}>
-                      Data: {meta.dataSource}
-                    </Typography>
-                  </Box>
-                  <Typography
-                    variant="body2"
-                    fontWeight={700}
-                    sx={{
-                      fontVariantNumeric: 'tabular-nums',
-                      textAlign: 'right',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {ATTRIBUTION_ONLY_KEYS.has(dimension) ? '' : '+'}
-                    {formatPoints(points)}
-                    {meta.maxPoints > 0 && (
-                      <Typography
-                        component="span"
-                        variant="caption"
-                        color="text.secondary"
-                        fontWeight={400}
+                  What helps
+                </Typography>
+                <Box
+                  component="ul"
+                  sx={{ listStyle: 'none', m: 0, p: 0, display: 'flex', flexDirection: 'column', gap: 1.25 }}
+                >
+                  {helps.map(([dimension, points]) => {
+                    const meta = getDimensionMeta(dimension, score_version)
+                    return (
+                      <Box
+                        component="li"
+                        key={dimension}
+                        sx={{
+                          display: 'grid',
+                          gridTemplateColumns: { xs: '1fr auto', sm: 'minmax(0, 1fr) 72px' },
+                          columnGap: 2,
+                          alignItems: 'start',
+                          py: 1,
+                          borderTop: 1,
+                          borderColor: 'divider',
+                          '&:first-of-type': { borderTop: 0, pt: 0 },
+                        }}
                       >
-                        {' '}
-                        / {meta.maxPoints}
-                      </Typography>
-                    )}
-                  </Typography>
-                  {ATTRIBUTION_ONLY_KEYS.has(dimension) && (
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      sx={{ gridColumn: '1 / -1' }}
-                    >
-                      Included in Structured Motivation (not added again)
-                    </Typography>
-                  )}
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="body2" fontWeight={600}>
+                            {meta.label}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
+                            {meta.description}
+                          </Typography>
+                        </Box>
+                        <Typography
+                          variant="body2"
+                          fontWeight={700}
+                          sx={{ fontVariantNumeric: 'tabular-nums', textAlign: 'right', whiteSpace: 'nowrap' }}
+                        >
+                          {formatSignedPoints(points)}
+                          {meta.maxPoints > 0 && (
+                            <Typography component="span" variant="caption" color="text.secondary" fontWeight={400}>
+                              {' '}
+                              / {meta.maxPoints}
+                            </Typography>
+                          )}
+                        </Typography>
+                      </Box>
+                    )
+                  })}
                 </Box>
-              )
-            })}
+              </Box>
+            )}
+
+            {adjustments.length > 0 && (
+              <Box sx={{ mb: attribution.length ? 2 : 0 }}>
+                <Typography
+                  component="h2"
+                  variant="subtitle2"
+                  gutterBottom
+                  data-testid="score-adjustments"
+                >
+                  Adjustments
+                </Typography>
+                <Box
+                  component="ul"
+                  sx={{ listStyle: 'none', m: 0, p: 0, display: 'flex', flexDirection: 'column', gap: 1.25 }}
+                >
+                  {adjustments.map(([dimension, points]) => {
+                    const meta = getDimensionMeta(dimension, score_version)
+                    const negative = points < 0
+                    return (
+                      <Box
+                        component="li"
+                        key={dimension}
+                        sx={{
+                          display: 'grid',
+                          gridTemplateColumns: { xs: '1fr auto', sm: 'minmax(0, 1fr) 72px' },
+                          columnGap: 2,
+                          alignItems: 'start',
+                          py: 1,
+                          borderTop: 1,
+                          borderColor: 'divider',
+                          '&:first-of-type': { borderTop: 0, pt: 0 },
+                        }}
+                      >
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="body2" fontWeight={600}>
+                            {meta.label}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
+                            {meta.description}
+                          </Typography>
+                        </Box>
+                        <Typography
+                          variant="body2"
+                          fontWeight={700}
+                          color={negative ? 'error.main' : 'text.primary'}
+                          sx={{ fontVariantNumeric: 'tabular-nums', textAlign: 'right', whiteSpace: 'nowrap' }}
+                        >
+                          {formatSignedPoints(points)}
+                        </Typography>
+                      </Box>
+                    )
+                  })}
+                </Box>
+              </Box>
+            )}
+
+            {attribution.length > 0 && (
+              <Box>
+                <Typography variant="subtitle2" gutterBottom>
+                  Attribution
+                </Typography>
+                {attribution.map(([dimension, points]) => {
+                  const meta = getDimensionMeta(dimension, score_version)
+                  return (
+                    <Box key={dimension} sx={{ py: 1, borderTop: 1, borderColor: 'divider' }}>
+                      <Typography variant="body2" fontWeight={600}>
+                        {meta.label}{' '}
+                        <Typography component="span" variant="body2" fontWeight={700}>
+                          {formatPoints(points)}
+                        </Typography>
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Included in Structured Motivation (not added again)
+                      </Typography>
+                    </Box>
+                  )
+                })}
+              </Box>
+            )}
           </Box>
         )}
 

@@ -645,6 +645,26 @@ class TestUpdateStatus:
             assert task.status == 'cancelled'
             assert task.completed_at is None
 
+    def test_deprioritize_status_cancels_open_tasks(self, client, app):
+        """PATCH to deprioritize cancels open tasks (same as DNC park)."""
+        with app.app_context():
+            lead = _make_lead(app, '10b Status St', lead_status='mailing_no_contact_made')
+            task = _make_task(app, lead.id)
+            client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({
+                    'status': 'deprioritize',
+                    'reason': 'Commercial property confirmed split into condos.',
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            db.session.refresh(task)
+            db.session.refresh(lead)
+            assert lead.lead_status == 'deprioritize'
+            assert task.status == 'cancelled'
+            assert task.completed_at is None
+
     def test_returns_404_for_missing_lead(self, client, app):
         """PATCH /api/leads/99999/status returns 404."""
         with app.app_context():
@@ -1906,6 +1926,21 @@ class TestParkLead:
             )
             db.session.refresh(lead)
             assert lead.lead_status == 'deprioritize'
+
+    def test_park_cancels_open_tasks(self, client, app):
+        """POST /api/leads/<id>/park cancels open tasks."""
+        with app.app_context():
+            lead = _make_lead(app, '32b Park St', lead_status='mailing_no_contact_made')
+            task = _make_task(app, lead.id)
+            response = client.post(
+                f'/api/leads/{lead.id}/park',
+                data=json.dumps({}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            db.session.refresh(task)
+            assert task.status == 'cancelled'
 
     def test_park_with_future_reactivation_date_accepted(self, client, app):
         """POST /api/leads/<id>/park with a future reactivation_date returns 200."""

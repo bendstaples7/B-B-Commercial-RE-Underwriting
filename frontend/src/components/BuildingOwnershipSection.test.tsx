@@ -79,11 +79,25 @@ describe('BuildingOwnershipSection', () => {
       },
     })
 
-    renderSection()
+    renderSection(
+      makePayload({
+        county_assessor_pin: '14-20-123-456-0000',
+        assessor_class: '3-18',
+        building_sale_possible: 'unknown',
+        condo_confidence: 'medium',
+        condo_check_drivers: ['rule_7_missing_data'],
+        condo_check_reason: 'Multiple PINs need review',
+      }),
+    )
 
     expect(screen.getByTestId('building-ownership-section')).toBeInTheDocument()
+    expect(screen.getByTestId('building-ownership-section')).toHaveAttribute(
+      'data-layout',
+      'split-header-metric-strip',
+    )
     expect(screen.getByTestId('building-ownership-units')).toHaveTextContent('2 units')
     expect(screen.getByTestId('building-ownership-sale')).toHaveTextContent('01/15/2019')
+    expect(screen.getByTestId('building-ownership-lead-pin')).toHaveTextContent(/14-20-123-456-0000/)
     expect(screen.queryByText('Confirm Building Ownership')).not.toBeInTheDocument()
     expect(screen.queryByTestId('building-ownership-recommendation')).not.toBeInTheDocument()
 
@@ -95,12 +109,34 @@ describe('BuildingOwnershipSection', () => {
       'aria-pressed',
       'true',
     )
-    expect(screen.getByTestId('building-ownership-confidence')).toHaveTextContent(
-      /medium confidence/i,
+    // Equal-width pills: Yes / No match Unclear width.
+    const yesBtn = screen.getByTestId('building-ownership-condoized-yes')
+    const noBtn = screen.getByTestId('building-ownership-condoized-no')
+    const unclearBtn = screen.getByTestId('building-ownership-condoized-unclear')
+    expect(getComputedStyle(yesBtn).width).toBe(getComputedStyle(unclearBtn).width)
+    expect(getComputedStyle(noBtn).width).toBe(getComputedStyle(unclearBtn).width)
+    expect(getComputedStyle(yesBtn).width).toBe('88px')
+    expect(screen.getByTestId('building-ownership-condo-check')).toBeInTheDocument()
+    expect(screen.getByTestId('building-ownership-condo-confidence-value')).toHaveTextContent('60%')
+    expect(screen.getByTestId('building-ownership-sale-possible')).toHaveTextContent(
+      /Sale possible: Unknown/i,
     )
     expect(screen.getByTestId('building-ownership-last-checked')).toHaveTextContent(
       /Last automated check/i,
     )
+
+    // Compact condo card sits in the decision row (not a full-width band).
+    const decisionRow = screen.getByTestId('building-ownership-decision-row')
+    const condoCard = screen.getByTestId('building-ownership-condo-check')
+    expect(decisionRow).toContainElement(condoCard)
+    expect(getComputedStyle(condoCard).width).not.toBe(getComputedStyle(decisionRow).width)
+
+    // Layout A visible proof: metric strip is a bordered 3-column grid on desktop widths.
+    const strip = screen.getByTestId('building-ownership-metric-strip')
+    expect(getComputedStyle(strip).display).toBe('grid')
+    expect(getComputedStyle(strip).borderTopStyle).not.toBe('none')
+    const header = screen.getByTestId('building-ownership-header')
+    expect(getComputedStyle(header).justifyContent).toMatch(/space-between/)
   })
 
   it('saves Yes/No via override API from Condoized? control', async () => {
@@ -166,6 +202,23 @@ describe('BuildingOwnershipSection', () => {
       )
     })
     expect(screen.queryByTestId('building-ownership-run-check')).not.toBeInTheDocument()
+  })
+
+  it('shows Last automated check from command-center condo_checked_at when detail has none', () => {
+    vi.mocked(buildingOwnershipService.get).mockResolvedValue(null as never)
+
+    renderSection(
+      makePayload({
+        condo_analysis_id: 257,
+        condo_checked_at: '2026-07-11T04:02:09.234806',
+        condo_risk_status: 'needs_review',
+        building_sale_possible: 'unknown',
+      }),
+    )
+
+    expect(screen.getByTestId('building-ownership-last-checked')).toHaveTextContent(
+      /Last automated check/i,
+    )
   })
 
   it('does not render for residential leads without ownership data', () => {

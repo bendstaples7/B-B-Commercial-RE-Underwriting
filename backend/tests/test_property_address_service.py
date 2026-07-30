@@ -832,7 +832,7 @@ class TestHealIncompletePropertyAddresses:
             assert lead.id in result['lead_ids']
             assert is_property_address_complete(lead=lead)
 
-    def test_heal_does_not_advance_cursor_on_hard_error(self, app):
+    def test_heal_advances_cursor_past_hard_error(self, app):
         with app.app_context():
             lead = _make_lead(
                 app,
@@ -860,10 +860,10 @@ class TestHealIncompletePropertyAddresses:
                 )
             assert lead.id in result['lead_ids']
             assert result['errors'] >= 1
-            assert result['last_id'] == 0
-            set_cursor.assert_called_with(0)
+            assert result['last_id'] == lead.id
+            set_cursor.assert_called_with(lead.id)
 
-    def test_heal_stops_on_hard_error_before_advancing_past_failed_lead(self, app):
+    def test_heal_advances_past_hard_error_and_continues_batch(self, app):
         with app.app_context():
             first = _make_lead(
                 app,
@@ -910,11 +910,72 @@ class TestHealIncompletePropertyAddresses:
                     actor='test',
                 )
 
-            assert result['lead_ids'] == [first.id, failed.id]
+            assert result['lead_ids'] == [first.id, failed.id, later.id]
             assert result['errors'] == 1
-            assert result['last_id'] == first.id
-            set_cursor.assert_called_with(first.id)
-            assert later.property_city is None
+            assert result['completed'] == 2
+            assert result['last_id'] == later.id
+            set_cursor.assert_called_with(later.id)
+            assert later.property_city == 'Chicago'
+
+    def test_heal_retries_locality_only_after_street_integrity_error(self, app):
+        with app.app_context():
+            twin = _make_lead(
+                app,
+                property_street='1116 W Wellington',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60657',
+            )
+            jammed = _make_lead(
+                app,
+                property_street='1116 W Wellington Chicago IL',
+                property_city=None,
+                property_state=None,
+                property_zip=None,
+            )
+            # Same owner scope so unique street key can collide after clean.
+            twin.owner_first_name = 'Jay'
+            twin.owner_last_name = 'Hausler'
+            jammed.owner_first_name = 'Jay'
+            jammed.owner_last_name = 'Hausler'
+            from app import db
+            db.session.commit()
+
+            calls = {'n': 0}
+
+            def complete_side_effect(lead, **kwargs):
+                calls['n'] += 1
+                if not kwargs.get('preserve_street') and lead.id == jammed.id:
+                    from sqlalchemy.exc import IntegrityError
+                    raise IntegrityError('stmt', {}, Exception('uq'))
+                lead.property_city = 'Chicago'
+                lead.property_state = 'IL'
+                lead.property_zip = '60657'
+                if not kwargs.get('preserve_street'):
+                    lead.property_street = '1116 W Wellington'
+                return {'complete': True, 'changed_fields': ['property_city']}
+
+            with patch(
+                'app.services.property_address_service._set_heal_incomplete_cursor',
+            ), patch(
+                'app.services.property_address_service.complete_property_address',
+                side_effect=complete_side_effect,
+            ):
+                result = heal_incomplete_property_addresses(
+                    lead_id=jammed.id,
+                    persist_cursor=False,
+                    commit=True,
+                    try_gis=False,
+                    try_geocode=False,
+                    actor='test',
+                )
+
+            assert result['errors'] == 0
+            assert result['completed'] == 1
+            assert calls['n'] >= 2
+            assert jammed.property_city == 'Chicago'
+            # Locality-only retry must not rewrite street into the twin's key.
+            assert 'Chicago' in (jammed.property_street or '')
 
     def test_dry_run_includes_before_after_previews(self, app):
         with app.app_context():

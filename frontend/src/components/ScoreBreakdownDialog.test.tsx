@@ -31,11 +31,37 @@ describe('ScoreBreakdownDialog', () => {
     )
 
     expect(screen.getByTestId('score-breakdown-dialog')).toBeInTheDocument()
+    expect(screen.getByTestId('score-how-we-got-to')).toBeInTheDocument()
+    expect(screen.getByTestId('score-what-helps')).toHaveTextContent('What helps')
     expect(screen.getByText('Ideal unit count')).toBeInTheDocument()
     expect(screen.getByText('Absentee owner')).toBeInTheDocument()
 
     await user.click(screen.getByTestId('score-breakdown-done'))
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('settles How we got to N + Adjustments for floored zero score', () => {
+    const zeroScore: PropertyScoreRecord = {
+      ...score,
+      total_score: 0,
+      score_tier: 'D',
+      score_details: {
+        weighted_base: 48,
+        property_equity: 17.5,
+        ownership_duration: 15,
+        pipeline_stage_bonus: -15,
+        hubspot_engagement: -40,
+      },
+    }
+    render(<ScoreBreakdownDialog score={zeroScore} open onClose={() => {}} />)
+
+    expect(screen.getByTestId('score-how-we-got-to-title')).toHaveTextContent('How we got to 0')
+    expect(screen.getByTestId('score-how-we-got-to-equation')).toHaveTextContent(/floored at 0/)
+    expect(screen.getByTestId('score-what-helps')).toBeInTheDocument()
+    expect(screen.getByTestId('score-adjustments')).toHaveTextContent('Adjustments')
+    expect(screen.getByText('−40')).toBeInTheDocument()
+    expect(screen.getByText('−15')).toBeInTheDocument()
+    expect(screen.queryByText('+-40')).not.toBeInTheDocument()
   })
 
   it('closes via header X button', async () => {

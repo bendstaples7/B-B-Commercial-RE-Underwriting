@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 
 from app import db
 from app.models import Lead, LeadTimelineEntry
@@ -16,6 +17,178 @@ logger = logging.getLogger(__name__)
 
 RESOLVE_UNAMBIGUOUS_PINS_LOCK_KEY = 'property_match:resolve_unambiguous_pins_lock'
 RESOLVE_UNAMBIGUOUS_PINS_CURSOR_KEY = 'property_match:resolve_unambiguous_pins_cursor'
+
+_SUFFIX_CANON = {
+    'AVENUE': 'AVE', 'AVE': 'AVE', 'BOULEVARD': 'BLVD', 'BLVD': 'BLVD',
+    'CIRCLE': 'CIR', 'CIR': 'CIR', 'COURT': 'CT', 'CT': 'CT',
+    'DRIVE': 'DR', 'DR': 'DR', 'LANE': 'LN', 'LN': 'LN',
+    'PLACE': 'PL', 'PL': 'PL', 'ROAD': 'RD', 'RD': 'RD',
+    'STREET': 'ST', 'ST': 'ST', 'TERRACE': 'TER', 'TER': 'TER',
+}
+
+_DIRECTION_CANON = {
+    'N': 'N', 'NORTH': 'N', 'S': 'S', 'SOUTH': 'S',
+    'E': 'E', 'EAST': 'E', 'W': 'W', 'WEST': 'W',
+    'NE': 'NE', 'NORTHEAST': 'NE', 'NW': 'NW', 'NORTHWEST': 'NW',
+    'SE': 'SE', 'SOUTHEAST': 'SE', 'SW': 'SW', 'SOUTHWEST': 'SW',
+}
+
+
+def _normalize_street_compare(street: str | None) -> str:
+    """Uppercase, collapse spaces, canonicalize directions + street suffixes."""
+    if street is None or not isinstance(street, str):
+        return ''
+    text = street.split(',')[0].strip().upper()
+    text = re.sub(r'[^\w\s\-]', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    tokens = []
+    for tok in text.split():
+        tokens.append(_DIRECTION_CANON.get(tok, _SUFFIX_CANON.get(tok, tok)))
+    return ' '.join(tokens)
+
+
+def street_name_key(street: str | None) -> str:
+    """Street name without house number (for same-situs clustering)."""
+    normalized = _normalize_street_compare(street)
+    if not normalized:
+        return ''
+    m = re.match(r'^(\d+)(?:-(\d+))?\s+(.+)$', normalized)
+    if m:
+        return m.group(3)
+    return normalized
+
+
+def assessor_street_differs_from_lead(
+    lead_street: str | None,
+    assessor_street: str | None,
+) -> bool:
+    """True when assessor situs is a meaningfully different street (set AKA).
+
+    Range vs single house on the same street name/suffix is treated as the same
+    (e.g. ``3715-3721 N LEAVITT ST`` vs ``3715 N LEAVITT ST``).
+    """
+    lead_n = _normalize_street_compare(lead_street)
+    assessor_n = _normalize_street_compare(assessor_street)
+    if not lead_n or not assessor_n:
+        return False
+    if lead_n == assessor_n:
+        return False
+
+    lead_m = re.match(r'^(\d+)(?:-(\d+))?\s+(.+)$', lead_n)
+    assessor_m = re.match(r'^(\d+)(?:-(\d+))?\s+(.+)$', assessor_n)
+    if lead_m and assessor_m and lead_m.group(3) == assessor_m.group(3):
+        a0 = int(assessor_m.group(1))
+        a1 = int(assessor_m.group(2) or assessor_m.group(1))
+        l0 = int(lead_m.group(1))
+        l1 = int(lead_m.group(2) or lead_m.group(1))
+        lo, hi = (l0, l1) if l0 <= l1 else (l1, l0)
+        # Overlap or containment of house numbers on the same street → same situs.
+        if not (a1 < lo or a0 > hi):
+            return False
+    return True
+
+
+def _candidate_from_row(row: dict) -> dict:
+    return {
+        'pin': (row.get('pin') or '').strip() or None,
+        'property_street': (row.get('property_street') or '').strip() or None,
+        'property_city': (row.get('property_city') or '').strip() or None,
+        'property_state': (row.get('property_state') or '').strip() or None,
+        'property_zip': (row.get('property_zip') or '').strip() or None,
+        'source': row.get('source'),
+    }
+
+
+def _street_name_key(street: str | None) -> str:
+    """Normalize to direction + name + suffix (ignore house number / unit)."""
+    norm = _normalize_street_compare(street)
+    if not norm:
+        return ''
+    return re.sub(r'^\d+(?:-\d+)?\s+', '', norm).strip()
+
+
+def tax_situs_cluster_meta(
+    lead_street: str | None,
+    candidates: list[dict],
+) -> dict:
+    """Dominant assessor street-name among candidates when it differs from lead street."""
+    counts: dict[str, int] = {}
+    display: dict[str, str] = {}
+    for row in candidates or []:
+        street = (row.get('property_street') or '').strip()
+        if not street:
+            continue
+        key = _street_name_key(street)
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+        # Prefer the first (usually closest) full street as display.
+        display.setdefault(key, street)
+    if not counts:
+        return {
+            'tax_situs_street': None,
+            'tax_situs_pin_count': 0,
+            'assessor_aka': None,
+        }
+    dominant_key = max(counts.keys(), key=lambda k: (counts[k], -len(k)))
+    dominant_street = display[dominant_key]
+    pin_count = counts[dominant_key]
+    differs = assessor_street_differs_from_lead(lead_street, dominant_street)
+    aka = None
+    if differs:
+        aka = {'property_street': dominant_street}
+    return {
+        'tax_situs_street': dominant_street if differs else None,
+        'tax_situs_pin_count': pin_count if differs else 0,
+        'assessor_aka': aka,
+    }
+
+
+def _apply_assessor_aka(lead: Lead, addr_row: dict | None) -> None:
+    """Keep marketing street; store assessor situs as AKA when it differs."""
+    if not isinstance(addr_row, dict):
+        return
+    raw_street = addr_row.get('property_street')
+    assessor_street = raw_street.strip() if isinstance(raw_street, str) else None
+    if not assessor_street:
+        return
+    if not assessor_street_differs_from_lead(lead.property_street, assessor_street):
+        # Clear stale AKA when assessor matches marketing street.
+        lead.assessor_aka_street = None
+        lead.assessor_aka_city = None
+        lead.assessor_aka_state = None
+        lead.assessor_aka_zip = None
+        return
+
+    from app.services.property_address_service import (
+        _clean,
+        _state_code,
+        _zip5,
+        title_case_address_part,
+    )
+
+    lead.assessor_aka_street = title_case_address_part(assessor_street)
+    city = _clean(addr_row.get('property_city'))
+    state = _clean(addr_row.get('property_state'))
+    zip_code = _zip5(addr_row.get('property_zip'))
+    lead_city = _clean(lead.property_city)
+    # Store locality only when it differs from the lead (or lead locality empty).
+    if city and (not lead_city or city.upper() != lead_city.upper()):
+        lead.assessor_aka_city = title_case_address_part(city)
+    else:
+        lead.assessor_aka_city = None
+    if state:
+        code = _state_code(state) or state.upper()[:2]
+        if not _clean(lead.property_state) or code != (_clean(lead.property_state) or '').upper():
+            lead.assessor_aka_state = code
+        else:
+            lead.assessor_aka_state = None
+    else:
+        lead.assessor_aka_state = None
+    if zip_code and zip_code != (_zip5(lead.property_zip) or ''):
+        lead.assessor_aka_zip = zip_code
+    else:
+        lead.assessor_aka_zip = None
 
 
 def _resolve_pins_cursor() -> int:
@@ -48,20 +221,29 @@ class PropertyMatchReviewService:
         )
 
     @staticmethod
-    def _cook_pins_at_address(address: str) -> list[str]:
-        """Return distinct Cook County PINs reported for a situs address."""
+    def _cook_pin_rows_at_address(address: str) -> list[dict]:
+        """Return distinct Cook County PIN rows for a situs address."""
         from app.services.gis.cook_county_gis_connector import lookup_all_pins_at_address
 
-        pins: list[str] = []
+        rows_out: list[dict] = []
         seen: set[str] = set()
         for row in lookup_all_pins_at_address(address):
             pin = str((row or {}).get('pin') or '').strip()
             if pin and pin not in seen:
                 seen.add(pin)
-                pins.append(pin)
-        return pins
+                rows_out.append(_candidate_from_row({**(row or {}), 'source': 'cook_address'}))
+        return rows_out
 
-    def preview_match(self, lead_id: int) -> dict:
+    @staticmethod
+    def _cook_pins_at_address(address: str) -> list[str]:
+        """Return distinct Cook County PINs reported for a situs address."""
+        return [
+            row['pin']
+            for row in PropertyMatchReviewService._cook_pin_rows_at_address(address)
+            if row.get('pin')
+        ]
+
+    def preview_match(self, lead_id: int, pin: str | None = None) -> dict:
         from app.services.property_address_service import (
             complete_property_address,
             is_property_address_complete,
@@ -90,7 +272,7 @@ class PropertyMatchReviewService:
             'property_zip': lead.property_zip,
         }
         address_complete = is_property_address_complete(lead=lead)
-        if not address_complete:
+        if not address_complete and not (pin or '').strip():
             return {
                 'found': False,
                 'entered_address': entered,
@@ -106,26 +288,199 @@ class PropertyMatchReviewService:
         parcel: GISParcel | None = None
         connector_name = connector.connector_name if connector else None
         is_cook = getattr(connector, 'market', None) == 'cook_county_il'
-        cook_pins = self._cook_pins_at_address(lead.property_street) if (
-            is_cook and lead.property_street
-        ) else []
-        pin_count = len(cook_pins) if is_cook else None
-        if is_cook and pin_count >= 2:
+        pin_hint = (pin or '').strip() or None
+
+        # PIN-first verify: resolve situs from pasted PIN without requiring ladder hit.
+        if pin_hint and is_cook and connector is not None:
+            from app.services.plugins.pin_utils import (
+                format_pin_for_storage,
+                normalize_pin_for_socrata,
+            )
+            digits = normalize_pin_for_socrata(pin_hint)
+            if len(digits) != 14 or not digits.isdigit():
+                return {
+                    'found': False,
+                    'entered_address': entered,
+                    'recommended_address': None,
+                    'pin': None,
+                    'candidates': [],
+                    'connector': connector_name,
+                    'address_complete': address_complete,
+                    'reason': 'invalid_pin',
+                    'message': 'Invalid Cook County PIN',
+                }
+            formatted = format_pin_for_storage(digits)
+            addr_row = None
+            if hasattr(connector, 'lookup_address_by_pin'):
+                addr_row = connector.lookup_address_by_pin(formatted)
+            parcel = connector.lookup_by_pin(formatted)
+            assessor_street = (
+                (addr_row or {}).get('property_street')
+                or getattr(parcel, 'property_street', None)
+            )
+            if not assessor_street and parcel is None:
+                return {
+                    'found': False,
+                    'entered_address': entered,
+                    'recommended_address': None,
+                    'pin': formatted,
+                    'candidates': [],
+                    'connector': connector_name,
+                    'address_complete': address_complete,
+                    'reason': 'no_match',
+                    'message': 'No assessor match for that PIN',
+                }
+            differs = assessor_street_differs_from_lead(
+                lead.property_street, assessor_street,
+            )
+            candidate = {
+                'pin': formatted,
+                'property_street': assessor_street,
+                'property_city': (addr_row or {}).get('property_city')
+                    or getattr(parcel, 'property_city', None),
+                'property_state': (addr_row or {}).get('property_state')
+                    or getattr(parcel, 'property_state', None)
+                    or 'IL',
+                'property_zip': (addr_row or {}).get('property_zip')
+                    or getattr(parcel, 'property_zip', None),
+                'source': 'pin_verify',
+            }
+            recommended = {
+                'property_street': lead.property_street if differs else (
+                    assessor_street or lead.property_street
+                ),
+                'property_city': lead.property_city or candidate['property_city'],
+                'property_state': lead.property_state or candidate['property_state'],
+                'property_zip': lead.property_zip or candidate['property_zip'],
+                'property_type': getattr(parcel, 'property_type', None),
+                'county_assessor_pin': formatted,
+            }
+            aka = None
+            if differs and assessor_street:
+                aka = {
+                    'property_street': assessor_street,
+                    'property_city': candidate['property_city'],
+                    'property_state': candidate['property_state'],
+                    'property_zip': candidate['property_zip'],
+                }
             return {
                 'found': True,
                 'entered_address': entered,
-                'recommended_address': None,
-                'pin': None,
-                'pins': cook_pins,
-                'pin_count': pin_count,
+                'recommended_address': recommended,
+                'pin': formatted,
+                'pins': [formatted],
+                'pin_count': 1,
+                'candidates': [candidate],
+                'assessor_aka': aka,
+                'require_explicit_apply': bool(differs),
                 'connector': connector_name,
                 'address_complete': address_complete,
                 'reason': None,
                 'parcel_fields': None,
-                'message': 'Multiple assessor PINs found; review and apply the property match.',
+                'message': (
+                    'Assessor situs differs from lead street — apply to confirm'
+                    if differs else None
+                ),
             }
-        if is_cook and pin_count == 1:
-            pin = cook_pins[0]
+
+        cook_rows = self._cook_pin_rows_at_address(lead.property_street) if (
+            is_cook and lead.property_street
+        ) else []
+        aka_street = (getattr(lead, 'assessor_aka_street', None) or '').strip()
+        # When marketing street misses (corner lots), try stored assessor AKA —
+        # Socrata is more reliable than the flaky MapServer spatial path.
+        if is_cook and not cook_rows and aka_street:
+            cook_rows = self._cook_pin_rows_at_address(aka_street)
+
+        # Enrich thin AKA/marketing hits via spatial around the best known situs.
+        need_spatial = is_cook and lead.property_street and (
+            len(cook_rows) == 0 or (aka_street and len(cook_rows) < 3)
+        )
+        if need_spatial:
+            try:
+                from app.services.gis.cook_county_parcel_spatial import (
+                    lookup_nearby_parcel_candidates,
+                )
+                seen = {r['pin'] for r in cook_rows if r.get('pin')}
+                for probe in (aka_street, lead.property_street):
+                    if not (probe or '').strip():
+                        continue
+                    spatial_rows = lookup_nearby_parcel_candidates(
+                        probe,
+                        city=lead.property_city,
+                        state=lead.property_state,
+                        zip_code=lead.property_zip,
+                        limit=8,
+                    )
+                    for r in spatial_rows:
+                        cand = _candidate_from_row(r)
+                        pin = cand.get('pin')
+                        if pin and pin not in seen:
+                            seen.add(pin)
+                            cook_rows.append(cand)
+                    if len(cook_rows) >= 3:
+                        break
+            except Exception:
+                logger.exception('Cook spatial PIN fallback failed for lead %s', lead_id)
+
+        cook_pins = [r['pin'] for r in cook_rows if r.get('pin')]
+        pin_count = len(cook_pins) if is_cook else None
+
+        if is_cook and pin_count and pin_count >= 1:
+            # Prefer multi-candidate / AKA framing when tax situs differs.
+            candidates = cook_rows[:5]
+            situs = tax_situs_cluster_meta(lead.property_street, candidates)
+            differs = bool(situs.get('tax_situs_street')) or (
+                pin_count == 1 and assessor_street_differs_from_lead(
+                    lead.property_street, candidates[0].get('property_street'),
+                )
+            )
+            if pin_count >= 2 or differs:
+                aka = situs.get('assessor_aka')
+                if not aka and candidates[0].get('property_street'):
+                    if assessor_street_differs_from_lead(
+                        lead.property_street, candidates[0].get('property_street'),
+                    ):
+                        aka = {'property_street': candidates[0].get('property_street')}
+                return {
+                    'found': True,
+                    'entered_address': entered,
+                    'recommended_address': (
+                        None if pin_count >= 2 else {
+                            'property_street': lead.property_street,
+                            'property_city': lead.property_city,
+                            'property_state': lead.property_state,
+                            'property_zip': lead.property_zip,
+                            'property_type': None,
+                            'county_assessor_pin': cook_pins[0],
+                        }
+                    ),
+                    'pin': None if pin_count >= 2 else cook_pins[0],
+                    'pins': cook_pins,
+                    'pin_count': pin_count,
+                    'candidates': candidates,
+                    'tax_situs_street': (
+                        situs.get('tax_situs_street')
+                        or (aka or {}).get('property_street')
+                    ),
+                    'tax_situs_pin_count': (
+                        situs.get('tax_situs_pin_count')
+                        if situs.get('tax_situs_street')
+                        else 0
+                    ),
+                    'assessor_aka': aka,
+                    'require_explicit_apply': True,
+                    'connector': connector_name,
+                    'address_complete': address_complete,
+                    'reason': None,
+                    'parcel_fields': None,
+                    'message': (
+                        'Nearby parcel candidates found; review and apply the match.'
+                        if situs.get('tax_situs_street') or differs
+                        else 'Multiple assessor PINs found; review and apply the property match.'
+                    ),
+                }
+            # Unique same-street PIN — FE may auto-apply.
             return {
                 'found': True,
                 'entered_address': entered,
@@ -135,11 +490,13 @@ class PropertyMatchReviewService:
                     'property_state': lead.property_state,
                     'property_zip': lead.property_zip,
                     'property_type': None,
-                    'county_assessor_pin': pin,
+                    'county_assessor_pin': cook_pins[0],
                 },
-                'pin': pin,
+                'pin': cook_pins[0],
                 'pins': cook_pins,
-                'pin_count': pin_count,
+                'pin_count': 1,
+                'candidates': candidates,
+                'require_explicit_apply': False,
                 'connector': connector_name,
                 'address_complete': address_complete,
                 'reason': None,
@@ -161,6 +518,7 @@ class PropertyMatchReviewService:
                 'recommended_address': None,
                 'pin': None,
                 'pin_count': pin_count,
+                'candidates': [],
                 'connector': None,
                 'address_complete': address_complete,
                 'reason': 'no_connector',
@@ -174,6 +532,7 @@ class PropertyMatchReviewService:
                 'recommended_address': None,
                 'pin': None,
                 'pin_count': pin_count,
+                'candidates': [],
                 'connector': connector_name,
                 'address_complete': address_complete,
                 'reason': 'no_match',
@@ -205,6 +564,21 @@ class PropertyMatchReviewService:
             'property_type': parcel.property_type,
             'county_assessor_pin': parcel.county_assessor_pin,
         }
+        differs = assessor_street_differs_from_lead(
+            lead.property_street,
+            recommended.get('property_street'),
+        )
+        if differs:
+            # Keep marketing street in recommended; surface assessor as AKA.
+            recommended['property_street'] = lead.property_street
+        aka = None
+        if differs and (addr_row or {}).get('property_street'):
+            aka = {
+                'property_street': (addr_row or {}).get('property_street'),
+                'property_city': (addr_row or {}).get('property_city'),
+                'property_state': (addr_row or {}).get('property_state'),
+                'property_zip': (addr_row or {}).get('property_zip'),
+            }
 
         return {
             'found': True,
@@ -212,6 +586,16 @@ class PropertyMatchReviewService:
             'recommended_address': recommended,
             'pin': parcel.county_assessor_pin,
             'pin_count': pin_count,
+            'candidates': [{
+                'pin': parcel.county_assessor_pin,
+                'property_street': (addr_row or {}).get('property_street'),
+                'property_city': recommended['property_city'],
+                'property_state': recommended['property_state'],
+                'property_zip': recommended['property_zip'],
+                'source': 'connector',
+            }],
+            'assessor_aka': aka,
+            'require_explicit_apply': bool(differs),
             'connector': connector_name,
             'address_complete': address_complete,
             'reason': None,
@@ -340,6 +724,7 @@ class PropertyMatchReviewService:
         *,
         actor: str = 'anonymous',
         pin: str | None = None,
+        use_assessor_street: bool = False,
     ) -> dict:
         lead = db.session.get(Lead, lead_id)
         if lead is None:
@@ -414,7 +799,8 @@ class PropertyMatchReviewService:
             if not preserve_skip_trace:
                 lead.needs_skip_trace = False
 
-            # Backfill situs from parcel address when approve resolves a PIN.
+            # Backfill locality from parcel address; keep marketing street and
+            # persist assessor situs as AKA when it differs (corner / range cases).
             if (
                 hasattr(connector, 'lookup_address_by_pin')
                 and lead.county_assessor_pin
@@ -424,7 +810,10 @@ class PropertyMatchReviewService:
                     complete_property_address,
                 )
                 addr_row = connector.lookup_address_by_pin(lead.county_assessor_pin)
-                apply_parcel_address_to_lead(lead, addr_row, replace_street=True)
+                apply_parcel_address_to_lead(
+                    lead, addr_row, replace_street=bool(use_assessor_street),
+                )
+                _apply_assessor_aka(lead, addr_row)
                 complete_property_address(
                     lead,
                     try_gis=False,
@@ -477,6 +866,10 @@ class PropertyMatchReviewService:
             'lead_id': lead_id,
             'has_property_match': lead.has_property_match,
             'county_assessor_pin': lead.county_assessor_pin,
+            'assessor_aka_street': getattr(lead, 'assessor_aka_street', None),
+            'assessor_aka_city': getattr(lead, 'assessor_aka_city', None),
+            'assessor_aka_state': getattr(lead, 'assessor_aka_state', None),
+            'assessor_aka_zip': getattr(lead, 'assessor_aka_zip', None),
             'recommended_action': recommended,
             'removed_from_queue': True,
         }

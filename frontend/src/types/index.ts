@@ -2222,6 +2222,10 @@ export interface CommandCenterPayload {
   square_footage?: number | null;
   year_built?: number | null;
   county_assessor_pin?: string | null;
+  assessor_aka_street?: string | null;
+  assessor_aka_city?: string | null;
+  assessor_aka_state?: string | null;
+  assessor_aka_zip?: string | null;
   is_cook_county_eligible?: boolean;
   ownership_type?: string | null;
   acquisition_date?: string | null;
@@ -2334,6 +2338,16 @@ export interface CommandCenterPayload {
   condo_risk_status?: CondoRiskStatus | null;
   building_sale_possible?: BuildingSalePossible | null;
   condo_analysis_id?: number | null;
+  /** Engine confidence band: high | medium | low (mapped to 90/60/30% in UI). */
+  condo_confidence?: string | null;
+  /** Classification reason from AddressGroupAnalysis.analysis_details. */
+  condo_check_reason?: string | null;
+  /** ISO timestamp when condo analysis last ran. */
+  condo_checked_at?: string | null;
+  /** Engine triggered_rules for condo-check driver chips. */
+  condo_check_drivers?: string[] | null;
+  /** Owner looks like unresolved LLC/org — show Research LLC Action Center tile. */
+  needs_entity_research?: boolean;
   assessor_class?: string | null;
   units?: number | null;
   units_allowed?: number | null;
@@ -2703,6 +2717,23 @@ export interface PropertyMatchPreview {
   pin: string | null
   pins?: string[]
   pin_count?: number | null
+  candidates?: Array<{
+    pin: string
+    property_street?: string | null
+    property_city?: string | null
+    property_state?: string | null
+    property_zip?: string | null
+    source?: string | null
+  }>
+  tax_situs_street?: string | null
+  tax_situs_pin_count?: number | null
+  require_explicit_apply?: boolean
+  assessor_aka?: {
+    property_street?: string | null
+    property_city?: string | null
+    property_state?: string | null
+    property_zip?: string | null
+  } | null
   connector: string | null
   parcel_fields?: Record<string, unknown> | null
   message?: string | null

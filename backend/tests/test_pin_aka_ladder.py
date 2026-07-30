@@ -1,0 +1,186 @@
+"""Tests for Cook PIN range ladder, spatial fallback, and assessor AKA."""
+from unittest.mock import MagicMock, patch
+
+from app import db
+from app.models import Lead
+from app.services.gis.cook_county_gis_connector import (
+    _house_number_range_variants,
+    _normalise_address,
+)
+from app.services.property_match_review_service import (
+    PropertyMatchReviewService,
+    assessor_street_differs_from_lead,
+)
+
+
+def test_house_number_range_includes_odd_intermediates():
+    normalised = _normalise_address('3715-3721 N Leavitt St')
+    variants = _house_number_range_variants(normalised)
+    assert '3715 N LEAVITT ST' in variants
+    assert '3721 N LEAVITT ST' in variants
+    assert '3717 N LEAVITT ST' in variants
+    assert '3719 N LEAVITT ST' in variants
+    # Start/end first, then intermediates
+    assert variants[0] == '3715 N LEAVITT ST'
+    assert variants[1] == '3721 N LEAVITT ST'
+
+
+def test_normalise_strips_concatenated_city_state_zip():
+    assert _normalise_address(
+        '3715-3721 N Leavitt St Chicago IL 60618'
+    ) == '3715-3721 N LEAVITT ST'
+
+
+def test_house_number_range_even_step():
+    variants = _house_number_range_variants('100-108 W MAIN ST')
+    assert '100 W MAIN ST' in variants
+    assert '108 W MAIN ST' in variants
+    assert '102 W MAIN ST' in variants
+    assert '104 W MAIN ST' in variants
+
+
+def test_assessor_street_differs_corner_vs_range():
+    assert assessor_street_differs_from_lead(
+        '3715-3721 N Leavitt St',
+        '2155 W BRADLEY PL',
+    )
+    assert not assessor_street_differs_from_lead(
+        '3715-3721 N Leavitt St',
+        '3715 N LEAVITT ST',
+    )
+    assert not assessor_street_differs_from_lead(
+        '3715 N Leavitt St',
+        '3715 N LEAVITT STREET',
+    )
+
+
+def _seed_cook_lead(**overrides) -> Lead:
+    lead = Lead(
+        property_street='3715-3721 N Leavitt St',
+        property_city='Chicago',
+        property_state='IL',
+        property_zip='60618',
+        has_property_match=False,
+        lead_status='mailing_no_contact_made',
+        owner_user_id='test-user',
+    )
+    for key, value in overrides.items():
+        setattr(lead, key, value)
+    db.session.add(lead)
+    db.session.commit()
+    return lead
+
+
+class TestPreviewSpatialAndPin:
+    def test_preview_spatial_fallback_returns_candidates(self, app):
+        with app.app_context():
+            lead = _seed_cook_lead()
+            mock_connector = MagicMock()
+            mock_connector.connector_name = 'cook_county_gis'
+            mock_connector.market = 'cook_county_il'
+
+            spatial = [{
+                'pin': '14-19-122-001-0000',
+                'property_street': '2155 W BRADLEY PL',
+                'property_city': 'CHICAGO',
+                'property_state': 'IL',
+                'property_zip': '60618',
+                'source': 'cook_parcel_spatial',
+            }]
+            with patch(
+                'app.services.property_match_review_service.connector_for_lead',
+                return_value=mock_connector,
+            ), patch.object(
+                PropertyMatchReviewService,
+                '_cook_pin_rows_at_address',
+                return_value=[],
+            ), patch(
+                'app.services.gis.cook_county_parcel_spatial.lookup_nearby_parcel_candidates',
+                return_value=spatial,
+            ):
+                preview = PropertyMatchReviewService().preview_match(lead.id)
+
+            assert preview['found'] is True
+            assert preview['require_explicit_apply'] is True
+            assert preview['candidates'][0]['pin'] == '14-19-122-001-0000'
+            assert 'BRADLEY' in (preview['candidates'][0]['property_street'] or '')
+            assert preview.get('tax_situs_street')
+            assert 'BRADLEY' in (preview.get('tax_situs_street') or '').upper()
+
+    def test_preview_pin_hint_sets_assessor_aka(self, app):
+        with app.app_context():
+            lead = _seed_cook_lead()
+            mock_connector = MagicMock()
+            mock_connector.connector_name = 'cook_county_gis'
+            mock_connector.market = 'cook_county_il'
+            mock_connector.lookup_address_by_pin.return_value = {
+                'property_street': '2155 W BRADLEY PL',
+                'property_city': 'CHICAGO',
+                'property_state': 'IL',
+                'property_zip': '60618',
+            }
+            mock_parcel = MagicMock()
+            mock_parcel.property_type = 'commercial'
+            mock_parcel.property_street = '2155 W BRADLEY PL'
+            mock_parcel.property_city = 'CHICAGO'
+            mock_parcel.property_state = 'IL'
+            mock_parcel.property_zip = '60618'
+            mock_connector.lookup_by_pin.return_value = mock_parcel
+
+            with patch(
+                'app.services.property_match_review_service.connector_for_lead',
+                return_value=mock_connector,
+            ):
+                preview = PropertyMatchReviewService().preview_match(
+                    lead.id, pin='14-19-122-001-0000',
+                )
+
+            assert preview['found'] is True
+            assert preview['require_explicit_apply'] is True
+            assert preview['assessor_aka']['property_street'] == '2155 W BRADLEY PL'
+            assert preview['recommended_address']['property_street'] == lead.property_street
+
+
+class TestApproveAka:
+    def test_approve_stores_aka_keeps_marketing_street(self, app):
+        with app.app_context():
+            lead = _seed_cook_lead()
+            mock_connector = MagicMock()
+            mock_connector.connector_name = 'cook_county_gis'
+            mock_connector.market = 'cook_county_il'
+            mock_connector.lookup_address_by_pin.return_value = {
+                'property_street': '2155 W BRADLEY PL',
+                'property_city': 'CHICAGO',
+                'property_state': 'IL',
+                'property_zip': '60618',
+            }
+
+            with patch(
+                'app.services.property_match_review_service.connector_for_lead',
+                return_value=mock_connector,
+            ), patch.object(
+                PropertyMatchReviewService,
+                '_ingestion_service',
+            ) as mock_ingestion, patch(
+                'app.services.property_match_review_service.refresh_lead_scoring',
+            ), patch(
+                'app.services.building_ownership_backfill.dispatch_building_ownership_analysis',
+            ):
+                svc_instance = MagicMock()
+                svc_instance._enrich_with_gis.return_value = {
+                    'connector_name': 'cook_county_gis',
+                    'match_found': True,
+                    'fields_populated': 1,
+                    'parcel_pin': '14-19-122-001-0000',
+                }
+                mock_ingestion.return_value = svc_instance
+
+                result = PropertyMatchReviewService().approve_match(
+                    lead.id, actor='tester', pin='14191220010000',
+                )
+
+            refreshed = db.session.get(Lead, lead.id)
+            assert refreshed.property_street == '3715-3721 N Leavitt St'
+            assert refreshed.assessor_aka_street == '2155 W Bradley Pl'
+            assert refreshed.county_assessor_pin == '14-19-122-001-0000'
+            assert result['assessor_aka_street'] == '2155 W Bradley Pl'

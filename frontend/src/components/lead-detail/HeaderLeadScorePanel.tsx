@@ -172,11 +172,11 @@ export function HeaderLeadScorePanel({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 1.25,
-        flex: { xs: '1 1 100%', md: '0 0 auto' },
-        width: { md: 400 },
-        minWidth: { md: 380 },
-        maxWidth: { xs: '100%', md: 440 },
-        flexShrink: 0,
+        flex: { xs: '1 1 100%', md: '1 1 320px' },
+        width: { md: 360 },
+        minWidth: 0,
+        maxWidth: { xs: '100%', md: 400 },
+        flexShrink: 1,
         ml: { md: 'auto' },
         py: 0.5,
         px: 1.25,
@@ -184,6 +184,7 @@ export function HeaderLeadScorePanel({
         border: '1px solid',
         borderColor: 'divider',
         bgcolor: 'background.paper',
+        overflow: 'hidden',
         cursor: clickable ? 'pointer' : 'default',
         textAlign: 'left',
         '&:hover': clickable
@@ -288,12 +289,14 @@ export function HeaderLeadScorePanel({
           </Typography>
         ) : (
           <Box
+            data-testid="header-score-drivers"
             sx={{
               display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
+              gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
               gridTemplateRows: 'auto auto',
               gap: 0.5,
               width: '100%',
+              minWidth: 0,
               alignItems: 'stretch',
             }}
           >
@@ -310,6 +313,7 @@ export function HeaderLeadScorePanel({
                   sx={{
                     width: '100%',
                     maxWidth: '100%',
+                    minWidth: 0,
                     height: 24,
                     justifyContent: 'flex-start',
                     borderRadius: 0.75,
@@ -317,6 +321,8 @@ export function HeaderLeadScorePanel({
                     color: tone.fg,
                     fontWeight: 600,
                     fontSize: '0.65rem',
+                    overflow: 'hidden',
+                    boxSizing: 'border-box',
                     '& .MuiChip-icon': {
                       color: tone.fg,
                       ml: 0.35,
@@ -325,6 +331,8 @@ export function HeaderLeadScorePanel({
                     },
                     '& .MuiChip-label': {
                       px: 0.5,
+                      minWidth: 0,
+                      flex: '1 1 auto',
                       whiteSpace: 'nowrap',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',

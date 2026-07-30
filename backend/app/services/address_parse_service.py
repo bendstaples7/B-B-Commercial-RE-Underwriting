@@ -101,16 +101,62 @@ def _parse_tabular_separated(raw: str) -> tuple[str, str, str, str] | None:
 def street_only_from_glued_city_state_zip(raw: str) -> str | None:
     """If ``raw`` is ``street City ST ZIP`` (state required), return street line.
 
+    Also accepts ``street City ST`` without ZIP (common HubSpot dealname dumps).
     Does not use zip-only parsing — that would mis-handle ``1719 W Barry 60657``.
     """
     text = (raw or '').strip()
     if not text or ',' in text:
         return None
     parsed = _parse_space_separated_with_state(text)
-    if not parsed:
+    if parsed:
+        street = (parsed[0] or '').strip()
+        return street or None
+    parsed_st = _parse_space_separated_city_state(text)
+    if parsed_st:
+        street = (parsed_st[0] or '').strip()
+        return street or None
+    return None
+
+
+def _parse_space_separated_city_state(raw: str) -> tuple[str, str, str] | None:
+    """Parse ``street … City ST`` (no ZIP) into (street, city, state)."""
+    parts = re.sub(r'\s+', ' ', raw.strip()).split()
+    if len(parts) < 3:
         return None
-    street = (parsed[0] or '').strip()
-    return street or None
+    state = parts[-1].upper()
+    if len(state) != 2 or not state.isalpha() or state not in _US_STATE_CODES:
+        return None
+    # Overlap with street suffixes (CT/ST): need a real City token, not
+    # ``1369 OXFORD CT`` peeled as city=OXFORD state=CT.
+    if state in _STREET_SUFFIXES and len(parts) < 4:
+        return None
+
+    if (
+        len(parts) >= 4
+        and parts[-2].upper() in _CITY_SECOND_WORDS
+        and parts[-3].upper() not in _STREET_SUFFIXES
+    ):
+        city = f'{parts[-3]} {parts[-2]}'
+        street_parts = parts[:-3]
+    else:
+        city = parts[-2]
+        street_parts = parts[:-2]
+
+    if not street_parts:
+        return None
+    # Street line should still look like a street (suffix or multi-token).
+    if (
+        state in _STREET_SUFFIXES
+        and len(street_parts) >= 1
+        and street_parts[-1].upper() not in _STREET_SUFFIXES
+        and len(street_parts) < 2
+    ):
+        return None
+    street = ' '.join(street_parts).strip()
+    city = city.strip()
+    if not street or not city:
+        return None
+    return street, city, state
 
 
 def _parse_comma_separated(raw: str) -> tuple[str, str, str, str] | None:

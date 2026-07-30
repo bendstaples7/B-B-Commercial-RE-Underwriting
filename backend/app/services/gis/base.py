@@ -21,6 +21,7 @@ class GISParcel:
     mailing_state: Optional[str]
     mailing_zip: Optional[str]
     # Property situs (filled when the connector can resolve parcel address)
+    property_street: Optional[str] = None
     property_city: Optional[str] = None
     property_state: Optional[str] = None
     property_zip: Optional[str] = None

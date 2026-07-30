@@ -48,3 +48,11 @@ class TestCommercialFewPinHeuristic:
         )
         assert result.condo_risk_status == "likely_condo"
         assert "rule_2_condo_language" in result.triggered_rules
+
+    def test_commercial_four_plus_pins_likely_condo_even_single_owner(self):
+        result = classify(
+            _base(pin_count=4, owner_count=1, is_commercial=True, units=12),
+        )
+        assert result.condo_risk_status == "likely_condo"
+        assert result.confidence == "medium"
+        assert "rule_3b_commercial_multi_pin_cluster" in result.triggered_rules

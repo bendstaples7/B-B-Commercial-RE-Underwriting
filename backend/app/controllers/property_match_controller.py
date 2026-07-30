@@ -49,7 +49,12 @@ class BackfillSchema(Schema):
 @require_auth
 @handle_errors
 def preview_property_match(lead_id: int):
-    return jsonify(_match_svc.preview_match(lead_id)), 200
+    pin_hint = request.args.get('pin')
+    if isinstance(pin_hint, str):
+        pin_hint = pin_hint.strip() or None
+    else:
+        pin_hint = None
+    return jsonify(_match_svc.preview_match(lead_id, pin=pin_hint)), 200
 
 
 @property_match_bp.route('/<int:lead_id>/property-match/approve', methods=['POST'])
@@ -123,7 +128,31 @@ def get_building_ownership(lead_id: int):
 def analyze_building_ownership(lead_id: int):
     body = request.get_json(silent=True) or {}
     force = bool(body.get('force'))
-    return jsonify(_ownership_svc.analyze_lead(lead_id, force=force)), 200
+    tax_situs = body.get('tax_situs_street')
+    if isinstance(tax_situs, str):
+        tax_situs = tax_situs.strip() or None
+    else:
+        tax_situs = None
+    raw_pins = body.get('candidate_pins')
+    candidate_pins = None
+    if isinstance(raw_pins, list):
+        candidate_pins = [
+            str(p).strip() for p in raw_pins if isinstance(p, (str, int)) and str(p).strip()
+        ] or None
+    apply_closest = bool(body.get('apply_closest_pin'))
+    persist_aka = body.get('persist_aka')
+    if persist_aka is None:
+        persist_aka = True
+    else:
+        persist_aka = bool(persist_aka)
+    return jsonify(_ownership_svc.analyze_lead(
+        lead_id,
+        force=force,
+        tax_situs_street=tax_situs,
+        candidate_pins=candidate_pins,
+        apply_closest_pin=apply_closest,
+        persist_aka=persist_aka,
+    )), 200
 
 
 @property_match_bp.route('/<int:lead_id>/building-ownership/override', methods=['PUT'])

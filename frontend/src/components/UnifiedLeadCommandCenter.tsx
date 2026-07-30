@@ -79,6 +79,7 @@ import {
 import { KeyContactCard } from '@/components/lead-detail/KeyContactCard'
 import { PropertyKpiCard } from '@/components/lead-detail/PropertyKpiCard'
 import { PropertyOverviewQuickStats } from '@/components/lead-detail/PropertyOverviewQuickStats'
+import { HeaderCondoCheckPanel } from '@/components/lead-detail/HeaderCondoCheckPanel'
 import { HeaderLeadScorePanel } from '@/components/lead-detail/HeaderLeadScorePanel'
 import { DeepDiveDetailsCard } from '@/components/lead-detail/DeepDiveDetailsCard'
 import { SuppressLeadDialog } from '@/components/SuppressLeadDialog'
@@ -89,6 +90,8 @@ import {
 } from '@/utils/formatEnqueueSummary'
 import { formatDateOnly } from '@/utils/helpers'
 import { formatCookCountyPin } from '@/utils/cookCountyPin'
+import { MissingPinActions } from '@/components/lead-detail/PinLookupControl'
+import { scrollCommandCenterSectionIntoView } from '@/utils/scrollCommandCenterSection'
 
 export { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
 export { tabParamToIndex } from '@/components/lead-detail/LeadDetailTabPanel'
@@ -152,6 +155,7 @@ function PropertyOverviewHeader({
   statusSelectorRef,
 }: PropertyOverviewHeaderProps & { statusSelectorRef?: React.RefObject<HTMLDivElement | null> }) {
   const [scoreDialogOpen, setScoreDialogOpen] = useState(false)
+  const [pinSnack, setPinSnack] = useState<string | null>(null)
   const navigate = useNavigate()
 
   const fullAddress = formatPropertyAddress(commandCenterData)
@@ -162,6 +166,23 @@ function PropertyOverviewHeader({
     commandCenterData.organizations,
   )
   const pinFormatted = formatCookCountyPin(commandCenterData.county_assessor_pin || '') || null
+  const pinMissing = !pinFormatted
+  const akaStreet = cleanAddressPart(commandCenterData.assessor_aka_street || '')
+  const akaLocality = [
+    cleanAddressPart(commandCenterData.assessor_aka_city || ''),
+    [
+      cleanAddressPart(commandCenterData.assessor_aka_state || ''),
+      cleanAddressPart(commandCenterData.assessor_aka_zip || ''),
+    ].filter(Boolean).join(' '),
+  ].filter(Boolean).join(', ')
+  const akaDisplay = akaStreet
+    ? (akaLocality ? `${akaStreet}, ${akaLocality}` : akaStreet)
+    : ''
+  const leadStreetNorm = cleanAddressPart(commandCenterData.property_street || '').toLowerCase()
+  const showAka = Boolean(
+    akaDisplay
+    && akaStreet.toLowerCase() !== leadStreetNorm,
+  )
 
   const displayScore = scoreRecord?.total_score ?? commandCenterData.lead_score
   const scoreTier = scoreRecord?.score_tier ?? scoreToTier(displayScore)
@@ -206,13 +227,35 @@ function PropertyOverviewHeader({
       </Box>,
     )
   }
-  if (pinFormatted) {
-    metadataParts.push(
-      <Box key="pin" component="span" data-testid="property-overview-pin">
-        Parcel ID / PIN: {pinFormatted}
-      </Box>,
-    )
-  }
+  // Always show PIN (same for commercial + residential) so a blank isn't invisible.
+  metadataParts.push(
+    <Box
+      key="pin"
+      component="span"
+      data-testid="property-overview-pin"
+      sx={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 0.5,
+      }}
+    >
+      Parcel ID / PIN: {pinMissing ? '—' : pinFormatted}
+      {pinMissing ? (
+        <MissingPinActions
+          leadId={leadId}
+          currentPin={commandCenterData.county_assessor_pin}
+          onSnack={setPinSnack}
+          testIdPrefix="property-overview"
+          align="start"
+          hideEmptyCaption
+          layout="inline"
+          autoPreview
+          isCookCounty={Boolean(commandCenterData.is_cook_county_eligible)}
+        />
+      ) : null}
+    </Box>,
+  )
 
   return (
     <>
@@ -226,45 +269,84 @@ function PropertyOverviewHeader({
           mb: 0,
         }}
       >
-        <Box
-          sx={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            gap: { xs: 1.25, md: 1.5 },
-          }}
-        >
+          <Box
+            sx={{
+              display: 'flex',
+              flexWrap: { xs: 'wrap', md: 'nowrap' },
+              alignItems: 'flex-start',
+              gap: { xs: 1.25, md: 1.5 },
+              minWidth: 0,
+            }}
+          >
           <IconButton
             data-testid="back-button"
             onClick={handleBack}
             edge="start"
             aria-label={fromQueue ? `Back to ${fromQueue.label}` : 'Go back'}
             size="small"
+            sx={{ mt: 0.25 }}
           >
             <ArrowBackIcon />
           </IconButton>
 
           <Box
             sx={{
-              // Grow enough to show the full address (wrap ok); do not clamp/ellipsis.
-              flex: { xs: '1 1 calc(100% - 48px)', md: '1 1 320px' },
-              minWidth: { xs: 0, md: 260 },
-              maxWidth: { xs: '100%', md: '40%' },
+              // Option A: address column only as wide as needed; panels pack right.
+              flex: { xs: '1 1 calc(100% - 48px)', md: '1 1 auto' },
+              minWidth: { xs: 0, md: 0 },
+              maxWidth: { xs: '100%', md: '42%' },
             }}
           >
             <Box
-              sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}
+              sx={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                gap: 0.35,
+                minWidth: 0,
+                width: '100%',
+              }}
               data-testid="property-overview-address"
             >
               <Typography
                 sx={{
                   ...ccHeroAddressSx,
-                  flex: 1,
+                  fontSize: { xs: '1.15rem', sm: '1.35rem' },
                   minWidth: 0,
+                  maxWidth: '100%',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  overflowWrap: 'normal',
+                  wordBreak: 'keep-all',
                 }}
+                title={fullAddress}
               >
                 {fullAddress}
               </Typography>
+              {showAka ? (
+                <Typography
+                  component="div"
+                  data-testid="property-overview-aka"
+                  sx={{
+                    ...ccHeroSecondarySx,
+                    mt: 0.15,
+                    fontSize: '0.8rem',
+                    minWidth: 0,
+                    maxWidth: '100%',
+                    textAlign: 'left',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                  title={akaDisplay}
+                >
+                  Also known as:{' '}
+                  <Box component="span" sx={{ color: 'text.primary', fontWeight: 500 }}>
+                    {akaDisplay}
+                  </Box>
+                </Typography>
+              ) : null}
             </Box>
 
             {metadataParts.length > 0 ? (
@@ -314,15 +396,42 @@ function PropertyOverviewHeader({
             </Box>
           </Box>
 
-          <PropertyOverviewQuickStats commandCenterData={commandCenterData} />
+          <Box
+            sx={{
+              display: 'flex',
+              flexWrap: { xs: 'wrap', md: 'nowrap' },
+              alignItems: 'stretch',
+              gap: 1,
+              flexShrink: 0,
+              ml: { md: 'auto' },
+              minWidth: 0,
+              maxWidth: '100%',
+              '& [data-testid="header-condo-check"], & [data-testid="header-lead-score"]': {
+                width: { md: 280 },
+                minWidth: { md: 240 },
+                maxWidth: { xs: '100%', md: 300 },
+                flex: '0 1 auto',
+                ml: '0 !important',
+              },
+            }}
+          >
+            <PropertyOverviewQuickStats commandCenterData={commandCenterData} />
 
-          <HeaderLeadScorePanel
-            score={displayScore}
-            tier={scoreTier}
-            scoreRecord={scoreRecord}
-            onOpenBreakdown={() => setScoreDialogOpen(true)}
-          />
-        </Box>
+            <HeaderCondoCheckPanel
+              commandCenterData={commandCenterData}
+              onOpenBuildingOwnership={() => {
+                scrollCommandCenterSectionIntoView('building-ownership-section')
+              }}
+            />
+
+            <HeaderLeadScorePanel
+              score={displayScore}
+              tier={scoreTier}
+              scoreRecord={scoreRecord}
+              onOpenBreakdown={() => setScoreDialogOpen(true)}
+            />
+          </Box>
+          </Box>
       </Paper>
 
       {scoreRecord && (
@@ -333,6 +442,11 @@ function PropertyOverviewHeader({
           onViewFullBreakdown={onViewFullBreakdown}
         />
       )}
+      <AppSnackbar
+        open={Boolean(pinSnack)}
+        onClose={() => setPinSnack(null)}
+        message={pinSnack ?? ''}
+      />
     </>
   )
 }
@@ -1243,10 +1357,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         return
       }
       case 'research_property': {
-        const el = document.getElementById('building-ownership-section')
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        }
+        scrollCommandCenterSectionIntoView('building-ownership-section')
         return
       }
       case 'run_analysis': {
@@ -1575,7 +1686,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         pb: 3,
       }}
     >
-      <Box sx={{ position: 'sticky', top: 0, zIndex: 100, bgcolor: 'grey.50', maxWidth: '100%' }}>
+      <Box
+        data-testid="cc-sticky-chrome"
+        sx={{ position: 'sticky', top: 0, zIndex: 100, bgcolor: 'grey.50', maxWidth: '100%' }}
+      >
         {fromQueue && (
           <QueueWorkHeader
             fromQueue={fromQueue}
@@ -1636,11 +1750,27 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 embedded
                 showActionCenterTiles
                 entityResearch={commandCenterData!.entity_research ?? null}
+                needsEntityResearch={Boolean(commandCenterData!.needs_entity_research)}
                 onRefreshEntityResearch={async () => {
                   await entityResolutionApi.resolve(leadId, { action: 'resolve', async: false })
                   await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
                 }}
                 onAction={handleRaAction}
+                onDeprioritize={async (reason) => {
+                  const result = await commandCenterService.updateStatus(
+                    leadId,
+                    'deprioritize',
+                    reason || undefined,
+                  )
+                  await handleStatusChanged(result.lead_status as LeadStatus, {
+                    lead_score: result.lead_score,
+                    recommended_action: result.recommended_action,
+                  })
+                  setActivitySnackbar({
+                    open: true,
+                    message: 'Lead deprioritized',
+                  })
+                }}
                 onCreateTask={handleCreateTask}
               />
             </Paper>

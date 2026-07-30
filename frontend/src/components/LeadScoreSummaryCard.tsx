@@ -15,6 +15,11 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import type { PropertyScoreRecord } from '@/types'
 import { LeadScoreBadge } from './LeadScoreBadge'
 import { TIER_RANGE_LABELS, formatScoreFieldLabel } from '@/utils/scoreTierMeta'
+import {
+  ATTRIBUTION_ONLY_KEYS,
+  META_SCORE_KEYS,
+  formatSignedPoints,
+} from '@/utils/scoreBreakdownSummary'
 
 export interface LeadScoreSummaryCardProps {
   score: PropertyScoreRecord
@@ -23,7 +28,7 @@ export interface LeadScoreSummaryCardProps {
 
 export function LeadScoreSummaryCard({ score, onViewFullBreakdown }: LeadScoreSummaryCardProps) {
   const breakdownEntries = Object.entries(score.score_details ?? {})
-    .filter(([key]) => key !== 'notes_keywords')
+    .filter(([key]) => !ATTRIBUTION_ONLY_KEYS.has(key) && !META_SCORE_KEYS.has(key))
     .sort(([, a], [, b]) => b - a)
     .slice(0, 5)
 
@@ -76,8 +81,12 @@ export function LeadScoreSummaryCard({ score, onViewFullBreakdown }: LeadScoreSu
                   <Typography variant="body2" noWrap sx={{ flex: 1 }}>
                     {formatScoreFieldLabel(dimension)}
                   </Typography>
-                  <Typography variant="body2" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                    +{points}
+                  <Typography
+                    variant="body2"
+                    color={points < 0 ? 'error.main' : 'text.primary'}
+                    sx={{ fontVariantNumeric: 'tabular-nums' }}
+                  >
+                    {formatSignedPoints(points)}
                   </Typography>
                 </Box>
               ))}

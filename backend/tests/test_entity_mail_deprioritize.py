@@ -328,7 +328,7 @@ class TestScoringMailGate:
         assert reason == 'mail_work_in_flight'
         assert meta.get('condo_risk_status') == 'needs_review'
 
-    def test_commercial_likely_condo_still_suppress_with_mail_in_flight(self, monkeypatch):
+    def test_commercial_likely_condo_confirm_deprioritize_with_mail_in_flight(self, monkeypatch):
         monkeypatch.setattr(
             'app.services.lead_scoring_engine._mail_work_in_flight',
             lambda lead_id: True,
@@ -344,9 +344,10 @@ class TestScoringMailGate:
         action, reason, meta = LeadScoringEngine.evaluate_recommended_action(
             lead, total_score=60.0, data_quality_score=50.0, score_tier='C',
         )
-        assert action == 'suppress'
+        assert action == 'needs_manual_review'
         assert reason == 'likely_condo'
         assert meta.get('condo_risk_status') == 'likely_condo'
+        assert meta.get('confirm_deprioritize') is True
 
     def test_commercial_needs_review_without_mail_still_nmr(self, monkeypatch):
         monkeypatch.setattr(

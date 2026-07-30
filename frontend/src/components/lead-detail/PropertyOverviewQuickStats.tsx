@@ -1,15 +1,22 @@
 /**
- * Property Overview Quick-Stats — 2×2 metric cells in the header middle band.
+ * Property Overview Quick-Stats — Est. value / Last sale / Units in the header middle band.
+ * Condo check lives in HeaderCondoCheckPanel (score-style), not in this grid.
  */
 import React from 'react'
 import { Box, Tooltip, Typography } from '@mui/material'
-import type { CommandCenterPayload } from '@/types'
+import type { CommandCenterPayload, CondoRiskStatus } from '@/types'
 import { ccKpiLabelSx, ccKpiValueSx } from '@/components/lead-detail/commandCenterChrome'
 import { formatMoneyValue, formatPropertyTypeLabel } from '@/utils/formatters'
 
 const EM_DASH = '—'
 
 export { formatMoneyValue } from '@/utils/formatters'
+
+const CONFIDENCE_PERCENT: Record<string, number> = {
+  high: 90,
+  medium: 60,
+  low: 30,
+}
 
 /** Normalize sale display strings to a readable date (prefer MM/DD/YYYY). */
 export function formatSaleDatePart(saleDisplay: string | null | undefined): string | null {
@@ -76,14 +83,95 @@ export function formatUnitsDetailsCell(
   return null
 }
 
+export function mapCondoConfidencePercent(
+  confidence: string | null | undefined,
+): number | null {
+  if (!confidence) return null
+  const key = String(confidence).trim().toLowerCase()
+  return CONFIDENCE_PERCENT[key] ?? null
+}
+
+/** CRM deal sources that imply commercial inventory (fill-if-blank on backend). */
+const COMMERCIAL_DEAL_SOURCES = new Set([
+  'costar',
+  'cityscape',
+  'cityscape unused zoning capacity',
+])
+
+export function shouldShowCondoCheckCell(commandCenterData: CommandCenterPayload): boolean {
+  const category = (commandCenterData.lead_category ?? '').toLowerCase()
+  const propertyType = (commandCenterData.property_type ?? '').toLowerCase()
+  const dealSource = (commandCenterData.deal_source ?? '').trim().toLowerCase()
+  const street = commandCenterData.property_street ?? ''
+  const multiUnitRange = /\d+\s*-\s*\d+/.test(street)
+  return (
+    category === 'commercial'
+    || propertyType.includes('commercial')
+    || COMMERCIAL_DEAL_SOURCES.has(dealSource)
+    || multiUnitRange
+    || Boolean(commandCenterData.condo_analysis_id)
+    || Boolean(commandCenterData.condo_risk_status)
+    || Boolean(commandCenterData.building_sale_possible)
+  )
+}
+
+export type CondoCheckLines = {
+  verdict: string
+  confidenceLine: string | null
+  reasonLine: string | null
+  tooltip?: string
+}
+
+export function resolveCondoCheckLines(
+  commandCenterData: CommandCenterPayload,
+): CondoCheckLines {
+  const status = commandCenterData.condo_risk_status as CondoRiskStatus | null | undefined
+  const pct = mapCondoConfidencePercent(commandCenterData.condo_confidence)
+  const confidenceLine = pct != null ? `${pct}% confidence` : null
+  const reason = (commandCenterData.condo_check_reason || '').trim() || null
+
+  if (!status && !commandCenterData.condo_analysis_id) {
+    return {
+      verdict: 'Not checked',
+      confidenceLine: null,
+      reasonLine: 'Run condo check below',
+      tooltip: 'Open Building ownership to run the condo check',
+    }
+  }
+
+  if (status === 'likely_not_condo') {
+    return {
+      verdict: 'Not condos',
+      confidenceLine,
+      reasonLine: reason,
+      tooltip: reason ?? undefined,
+    }
+  }
+  if (status === 'likely_condo') {
+    return {
+      verdict: 'Condos',
+      confidenceLine,
+      reasonLine: reason,
+      tooltip: reason ?? undefined,
+    }
+  }
+
+  return {
+    verdict: 'Check unclear',
+    confidenceLine: confidenceLine ?? (pct == null ? '30% confidence' : null),
+    reasonLine: reason ?? 'Condo check needs more research',
+    tooltip: reason ?? undefined,
+  }
+}
+
 export interface PropertyOverviewQuickStatsProps {
   commandCenterData: CommandCenterPayload
 }
 
-export function PropertyOverviewQuickStats({ commandCenterData }: PropertyOverviewQuickStatsProps) {
+export function PropertyOverviewQuickStats({
+  commandCenterData,
+}: PropertyOverviewQuickStatsProps) {
   const estValue = formatMoneyValue(commandCenterData.assessed_value ?? null)
-  // Est. rent has no lead field yet — omit the cell until a source exists.
-  const estRent: string | null = null
   const lastSale = resolveLastSaleCell(commandCenterData)
   const unitsDetails = formatUnitsDetailsCell(
     commandCenterData.units ?? null,
@@ -103,9 +191,6 @@ export function PropertyOverviewQuickStats({ commandCenterData }: PropertyOvervi
       value: estValue ?? EM_DASH,
       tooltip: 'Assessor assessed value (not analysis ARV)',
     },
-    ...(estRent
-      ? [{ id: 'est-rent', label: 'Est. rent', value: estRent }]
-      : []),
     {
       id: 'last-sale',
       label: 'Last sale',
@@ -123,18 +208,18 @@ export function PropertyOverviewQuickStats({ commandCenterData }: PropertyOvervi
     <Box
       data-testid="property-overview-quick-stats"
       sx={{
-        // Compact even 2×2 — leave horizontal room for the score panel.
-        flex: { xs: '1 1 100%', md: '0 1 280px' },
-        minWidth: { xs: '100%', md: 240 },
-        maxWidth: { xs: '100%', md: 300 },
+        // Compact 2-col KPI band — shifted left; condo lives in its own panel.
+        flex: { xs: '1 1 100%', md: '0 0 auto' },
+        minWidth: { xs: '100%', md: 200 },
+        maxWidth: { xs: '100%', md: 240 },
         display: 'grid',
         gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-        columnGap: { xs: 1.5, md: 2 },
-        rowGap: { xs: 0.75, md: 1 },
+        columnGap: { xs: 1.25, md: 1.5 },
+        rowGap: { xs: 0.75, md: 0.85 },
         alignContent: 'center',
         justifyItems: 'stretch',
-        px: { md: 0.5 },
-        mr: { md: 0.5 },
+        px: { md: 0.25 },
+        mr: { md: 0 },
       }}
     >
       {cells.map((cell) => {
@@ -155,9 +240,10 @@ export function PropertyOverviewQuickStats({ commandCenterData }: PropertyOvervi
             </Typography>
           </Box>
         )
+
         return cell.tooltip ? (
           <Tooltip key={cell.id} title={cell.tooltip} enterDelay={400}>
-            {body}
+            <Box sx={{ minWidth: 0 }}>{body}</Box>
           </Tooltip>
         ) : (
           <React.Fragment key={cell.id}>{body}</React.Fragment>

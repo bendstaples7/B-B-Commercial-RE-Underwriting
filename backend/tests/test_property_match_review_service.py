@@ -150,8 +150,11 @@ class TestPinPreviewAndBatchResolve:
                 return_value=connector,
             ), patch.object(
                 PropertyMatchReviewService,
-                '_cook_pins_at_address',
-                return_value=['14-21-123-456-0000', '14-21-123-456-0001'],
+                '_cook_pin_rows_at_address',
+                return_value=[
+                    {'pin': '14-21-123-456-0000', 'property_street': '123 Test St'},
+                    {'pin': '14-21-123-456-0001', 'property_street': '123 Test St'},
+                ],
             ):
                 preview = PropertyMatchReviewService().preview_match(lead.id)
 
@@ -159,6 +162,7 @@ class TestPinPreviewAndBatchResolve:
             assert preview['pin'] is None
             assert preview['pin_count'] == 2
             assert preview['pins'] == ['14-21-123-456-0000', '14-21-123-456-0001']
+            assert len(preview['candidates']) == 2
 
     def test_batch_resolves_only_unique_cook_pin(self, app):
         with app.app_context():
@@ -262,3 +266,12 @@ class TestPinPreviewAndBatchResolve:
                 )
             # Fewer rows than the batch size means the pass ended → wrap to 0.
             assert result['last_id'] == 0
+
+
+def test_direction_tokens_do_not_force_aka():
+    from app.services.property_match_review_service import (
+        assessor_street_differs_from_lead,
+        street_name_key,
+    )
+    assert street_name_key('100 N Main St') == street_name_key('100 NORTH MAIN STREET')
+    assert not assessor_street_differs_from_lead('100 N Main St', '100 NORTH Main Street')
