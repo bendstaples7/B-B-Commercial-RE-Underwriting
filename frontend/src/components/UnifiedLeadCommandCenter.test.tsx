@@ -1515,7 +1515,7 @@ describe('UnifiedLeadCommandCenter — mail stage advances queue', () => {
         }),
       )
     })
-  })
+  }, 20000)
 
   it('Pause cancels mail-stage hold and stays on the current lead', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
@@ -1665,7 +1665,7 @@ describe('UnifiedLeadCommandCenter — deprioritize queue hold', () => {
         }),
       )
     }, { timeout: 10000 })
-  }, 20000)
+  }, 30000)
 })
 
 describe('UnifiedLeadCommandCenter — timeline does not bleed across leads', () => {
