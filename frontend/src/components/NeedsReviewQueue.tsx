@@ -24,6 +24,12 @@ import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
 
+function duplicateConfidenceLabel(confidence: QueueRow['duplicate_confidence']): string {
+  const normalized = String(confidence || '').trim().toLowerCase()
+  if (!normalized) return ''
+  return normalized === 'ambiguous' ? ' (ambiguous match)' : ` (${normalized} match)`
+}
+
 export function NeedsReviewQueue() {
   const [page, setPage] = useState(1)
   const navigate = useNavigate()
@@ -54,9 +60,10 @@ export function NeedsReviewQueue() {
         if (row.review_reason === 'duplicate_lead_cluster') {
           const twin = row.suggested_winner_id
           const ids = (row.duplicate_cluster_ids ?? []).filter((id) => id !== row.id)
+          const confidence = duplicateConfidenceLabel(row.duplicate_confidence)
           return twin
-            ? `Duplicate cluster → #${twin}${ids.length ? ` (+${ids.length})` : ''}`
-            : 'Duplicate cluster'
+            ? `Duplicate cluster → #${twin}${ids.length ? ` (+${ids.length})` : ''}${confidence}`
+            : `Duplicate cluster${confidence}`
         }
         return row.review_reason ?? '—'
       },
@@ -95,6 +102,7 @@ export function NeedsReviewQueue() {
         row.review_reason === 'duplicate_lead_cluster'
         && Boolean(row.suggested_winner_id)
         && row.suggested_winner_id !== row.id
+        && String(row.duplicate_confidence || '').toLowerCase() !== 'ambiguous'
       ),
       onClick: async (row: QueueRow) => {
         const winnerId = row.suggested_winner_id

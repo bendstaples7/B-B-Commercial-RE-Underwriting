@@ -62,6 +62,44 @@ def refresh_lead_dedup_fields(lead: Lead) -> None:
     lead.normalized_street = key or None
 
 
+def _dedup_index_conflict_exists(
+    *,
+    lead: Lead,
+    proposed_street: str,
+    ignore_ids: set[int],
+) -> bool:
+    """True when a street update would collide with the owner+street index."""
+    key = dedup_street_key(proposed_street)
+    owner_user_id = getattr(lead, 'owner_user_id', None)
+    first = (getattr(lead, 'owner_first_name', None) or '').strip()
+    last = (getattr(lead, 'owner_last_name', None) or '').strip()
+    if not (key and owner_user_id and first and last):
+        return False
+    query = Lead.query.filter(
+        Lead.owner_user_id == owner_user_id,
+        func.lower(func.trim(Lead.owner_first_name)) == first.lower(),
+        func.lower(func.trim(Lead.owner_last_name)) == last.lower(),
+        Lead.normalized_street == key,
+    )
+    if ignore_ids:
+        query = query.filter(~Lead.id.in_(ignore_ids))
+    return db.session.query(query.exists()).scalar()
+
+
+def _street_prefilter(query, street: str):
+    """Bound owner-name scans with a coarse building-level SQL predicate."""
+    key = dedup_street_key(street)
+    if not key:
+        return query
+    house_token = key.split(' ', 1)[0]
+    normalized_prefix = f'{key} %'
+    return query.filter(or_(
+        Lead.normalized_street == key,
+        Lead.normalized_street.ilike(normalized_prefix),
+        Lead.property_street.ilike(f'{house_token}%'),
+    ))
+
+
 def _owner_name_filters(
     query,
     owner_first: Optional[str],
@@ -242,6 +280,16 @@ def _prefer_cleaner_property_street(winner: Lead, loser: Lead) -> None:
         ):
             preferred = l_street
     if preferred:
+        if _dedup_index_conflict_exists(
+            lead=winner,
+            proposed_street=preferred,
+            ignore_ids={winner.id} if isinstance(winner.id, int) else set(),
+        ):
+            logger.info(
+                'skipping cleaner street preference for winner=%s; normalized street would collide',
+                winner.id,
+            )
+            return
         winner.property_street = preferred
         refresh_lead_dedup_fields(winner)
         # Address completion runs once at merge level — avoid double GIS here.
@@ -372,7 +420,9 @@ def find_building_owner_siblings(lead: Lead, *, limit: int = 40) -> list[Lead]:
     q = _owner_name_filters(q, first, last)
 
     siblings: list[Lead] = []
-    for other in q.order_by(Lead.id.asc()).all():
+    q = _street_prefilter(q, street)
+
+    for other in q.order_by(Lead.id.asc()).limit(max(limit * 4, limit)).all():
         if streets_match_normalized(street, other.property_street):
             siblings.append(other)
         if len(siblings) >= limit:
@@ -477,11 +527,12 @@ def try_absorb_duplicate_for_lead(
                 loser = db.session.get(Lead, loser.id)
                 if winner is None or loser is None:
                     break
-                merge_lead_into_winner(winner, loser, changed_by=changed_by)
-                merged_pairs.append({
+                pair = {
                     'winner_id': winner.id,
                     'loser_id': loser.id,
-                })
+                }
+                merge_lead_into_winner(winner, loser, changed_by=changed_by)
+            merged_pairs.append(pair)
         except Exception:
             logger.exception(
                 'absorb merge failed loser=%s winner=%s',

@@ -28,9 +28,20 @@ logger = logging.getLogger(__name__)
 
 INCOMPLETE_ADDRESS_REASON = 'incomplete_property_address'
 
-HEAL_INCOMPLETE_BATCH_SIZE = int(os.environ.get('PROPERTY_ADDRESS_HEAL_BATCH_SIZE', '300'))
-HEAL_PRIORITY_BATCH_SIZE = int(os.environ.get('PROPERTY_ADDRESS_HEAL_PRIORITY_BATCH', '50'))
-HEAL_GIS_WORKERS = int(os.environ.get('PROPERTY_ADDRESS_HEAL_GIS_WORKERS', '4'))
+def _int_env(name: str, default: int, *, minimum: int = 0, maximum: int | None = None) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+HEAL_INCOMPLETE_BATCH_SIZE = _int_env('PROPERTY_ADDRESS_HEAL_BATCH_SIZE', 300)
+HEAL_PRIORITY_BATCH_SIZE = _int_env('PROPERTY_ADDRESS_HEAL_PRIORITY_BATCH', 50)
+HEAL_GIS_WORKERS = _int_env('PROPERTY_ADDRESS_HEAL_GIS_WORKERS', 4, minimum=1, maximum=12)
 HEAL_INCOMPLETE_CURSOR_KEY = 'property_address:heal_incomplete:last_id'
 HEAL_INCOMPLETE_LOCK_KEY = 'property_address:heal_incomplete_lock'
 
@@ -289,7 +300,7 @@ def find_sibling_complete_locality(lead: Lead) -> dict[str, Any] | None:
     if is_property_address_complete(lead=lead):
         return None
 
-    from app.services.lead_merge_utils import streets_match_normalized
+    from app.services.lead_merge_utils import dedup_street_key, streets_match_normalized
 
     first = (getattr(lead, 'owner_first_name', None) or '').strip()
     last = (getattr(lead, 'owner_last_name', None) or '').strip()
@@ -315,7 +326,16 @@ def find_sibling_complete_locality(lead: Lead) -> dict[str, Any] | None:
             or_(Lead.owner_last_name.is_(None), Lead.owner_last_name == ''),
         )
 
-    for sibling in q.order_by(Lead.id.asc()).all():
+    street_key = dedup_street_key(street)
+    if street_key:
+        house_token = street_key.split(' ', 1)[0]
+        q = q.filter(or_(
+            Lead.normalized_street == street_key,
+            Lead.normalized_street.ilike(f'{street_key} %'),
+            Lead.property_street.ilike(f'{house_token}%'),
+        ))
+
+    for sibling in q.order_by(Lead.id.asc()).limit(80).all():
         if not streets_match_normalized(street, sibling.property_street):
             continue
         if not is_property_address_complete(lead=sibling):
@@ -1165,7 +1185,8 @@ def _select_heal_batch(
         )
         return leads, {lead.id for lead in leads}, False
 
-    priority_limit = max(0, min(HEAL_PRIORITY_BATCH_SIZE, batch_limit))
+    cursor_reserve = 1 if batch_limit > 1 else 0
+    priority_limit = max(0, min(HEAL_PRIORITY_BATCH_SIZE, batch_limit - cursor_reserve))
     priority_leads = (
         Lead.query
         .filter(_priority_incomplete_clause())

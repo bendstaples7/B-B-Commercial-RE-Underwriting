@@ -43,7 +43,10 @@ vi.mock('@/services/openLetterApi', () => ({
   },
 }))
 
-const navigateMock = vi.fn()
+const { navigateMock } = vi.hoisted(() => ({
+  navigateMock: vi.fn(),
+}))
+
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
   return {

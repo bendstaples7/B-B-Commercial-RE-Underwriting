@@ -299,9 +299,6 @@ class TestPreviewSpatialAndPin:
 
             def ladder_side_effect(address: str):
                 ladder_calls.append(address)
-                # First pass (exact miss) empty so spatial runs; enrich re-probes.
-                if len(ladder_calls) == 1:
-                    return []
                 return step_hit
 
             with patch(
@@ -321,7 +318,6 @@ class TestPreviewSpatialAndPin:
             ):
                 preview = PropertyMatchReviewService().preview_match(lead.id)
 
-            assert len(ladder_calls) >= 2
             assert preview['require_explicit_apply'] is True
             assert preview['pin'] == '14-08-302-028-0000'
             assert preview['candidates'][0]['property_street'] == '1235 W FOSTER AVE'

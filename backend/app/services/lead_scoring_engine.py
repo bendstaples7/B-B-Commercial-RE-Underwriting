@@ -562,10 +562,6 @@ class LeadScoringEngine:
                 ),
             }
 
-        # Manual park (no active recent-sale window) — out of queues.
-        if lead.lead_status == 'deprioritize':
-            return 'suppress', 'terminal_status', {'lead_status': lead.lead_status}
-
         # After the mail hold ends, prior-owner phones/emails remain untrusted
         # until skip-trace completes on/after the sale date.
         if rubric.contacts_need_post_hold_verification(lead):
@@ -575,6 +571,10 @@ class LeadScoringEngine:
                 'contacts_likely_prior_owner': True,
                 'most_recent_sale': getattr(lead, 'most_recent_sale', None),
             }
+
+        # Manual park (no active recent-sale window) — out of queues.
+        if lead.lead_status == 'deprioritize':
+            return 'suppress', 'terminal_status', {'lead_status': lead.lead_status}
 
         if lead.lead_status == 'skip_trace':
             # Returned / USPS-failed owner mailing is not "no contact" — prefer phone/email.

@@ -178,13 +178,13 @@ def _rank_candidates_by_house_proximity(
     rows: list[dict],
 ) -> list[dict]:
     """Prefer same street name and closer house numbers; stable otherwise."""
+    lead_key = street_name_key(lead_street)
 
     def _key(row: dict) -> tuple:
         delta = _house_number_delta(lead_street, row.get('property_street'))
         same_name = (
             0
-            if street_name_key(lead_street)
-            and street_name_key(lead_street) == street_name_key(row.get('property_street'))
+            if lead_key and lead_key == street_name_key(row.get('property_street'))
             else 1
         )
         abs_delta = abs(delta) if delta is not None else 10_000
@@ -365,6 +365,7 @@ class PropertyMatchReviewService:
         cook_rows: list[dict],
         *,
         aka_street: str,
+        house_step_lookup=None,
     ) -> list[dict]:
         """Spatial nearby parcels + one-sided house-number bias correction."""
         from app.services.gis.cook_county_parcel_spatial import (
@@ -408,10 +409,11 @@ class PropertyMatchReviewService:
             all(d < 0 for d in deltas) or all(d > 0 for d in deltas)
         )
         if one_sided or not deltas:
-            step_rows = cls._cook_pin_rows_via_house_steps(lead_street)
+            step_lookup = house_step_lookup or cls._cook_pin_rows_via_house_steps
+            step_rows = step_lookup(lead_street)
             cls._merge_cook_rows(cook_rows, step_rows)
             seen = {str(r.get('pin') or '').strip() for r in cook_rows if r.get('pin')}
-            for radius in (150.0, 200.0):
+            for radius in (() if step_rows else (150.0, 200.0)):
                 balanced = False
                 for probe in (aka_street, lead_street):
                     if not (probe or '').strip():
@@ -546,6 +548,15 @@ class PropertyMatchReviewService:
         connector_name = connector.connector_name if connector else None
         is_cook = getattr(connector, 'market', None) == 'cook_county_il'
         pin_hint = (pin or '').strip() or None
+        house_step_cache: dict[str, list[dict]] = {}
+
+        def _cached_house_step_rows(address: str) -> list[dict]:
+            key = _normalize_street_compare(address)
+            if not key:
+                return []
+            if key not in house_step_cache:
+                house_step_cache[key] = self._cook_pin_rows_via_house_steps(address)
+            return list(house_step_cache[key])
 
         # PIN-first verify: resolve situs from pasted PIN without requiring ladder hit.
         if pin_hint and is_cook and connector is not None:
@@ -651,18 +662,20 @@ class PropertyMatchReviewService:
 
         # Exact miss → odd/even house-number ladder (±2/±4/±6) on Socrata.
         if is_cook and lead.property_street and not cook_rows:
-            cook_rows = self._cook_pin_rows_via_house_steps(lead.property_street)
+            cook_rows = _cached_house_step_rows(lead.property_street)
 
         # Enrich thin AKA/marketing hits via spatial around the best known situs.
         need_spatial = is_cook and lead.property_street and (
             len(cook_rows) == 0 or (aka_street and len(cook_rows) < 3)
         )
-        # Also run spatial when ladder-only hits exist but we still want neighbors
-        # for condo context — skip when ladder already found a unique near-miss.
+        # Run spatial only for exact misses, or thin AKA contexts that need neighbors.
         if need_spatial:
             try:
                 cook_rows = self._enrich_cook_rows_spatial(
-                    lead, cook_rows, aka_street=aka_street,
+                    lead,
+                    cook_rows,
+                    aka_street=aka_street,
+                    house_step_lookup=_cached_house_step_rows,
                 )
             except Exception:
                 logger.exception('Cook spatial PIN fallback failed for lead %s', lead_id)
@@ -680,7 +693,7 @@ class PropertyMatchReviewService:
             if not same_probe and near_probe is None:
                 self._merge_cook_rows(
                     cook_rows,
-                    self._cook_pin_rows_via_house_steps(lead.property_street),
+                    _cached_house_step_rows(lead.property_street),
                 )
 
         cook_rows = _rank_candidates_by_house_proximity(lead.property_street, cook_rows)
@@ -991,7 +1004,10 @@ class PropertyMatchReviewService:
                 result['skipped_no_connector'] += 1
                 continue
             try:
-                rows = self._cook_pin_rows_at_address(lead.property_street)
+                rows = [
+                    {'pin': pin}
+                    for pin in self._cook_pins_at_address(lead.property_street)
+                ]
             except Exception:
                 logger.exception('PIN batch lookup failed for lead %s', lead.id)
                 result['errors'] += 1
@@ -1021,9 +1037,8 @@ class PropertyMatchReviewService:
             if len(same_situs) == 1:
                 pin = same_situs[0]
             elif len({(r.get('pin') or '').strip() for r in rows if r.get('pin')}) == 1:
-                # Single PIN only when it is same-situs (not a silent near-miss).
                 only = next(r for r in rows if r.get('pin'))
-                if assessor_street_differs_from_lead(
+                if only.get('property_street') and assessor_street_differs_from_lead(
                     lead.property_street, only.get('property_street'),
                 ):
                     result['skipped_ambiguous'] += 1

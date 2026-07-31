@@ -23,6 +23,8 @@ export function QueueAdvanceHoldBanner({
   return (
     <Box
       data-testid="queue-advance-hold"
+      role="status"
+      aria-live="polite"
       sx={{
         px: { xs: 1, sm: 2 },
         py: 0.75,

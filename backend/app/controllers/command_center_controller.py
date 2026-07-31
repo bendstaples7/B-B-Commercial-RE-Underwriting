@@ -1849,8 +1849,15 @@ def merge_lead_into(lead_id: int, winner_id: int):
     """
     from app.services.lead_dedup_service import merge_loser_into_winner
 
-    data = request.get_json(silent=True) or {}
-    actor = data.get('actor') or getattr(g, 'user_id', 'anonymous')
+    loser = Lead.query.get(lead_id)
+    winner = Lead.query.get(winner_id)
+    if loser is None or winner is None:
+        return jsonify({'error': 'winner or loser lead not found'}), 404
+    for lead in (loser, winner):
+        denied = _require_lead_read_access(lead)
+        if denied is not None:
+            return denied
+    actor = getattr(g, 'user_id', 'anonymous')
     try:
         result = merge_loser_into_winner(
             winner_id,
@@ -1873,6 +1880,9 @@ def dismiss_duplicate_review(lead_id: int):
     lead = Lead.query.get(lead_id)
     if lead is None:
         return jsonify({'error': 'Not found'}), 404
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return denied
     if lead.review_reason != 'duplicate_lead_cluster':
         return jsonify({'error': 'Lead is not flagged as a duplicate cluster'}), 400
     lead.review_required = False
