@@ -1377,11 +1377,12 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       window.setTimeout(() => setHighlightEntryId(null), 2000)
     }
     // Header prefers leadScore history over CC lead_score — must refresh or score looks stuck.
-    await queryClient.invalidateQueries({ queryKey: ['leadScore', leadId] })
-    await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+    // Fire-and-forget: awaiting RQ refetch under Vitest fake timers can deadlock.
+    void queryClient.invalidateQueries({ queryKey: ['leadScore', leadId] })
+    void queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
     if (!fromQueue) return
-    await queryClient.invalidateQueries({ queryKey: ['queue-navigation', fromQueue.key] })
-    await queryClient.invalidateQueries({ queryKey: [`queue-${fromQueue.key}`] })
+    void queryClient.invalidateQueries({ queryKey: ['queue-navigation', fromQueue.key] })
+    void queryClient.invalidateQueries({ queryKey: [`queue-${fromQueue.key}`] })
     // Stay on this lead after status change — only task/activity completion advances the queue.
   }, [queryClient, leadId, fromQueue])
 
@@ -1451,9 +1452,8 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           open: true,
           ...flash,
         })
-        await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-        await queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
-        await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+        // Arm hold before query invalidation — awaiting RQ under fake timers
+        // can starve the advance chrome and hang tests.
         if (result.added > 0 && fromQueue) {
           scheduleQueueAdvanceHold({
             nextId: nextLeadId,
@@ -1461,6 +1461,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             message: flash.message,
           })
         }
+        void queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+        void queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
+        void queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
         return
       }
       case 'research_property': {
@@ -1585,13 +1588,8 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           )
             ? snapshotNextQueueLeadId()
             : undefined
-          await handleStatusChanged(result.lead_status as LeadStatus, {
-            lead_score: result.lead_score,
-            recommended_action: result.recommended_action,
-          })
-          // Status change alone stays put; Move to Skip Trace completes current
-          // work and drops the lead from due-work queues — advance like task done.
-          // Snapshot next id *before* queue-navigation refetch in handleStatusChanged.
+          // Snapshot + arm hold *before* status refetch invalidation so the
+          // advance chrome is not blocked by React Query under fake timers.
           if (advanceNextId !== undefined) {
             scheduleQueueAdvanceHold({
               nextId: advanceNextId,
@@ -1600,6 +1598,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 : 'Lead moved to Skip Trace',
             })
           }
+          await handleStatusChanged(result.lead_status as LeadStatus, {
+            lead_score: result.lead_score,
+            recommended_action: result.recommended_action,
+          })
         }
         return
       }
@@ -1898,10 +1900,6 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                     'deprioritize',
                     reason || undefined,
                   )
-                  await handleStatusChanged(result.lead_status as LeadStatus, {
-                    lead_score: result.lead_score,
-                    recommended_action: result.recommended_action,
-                  })
                   if (fromQueue) {
                     scheduleQueueAdvanceHold({
                       nextId: nextLeadId,
@@ -1914,6 +1912,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                       message: 'Lead deprioritized',
                     })
                   }
+                  await handleStatusChanged(result.lead_status as LeadStatus, {
+                    lead_score: result.lead_score,
+                    recommended_action: result.recommended_action,
+                  })
                 }}
                 onCreateTask={handleCreateTask}
               />

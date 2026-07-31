@@ -171,18 +171,24 @@ class TestPinPreviewAndBatchResolve:
             connector = MagicMock()
             connector.market = 'cook_county_il'
 
-            def pins_for_address(address):
+            def rows_for_address(address):
                 if address == '1 Unique St':
-                    return ['14-21-123-456-0000']
-                return ['14-21-123-456-0001', '14-21-123-456-0002']
+                    return [{
+                        'pin': '14-21-123-456-0000',
+                        'property_street': '1 Unique St',
+                    }]
+                return [
+                    {'pin': '14-21-123-456-0001', 'property_street': '2 Ambiguous St'},
+                    {'pin': '14-21-123-456-0002', 'property_street': '2 Ambiguous St'},
+                ]
 
             with patch(
                 'app.services.property_match_review_service.connector_for_lead',
                 return_value=connector,
             ), patch.object(
                 PropertyMatchReviewService,
-                '_cook_pins_at_address',
-                side_effect=pins_for_address,
+                '_cook_pin_rows_at_address',
+                side_effect=rows_for_address,
             ), patch.object(
                 PropertyMatchReviewService,
                 'approve_match',
@@ -208,18 +214,24 @@ class TestPinPreviewAndBatchResolve:
             connector = MagicMock()
             connector.market = 'cook_county_il'
 
-            def pins_for_address(address):
+            def rows_for_address(address):
                 if address == '1 Unique St':
-                    return ['14-21-123-456-0000']
-                return ['14-21-123-456-0001', '14-21-123-456-0002']
+                    return [{
+                        'pin': '14-21-123-456-0000',
+                        'property_street': '1 Unique St',
+                    }]
+                return [
+                    {'pin': '14-21-123-456-0001', 'property_street': '2 Ambiguous St'},
+                    {'pin': '14-21-123-456-0002', 'property_street': '2 Ambiguous St'},
+                ]
 
             with patch(
                 'app.services.property_match_review_service.connector_for_lead',
                 return_value=connector,
             ), patch.object(
                 PropertyMatchReviewService,
-                '_cook_pins_at_address',
-                side_effect=pins_for_address,
+                '_cook_pin_rows_at_address',
+                side_effect=rows_for_address,
             ), patch.object(
                 PropertyMatchReviewService,
                 'approve_match',
@@ -254,8 +266,11 @@ class TestPinPreviewAndBatchResolve:
                 return_value=connector,
             ), patch.object(
                 PropertyMatchReviewService,
-                '_cook_pins_at_address',
-                return_value=['14-21-123-456-0000'],
+                '_cook_pin_rows_at_address',
+                return_value=[{
+                    'pin': '14-21-123-456-0000',
+                    'property_street': '1 Unique St',
+                }],
             ), patch.object(
                 PropertyMatchReviewService,
                 'approve_match',
