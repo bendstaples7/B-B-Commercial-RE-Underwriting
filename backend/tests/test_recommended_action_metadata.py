@@ -14,6 +14,8 @@ from app.services.recommended_action_metadata import (
 
 def test_hold_explanation_includes_outdated_contact_rationale():
     display = get_recommended_action_display('hold')
+    assert display['label'] == 'Recent-sale hold'
+    assert 'deprioritized' in (display['explanation'] or '').lower()
     assert RECENT_SALE_OUTDATED_CONTACT_EXPLANATION in (display['explanation'] or '')
 
 

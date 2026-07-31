@@ -1366,6 +1366,15 @@ export const commandCenterService = {
     api.post(`/leads/${leadId}/do-not-contact`).then(r => r.data),
   park: (leadId: number, reactivationDate?: string): Promise<unknown> =>
     api.post(`/leads/${leadId}/park`, { reactivation_date: reactivationDate ?? null }).then(r => r.data),
+  mergeInto: (
+    loserId: number,
+    winnerId: number,
+  ): Promise<{ winner_id: number; loser_id: number; merged: boolean }> =>
+    api.post(`/leads/${loserId}/merge-into/${winnerId}`).then(r => r.data),
+  dismissDuplicateReview: (
+    leadId: number,
+  ): Promise<{ lead_id: number; dismissed: boolean }> =>
+    api.post(`/leads/${leadId}/dismiss-duplicate-review`).then(r => r.data),
   reactivate: (leadId: number): Promise<unknown> =>
     api.post(`/leads/${leadId}/reactivate`).then(r => r.data),
   suppress: (leadId: number): Promise<unknown> =>

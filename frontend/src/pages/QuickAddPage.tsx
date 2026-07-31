@@ -10,9 +10,12 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogContent,
+  DialogTitle,
   FormControl,
+  IconButton,
   InputLabel,
-  Link,
   List,
   ListItem,
   ListItemButton,
@@ -23,6 +26,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+import CloseIcon from '@mui/icons-material/Close'
 import MyLocationIcon from '@mui/icons-material/MyLocation'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
@@ -358,46 +362,61 @@ export function QuickAddPage() {
     clearSuggestions()
   }
 
-  if (successResult !== null) {
-    const hubspotMessage = hubspotSuccessMessage(successResult)
-    return (
-      <Box sx={{ maxWidth: 480, mx: 'auto' }}>
-        <Paper sx={{ p: 3, textAlign: 'center' }}>
-          <CheckCircleOutlineIcon color="success" sx={{ fontSize: 48, mb: 1 }} />
-          <Typography variant="h6" gutterBottom>
-            {successResult.created ? 'Lead saved' : 'Existing lead updated'}
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            {successResult.created
-              ? 'Added to Skip Trace.'
-              : 'This address was already in the system. Walk-by notes were appended without changing the pipeline stage.'}
-            {hubspotMessage ? ` ${hubspotMessage}` : ' HubSpot write-back is disabled in this environment.'}
-          </Typography>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            <Button variant="contained" component={RouterLink} to={`/leads/${successResult.lead_id}`}>
-              View lead
-            </Button>
-            <Button variant="outlined" component={RouterLink} to="/kanban">
-              Open Kanban
-            </Button>
-            <Button variant="text" onClick={handleReset}>
-              Add another
-            </Button>
-          </Box>
-        </Paper>
-      </Box>
-    )
+  const handleClose = () => {
+    const ref = typeof document !== 'undefined' ? document.referrer : ''
+    let sameOriginRef = false
+    if (ref) {
+      try {
+        sameOriginRef = new URL(ref).origin === window.location.origin
+      } catch {
+        sameOriginRef = false
+      }
+    }
+    if (sameOriginRef && window.history.length > 1) {
+      navigate(-1)
+      return
+    }
+    navigate('/kanban')
   }
 
-  return (
+  const formBody =
+    successResult !== null ? (
+      (() => {
+        const hubspotMessage = hubspotSuccessMessage(successResult)
+        return (
+          <Box sx={{ maxWidth: 480, mx: 'auto' }}>
+            <Paper sx={{ p: 3, textAlign: 'center' }}>
+              <CheckCircleOutlineIcon color="success" sx={{ fontSize: 48, mb: 1 }} />
+              <Typography variant="h6" gutterBottom>
+                {successResult.created ? 'Lead saved' : 'Existing lead updated'}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                {successResult.created
+                  ? 'Added to Skip Trace.'
+                  : 'This address was already in the system. Walk-by notes were appended without changing the pipeline stage.'}
+                {hubspotMessage ? ` ${hubspotMessage}` : ' HubSpot write-back is disabled in this environment.'}
+              </Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <Button variant="contained" component={RouterLink} to={`/leads/${successResult.lead_id}`}>
+                  View lead
+                </Button>
+                <Button variant="outlined" component={RouterLink} to="/kanban">
+                  Open Kanban
+                </Button>
+                <Button variant="text" onClick={handleReset}>
+                  Add another
+                </Button>
+              </Box>
+            </Paper>
+          </Box>
+        )
+      })()
+    ) : (
     <Box
       component="form"
       onSubmit={handleSubmit}
-      sx={{ maxWidth: 480, mx: 'auto', pb: 10 }}
+      sx={{ maxWidth: 480, mx: 'auto', pb: 4 }}
     >
-      <Typography variant="h5" component="h1" gutterBottom>
-        Quick Add
-      </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Capture a walk-by address. We will add it to Skip Trace and create a HubSpot deal.
       </Typography>
@@ -661,13 +680,44 @@ export function QuickAddPage() {
       >
         {quickAddMutation.isPending ? 'Saving…' : 'Save to Skip Trace'}
       </Button>
-
-      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2, textAlign: 'center' }}>
-        <Link component="button" type="button" onClick={() => navigate(-1)}>
-          Cancel
-        </Link>
-      </Typography>
     </Box>
+    )
+
+  return (
+    <Dialog
+      open
+      fullScreen
+      onClose={handleClose}
+      aria-labelledby="quick-add-dialog-title"
+      data-testid="quick-add-dialog"
+    >
+      <DialogTitle
+        id="quick-add-dialog-title"
+        component="div"
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 1,
+          py: 1.5,
+        }}
+      >
+        <Typography component="h1" variant="h6" fontWeight={700}>
+          Quick Add
+        </Typography>
+        <IconButton
+          aria-label="Close quick add"
+          onClick={handleClose}
+          data-testid="quick-add-close"
+          edge="end"
+        >
+          <CloseIcon />
+        </IconButton>
+      </DialogTitle>
+      <DialogContent dividers sx={{ pt: 2 }}>
+        {formBody}
+      </DialogContent>
+    </Dialog>
   )
 }
 

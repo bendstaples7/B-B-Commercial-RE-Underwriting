@@ -158,7 +158,7 @@ export function usePinLookup(
     autoPreviewDone.current = null
   }, [leadId])
 
-  const applyPin = useCallback(async (pin: string) => {
+  const applyPin = useCallback(async (pin: string, contextMessage?: string | null) => {
     setPinApplyPending(true)
     try {
       const result = await propertyMatchService.approve(leadId, { pin })
@@ -188,7 +188,11 @@ export function usePinLookup(
       setPreviewMeta({})
       setShowPinEntry(false)
       setManualPin('')
-      onSnack(`PIN applied: ${appliedPin}`)
+      onSnack(
+        contextMessage
+          ? `${contextMessage}; PIN applied: ${appliedPin}`
+          : `PIN applied: ${appliedPin}`,
+      )
       await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     } catch (error) {
       onSnack(error instanceof Error ? error.message : 'Could not apply PIN')
@@ -239,7 +243,7 @@ export function usePinLookup(
           && !preview.require_explicit_apply
         )
         if (autoApply && pin) {
-          await applyPin(pin)
+          await applyPin(pin, preview.message)
           return
         }
         const taxCount = Number(preview.tax_situs_pin_count) || 0
@@ -469,6 +473,10 @@ export interface MissingPinActionsProps {
   /** Auto-run preview when Cook-eligible and PIN blank. */
   autoPreview?: boolean
   isCookCounty?: boolean
+  /** Snapshot queue neighbour before deprioritize PATCH (parent). */
+  onBeforeDeprioritize?: () => void
+  /** After multi-PIN deprioritize succeeds (queue hold / refresh). */
+  onAfterDeprioritize?: () => void | Promise<void>
 }
 
 /**
@@ -486,6 +494,8 @@ export function MissingPinActions({
   layout = 'stack',
   autoPreview = false,
   isCookCounty = false,
+  onBeforeDeprioritize,
+  onAfterDeprioritize,
 }: MissingPinActionsProps) {
   const {
     pinMissing,
@@ -566,20 +576,29 @@ export function MissingPinActions({
 
   const handleDeprioritizeMultiPin = async () => {
     setDeprioritizePending(true)
+    let updated = false
     try {
+      onBeforeDeprioritize?.()
       await commandCenterService.updateStatus(
         leadId,
         'deprioritize',
         CONDO_MULTI_PIN_DEPRIORITIZE_REASON,
       )
+      updated = true
       setResultsOpen(false)
       onSnack('Lead deprioritized — commercial split into condos')
-      await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-      await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
     } catch (error) {
       onSnack(error instanceof Error ? error.message : 'Could not deprioritize lead')
     } finally {
       setDeprioritizePending(false)
+    }
+    if (!updated) return
+    try {
+      await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+      await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+      await onAfterDeprioritize?.()
+    } catch (error) {
+      console.warn('post-deprioritize refresh failed', error)
     }
   }
 

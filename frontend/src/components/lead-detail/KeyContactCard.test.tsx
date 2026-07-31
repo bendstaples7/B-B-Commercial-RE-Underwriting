@@ -80,6 +80,29 @@ describe('KeyContactCard', () => {
     expect(name).not.toHaveStyle({ fontSize: '1.05rem' })
   })
 
+  it('grays out contact details when contacts_likely_prior_owner (post-sale untrusted)', () => {
+    renderCard(
+      basePayload({
+        phone_1: '(312) 806-0441',
+        email_1: 'old@example.com',
+        mailing_address: '100 Main St',
+        mailing_city: 'Chicago',
+        mailing_state: 'IL',
+        mailing_zip: '60614',
+        contacts_likely_prior_owner: true,
+        contacts_stale_since: '2024-07-30',
+      }),
+      'Prior Owner',
+    )
+    expect(screen.getByTestId('key-contact-stale')).toBeInTheDocument()
+    expect(screen.getByTestId('key-contact-likely-prior-owner')).toHaveTextContent(
+      /Likely prior owner/i,
+    )
+    // Display-only — no tel/mailto while untrusted.
+    expect(screen.getByTestId('key-contact-phone').tagName).toBe('P')
+    expect(screen.getByTestId('key-contact-email').tagName).toBe('P')
+  })
+
   it('uses phone icon/link for a phone misfiled as email', () => {
     renderCard(
       basePayload({

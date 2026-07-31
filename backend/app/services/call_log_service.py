@@ -13,6 +13,7 @@ from app.exceptions import (
 logger = logging.getLogger(__name__)
 
 VALID_CALL_OUTCOMES = frozenset(['answered', 'voicemail', 'no_answer', 'busy', 'wrong_number', 'not_interested'])
+VALID_CALL_DIRECTIONS = frozenset(['outbound', 'inbound'])
 
 
 def _contact_display_name(contact) -> str | None:
@@ -105,7 +106,9 @@ def _build_call_summary(
     contact_name: str | None,
     phone_number: str | None,
     phone_label: str | None,
+    direction: str = 'outbound',
 ) -> str:
+    direction_label = 'Inbound' if direction == 'inbound' else 'Outbound'
     phone_display = _format_phone_display(phone_number)
     if contact_name:
         method_suffix = ''
@@ -114,12 +117,12 @@ def _build_call_summary(
             if phone_label:
                 method_suffix += f', {phone_label}'
             method_suffix += ')'
-        summary_parts = [f'Call with {contact_name}{method_suffix}: {outcome}']
+        summary_parts = [f'{direction_label} call with {contact_name}{method_suffix}: {outcome}']
     elif phone_display:
         label_suffix = f', {phone_label}' if phone_label else ''
-        summary_parts = [f'Call ({phone_display}{label_suffix}): {outcome}']
+        summary_parts = [f'{direction_label} call ({phone_display}{label_suffix}): {outcome}']
     else:
-        summary_parts = [f'Call logged: {outcome}']
+        summary_parts = [f'{direction_label} call: {outcome}']
 
     if duration_minutes:
         summary_parts.append(f'{duration_minutes} min')
@@ -192,6 +195,7 @@ class CallLogService:
         mail_campaign_id: int | None = None,
         complete_task_id: int | None = None,
         follow_up: dict | None = None,
+        direction: str = 'outbound',
     ) -> LeadTimelineEntry:
         """Log a call on a lead.
 
@@ -202,6 +206,12 @@ class CallLogService:
             raise LeadTaskValidationError(
                 f"Invalid call outcome '{outcome}'. Must be one of: {', '.join(sorted(VALID_CALL_OUTCOMES))}",
                 field='outcome',
+            )
+
+        if direction not in VALID_CALL_DIRECTIONS:
+            raise LeadTaskValidationError(
+                f"Invalid call direction '{direction}'. Must be one of: {', '.join(sorted(VALID_CALL_DIRECTIONS))}",
+                field='direction',
             )
 
         if duration_minutes is not None and not (1 <= duration_minutes <= 999):
@@ -265,10 +275,12 @@ class CallLogService:
 
         summary = _build_call_summary(
             outcome, duration_minutes, notes, contact_name, phone_number, phone_label,
+            direction=direction,
         )
 
         metadata = {
             'outcome': outcome,
+            'direction': direction,
             'duration_minutes': duration_minutes,
             'notes': notes,
         }

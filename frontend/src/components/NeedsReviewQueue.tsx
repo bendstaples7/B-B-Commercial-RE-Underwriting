@@ -2,7 +2,7 @@
  * NeedsReviewQueue — Needs Review queue view.
  *
  * Shows leads flagged for review. Extra columns: review reason and trigger date.
- * Row actions: context-specific "View Analysis" or "View Activity" button.
+ * Soft-merge for ``duplicate_lead_cluster``: Merge into suggested winner / Dismiss.
  *
  * Requirements: 6.7, 18.1
  */
@@ -11,16 +11,24 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Box, Typography } from '@mui/material'
 import AnalyticsIcon from '@mui/icons-material/Analytics'
 import HistoryIcon from '@mui/icons-material/History'
+import MergeTypeIcon from '@mui/icons-material/MergeType'
+import CloseIcon from '@mui/icons-material/Close'
 import { useNavigate } from 'react-router-dom'
 import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
 import { QueueLoadingState } from './QueueLoadingState'
-import { queueService } from '@/services/api'
+import { commandCenterService, queueService } from '@/services/api'
 import type { QueueRow } from '@/types'
 import { resolveBulkActions } from './queueBulkActions'
 import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
+
+function duplicateConfidenceLabel(confidence: QueueRow['duplicate_confidence']): string {
+  const normalized = String(confidence || '').trim().toLowerCase()
+  if (!normalized) return ''
+  return normalized === 'ambiguous' ? ' (ambiguous match)' : ` (${normalized} match)`
+}
 
 export function NeedsReviewQueue() {
   const [page, setPage] = useState(1)
@@ -48,7 +56,17 @@ export function NeedsReviewQueue() {
     {
       key: 'review_reason',
       label: 'Review Reason',
-      render: (row: QueueRow) => row.review_reason ?? '—',
+      render: (row: QueueRow) => {
+        if (row.review_reason === 'duplicate_lead_cluster') {
+          const twin = row.suggested_winner_id
+          const ids = (row.duplicate_cluster_ids ?? []).filter((id) => id !== row.id)
+          const confidence = duplicateConfidenceLabel(row.duplicate_confidence)
+          return twin
+            ? `Duplicate cluster → #${twin}${ids.length ? ` (+${ids.length})` : ''}${confidence}`
+            : `Duplicate cluster${confidence}`
+        }
+        return row.review_reason ?? '—'
+      },
     },
     {
       key: 'review_triggered_at',
@@ -71,7 +89,43 @@ export function NeedsReviewQueue() {
     },
   }
 
+  const refreshQueue = () => {
+    void queryClient.invalidateQueries({ queryKey: ['queue-needs-review'] })
+  }
+
   const rowActions: RowAction[] = [
+    {
+      label: 'Merge into winner',
+      icon: <MergeTypeIcon fontSize="small" />,
+      testId: 'action-merge-duplicate',
+      isVisible: (row: QueueRow) => (
+        row.review_reason === 'duplicate_lead_cluster'
+        && Boolean(row.suggested_winner_id)
+        && row.suggested_winner_id !== row.id
+        && String(row.duplicate_confidence || '').toLowerCase() !== 'ambiguous'
+      ),
+      onClick: async (row: QueueRow) => {
+        const winnerId = row.suggested_winner_id
+        if (!winnerId) return
+        const ok = window.confirm(
+          `Merge lead #${row.id} into #${winnerId}? This soft-merges the duplicate and cannot be undone from this screen.`,
+        )
+        if (!ok) return
+        await commandCenterService.mergeInto(row.id, winnerId)
+        refreshQueue()
+        navigate(`/leads/${winnerId}`)
+      },
+    },
+    {
+      label: 'Dismiss duplicate',
+      icon: <CloseIcon fontSize="small" />,
+      testId: 'action-dismiss-duplicate',
+      isVisible: (row: QueueRow) => row.review_reason === 'duplicate_lead_cluster',
+      onClick: async (row: QueueRow) => {
+        await commandCenterService.dismissDuplicateReview(row.id)
+        refreshQueue()
+      },
+    },
     {
       label: 'View Analysis',
       icon: <AnalyticsIcon fontSize="small" />,

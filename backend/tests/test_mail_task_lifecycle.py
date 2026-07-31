@@ -417,7 +417,7 @@ class TestRecentSaleMailReconciliation:
             assert result['skip_trace_scheduled'] is True
             assert result['skip_trace_task_id'] is not None
             assert result['removed_queue_item_count'] == 1
-            assert db.session.get(Lead, lead.id).lead_status == 'skip_trace'
+            assert db.session.get(Lead, lead.id).lead_status == 'deprioritize'
             assert db.session.get(Lead, lead.id).needs_skip_trace is False
             skip_task = LeadTask.query.filter_by(
                 lead_id=lead.id,
@@ -586,7 +586,7 @@ class TestRecentSaleMailReconciliation:
             )
 
             before = db.session.get(Lead, lead.id)
-            assert before.lead_status == 'skip_trace'
+            assert before.lead_status == 'deprioritize'
             assert before.needs_skip_trace is False
 
             result = service.activate_due_recent_sale_tasks(actor='test')
@@ -776,7 +776,8 @@ class TestRecentSaleMailReconciliation:
 
             lead = db.session.get(Lead, lead.id)
             assert lead.id not in result.get('stale_contact_healed_lead_ids', [])
-            assert lead.lead_status == 'skip_trace'
+            assert lead.lead_status == 'deprioritize'
+            assert lead.needs_skip_trace is False
             assert db.session.get(LeadTask, hold.id).workflow_key == 'recent_sale_hold'
             assert LeadTask.query.filter(
                 LeadTask.lead_id == lead.id,
@@ -785,7 +786,7 @@ class TestRecentSaleMailReconciliation:
                 LeadTask.due_date <= date.today(),
             ).count() == 0
 
-    def test_syncs_mailing_status_to_skip_trace_for_future_hold(self, app):
+    def test_syncs_mailing_status_to_deprioritize_for_future_hold(self, app):
         from app import db
         from app.services.skip_trace_enqueue import SkipTraceEnqueue
 
@@ -814,7 +815,7 @@ class TestRecentSaleMailReconciliation:
             SkipTraceEnqueue().activate_due_recent_sale_tasks(actor='test')
 
             lead = db.session.get(Lead, lead.id)
-            assert lead.lead_status == 'skip_trace'
+            assert lead.lead_status == 'deprioritize'
             assert lead.needs_skip_trace is False
             assert lead.recommended_action == 'hold'
 
@@ -843,6 +844,77 @@ class TestRecentSaleMailReconciliation:
             assert result['retired_task_ids'] == [task.id]
             assert task.status == 'completed'
             assert db.session.get(Lead, lead.id).lead_status == 'deal_lost'
+
+    def test_activates_matured_hold_from_deprioritize_not_retired(self, app):
+        """Sale-hold park uses deprioritize — activation must promote, not retire."""
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '4b Deprioritize Hold Activate St',
+                acquisition_date=date.today() - timedelta(days=800),
+                lead_status='deprioritize',
+            )
+            lead.needs_skip_trace = False
+            hold = LeadTask(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                title='Recent-sale hold ended — verify new owner and contact information',
+                status='open',
+                due_date=date.today() - timedelta(days=1),
+                workflow_key='recent_sale_hold',
+                created_by='test',
+            )
+            db.session.add(hold)
+            db.session.commit()
+
+            result = SkipTraceEnqueue().activate_due_recent_sale_tasks(actor='test')
+
+            lead = db.session.get(Lead, lead.id)
+            task = db.session.get(LeadTask, hold.id)
+            assert hold.id not in result['retired_task_ids']
+            assert lead.id in result['activated_lead_ids']
+            assert lead.lead_status == 'skip_trace'
+            assert lead.needs_skip_trace is True
+            assert task.status == 'open'
+            assert task.due_date is None
+            assert task.workflow_key == 'awaiting_skip_trace_handoff'
+
+    def test_heals_legacy_mid_hold_skip_trace_to_deprioritize(self, app):
+        """Legacy skip_trace+needs=false mid-hold rows sync to deprioritize."""
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            sale = date.today() - timedelta(days=200)
+            lead = _make_lead(
+                app,
+                '4c Legacy Mid Hold Heal St',
+                acquisition_date=sale,
+                most_recent_sale=sale.strftime('%m/%d/%Y'),
+                lead_status='skip_trace',
+            )
+            lead.needs_skip_trace = False
+            hold = LeadTask(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                title='Recent-sale hold ended — verify new owner and contact information',
+                status='open',
+                due_date=sale + timedelta(days=730),
+                workflow_key='recent_sale_hold',
+                created_by='test',
+            )
+            db.session.add(hold)
+            db.session.commit()
+
+            SkipTraceEnqueue().activate_due_recent_sale_tasks(actor='test')
+
+            lead = db.session.get(Lead, lead.id)
+            assert lead.lead_status == 'deprioritize'
+            assert lead.needs_skip_trace is False
+            assert db.session.get(LeadTask, hold.id).workflow_key == 'recent_sale_hold'
 
     def test_bounded_reconciliation_prioritizes_matured_hold_activation(self, app):
         from app import db

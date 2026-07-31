@@ -146,6 +146,92 @@ def tax_situs_cluster_meta(
     }
 
 
+def _parse_house_number(street: str | None) -> int | None:
+    """Leading house number from a street string, or None."""
+    norm = _normalize_street_compare(street)
+    if not norm:
+        return None
+    m = re.match(r'^(\d+)(?:-\d+)?\s+', norm)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _house_number_delta(lead_street: str | None, cand_street: str | None) -> int | None:
+    """Signed house-number delta when both share the same street name; else None."""
+    if not street_name_key(lead_street) or street_name_key(lead_street) != street_name_key(
+        cand_street,
+    ):
+        return None
+    lead_n = _parse_house_number(lead_street)
+    cand_n = _parse_house_number(cand_street)
+    if lead_n is None or cand_n is None:
+        return None
+    return cand_n - lead_n
+
+
+def _rank_candidates_by_house_proximity(
+    lead_street: str | None,
+    rows: list[dict],
+) -> list[dict]:
+    """Prefer same street name and closer house numbers; stable otherwise."""
+    lead_key = street_name_key(lead_street)
+
+    def _key(row: dict) -> tuple:
+        delta = _house_number_delta(lead_street, row.get('property_street'))
+        same_name = (
+            0
+            if lead_key and lead_key == street_name_key(row.get('property_street'))
+            else 1
+        )
+        abs_delta = abs(delta) if delta is not None else 10_000
+        pin = (row.get('pin') or '')
+        return (same_name, abs_delta, pin)
+
+    return sorted(rows or [], key=_key)
+
+
+def _unique_near_miss_row(
+    lead_street: str | None,
+    rows: list[dict],
+    *,
+    max_abs_delta: int = 6,
+    allowed_abs_deltas: frozenset[int] | None = None,
+) -> dict | None:
+    """Single PIN at the closest same-street house number within the step ladder.
+
+    Eligible absolute deltas default to ``{2, 4, 6}`` (Chicago odd/even sides),
+    not every integer in 1..max — so across-the-street ±1 parcels cannot win.
+    Multiple PINs at that closest near-miss address (condo stack) returns None.
+    """
+    allowed = allowed_abs_deltas if allowed_abs_deltas is not None else frozenset({2, 4, 6})
+    eligible: list[tuple[int, dict]] = []
+    for row in rows or []:
+        pin = (row.get('pin') or '').strip()
+        if not pin:
+            continue
+        delta = _house_number_delta(lead_street, row.get('property_street'))
+        if delta is None or delta == 0:
+            continue
+        abs_d = abs(delta)
+        if abs_d > max_abs_delta or abs_d not in allowed:
+            continue
+        if not assessor_street_differs_from_lead(lead_street, row.get('property_street')):
+            continue
+        eligible.append((abs_d, row))
+    if not eligible:
+        return None
+    best_abs = min(abs_d for abs_d, _ in eligible)
+    closest = [row for abs_d, row in eligible if abs_d == best_abs]
+    pins = {(row.get('pin') or '').strip() for row in closest if row.get('pin')}
+    if len(pins) != 1:
+        return None
+    return closest[0]
+
+
 def _apply_assessor_aka(lead: Lead, addr_row: dict | None) -> None:
     """Keep marketing street; store assessor situs as AKA when it differs."""
     if not isinstance(addr_row, dict):
@@ -237,6 +323,127 @@ class PropertyMatchReviewService:
         return rows_out
 
     @staticmethod
+    def _cook_pin_rows_via_house_steps(address: str) -> list[dict]:
+        """Socrata lookups at ±2/±4/±6 house numbers when exact address misses."""
+        from app.services.gis.cook_county_gis_connector import (
+            _house_number_step_variants,
+            _normalise_address,
+            lookup_all_pins_at_address,
+        )
+
+        normalised = _normalise_address(address or '')
+        if not normalised:
+            return []
+        rows_out: list[dict] = []
+        seen: set[str] = set()
+        for variant in _house_number_step_variants(normalised):
+            for row in lookup_all_pins_at_address(variant):
+                pin = str((row or {}).get('pin') or '').strip()
+                if not pin or pin in seen:
+                    continue
+                seen.add(pin)
+                rows_out.append(
+                    _candidate_from_row({**(row or {}), 'source': 'cook_address_step'}),
+                )
+        return rows_out
+
+    @classmethod
+    def _merge_cook_rows(cls, into: list[dict], extra: list[dict]) -> list[dict]:
+        seen = {str(r.get('pin') or '').strip() for r in into if r.get('pin')}
+        for row in extra or []:
+            pin = str((row or {}).get('pin') or '').strip()
+            if not pin or pin in seen:
+                continue
+            seen.add(pin)
+            into.append(row)
+        return into
+
+    @classmethod
+    def _enrich_cook_rows_spatial(
+        cls,
+        lead: Lead,
+        cook_rows: list[dict],
+        *,
+        aka_street: str,
+        house_step_lookup=None,
+    ) -> list[dict]:
+        """Spatial nearby parcels + one-sided house-number bias correction."""
+        from app.services.gis.cook_county_parcel_spatial import (
+            lookup_nearby_parcel_candidates,
+        )
+
+        lead_street = lead.property_street or ''
+        seen = {str(r.get('pin') or '').strip() for r in cook_rows if r.get('pin')}
+
+        def _merge_spatial(rows: list[dict]) -> None:
+            for r in rows or []:
+                cand = _candidate_from_row(r)
+                pin = cand.get('pin')
+                if pin and pin not in seen:
+                    seen.add(pin)
+                    cook_rows.append(cand)
+
+        for probe in (aka_street, lead_street):
+            if not (probe or '').strip():
+                continue
+            spatial_rows = lookup_nearby_parcel_candidates(
+                probe,
+                city=lead.property_city,
+                state=lead.property_state,
+                zip_code=lead.property_zip,
+                limit=8,
+                radius_m=100.0,
+            )
+            _merge_spatial(spatial_rows)
+            if len(cook_rows) >= 3:
+                break
+
+        # One-sided bias: every same-street hit is below (or above) the lead
+        # house number — expand radius and probe odd/even step Socrata hits.
+        deltas: list[int] = []
+        for row in cook_rows:
+            d = _house_number_delta(lead_street, row.get('property_street'))
+            if d is not None:
+                deltas.append(d)
+        one_sided = bool(deltas) and (
+            all(d < 0 for d in deltas) or all(d > 0 for d in deltas)
+        )
+        if one_sided or not deltas:
+            step_lookup = house_step_lookup or cls._cook_pin_rows_via_house_steps
+            step_rows = step_lookup(lead_street)
+            cls._merge_cook_rows(cook_rows, step_rows)
+            seen = {str(r.get('pin') or '').strip() for r in cook_rows if r.get('pin')}
+            for radius in (() if step_rows else (150.0, 200.0)):
+                balanced = False
+                for probe in (aka_street, lead_street):
+                    if not (probe or '').strip():
+                        continue
+                    more = lookup_nearby_parcel_candidates(
+                        probe,
+                        city=lead.property_city,
+                        state=lead.property_state,
+                        zip_code=lead.property_zip,
+                        limit=12,
+                        radius_m=radius,
+                    )
+                    _merge_spatial(more)
+                new_deltas = [
+                    d for d in (
+                        _house_number_delta(lead_street, r.get('property_street'))
+                        for r in cook_rows
+                    )
+                    if d is not None
+                ]
+                if new_deltas and not (
+                    all(d < 0 for d in new_deltas) or all(d > 0 for d in new_deltas)
+                ):
+                    balanced = True
+                if balanced or step_rows:
+                    break
+
+        return cook_rows
+
+    @staticmethod
     def _cook_pins_at_address(address: str) -> list[str]:
         """Return distinct Cook County PINs reported for a situs address."""
         return [
@@ -244,6 +451,56 @@ class PropertyMatchReviewService:
             for row in PropertyMatchReviewService._cook_pin_rows_at_address(address)
             if row.get('pin')
         ]
+
+    @staticmethod
+    def _unique_auto_apply_payload(
+        *,
+        entered: dict,
+        lead: Lead,
+        chosen: dict,
+        connector_name: str | None,
+        address_complete: bool,
+        message: str | None,
+        require_explicit_apply: bool,
+        assessor_aka: dict | None = None,
+    ) -> dict:
+        chosen_pin = chosen['pin']
+        assessor_street = (chosen.get('property_street') or '').strip() or None
+        aka = assessor_aka
+        if aka is None and assessor_street and assessor_street_differs_from_lead(
+            lead.property_street, assessor_street,
+        ):
+            aka = {
+                'property_street': assessor_street,
+                'property_city': chosen.get('property_city'),
+                'property_state': chosen.get('property_state'),
+                'property_zip': chosen.get('property_zip'),
+            }
+        return {
+            'found': True,
+            'entered_address': entered,
+            'recommended_address': {
+                'property_street': lead.property_street,
+                'property_city': lead.property_city,
+                'property_state': lead.property_state,
+                'property_zip': lead.property_zip,
+                'property_type': None,
+                'county_assessor_pin': chosen_pin,
+            },
+            'pin': chosen_pin,
+            'pins': [chosen_pin],
+            'pin_count': 1,
+            'candidates': [chosen],
+            'assessor_aka': aka,
+            'tax_situs_street': (aka or {}).get('property_street') if aka else None,
+            'tax_situs_pin_count': 1 if aka else 0,
+            'require_explicit_apply': require_explicit_apply,
+            'connector': connector_name,
+            'address_complete': address_complete,
+            'reason': None,
+            'parcel_fields': None,
+            'message': message,
+        }
 
     def preview_match(self, lead_id: int, pin: str | None = None) -> dict:
         from app.services.property_address_service import (
@@ -291,6 +548,15 @@ class PropertyMatchReviewService:
         connector_name = connector.connector_name if connector else None
         is_cook = getattr(connector, 'market', None) == 'cook_county_il'
         pin_hint = (pin or '').strip() or None
+        house_step_cache: dict[str, list[dict]] = {}
+
+        def _cached_house_step_rows(address: str) -> list[dict]:
+            key = _normalize_street_compare(address)
+            if not key:
+                return []
+            if key not in house_step_cache:
+                house_step_cache[key] = self._cook_pin_rows_via_house_steps(address)
+            return list(house_step_cache[key])
 
         # PIN-first verify: resolve situs from pasted PIN without requiring ladder hit.
         if pin_hint and is_cook and connector is not None:
@@ -394,43 +660,92 @@ class PropertyMatchReviewService:
         if is_cook and not cook_rows and aka_street:
             cook_rows = self._cook_pin_rows_at_address(aka_street)
 
+        # Exact miss → odd/even house-number ladder (±2/±4/±6) on Socrata.
+        if is_cook and lead.property_street and not cook_rows:
+            cook_rows = _cached_house_step_rows(lead.property_street)
+
         # Enrich thin AKA/marketing hits via spatial around the best known situs.
         need_spatial = is_cook and lead.property_street and (
             len(cook_rows) == 0 or (aka_street and len(cook_rows) < 3)
         )
+        # Run spatial only for exact misses, or thin AKA contexts that need neighbors.
         if need_spatial:
             try:
-                from app.services.gis.cook_county_parcel_spatial import (
-                    lookup_nearby_parcel_candidates,
+                cook_rows = self._enrich_cook_rows_spatial(
+                    lead,
+                    cook_rows,
+                    aka_street=aka_street,
+                    house_step_lookup=_cached_house_step_rows,
                 )
-                seen = {r['pin'] for r in cook_rows if r.get('pin')}
-                for probe in (aka_street, lead.property_street):
-                    if not (probe or '').strip():
-                        continue
-                    spatial_rows = lookup_nearby_parcel_candidates(
-                        probe,
-                        city=lead.property_city,
-                        state=lead.property_state,
-                        zip_code=lead.property_zip,
-                        limit=8,
-                    )
-                    for r in spatial_rows:
-                        cand = _candidate_from_row(r)
-                        pin = cand.get('pin')
-                        if pin and pin not in seen:
-                            seen.add(pin)
-                            cook_rows.append(cand)
-                    if len(cook_rows) >= 3:
-                        break
             except Exception:
                 logger.exception('Cook spatial PIN fallback failed for lead %s', lead_id)
 
+        # When spatial-only (or one-sided) left us without ladder hits, still try
+        # house steps so 1233→1235 is not drowned by lower condo PINs.
+        if is_cook and lead.property_street:
+            near_probe = _unique_near_miss_row(lead.property_street, cook_rows)
+            same_probe = [
+                r for r in cook_rows
+                if r.get('pin') and not assessor_street_differs_from_lead(
+                    lead.property_street, r.get('property_street'),
+                )
+            ]
+            if not same_probe and near_probe is None:
+                self._merge_cook_rows(
+                    cook_rows,
+                    _cached_house_step_rows(lead.property_street),
+                )
+
+        cook_rows = _rank_candidates_by_house_proximity(lead.property_street, cook_rows)
         cook_pins = [r['pin'] for r in cook_rows if r.get('pin')]
         pin_count = len(cook_pins) if is_cook else None
 
         if is_cook and pin_count and pin_count >= 1:
-            # Prefer multi-candidate / AKA framing when tax situs differs.
             candidates = cook_rows[:5]
+            # Unique same-situs among *all* rows (not just the display cap).
+            same_situs_rows: list[dict] = []
+            seen_same: set[str] = set()
+            for row in cook_rows:
+                pin = (row.get('pin') or '').strip()
+                if not pin or pin in seen_same:
+                    continue
+                if assessor_street_differs_from_lead(
+                    lead.property_street, row.get('property_street'),
+                ):
+                    continue
+                seen_same.add(pin)
+                same_situs_rows.append(row)
+
+            if len(same_situs_rows) == 1:
+                return self._unique_auto_apply_payload(
+                    entered=entered,
+                    lead=lead,
+                    chosen=same_situs_rows[0],
+                    connector_name=connector_name,
+                    address_complete=address_complete,
+                    message=None,
+                    require_explicit_apply=False,
+                )
+
+            # Unique near-miss on same street (±2/±4/±6) — recommend with AKA;
+            # require explicit apply so quiet auto-preview cannot attach a neighbor.
+            near_miss = _unique_near_miss_row(lead.property_street, cook_rows)
+            if near_miss is not None:
+                assessor_street = (near_miss.get('property_street') or '').strip()
+                return self._unique_auto_apply_payload(
+                    entered=entered,
+                    lead=lead,
+                    chosen=near_miss,
+                    connector_name=connector_name,
+                    address_complete=address_complete,
+                    message=(
+                        f'Assessor lists {assessor_street} — apply to confirm.'
+                        if assessor_street
+                        else 'Closest house-number assessor match — apply to confirm.'
+                    ),
+                    require_explicit_apply=True,
+                )
+
             situs = tax_situs_cluster_meta(lead.property_street, candidates)
             differs = bool(situs.get('tax_situs_street')) or (
                 pin_count == 1 and assessor_street_differs_from_lead(
@@ -689,18 +1004,54 @@ class PropertyMatchReviewService:
                 result['skipped_no_connector'] += 1
                 continue
             try:
-                pins = self._cook_pins_at_address(lead.property_street)
+                rows = [
+                    {'pin': pin}
+                    for pin in self._cook_pins_at_address(lead.property_street)
+                ]
             except Exception:
                 logger.exception('PIN batch lookup failed for lead %s', lead.id)
                 result['errors'] += 1
                 continue
-            if not pins:
+            if not rows:
+                try:
+                    rows = self._cook_pin_rows_via_house_steps(lead.property_street)
+                except Exception:
+                    logger.exception('PIN batch step ladder failed for lead %s', lead.id)
+                    result['errors'] += 1
+                    continue
+            if not rows:
                 result['skipped_no_match'] += 1
                 continue
-            if len(pins) != 1:
+            same_situs = []
+            seen_same: set[str] = set()
+            for row in rows:
+                pin = (row.get('pin') or '').strip()
+                if not pin or pin in seen_same:
+                    continue
+                if assessor_street_differs_from_lead(
+                    lead.property_street, row.get('property_street'),
+                ):
+                    continue
+                seen_same.add(pin)
+                same_situs.append(pin)
+            if len(same_situs) == 1:
+                pin = same_situs[0]
+            elif len({(r.get('pin') or '').strip() for r in rows if r.get('pin')}) == 1:
+                only = next(r for r in rows if r.get('pin'))
+                if only.get('property_street') and assessor_street_differs_from_lead(
+                    lead.property_street, only.get('property_street'),
+                ):
+                    result['skipped_ambiguous'] += 1
+                    continue
+                pin = (only.get('pin') or '').strip()
+            else:
+                # Near-miss and multi-PIN stay interactive — batch must not
+                # silently approve house-number typos.
                 result['skipped_ambiguous'] += 1
                 continue
-            pin = pins[0]
+            if not pin:
+                result['skipped_no_match'] += 1
+                continue
             if dry_run:
                 result['previews'].append({'lead_id': lead.id, 'pin': pin})
                 continue

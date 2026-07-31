@@ -46,6 +46,10 @@ import {
   evaluateMoveToSkipTrace,
   unavailableReasonForQuickAction,
 } from '@/utils/actionEligibility'
+import {
+  formatOwnerMailingLine,
+  renderOriginalMailingWithStrikes,
+} from '@/utils/ownerMailingAddressDiff'
 import { ccActionTileSx, ccSectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
 
 // ---------------------------------------------------------------------------
@@ -207,6 +211,8 @@ export interface RecommendedActionPanelProps {
   ownerMailingReadiness?: OwnerMailingReadiness | null
   /** Persist parsed mailing_* and refresh command center. */
   onApplyParsedMailing?: () => Promise<void>
+  /** When true, contacts are prior-owner / post-sale stale — hide mailing "fix" chrome. */
+  contactsLikelyPriorOwner?: boolean
   /** When true, show outreach contact inline under the action label */
   showOutreachContact?: boolean
   /** Drop outer border when nested inside a shared action card. */
@@ -248,6 +254,7 @@ export function RecommendedActionPanel({
   mailEligibleDate = null,
   ownerMailingReadiness = null,
   onApplyParsedMailing,
+  contactsLikelyPriorOwner = false,
   showOutreachContact = false,
   embedded = false,
   showActionCenterTiles = false,
@@ -301,16 +308,17 @@ export function RecommendedActionPanel({
     : { p: 2, border: 1, borderColor: 'divider', borderRadius: 1, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }
   const mailHoldAlert = mailIneligibleReason === 'recently_sold' ? (
     <Alert severity="warning" sx={{ mb: 2 }} data-testid="recent-sale-mail-hold">
-      Recent sale detected. Held in Skip Trace
+      Recent sale detected. Deprioritized for the recent-sale hold
       {mailEligibleDate
         ? ` until ${formatDateOnly(mailEligibleDate)}.`
         : ' until the two-year hold ends.'}
-      {' '}It stays in Skip Trace; when the hold expires the undated handoff becomes active work.
+      {' '}When the hold expires, the lead moves to Skip Trace for active work.
     </Alert>
   ) : null
 
   const showMailAddressAlert =
-    (
+    !contactsLikelyPriorOwner
+    && (
       mailIneligibleReason === 'invalid_owner_address'
       || Boolean(ownerMailingReadiness?.can_apply_parsed)
       || (
@@ -342,54 +350,83 @@ export function RecommendedActionPanel({
       sx={{ mb: 2 }}
       data-testid="owner-mailing-readiness"
     >
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 2,
-          flexWrap: 'wrap',
-          width: '100%',
-        }}
-      >
-        <Box sx={{ minWidth: 0, flex: '1 1 220px' }}>
-          <Typography variant="body2" component="div">
-            {ownerMailingReadiness?.reason
-              ?? 'Owner mailing address is not ready for the mail queue'}
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, width: '100%' }}>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 2,
+            flexWrap: 'wrap',
+            width: '100%',
+          }}
+        >
+          <Typography variant="body2" component="div" sx={{ minWidth: 0, flex: '1 1 220px' }}>
+            Owner mailing address needs a fix before mail
           </Typography>
-          {ownerMailingReadiness?.parsed ? (
-            <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}>
-              Parsed preview:{' '}
-              {[
-                ownerMailingReadiness.parsed.street,
-                ownerMailingReadiness.parsed.city,
-                ownerMailingReadiness.parsed.state,
-                ownerMailingReadiness.parsed.zip,
-              ].filter(Boolean).join(', ')}
-            </Typography>
-          ) : ownerMailingReadiness?.raw.street ? (
-            <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}>
-              Stored street: {ownerMailingReadiness.raw.street}
-            </Typography>
+          {ownerMailingReadiness?.can_apply_parsed && onApplyParsedMailing ? (
+            <Button
+              size="small"
+              variant="contained"
+              color="primary"
+              disabled={applyMailingPending || pendingAction !== null}
+              onClick={() => void handleApplyParsedMailing()}
+              startIcon={
+                applyMailingPending
+                  ? <CircularProgress size={14} color="inherit" />
+                  : undefined
+              }
+              data-testid="apply-parsed-owner-mailing"
+              sx={{ flexShrink: 0 }}
+            >
+              Use corrected address
+            </Button>
           ) : null}
         </Box>
-        {ownerMailingReadiness?.can_apply_parsed && onApplyParsedMailing ? (
-          <Button
-            size="small"
-            variant="contained"
-            color="primary"
-            disabled={applyMailingPending || pendingAction !== null}
-            onClick={() => void handleApplyParsedMailing()}
-            startIcon={
-              applyMailingPending
-                ? <CircularProgress size={14} color="inherit" />
-                : undefined
-            }
-            data-testid="apply-parsed-owner-mailing"
-            sx={{ flexShrink: 0 }}
+        {ownerMailingReadiness?.reason ? (
+          <Typography variant="caption" color="text.secondary" component="div">
+            {ownerMailingReadiness.reason}
+          </Typography>
+        ) : null}
+        {ownerMailingReadiness?.parsed ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.35 }}>
+            <Typography
+              variant="body2"
+              component="div"
+              data-testid="mailing-address-original"
+              sx={{ color: 'text.secondary' }}
+            >
+              <Box component="span" sx={{ fontWeight: 600, color: 'text.primary', mr: 0.75 }}>
+                Original
+              </Box>
+              {renderOriginalMailingWithStrikes(
+                ownerMailingReadiness.raw,
+                ownerMailingReadiness.parsed,
+              )}
+            </Typography>
+            <Typography
+              variant="body2"
+              component="div"
+              data-testid="mailing-address-corrected"
+            >
+              <Box component="span" sx={{ fontWeight: 600, mr: 0.75 }}>
+                Corrected
+              </Box>
+              {formatOwnerMailingLine(ownerMailingReadiness.parsed)}
+            </Typography>
+          </Box>
+        ) : ownerMailingReadiness?.raw.street ? (
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            component="div"
+            data-testid="mailing-address-original"
           >
-            Use parsed address
-          </Button>
+            <Box component="span" sx={{ fontWeight: 600, color: 'text.primary', mr: 0.75 }}>
+              Original
+            </Box>
+            {formatOwnerMailingLine(ownerMailingReadiness.raw)}
+          </Typography>
         ) : null}
       </Box>
     </Alert>
@@ -936,11 +973,16 @@ export function RecommendedActionPanel({
 
   const { value, label, explanation, recommended_contact_method: contactMethod, outreach_contact: outreachContact, winning_rule_label: winningRuleLabel } = recommendedAction
   const hasOpenTasks = openTasks.length > 0
+  const recentSaleHoldRa = (
+    value === 'hold'
+    || recommendedAction.winning_rule === 'recent_sale_hold'
+  )
   const displayLabel = (() => {
     if (llcResearchPrimary) {
       return 'Research LLC'
     }
-    if (leadStatus === 'deprioritize') {
+    // Mid-hold parks as deprioritize but must show hold copy, not "Deprioritized".
+    if (leadStatus === 'deprioritize' && !recentSaleHoldRa) {
       return 'Deprioritized'
     }
     if (leadStatus === 'suppressed') {
@@ -957,7 +999,7 @@ export function RecommendedActionPanel({
         ? explanation
         : 'Owner looks like a company — research Illinois LLC / org records'
     }
-    if (leadStatus === 'deprioritize') {
+    if (leadStatus === 'deprioritize' && !recentSaleHoldRa) {
       return 'Parked from active queues.'
     }
     if (leadStatus === 'suppressed') {
@@ -970,9 +1012,10 @@ export function RecommendedActionPanel({
   })()
   // Nurture / terminal park — hide empty system suggestion chrome when appropriate.
   // Entity Research LLC path always keeps the recommended line visible.
+  // Recent-sale hold keeps the hold RA label even while status is deprioritize.
   const hideRaLabel = (
     (value === 'nurture' && !llcResearchPrimary)
-    || leadStatus === 'deprioritize'
+    || (leadStatus === 'deprioritize' && !recentSaleHoldRa)
     || leadStatus === 'suppressed'
     || leadStatus === 'deal_won'
     || leadStatus === 'deal_lost'

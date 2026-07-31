@@ -241,6 +241,9 @@ def test_recent_sale_hold_status_sync_propagates_cleared_hubspot_ids(app):
 
         assert lead.id in scoring_ids
         assert hubspot_ids == ['hs-cleared', 'hs-obsolete']
+        db.session.flush()
+        assert lead.lead_status == 'deprioritize'
+        assert lead.needs_skip_trace is False
 
 
 def test_todays_action_includes_lead_with_task_due_today(app):
@@ -1061,7 +1064,7 @@ def test_skip_trace_queue_by_status_exhausted_separate(app):
         mid_hold = _make_lead(
             app,
             '902 Mid Hold Skip St',
-            lead_status='skip_trace',
+            lead_status='deprioritize',
             needs_skip_trace=False,
         )
         hold = LeadTask(

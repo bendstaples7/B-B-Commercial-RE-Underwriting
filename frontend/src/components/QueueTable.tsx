@@ -47,6 +47,8 @@ export interface RowAction {
   icon: React.ReactNode
   onClick: (row: QueueRow) => Promise<BulkActionResult | void>
   testId?: string
+  /** When false, the action is omitted for that row. */
+  isVisible?: (row: QueueRow) => boolean
 }
 
 export interface BulkAction {
@@ -528,7 +530,7 @@ export function QueueTable({
                         </IconButton>
                       )}
                     </Tooltip>
-                    {rowActions.map((action) => (
+                    {rowActions.filter((action) => action.isVisible?.(row) !== false).map((action) => (
                       <Tooltip key={action.label} title={action.label}>
                         <span>
                           <IconButton
@@ -749,7 +751,7 @@ export function QueueTable({
                             </IconButton>
                           )}
                         </Tooltip>
-                        {rowActions.map((action) => (
+                        {rowActions.filter((action) => action.isVisible?.(row) !== false).map((action) => (
                           <Tooltip key={action.label} title={action.label}>
                             <span>
                               <IconButton

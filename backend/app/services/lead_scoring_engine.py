@@ -513,7 +513,9 @@ class LeadScoringEngine:
         if lead.lead_status == 'do_not_contact':
             return 'do_not_contact', 'do_not_contact', {'lead_status': 'do_not_contact'}
 
-        if lead.lead_status in ('suppressed', 'deprioritize', 'deal_won', 'deal_lost'):
+        # Won/lost/suppressed stay terminal. Deprioritize is evaluated after
+        # recent-sale hold so mid-hold parks still surface RA ``hold``.
+        if lead.lead_status in ('suppressed', 'deal_won', 'deal_lost'):
             return 'suppress', 'terminal_status', {'lead_status': lead.lead_status}
 
         lead_category = getattr(lead, "lead_category", "residential")
@@ -569,6 +571,10 @@ class LeadScoringEngine:
                 'contacts_likely_prior_owner': True,
                 'most_recent_sale': getattr(lead, 'most_recent_sale', None),
             }
+
+        # Manual park (no active recent-sale window) — out of queues.
+        if lead.lead_status == 'deprioritize':
+            return 'suppress', 'terminal_status', {'lead_status': lead.lead_status}
 
         if lead.lead_status == 'skip_trace':
             # Returned / USPS-failed owner mailing is not "no contact" — prefer phone/email.

@@ -129,6 +129,65 @@ describe('LogCallForm', () => {
     })
   })
 
+  describe('call direction', () => {
+    it('defaults to outbound', () => {
+      render(<LogCallForm leadId={1} onSaved={vi.fn()} />)
+
+      expect(screen.getByTestId('call-direction-outbound')).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByTestId('call-direction-inbound')).toHaveAttribute('aria-pressed', 'false')
+    })
+
+    it('submits inbound direction when selected', async () => {
+      mockLogCall.mockResolvedValueOnce(makeTimelineEntry({
+        summary: 'Inbound call: answered',
+        metadata: { outcome: 'answered', direction: 'inbound' },
+      }))
+      const onSaved = vi.fn()
+      render(<LogCallForm leadId={1} onSaved={onSaved} />)
+
+      fireEvent.click(screen.getByTestId('call-direction-inbound'))
+      selectOutcome('answered')
+      await user.click(screen.getByTestId('call-save-btn'))
+
+      await waitFor(() => {
+        expect(mockLogCall).toHaveBeenCalledWith(
+          1,
+          expect.objectContaining({
+            outcome: 'answered',
+            direction: 'inbound',
+          }),
+        )
+      })
+      expect(onSaved).toHaveBeenCalledWith(
+        expect.objectContaining({
+          summary: 'Inbound call: answered',
+          metadata: expect.objectContaining({ direction: 'inbound' }),
+        }),
+        undefined,
+      )
+    })
+
+    it('includes outbound direction by default on submit', async () => {
+      mockLogCall.mockResolvedValueOnce(makeTimelineEntry({
+        summary: 'Outbound call: answered',
+        metadata: { outcome: 'answered', direction: 'outbound' },
+      }))
+      render(<LogCallForm leadId={1} onSaved={vi.fn()} />)
+
+      selectOutcome('answered')
+      await user.click(screen.getByTestId('call-save-btn'))
+
+      await waitFor(() => {
+        expect(mockLogCall).toHaveBeenCalledWith(
+          1,
+          expect.objectContaining({
+            direction: 'outbound',
+          }),
+        )
+      })
+    })
+  })
+
   // -------------------------------------------------------------------------
   // Duration range validation
   // -------------------------------------------------------------------------

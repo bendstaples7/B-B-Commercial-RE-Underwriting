@@ -9,6 +9,7 @@ import {
   ccRowTitleSx,
   ccSectionTitleSx,
 } from '@/components/lead-detail/commandCenterChrome'
+import { PriorOwnerStaleOverlay } from '@/components/lead-detail/PriorOwnerStaleCallout'
 import { formatPhoneNumber, looksLikePhoneNumber, phoneTelHref } from '@/utils/phone'
 
 export interface KeyContactCardProps {
@@ -120,25 +121,9 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
   const displayName = name?.trim() || 'No contact on file'
   const phoneChannels = channels.filter((c) => c.kind === 'phone')
   const emailChannels = channels.filter((c) => c.kind === 'email')
-
-  return (
-    <Paper
-      data-testid="key-contact-card"
-      elevation={0}
-      sx={{
-        ...ccCardSx,
-        ...(sticky
-          ? {
-              position: 'sticky',
-              top: 16,
-              zIndex: 2,
-            }
-          : {}),
-      }}
-    >
-      <Typography sx={ccSectionTitleSx} component="h2">
-        Key Contact
-      </Typography>
+  const contactsUntrusted = Boolean(commandCenterData.contacts_likely_prior_owner)
+  const contactBody = (
+    <>
       <Typography sx={{ ...ccRowTitleSx, fontWeight: 600, mb: 1.5 }} data-testid="key-contact-name">
         {displayName}
       </Typography>
@@ -154,14 +139,23 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
               sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}
             >
               <PhoneOutlinedIcon sx={{ fontSize: 18, color: 'text.secondary', flexShrink: 0 }} />
-              <Link
-                href={phoneTelHref(ch.value)}
-                underline="hover"
-                sx={{ ...ccMetaSx, color: 'primary.main', fontSize: '0.9rem' }}
-                data-testid={idx === 0 ? 'key-contact-phone' : `key-contact-phone-${idx + 1}`}
-              >
-                {formatPhoneNumber(ch.value)}
-              </Link>
+              {contactsUntrusted ? (
+                <Typography
+                  sx={{ ...ccMetaSx, fontSize: '0.9rem' }}
+                  data-testid={idx === 0 ? 'key-contact-phone' : `key-contact-phone-${idx + 1}`}
+                >
+                  {formatPhoneNumber(ch.value)}
+                </Typography>
+              ) : (
+                <Link
+                  href={phoneTelHref(ch.value)}
+                  underline="hover"
+                  sx={{ ...ccMetaSx, color: 'primary.main', fontSize: '0.9rem' }}
+                  data-testid={idx === 0 ? 'key-contact-phone' : `key-contact-phone-${idx + 1}`}
+                >
+                  {formatPhoneNumber(ch.value)}
+                </Link>
+              )}
             </Box>
           ))
         )}
@@ -176,20 +170,34 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
               sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}
             >
               <EmailOutlinedIcon sx={{ fontSize: 18, color: 'text.secondary', flexShrink: 0 }} />
-              <Link
-                href={`mailto:${ch.value}`}
-                underline="hover"
-                sx={{
-                  ...ccMetaSx,
-                  color: 'primary.main',
-                  fontSize: '0.9rem',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }}
-                data-testid={idx === 0 ? 'key-contact-email' : `key-contact-email-${idx + 1}`}
-              >
-                {ch.value}
-              </Link>
+              {contactsUntrusted ? (
+                <Typography
+                  sx={{
+                    ...ccMetaSx,
+                    fontSize: '0.9rem',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                  data-testid={idx === 0 ? 'key-contact-email' : `key-contact-email-${idx + 1}`}
+                >
+                  {ch.value}
+                </Typography>
+              ) : (
+                <Link
+                  href={`mailto:${ch.value}`}
+                  underline="hover"
+                  sx={{
+                    ...ccMetaSx,
+                    color: 'primary.main',
+                    fontSize: '0.9rem',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                  data-testid={idx === 0 ? 'key-contact-email' : `key-contact-email-${idx + 1}`}
+                >
+                  {ch.value}
+                </Link>
+              )}
             </Box>
           ))
         )}
@@ -219,6 +227,37 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
           )}
         </Box>
       </Stack>
+    </>
+  )
+
+  return (
+    <Paper
+      data-testid="key-contact-card"
+      elevation={0}
+      sx={{
+        ...ccCardSx,
+        ...(sticky
+          ? {
+              position: 'sticky',
+              top: 16,
+              zIndex: 2,
+            }
+          : {}),
+      }}
+    >
+      <Typography sx={ccSectionTitleSx} component="h2">
+        Key Contact
+      </Typography>
+      {contactsUntrusted ? (
+        <PriorOwnerStaleOverlay
+          testId="key-contact-stale"
+          bannerTestId="key-contact-likely-prior-owner"
+        >
+          {contactBody}
+        </PriorOwnerStaleOverlay>
+      ) : (
+        contactBody
+      )}
     </Paper>
   )
 }

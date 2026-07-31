@@ -40,8 +40,8 @@ from app.services.helpers.mailer_history import mailer_history_summary
 from app.services.open_letter_contact_mapper import is_owner_mailable_lead
 from app.services.mailing_address_service import owner_mailing_readiness_detail
 from app.services.scoring_rubric import (
-    contacts_likely_prior_owner,
     contacts_stale_since,
+    contacts_untrusted,
     display_most_recent_sale,
     resolve_sale_date_meta,
 )
@@ -764,7 +764,8 @@ def get_command_center(lead_id: int):
         except Exception:  # noqa: BLE001
             pass
     past_owners_payload = list_past_owners_payload(lead_id)
-    contacts_stale = contacts_likely_prior_owner(lead)
+    # UI gray-out: hold window OR post-hold until skip-trace after sale.
+    contacts_stale = contacts_untrusted(lead)
     stale_since = contacts_stale_since(lead)
 
     org_rows = (
@@ -1730,6 +1731,7 @@ def log_call(lead_id: int):
         mail_campaign_id=data.get('mail_campaign_id'),
         complete_task_id=data.get('complete_task_id'),
         follow_up=data.get('follow_up'),
+        direction=data.get('direction') or 'outbound',
     )
     return jsonify(_serialize_timeline_entry(entry)), 201
 
@@ -1833,6 +1835,62 @@ def park_lead(lead_id: int):
     _rescore_after_status_change(lead_id)
 
     return jsonify({'lead_status': 'deprioritize'}), 200
+
+
+@command_center_bp.route('/<int:lead_id>/merge-into/<int:winner_id>', methods=['POST'])
+@require_auth
+@handle_errors
+def merge_lead_into(lead_id: int, winner_id: int):
+    """
+    POST /api/leads/<lead_id>/merge-into/<winner_id>
+
+    Soft-merge: merge this lead (loser) into *winner_id*. Used from Needs Review
+    for ``duplicate_lead_cluster`` rows.
+    """
+    from app.services.lead_dedup_service import merge_loser_into_winner
+
+    loser = Lead.query.get(lead_id)
+    winner = Lead.query.get(winner_id)
+    if loser is None or winner is None:
+        return jsonify({'error': 'winner or loser lead not found'}), 404
+    for lead in (loser, winner):
+        denied = _require_lead_read_access(lead)
+        if denied is not None:
+            return denied
+    actor = getattr(g, 'user_id', 'anonymous')
+    try:
+        result = merge_loser_into_winner(
+            winner_id,
+            lead_id,
+            changed_by=str(actor),
+            commit=True,
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify(result), 200
+
+
+@command_center_bp.route('/<int:lead_id>/dismiss-duplicate-review', methods=['POST'])
+@require_auth
+@handle_errors
+def dismiss_duplicate_review(lead_id: int):
+    """Clear ``duplicate_lead_cluster`` review flag without merging."""
+    from app import db
+
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return denied
+    if lead.review_reason != 'duplicate_lead_cluster':
+        return jsonify({'error': 'Lead is not flagged as a duplicate cluster'}), 400
+    lead.review_required = False
+    lead.review_reason = None
+    lead.review_triggered_at = None
+    db.session.add(lead)
+    db.session.commit()
+    return jsonify({'lead_id': lead_id, 'dismissed': True}), 200
 
 
 @command_center_bp.route('/<int:lead_id>/reactivate', methods=['POST'])

@@ -484,8 +484,9 @@ class SkipTraceEnqueue:
         lead = Lead.query.filter_by(id=lead_id).with_for_update().first()
         if lead is None:
             return {'scheduled': False, 'task_id': None, 'changed': False}
+        # Manual park (deprioritize) is allowed — attach/update the hold wake-up
+        # task. Hard terminals without a wake path stay skipped.
         if lead.lead_status in {
-            "deprioritize",
             "deal_won",
             "deal_lost",
             "suppressed",
@@ -580,12 +581,12 @@ class SkipTraceEnqueue:
             hubspot_task_ids,
         )
 
-        # ``skip_trace`` holds during the recent-sale window (needs_skip_trace=False).
-        # When the hold matures, stay on ``skip_trace`` with needs_skip_trace=True.
-        lead_changed = lead.needs_skip_trace or lead.lead_status != "skip_trace"
+        # Mid-hold parks as deprioritize (out of Skip Trace / Today's Action).
+        # When the hold matures, activation promotes to skip_trace + needs=True.
+        lead_changed = lead.needs_skip_trace or lead.lead_status != "deprioritize"
         lead.needs_skip_trace = False
         old_status = lead.lead_status
-        lead.lead_status = "skip_trace"
+        lead.lead_status = "deprioritize"
         db.session.add(lead)
 
         if scheduled:
@@ -596,8 +597,8 @@ class SkipTraceEnqueue:
                 source="system",
                 actor=actor,
                 summary=(
-                    "Skip trace scheduled for the end of the recent-sale hold "
-                    f"on {due_date.isoformat()}."
+                    "Lead deprioritized for the recent-sale hold; skip trace "
+                    f"scheduled for {due_date.isoformat()}."
                 ),
                 event_metadata={
                     "task_id": task.id,
@@ -606,7 +607,7 @@ class SkipTraceEnqueue:
                     "reason": "recent_sale_hold_expiration",
                 },
             ))
-        if old_status != "skip_trace":
+        if old_status != "deprioritize":
             db.session.add(LeadTimelineEntry(
                 lead_id=lead_id,
                 event_type="status_changed",
@@ -614,12 +615,12 @@ class SkipTraceEnqueue:
                 source="system",
                 actor=actor,
                 summary=(
-                    f"Status changed from '{old_status}' to 'skip_trace' "
+                    f"Status changed from '{old_status}' to 'deprioritize' "
                     "for the recent-sale holding period."
                 ),
                 event_metadata={
                     "previous_status": old_status,
-                    "new_status": "skip_trace",
+                    "new_status": "deprioritize",
                     "reason": "recent_sale_hold",
                     "due_date": due_date.isoformat(),
                 },
@@ -721,8 +722,8 @@ class SkipTraceEnqueue:
         hold_status_synced_ids = list(hold_status_synced)
         for task in hold_tasks:
             lead = Lead.query.filter_by(id=task.lead_id).with_for_update().first()
+            # Deprioritize is the mid-hold park — promote, do not retire.
             if lead is None or lead.lead_status in {
-                "deprioritize",
                 "deal_won",
                 "deal_lost",
                 "suppressed",
@@ -961,12 +962,11 @@ class SkipTraceEnqueue:
         today: date,
         limit: int | None,
     ) -> tuple[set[int], list[str]]:
-        """Align lead_status to skip_trace and clear obsolete outreach on hold.
+        """Align mid-hold leads to deprioritize and clear obsolete outreach.
 
         Returns ``(scoring_lead_ids, hubspot_completion_ids)``.
         """
         hard_terminal = {
-            "deprioritize",
             "deal_won",
             "deal_lost",
             "suppressed",
@@ -999,9 +999,9 @@ class SkipTraceEnqueue:
 
             status_changed = False
             needs_cleared = False
-            if lead.lead_status != "skip_trace":
+            if lead.lead_status != "deprioritize":
                 old_status = lead.lead_status
-                lead.lead_status = "skip_trace"
+                lead.lead_status = "deprioritize"
                 # Hold period: skip work is not yet needed (flag stays False).
                 lead.needs_skip_trace = False
                 db.session.add(lead)
@@ -1012,19 +1012,19 @@ class SkipTraceEnqueue:
                     source="system",
                     actor=actor,
                     summary=(
-                        f"Status changed from '{old_status}' to 'skip_trace' "
+                        f"Status changed from '{old_status}' to 'deprioritize' "
                         "to match an open recent-sale hold task."
                     ),
                     event_metadata={
                         "previous_status": old_status,
-                        "new_status": "skip_trace",
+                        "new_status": "deprioritize",
                         "reason": "recent_sale_hold_status_sync",
                         "task_id": task.id,
                     },
                 ))
                 status_changed = True
-                # Clear leftover dated custom/follow-ups so hold status cannot
-                # re-enter Today's Action via stale May chores.
+                # Clear leftover dated custom/follow-ups so hold cannot
+                # re-enter Today's Action via stale chores.
                 _, cleared_hs = clear_dated_due_chores_entering_skip_trace(
                     lead.id,
                     actor=actor,

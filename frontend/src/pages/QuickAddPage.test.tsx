@@ -43,17 +43,29 @@ vi.mock('@/services/openLetterApi', () => ({
   },
 }))
 
+const { navigateMock } = vi.hoisted(() => ({
+  navigateMock: vi.fn(),
+}))
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  return {
+    ...actual,
+    useNavigate: () => navigateMock,
+  }
+})
+
 import { leadService } from '@/services/leadApi'
 import { commandCenterService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
 
 const theme = createTheme()
 
-function renderPage() {
+function renderPage(initialEntries: string[] = ['/quick-add']) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={initialEntries}>
         <ThemeProvider theme={theme}>
           <QuickAddPage />
         </ThemeProvider>
@@ -90,6 +102,47 @@ beforeEach(() => {
     lead_id: 99,
     hubspot_push_status: 'disabled',
   } as any)
+})
+
+describe('QuickAddPage fullscreen dialog', () => {
+  it('renders a fullscreen dialog with a single Quick Add title and close control', () => {
+    renderPage()
+
+    expect(screen.getByTestId('quick-add-dialog')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Quick Add' })).toBeInTheDocument()
+    expect(screen.getByTestId('quick-add-close')).toBeInTheDocument()
+    expect(screen.getByLabelText('Property address')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument()
+  })
+
+  it('navigates back when the close button is clicked with same-origin referrer', () => {
+    Object.defineProperty(document, 'referrer', {
+      configurable: true,
+      value: 'http://localhost:3000/kanban',
+    })
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...window.location, origin: 'http://localhost:3000' },
+    })
+    Object.defineProperty(window.history, 'length', { configurable: true, value: 3 })
+    renderPage()
+
+    fireEvent.click(screen.getByTestId('quick-add-close'))
+
+    expect(navigateMock).toHaveBeenCalledWith(-1)
+  })
+
+  it('falls back to kanban when referrer is missing', () => {
+    Object.defineProperty(document, 'referrer', {
+      configurable: true,
+      value: '',
+    })
+    renderPage()
+
+    fireEvent.click(screen.getByTestId('quick-add-close'))
+
+    expect(navigateMock).toHaveBeenCalledWith('/kanban')
+  })
 })
 
 describe('QuickAddPage deprioritized matches', () => {

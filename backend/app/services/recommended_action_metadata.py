@@ -97,10 +97,11 @@ RECOMMENDED_ACTION_METADATA = {
         'explanation': 'This lead is ready for a phone outreach attempt.',
     },
     'hold': {
-        'label': 'Skip Trace Hold',
+        'label': 'Recent-sale hold',
         'explanation': (
-            'A recent sale is still inside the two-year hold. Keep this lead in '
-            'Skip Trace until its scheduled Awaiting Skip Trace date. '
+            'A recent sale is still inside the two-year hold. This lead is '
+            'deprioritized until that date, then moves to Skip Trace for active '
+            'work. '
             + RECENT_SALE_OUTDATED_CONTACT_EXPLANATION
         ),
     },

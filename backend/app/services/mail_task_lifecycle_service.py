@@ -556,17 +556,21 @@ def reconcile_recent_sale_mail_tasks(
         - promote.get('promoted_lead_count', 0),
         0,
     )
+    # Mid-hold parks as deprioritize but still needs queue/mail reconcile.
+    # Manual park without a recent sale is filtered by sql_not_recently_sold.
     terminal_statuses = [
-        'deprioritize',
         'deal_won',
         'deal_lost',
         'suppressed',
         'do_not_contact',
     ]
     ordered_ids: list[int] = []
-    activation_processed_ids = set(activation.get('processed_lead_ids', []))
+    # Exclude only leads already activated/promoted this pass. Status-sync of
+    # future holds must not skip per-lead queue cleanup.
     promoted_lead_ids = set(promote.get('promoted_lead_ids', []))
-    excluded_lead_ids = activation_processed_ids | promoted_lead_ids
+    excluded_lead_ids = (
+        set(activation.get('activated_lead_ids', [])) | promoted_lead_ids
+    )
     if remaining_limit:
         candidates = Lead.query.filter(
             ~sql_not_recently_sold(),

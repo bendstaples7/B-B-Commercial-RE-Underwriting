@@ -214,7 +214,7 @@ class TestEnqueueMailQueue:
             assert LeadTask.query.get(task.id).due_date == (
                 sale_date + timedelta(days=730)
             )
-            assert db.session.get(Lead, lead.id).lead_status == 'skip_trace'
+            assert db.session.get(Lead, lead.id).lead_status == 'deprioritize'
             assert db.session.get(Lead, lead.id).needs_skip_trace is False
             skip_task = LeadTask.query.get(
                 data['results'][0]['skip_trace_task_id'],

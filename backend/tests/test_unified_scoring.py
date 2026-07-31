@@ -795,3 +795,73 @@ class TestRecentlySoldMailGuard:
         )
         assert action == 'hold'
         assert reason == 'recent_sale_hold'
+
+    def test_deprioritize_recently_sold_returns_hold_not_suppress(self, monkeypatch):
+        """Mid-hold park status must still surface RA hold."""
+        from unittest.mock import MagicMock
+
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._resolve_crm_flags',
+            lambda _lead: (True, True, True),
+        )
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._count_open_tasks',
+            lambda _id: 0,
+        )
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._has_overdue_lead_task',
+            lambda _id: False,
+        )
+
+        lead = MagicMock()
+        lead.lead_status = 'deprioritize'
+        lead.lead_category = 'residential'
+        lead.do_not_contact = False
+        lead.follow_up_overdue = False
+        lead.is_warm = False
+        lead.id = 3
+        lead.property_street = '789 Hold St'
+        lead.analysis_complete = True
+        sale = date.today() - timedelta(days=60)
+        lead.acquisition_date = sale
+        lead.most_recent_sale = sale.strftime('%m/%d/%Y')
+
+        action, reason, _meta = LeadScoringEngine.evaluate_recommended_action(
+            lead, total_score=70.0, data_quality_score=70.0, score_tier='B',
+        )
+        assert action == 'hold'
+        assert reason == 'recent_sale_hold'
+
+    def test_manual_deprioritize_without_recent_sale_still_suppresses(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._resolve_crm_flags',
+            lambda _lead: (True, True, True),
+        )
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._count_open_tasks',
+            lambda _id: 0,
+        )
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._has_overdue_lead_task',
+            lambda _id: False,
+        )
+
+        lead = MagicMock()
+        lead.lead_status = 'deprioritize'
+        lead.lead_category = 'residential'
+        lead.do_not_contact = False
+        lead.follow_up_overdue = False
+        lead.is_warm = False
+        lead.id = 4
+        lead.property_street = '790 Parked St'
+        lead.analysis_complete = True
+        lead.acquisition_date = date.today() - timedelta(days=2000)
+        lead.most_recent_sale = None
+
+        action, reason, _meta = LeadScoringEngine.evaluate_recommended_action(
+            lead, total_score=70.0, data_quality_score=70.0, score_tier='B',
+        )
+        assert action == 'suppress'
+        assert reason == 'terminal_status'

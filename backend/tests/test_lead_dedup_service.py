@@ -383,3 +383,169 @@ class TestDuplicateSentinel:
             assert refreshed.property_city == 'Chicago'
             assert refreshed.property_state == 'IL'
             assert refreshed.property_zip == '60618'
+
+
+class TestSiblingAbsorbAndSoftMerge:
+    def test_absorb_merges_clear_street_only_twin(self, app):
+        from app.services.lead_dedup_service import try_absorb_duplicate_for_lead
+
+        with app.app_context():
+            complete = Lead(
+                property_street='2834 N Drake Ave 1r',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60618',
+                owner_first_name='Francisco',
+                owner_last_name='R Solis',
+                owner_user_id='user-solis',
+                lead_status='mailing_no_contact_made',
+                has_phone=True,
+            )
+            husk = Lead(
+                property_street='2834 N Drake Ave',
+                property_city=None,
+                property_state=None,
+                property_zip=None,
+                owner_first_name='Francisco',
+                owner_last_name='R Solis',
+                owner_user_id='user-solis',
+                lead_status='mailing_no_contact_made',
+            )
+            db.session.add_all([complete, husk])
+            db.session.commit()
+
+            with patch(
+                'app.services.lead_dedup_service.confirmed_hubspot_lead_ids',
+                return_value=set(),
+            ), patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ):
+                result = try_absorb_duplicate_for_lead(husk, changed_by='test')
+                db.session.commit()
+
+            assert result is not None
+            assert result.get('merged') is True
+            assert db.session.get(Lead, husk.id) is None
+            assert db.session.get(Lead, complete.id) is not None
+
+    def test_siblings_match_by_owner_name_not_assignee(self, app):
+        """CRM assignee is shared across the book — siblings use property-owner name."""
+        from app.services.lead_dedup_service import find_building_owner_siblings
+
+        with app.app_context():
+            assignee = 'shared-assignee-uid'
+            decoys = [
+                Lead(
+                    property_street=f'{100 + i} N Decoy Ave',
+                    property_city='Chicago',
+                    property_state='IL',
+                    property_zip='60618',
+                    owner_first_name='Other',
+                    owner_last_name=f'Owner{i}',
+                    owner_user_id=assignee,
+                    lead_status='mailing_no_contact_made',
+                )
+                for i in range(5)
+            ]
+            twin = Lead(
+                property_street='2834 N Drake Ave 1r',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60618',
+                owner_first_name='Francisco',
+                owner_last_name='R Solis',
+                owner_user_id=assignee,
+                lead_status='mailing_no_contact_made',
+                has_phone=True,
+            )
+            husk = Lead(
+                property_street='2834 N Drake Ave',
+                property_city=None,
+                property_state=None,
+                property_zip=None,
+                owner_first_name='Francisco',
+                owner_last_name='R Solis',
+                owner_user_id=assignee,
+                lead_status='mailing_no_contact_made',
+            )
+            db.session.add_all(decoys + [twin, husk])
+            db.session.commit()
+
+            siblings = find_building_owner_siblings(husk)
+            assert [s.id for s in siblings] == [twin.id]
+
+    def test_merge_loser_into_winner_api_helper(self, app):
+        from app.services.lead_dedup_service import merge_loser_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='100 Soft Merge St',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60618',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                review_required=True,
+                review_reason='duplicate_lead_cluster',
+            )
+            loser = Lead(
+                property_street='100 Soft Merge Street',
+                property_city=None,
+                property_state=None,
+                property_zip=None,
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                review_required=True,
+                review_reason='duplicate_lead_cluster',
+            )
+            db.session.add_all([winner, loser])
+            db.session.commit()
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ), patch(
+                'app.services.lead_refresh.refresh_lead_scoring',
+            ):
+                result = merge_loser_into_winner(
+                    winner.id, loser.id, changed_by='test', commit=True,
+                )
+
+            assert result['merged'] is True
+            assert db.session.get(Lead, loser.id) is None
+            refreshed = db.session.get(Lead, winner.id)
+            assert refreshed.review_required is False
+            assert refreshed.review_reason is None
+
+    def test_merge_prefers_unit_street_onto_bare_winner(self, app):
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='2834 N Drake Ave',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60618',
+                owner_first_name='Francisco',
+                owner_last_name='R Solis',
+            )
+            loser = Lead(
+                property_street='2834 N Drake Ave 1r',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60618',
+                county_assessor_pin='13262220410000',
+                owner_first_name='Francisco',
+                owner_last_name='R Solis',
+            )
+            db.session.add_all([winner, loser])
+            db.session.commit()
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ):
+                merge_lead_into_winner(winner, loser, changed_by='test')
+                db.session.commit()
+
+            refreshed = db.session.get(Lead, winner.id)
+            assert refreshed.property_street == '2834 N Drake Ave 1r'
+            assert refreshed.county_assessor_pin == '13262220410000'

@@ -62,6 +62,44 @@ def refresh_lead_dedup_fields(lead: Lead) -> None:
     lead.normalized_street = key or None
 
 
+def _dedup_index_conflict_exists(
+    *,
+    lead: Lead,
+    proposed_street: str,
+    ignore_ids: set[int],
+) -> bool:
+    """True when a street update would collide with the owner+street index."""
+    key = dedup_street_key(proposed_street)
+    owner_user_id = getattr(lead, 'owner_user_id', None)
+    first = (getattr(lead, 'owner_first_name', None) or '').strip()
+    last = (getattr(lead, 'owner_last_name', None) or '').strip()
+    if not (key and owner_user_id and first and last):
+        return False
+    query = Lead.query.filter(
+        Lead.owner_user_id == owner_user_id,
+        func.lower(func.trim(Lead.owner_first_name)) == first.lower(),
+        func.lower(func.trim(Lead.owner_last_name)) == last.lower(),
+        Lead.normalized_street == key,
+    )
+    if ignore_ids:
+        query = query.filter(~Lead.id.in_(ignore_ids))
+    return db.session.query(query.exists()).scalar()
+
+
+def _street_prefilter(query, street: str):
+    """Bound owner-name scans with a coarse building-level SQL predicate."""
+    key = dedup_street_key(street)
+    if not key:
+        return query
+    house_token = key.split(' ', 1)[0]
+    normalized_prefix = f'{key} %'
+    return query.filter(or_(
+        Lead.normalized_street == key,
+        Lead.normalized_street.ilike(normalized_prefix),
+        Lead.property_street.ilike(f'{house_token}%'),
+    ))
+
+
 def _owner_name_filters(
     query,
     owner_first: Optional[str],
@@ -150,6 +188,7 @@ def _lead_to_merge_record(lead: Lead) -> dict[str, Any]:
         'has_phone': lead.has_phone,
         'has_email': lead.has_email,
         'last_hubspot_sync_at': lead.last_hubspot_sync_at,
+        'county_assessor_pin': getattr(lead, 'county_assessor_pin', None),
     }
 
 
@@ -217,7 +256,7 @@ def _prefer_newer_sale_onto_winner(winner: Lead, loser: Lead) -> None:
 
 
 def _prefer_cleaner_property_street(winner: Lead, loser: Lead) -> None:
-    """Prefer a street line without a glued ZIP when both normalize to one building."""
+    """Prefer cleaner / more specific street when both normalize to one building."""
     w_street = (winner.property_street or '').strip()
     l_street = (loser.property_street or '').strip()
     if not l_street or not streets_match_normalized(w_street, l_street):
@@ -228,8 +267,30 @@ def _prefer_cleaner_property_street(winner: Lead, loser: Lead) -> None:
     zip_suffix = re.compile(r'\s+\d{5}(?:-\d{4})?\s*$')
     w_has_zip = bool(zip_suffix.search(w_street))
     l_has_zip = bool(zip_suffix.search(l_street))
+    preferred: str | None = None
     if w_has_zip and not l_has_zip:
-        winner.property_street = l_street
+        preferred = l_street
+    elif not w_has_zip and not l_has_zip:
+        # Prefer unit-bearing / longer line (bare husk vs "… Ave 1r").
+        w_u = w_street.upper()
+        l_u = l_street.upper()
+        if l_u.startswith(w_u + ' ') or (
+            len(l_street) > len(w_street)
+            and dedup_street_key(w_street) == dedup_street_key(l_street)
+        ):
+            preferred = l_street
+    if preferred:
+        if _dedup_index_conflict_exists(
+            lead=winner,
+            proposed_street=preferred,
+            ignore_ids={winner.id} if isinstance(winner.id, int) else set(),
+        ):
+            logger.info(
+                'skipping cleaner street preference for winner=%s; normalized street would collide',
+                winner.id,
+            )
+            return
+        winner.property_street = preferred
         refresh_lead_dedup_fields(winner)
         # Address completion runs once at merge level — avoid double GIS here.
 
@@ -332,6 +393,166 @@ def find_duplicate_clusters() -> list[list[Lead]]:
         first_of=lambda lead: lead.owner_first_name,
         last_of=lambda lead: lead.owner_last_name,
     )
+
+
+def find_building_owner_siblings(lead: Lead, *, limit: int = 40) -> list[Lead]:
+    """Same property-owner leads whose street matches *lead* at building level.
+
+    Matches on owner first/last name — not ``owner_user_id`` (CRM assignee).
+    Assignees commonly own thousands of leads; filtering by assignee + a small
+    id-ordered window misses same-building twins (e.g. street-only husk vs unit).
+    """
+    street = (lead.property_street or '').strip()
+    lead_id = getattr(lead, 'id', None)
+    if not street or not isinstance(lead_id, int):
+        return []
+
+    first = (lead.owner_first_name or '').strip()
+    last = (lead.owner_last_name or '').strip()
+    if not first:
+        return []
+
+    q = Lead.query.filter(
+        Lead.id != lead_id,
+        Lead.property_street.isnot(None),
+        Lead.property_street != '',
+    )
+    q = _owner_name_filters(q, first, last)
+
+    siblings: list[Lead] = []
+    q = _street_prefilter(q, street)
+
+    for other in q.order_by(Lead.id.asc()).limit(max(limit * 4, limit)).all():
+        if streets_match_normalized(street, other.property_street):
+            siblings.append(other)
+        if len(siblings) >= limit:
+            break
+    return siblings
+
+
+def cluster_preview_for_lead(lead: Lead) -> dict[str, Any] | None:
+    """Suggested soft-merge cluster for Needs Review (duplicate_lead_cluster)."""
+    siblings = find_building_owner_siblings(lead)
+    if not siblings:
+        return None
+    cluster = [lead] + siblings
+    confirmed_ids = confirmed_hubspot_lead_ids()
+    records = [_lead_to_merge_record(item) for item in cluster]
+    winner = pick_merge_winner(records, confirmed_ids)
+    return {
+        'cluster_ids': [item.id for item in cluster],
+        'suggested_winner_id': winner['id'],
+        'confidence': merge_confidence(records, confirmed_ids),
+        'streets': {
+            item.id: item.property_street for item in cluster
+        },
+    }
+
+
+def merge_loser_into_winner(
+    winner_id: int,
+    loser_id: int,
+    *,
+    changed_by: str = 'manual_soft_merge',
+    commit: bool = True,
+) -> dict[str, Any]:
+    """Merge *loser_id* into *winner_id*; clear duplicate review flags on winner."""
+    if winner_id == loser_id:
+        raise ValueError('winner and loser must be different leads')
+    winner = db.session.get(Lead, winner_id)
+    loser = db.session.get(Lead, loser_id)
+    if winner is None or loser is None:
+        raise ValueError('winner or loser lead not found')
+    if not streets_match_normalized(winner.property_street, loser.property_street):
+        raise ValueError('leads do not share a building-level street')
+
+    with db.session.begin_nested():
+        merge_lead_into_winner(winner, loser, changed_by=changed_by)
+        winner.review_required = False
+        if winner.review_reason == 'duplicate_lead_cluster':
+            winner.review_reason = None
+            winner.review_triggered_at = None
+
+    if commit:
+        db.session.commit()
+        from app.services.lead_refresh import refresh_lead_scoring
+        refresh_lead_scoring(winner_id)
+
+    return {
+        'winner_id': winner_id,
+        'loser_id': loser_id,
+        'merged': True,
+    }
+
+
+def try_absorb_duplicate_for_lead(
+    lead: Lead,
+    *,
+    changed_by: str = 'situs_sibling_absorb',
+) -> dict[str, Any] | None:
+    """Auto-merge clear same-building duplicates; flag ambiguous for Needs Review.
+
+    Returns a result dict, or None when no siblings exist.
+    """
+    siblings = find_building_owner_siblings(lead)
+    if not siblings:
+        return None
+
+    cluster = [lead] + siblings
+    confirmed_ids = confirmed_hubspot_lead_ids()
+    records = [_lead_to_merge_record(item) for item in cluster]
+    confidence = merge_confidence(records, confirmed_ids)
+
+    if confidence == 'ambiguous':
+        for item in cluster:
+            item.review_required = True
+            item.review_reason = 'duplicate_lead_cluster'
+            item.review_triggered_at = datetime.utcnow()
+        return {
+            'flagged': True,
+            'cluster_ids': [item.id for item in cluster],
+            'confidence': confidence,
+        }
+
+    winner_record = pick_merge_winner(records, confirmed_ids)
+    winner = next(item for item in cluster if item.id == winner_record['id'])
+    losers = [item for item in cluster if item.id != winner.id]
+    merged_pairs: list[dict[str, int]] = []
+
+    for loser in losers:
+        try:
+            with db.session.begin_nested():
+                # Re-load winner after prior merges.
+                winner = db.session.get(Lead, winner_record['id'])
+                loser = db.session.get(Lead, loser.id)
+                if winner is None or loser is None:
+                    break
+                pair = {
+                    'winner_id': winner.id,
+                    'loser_id': loser.id,
+                }
+                merge_lead_into_winner(winner, loser, changed_by=changed_by)
+            merged_pairs.append(pair)
+        except Exception:
+            logger.exception(
+                'absorb merge failed loser=%s winner=%s',
+                getattr(loser, 'id', None),
+                winner_record['id'],
+            )
+            continue
+
+    if winner is not None:
+        winner.review_required = False
+        if winner.review_reason == 'duplicate_lead_cluster':
+            winner.review_reason = None
+            winner.review_triggered_at = None
+
+    return {
+        'merged': bool(merged_pairs),
+        'merged_pairs': merged_pairs,
+        'winner_id': winner_record['id'],
+        'confidence': confidence,
+    }
 
 
 def run_duplicate_sentinel(

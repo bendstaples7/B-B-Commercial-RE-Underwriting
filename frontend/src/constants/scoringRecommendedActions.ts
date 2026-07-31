@@ -8,7 +8,7 @@ export const SCORING_ACTION_LABELS: Record<UnifiedRecommendedAction, string> = {
   valuation_needed: 'Valuation Needed',
   suppress: 'Suppress',
   nurture: 'Nurture',
-  hold: 'Skip Trace Hold',
+  hold: 'Recent-sale hold',
   needs_manual_review: 'Needs Manual Review',
   follow_up_now: 'Follow Up Now',
   ready_for_outreach: 'Ready for Outreach',
