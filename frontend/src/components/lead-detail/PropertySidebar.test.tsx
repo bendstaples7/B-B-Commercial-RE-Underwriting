@@ -596,7 +596,8 @@ describe('PropertySidebar always-visible sale and PIN', () => {
     expect(screen.getByTestId('sidebar-sale-last-checked')).toHaveTextContent(
       'No sale found as of Jul 2026',
     )
-    expect(screen.getByTestId('sidebar-sale-verified-check')).toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-sale-verified-check')).not.toBeInTheDocument()
+    expect(screen.getByTestId('sidebar-reverify-sale-date')).toBeInTheDocument()
   })
 
   it('keeps displayed sale without checkmark and says cannot confirm after no_sale probe', () => {
