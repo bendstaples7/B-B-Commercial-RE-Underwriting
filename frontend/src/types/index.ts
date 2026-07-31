@@ -2036,6 +2036,10 @@ export interface QueueRow {
   review_required: boolean;
   review_reason: string | null;
   review_triggered_at: string | null;
+  /** Present when review_reason is duplicate_lead_cluster. */
+  duplicate_cluster_ids?: number[] | null;
+  suggested_winner_id?: number | null;
+  duplicate_confidence?: 'clear' | 'ambiguous' | string | null;
   unanswered_call_count: number;
   is_warm: boolean;
   last_mailed_at?: string | null;
@@ -2379,6 +2383,7 @@ export interface LogCallFollowUpPayload {
 
 export interface LogCallPayload {
   outcome: 'answered' | 'voicemail' | 'no_answer' | 'busy' | 'wrong_number';
+  direction?: 'outbound' | 'inbound';
   duration_minutes?: number | null;
   notes?: string | null;
   contact_id?: number | null;

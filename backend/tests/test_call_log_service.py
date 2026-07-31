@@ -193,6 +193,27 @@ def test_log_call_creates_timeline_entry(app):
 
         assert entry.event_type == 'call_logged'
         assert entry.event_metadata['outcome'] == 'answered'
+        assert entry.event_metadata['direction'] == 'outbound'
+        assert 'Outbound call: answered' in entry.summary
+
+
+def test_log_call_inbound_direction_in_summary_and_metadata(app):
+    """Inbound direction is stored on metadata and reflected in the summary."""
+    with app.app_context():
+        lead = _make_lead(app, '9b Inbound Call St')
+        svc = CallLogService()
+
+        with patch(_REFRESH_PATCH):
+            entry = svc.log_call(
+                lead.id,
+                outcome='answered',
+                duration_minutes=2,
+                notes='Lead called in',
+                direction='inbound',
+            )
+
+        assert entry.event_metadata['direction'] == 'inbound'
+        assert 'Inbound call: answered' in entry.summary
 
 
 def test_note_with_contact_only_stays_note_added(app):

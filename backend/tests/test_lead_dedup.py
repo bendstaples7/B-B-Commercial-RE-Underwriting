@@ -36,6 +36,31 @@ class TestMergeWinnerSelection:
         winner = pick_merge_winner(records, confirmed)
         assert winner['id'] == 11129
 
+    def test_pick_merge_winner_prefers_pin_unit_over_synced_husk(self):
+        """Street-only HubSpot husk must not beat Listsource twin with PIN/unit."""
+        records = [
+            {
+                'id': 11182,
+                'lead_status': 'mailing_no_contact_made',
+                'has_phone': False,
+                'has_email': False,
+                'last_hubspot_sync_at': '2026-07-24T00:00:00',
+                'property_street': '2834 N Drake Ave',
+                'county_assessor_pin': None,
+            },
+            {
+                'id': 291,
+                'lead_status': 'mailing_no_contact_made',
+                'has_phone': False,
+                'has_email': False,
+                'last_hubspot_sync_at': None,
+                'property_street': '2834 N Drake Ave 1r',
+                'county_assessor_pin': '13262220410000',
+            },
+        ]
+        winner = pick_merge_winner(records, set())
+        assert winner['id'] == 291
+
     def test_cluster_groups_schiller_variants(self):
         rows = [
             {'id': 2835, 'property_street': '1915 W Schiller St'},

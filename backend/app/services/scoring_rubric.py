@@ -224,9 +224,10 @@ def _contacts_skip_trace_before_sale(lead: Lead) -> bool:
 def contacts_likely_prior_owner(lead: Lead) -> bool:
     """True when contacts may still describe the prior owner during a recent-sale hold.
 
-    Only applies inside the recent-sale window (``is_recently_sold``) for UI
-    gray-out. Older sales (e.g. year 2000) do not gray out contacts. Post-hold
-    skip-trace handoff uses ``contacts_need_post_hold_verification`` instead.
+    Only applies inside the recent-sale window (``is_recently_sold``). Older
+    sales (e.g. year 2000) do not qualify. Post-hold skip-trace handoff uses
+    ``contacts_need_post_hold_verification``; UI gray-out uses
+    ``contacts_untrusted``.
     """
     if not is_recently_sold(lead):
         return False
@@ -253,9 +254,21 @@ def contacts_need_post_hold_verification(lead: Lead) -> bool:
     return _contacts_skip_trace_before_sale(lead)
 
 
+def contacts_untrusted(lead: Lead) -> bool:
+    """True when on-file contacts must not be treated as the current owner.
+
+    Covers both the recent-sale hold window and the post-hold period until
+    skip-trace runs after the sale. Ancient sales stay trusted.
+    """
+    return (
+        contacts_likely_prior_owner(lead)
+        or contacts_need_post_hold_verification(lead)
+    )
+
+
 def contacts_stale_since(lead: Lead) -> str | None:
     """ISO sale date that makes contacts stale, or None when not stale."""
-    if not contacts_likely_prior_owner(lead):
+    if not contacts_untrusted(lead):
         return None
     return format_last_sale_at(lead)
 
@@ -904,8 +917,8 @@ def _flat_phone_confidences(lead: Lead) -> list[int]:
 
 
 def _use_flat_contact_fields(lead: Lead) -> bool:
-    """Use flat phone/email unless contacts are still likely prior-owner stale."""
-    return not contacts_likely_prior_owner(lead)
+    """Use flat phone/email unless contacts are still prior-owner / post-sale stale."""
+    return not contacts_untrusted(lead)
 
 
 def _relational_phone_confidences(lead_id: int) -> list[int]:

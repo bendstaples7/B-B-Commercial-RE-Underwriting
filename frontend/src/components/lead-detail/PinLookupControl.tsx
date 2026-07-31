@@ -239,6 +239,9 @@ export function usePinLookup(
           && !preview.require_explicit_apply
         )
         if (autoApply && pin) {
+          if (preview.message) {
+            onSnack(preview.message)
+          }
           await applyPin(pin)
           return
         }
@@ -469,6 +472,10 @@ export interface MissingPinActionsProps {
   /** Auto-run preview when Cook-eligible and PIN blank. */
   autoPreview?: boolean
   isCookCounty?: boolean
+  /** Snapshot queue neighbour before deprioritize PATCH (parent). */
+  onBeforeDeprioritize?: () => void
+  /** After multi-PIN deprioritize succeeds (queue hold / refresh). */
+  onAfterDeprioritize?: () => void | Promise<void>
 }
 
 /**
@@ -486,6 +493,8 @@ export function MissingPinActions({
   layout = 'stack',
   autoPreview = false,
   isCookCounty = false,
+  onBeforeDeprioritize,
+  onAfterDeprioritize,
 }: MissingPinActionsProps) {
   const {
     pinMissing,
@@ -567,6 +576,7 @@ export function MissingPinActions({
   const handleDeprioritizeMultiPin = async () => {
     setDeprioritizePending(true)
     try {
+      onBeforeDeprioritize?.()
       await commandCenterService.updateStatus(
         leadId,
         'deprioritize',
@@ -576,6 +586,7 @@ export function MissingPinActions({
       onSnack('Lead deprioritized — commercial split into condos')
       await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
       await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+      await onAfterDeprioritize?.()
     } catch (error) {
       onSnack(error instanceof Error ? error.message : 'Could not deprioritize lead')
     } finally {

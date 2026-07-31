@@ -5,10 +5,13 @@ from app import db
 from app.models import Lead
 from app.services.gis.cook_county_gis_connector import (
     _house_number_range_variants,
+    _house_number_step_variants,
     _normalise_address,
 )
 from app.services.property_match_review_service import (
     PropertyMatchReviewService,
+    _rank_candidates_by_house_proximity,
+    _unique_near_miss_row,
     assessor_street_differs_from_lead,
 )
 
@@ -79,6 +82,38 @@ def _seed_cook_lead(**overrides) -> Lead:
     return lead
 
 
+def test_house_number_step_variants_odd_even_side():
+    variants = _house_number_step_variants('1233 W FOSTER AVE')
+    assert variants[0] == '1235 W FOSTER AVE'
+    assert variants[1] == '1231 W FOSTER AVE'
+    assert '1237 W FOSTER AVE' in variants
+    assert '1239 W FOSTER AVE' in variants
+    assert '1227 W FOSTER AVE' in variants
+
+
+def test_unique_near_miss_picks_single_step_up():
+    lead = '1233 W Foster Ave'
+    rows = [
+        {'pin': 'a', 'property_street': '1227 W FOSTER AVE'},
+        {'pin': 'b', 'property_street': '1235 W FOSTER AVE'},
+        {'pin': 'c', 'property_street': '1229 W FOSTER AVE'},
+    ]
+    hit = _unique_near_miss_row(lead, rows)
+    assert hit is not None
+    assert hit['pin'] == 'b'
+    ranked = _rank_candidates_by_house_proximity(lead, rows)
+    assert ranked[0]['pin'] == 'b'
+
+
+def test_unique_near_miss_rejects_condo_stack_at_near_address():
+    lead = '1233 W Foster Ave'
+    rows = [
+        {'pin': 'a', 'property_street': '1235 W FOSTER AVE'},
+        {'pin': 'b', 'property_street': '1235 W FOSTER AVE'},
+    ]
+    assert _unique_near_miss_row(lead, rows) is None
+
+
 class TestPreviewSpatialAndPin:
     def test_preview_spatial_fallback_returns_candidates(self, app):
         with app.app_context():
@@ -102,6 +137,10 @@ class TestPreviewSpatialAndPin:
                 PropertyMatchReviewService,
                 '_cook_pin_rows_at_address',
                 return_value=[],
+            ), patch.object(
+                PropertyMatchReviewService,
+                '_cook_pin_rows_via_house_steps',
+                return_value=[],
             ), patch(
                 'app.services.gis.cook_county_parcel_spatial.lookup_nearby_parcel_candidates',
                 return_value=spatial,
@@ -114,6 +153,178 @@ class TestPreviewSpatialAndPin:
             assert 'BRADLEY' in (preview['candidates'][0]['property_street'] or '')
             assert preview.get('tax_situs_street')
             assert 'BRADLEY' in (preview.get('tax_situs_street') or '').upper()
+
+    def test_preview_unique_same_situs_among_neighbors_auto_applies(self, app):
+        """One exact lead-street PIN among spatial neighbors is unambiguous."""
+        with app.app_context():
+            lead = _seed_cook_lead(property_street='1233 W Foster Ave')
+            mock_connector = MagicMock()
+            mock_connector.connector_name = 'cook_county_gis'
+            mock_connector.market = 'cook_county_il'
+
+            spatial = [
+                {
+                    'pin': '14-08-302-030-0000',
+                    'property_street': '1223 W FOSTER AVE',
+                    'property_city': 'CHICAGO',
+                    'property_state': 'IL',
+                    'property_zip': '60640',
+                    'source': 'cook_parcel_spatial',
+                },
+                {
+                    'pin': '14-08-302-028-0000',
+                    'property_street': '1233 W FOSTER AVE',
+                    'property_city': 'CHICAGO',
+                    'property_state': 'IL',
+                    'property_zip': '60640',
+                    'source': 'cook_parcel_spatial',
+                },
+                {
+                    'pin': '14-08-302-070-1011',
+                    'property_street': '1227 W FOSTER AVE',
+                    'property_city': 'CHICAGO',
+                    'property_state': 'IL',
+                    'property_zip': '60640',
+                    'source': 'cook_parcel_spatial',
+                },
+            ]
+            with patch(
+                'app.services.property_match_review_service.connector_for_lead',
+                return_value=mock_connector,
+            ), patch.object(
+                PropertyMatchReviewService,
+                '_cook_pin_rows_at_address',
+                return_value=[],
+            ), patch.object(
+                PropertyMatchReviewService,
+                '_cook_pin_rows_via_house_steps',
+                return_value=[],
+            ), patch(
+                'app.services.gis.cook_county_parcel_spatial.lookup_nearby_parcel_candidates',
+                return_value=spatial,
+            ):
+                preview = PropertyMatchReviewService().preview_match(lead.id)
+
+            assert preview['found'] is True
+            assert preview['require_explicit_apply'] is False
+            assert preview['pin_count'] == 1
+            assert preview['pin'] == '14-08-302-028-0000'
+            assert preview['candidates'] == [spatial[1]]
+
+    def test_preview_house_step_ladder_finds_assessor_typo(self, app):
+        """Exact miss + ±2 Socrata hit auto-applies with assessor AKA."""
+        with app.app_context():
+            lead = _seed_cook_lead(
+                property_street='1233 W Foster Ave',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60640',
+            )
+            mock_connector = MagicMock()
+            mock_connector.connector_name = 'cook_county_gis'
+            mock_connector.market = 'cook_county_il'
+
+            step_hit = [{
+                'pin': '14-08-302-028-0000',
+                'property_street': '1235 W FOSTER AVE',
+                'property_city': 'CHICAGO',
+                'property_state': 'IL',
+                'property_zip': '60640',
+                'source': 'cook_address_step',
+            }]
+
+            with patch(
+                'app.services.property_match_review_service.connector_for_lead',
+                return_value=mock_connector,
+            ), patch.object(
+                PropertyMatchReviewService,
+                '_cook_pin_rows_at_address',
+                return_value=[],
+            ), patch.object(
+                PropertyMatchReviewService,
+                '_cook_pin_rows_via_house_steps',
+                return_value=step_hit,
+            ), patch(
+                'app.services.gis.cook_county_parcel_spatial.lookup_nearby_parcel_candidates',
+                return_value=[],
+            ):
+                preview = PropertyMatchReviewService().preview_match(lead.id)
+
+            assert preview['found'] is True
+            assert preview['require_explicit_apply'] is True
+            assert preview['pin'] == '14-08-302-028-0000'
+            assert preview['assessor_aka']['property_street'] == '1235 W FOSTER AVE'
+            assert '1235' in (preview.get('message') or '')
+
+    def test_preview_one_sided_spatial_merges_step_ladder(self, app):
+        """All-lower spatial neighbors still pick unique +2 assessor hit."""
+        with app.app_context():
+            lead = _seed_cook_lead(
+                property_street='1233 W Foster Ave',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60640',
+            )
+            mock_connector = MagicMock()
+            mock_connector.connector_name = 'cook_county_gis'
+            mock_connector.market = 'cook_county_il'
+
+            spatial_lower = [
+                {
+                    'pin': '14-08-302-030-0000',
+                    'property_street': '1223 W FOSTER AVE',
+                    'property_city': 'CHICAGO',
+                    'property_state': 'IL',
+                    'property_zip': '60640',
+                    'source': 'cook_parcel_spatial',
+                },
+                {
+                    'pin': '14-08-302-070-1011',
+                    'property_street': '1227 W FOSTER AVE',
+                    'property_city': 'CHICAGO',
+                    'property_state': 'IL',
+                    'property_zip': '60640',
+                    'source': 'cook_parcel_spatial',
+                },
+            ]
+            step_hit = [{
+                'pin': '14-08-302-028-0000',
+                'property_street': '1235 W FOSTER AVE',
+                'property_city': 'CHICAGO',
+                'property_state': 'IL',
+                'property_zip': '60640',
+                'source': 'cook_address_step',
+            }]
+            ladder_calls: list[str] = []
+
+            def ladder_side_effect(address: str):
+                ladder_calls.append(address)
+                # First pass (exact miss) empty so spatial runs; enrich re-probes.
+                if len(ladder_calls) == 1:
+                    return []
+                return step_hit
+
+            with patch(
+                'app.services.property_match_review_service.connector_for_lead',
+                return_value=mock_connector,
+            ), patch.object(
+                PropertyMatchReviewService,
+                '_cook_pin_rows_at_address',
+                return_value=[],
+            ), patch.object(
+                PropertyMatchReviewService,
+                '_cook_pin_rows_via_house_steps',
+                side_effect=ladder_side_effect,
+            ), patch(
+                'app.services.gis.cook_county_parcel_spatial.lookup_nearby_parcel_candidates',
+                return_value=spatial_lower,
+            ):
+                preview = PropertyMatchReviewService().preview_match(lead.id)
+
+            assert len(ladder_calls) >= 2
+            assert preview['require_explicit_apply'] is True
+            assert preview['pin'] == '14-08-302-028-0000'
+            assert preview['candidates'][0]['property_street'] == '1235 W FOSTER AVE'
 
     def test_preview_pin_hint_sets_assessor_aka(self, app):
         with app.app_context():

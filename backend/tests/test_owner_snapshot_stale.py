@@ -18,6 +18,7 @@ from app.services.scoring_rubric import (
     contacts_likely_prior_owner,
     contacts_need_post_hold_verification,
     contacts_stale_since,
+    contacts_untrusted,
 )
 
 
@@ -66,11 +67,14 @@ class TestContactsLikelyPriorOwner:
         sale = date.today() - timedelta(days=800)
         lead = _lead(acquisition_date=sale, date_skip_traced=None)
         assert contacts_likely_prior_owner(lead) is False
-        assert contacts_stale_since(lead) is None
+        # Post-hold still untrusted until skip-trace after sale.
+        assert contacts_untrusted(lead) is True
+        assert contacts_stale_since(lead) == sale.isoformat()
 
     def test_false_when_year_2000_sale_never_skip_traced(self):
         lead = _lead(acquisition_date=date(2000, 2, 1), date_skip_traced=None)
         assert contacts_likely_prior_owner(lead) is False
+        assert contacts_untrusted(lead) is False
         assert contacts_stale_since(lead) is None
 
     def test_false_when_old_sale_but_skip_traced_after(self):
@@ -80,6 +84,7 @@ class TestContactsLikelyPriorOwner:
             date_skip_traced=sale + timedelta(days=5),
         )
         assert contacts_likely_prior_owner(lead) is False
+        assert contacts_untrusted(lead) is False
         assert contacts_stale_since(lead) is None
 
 
@@ -90,16 +95,20 @@ class TestContactsNeedPostHoldVerification:
         lead = _lead(acquisition_date=sale, date_skip_traced=None)
         assert contacts_likely_prior_owner(lead) is False
         assert contacts_need_post_hold_verification(lead) is True
+        assert contacts_untrusted(lead) is True
+        assert contacts_stale_since(lead) == sale.isoformat()
 
     def test_false_during_hold_window(self):
         sale = date.today() - timedelta(days=30)
         lead = _lead(acquisition_date=sale, date_skip_traced=None)
         assert contacts_likely_prior_owner(lead) is True
         assert contacts_need_post_hold_verification(lead) is False
+        assert contacts_untrusted(lead) is True
 
     def test_false_for_year_2000_sale(self):
         lead = _lead(acquisition_date=date(2000, 2, 1), date_skip_traced=None)
         assert contacts_need_post_hold_verification(lead) is False
+        assert contacts_untrusted(lead) is False
 
     def test_false_when_skip_traced_after_sale(self):
         sale = date.today() - timedelta(days=800)
@@ -108,6 +117,15 @@ class TestContactsNeedPostHoldVerification:
             date_skip_traced=sale + timedelta(days=5),
         )
         assert contacts_need_post_hold_verification(lead) is False
+        assert contacts_untrusted(lead) is False
+
+    def test_untrusted_on_hold_boundary_day(self):
+        # Exactly 730 days out of hold window (< 730) → post-hold still untrusted.
+        sale = date.today() - timedelta(days=730)
+        lead = _lead(acquisition_date=sale, date_skip_traced=None)
+        assert contacts_likely_prior_owner(lead) is False
+        assert contacts_need_post_hold_verification(lead) is True
+        assert contacts_untrusted(lead) is True
 
 
 class TestOwnerSnapshotService:

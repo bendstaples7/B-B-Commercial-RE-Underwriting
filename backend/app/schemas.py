@@ -1709,6 +1709,7 @@ LEAD_STATUS_LABELS = {
 }
 
 VALID_CALL_OUTCOMES = ['answered', 'voicemail', 'no_answer', 'busy', 'wrong_number', 'not_interested']
+VALID_CALL_DIRECTIONS = ['outbound', 'inbound']
 
 
 class LeadStatusUpdateSchema(RequestSchema):
@@ -1747,6 +1748,10 @@ class LogCallSchema(RequestSchema):
     outcome = fields.String(
         required=True,
         validate=validate.OneOf(VALID_CALL_OUTCOMES),
+    )
+    direction = fields.String(
+        load_default='outbound',
+        validate=validate.OneOf(VALID_CALL_DIRECTIONS),
     )
     duration_minutes = fields.Integer(
         allow_none=True,

@@ -999,3 +999,109 @@ class TestHealIncompletePropertyAddresses:
             assert preview['complete'] is True
             assert preview['after']['property_city'] == 'Chicago'
             assert lead.property_city is None
+
+    def test_sibling_locality_fills_before_gis(self, app):
+        with app.app_context():
+            twin = _make_lead(
+                app,
+                property_street='2834 N Drake Ave 1r',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60618',
+                county_assessor_pin='13262220410000',
+                owner_first_name='Francisco',
+                owner_last_name='R Solis',
+                owner_user_id='user-drake',
+            )
+            incomplete = _make_lead(
+                app,
+                property_street='2834 N Drake Ave',
+                property_city=None,
+                property_state=None,
+                property_zip=None,
+                owner_first_name='Francisco',
+                owner_last_name='R Solis',
+                owner_user_id='user-drake',
+            )
+            with patch(
+                'app.services.property_address_service._gis_fill_from_street',
+                return_value=None,
+            ) as gis:
+                result = complete_property_address(
+                    incomplete,
+                    try_gis=True,
+                    try_geocode=False,
+                    apply_market_defaults=False,
+                    actor='test',
+                    commit=True,
+                )
+            assert result['complete'] is True
+            assert 'sibling_locality' in (result.get('sources') or [])
+            assert incomplete.property_city == 'Chicago'
+            assert incomplete.property_zip == '60618'
+            # Unit-suffix siblings must not inherit the twin's PIN.
+            assert incomplete.county_assessor_pin is None
+            gis.assert_not_called()
+
+    def test_heal_priority_lane_processes_due_task_before_backlog(self, app):
+        from datetime import date
+
+        from app import db
+        from app.models import LeadTask
+
+        with app.app_context():
+            backlog = _make_lead(
+                app,
+                property_street='100 Priority Backlog St',
+                property_city=None,
+                property_state=None,
+                property_zip=None,
+            )
+            active = _make_lead(
+                app,
+                property_street='200 Priority Active St',
+                property_city=None,
+                property_state=None,
+                property_zip=None,
+                lead_status='mailing_no_contact_made',
+            )
+            # Ensure backlog has lower id so cursor would hit it first without priority.
+            assert backlog.id < active.id
+            db.session.add(LeadTask(
+                lead_id=active.id,
+                task_type='custom',
+                title='Follow up',
+                status='open',
+                due_date=date.today(),
+                created_by='test',
+            ))
+            db.session.commit()
+
+            def _fake_complete(lead, **kwargs):
+                lead.property_city = 'Chicago'
+                lead.property_state = 'IL'
+                lead.property_zip = '60618'
+                return {'complete': True, 'changed_fields': ['property_city']}
+
+            with patch(
+                'app.services.property_address_service._set_heal_incomplete_cursor',
+            ), patch(
+                'app.services.property_address_service.complete_property_address',
+                side_effect=_fake_complete,
+            ), patch(
+                'app.services.property_address_service.HEAL_PRIORITY_BATCH_SIZE',
+                1,
+            ), patch(
+                'app.services.lead_dedup_service.try_absorb_duplicate_for_lead',
+                return_value=None,
+            ):
+                result = heal_incomplete_property_addresses(
+                    last_id=0,
+                    limit=1,
+                    persist_cursor=False,
+                    commit=False,
+                    try_gis=False,
+                    try_geocode=False,
+                )
+            assert result['priority_processed'] == 1
+            assert result['lead_ids'] == [active.id]

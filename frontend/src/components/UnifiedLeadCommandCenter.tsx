@@ -91,6 +91,10 @@ import {
 import { formatDateOnly } from '@/utils/helpers'
 import { formatCookCountyPin } from '@/utils/cookCountyPin'
 import { MissingPinActions } from '@/components/lead-detail/PinLookupControl'
+import {
+  QueueAdvanceHoldBanner,
+  QUEUE_ADVANCE_HOLD_MS,
+} from '@/components/lead-detail/QueueAdvanceHoldBanner'
 import { scrollCommandCenterSectionIntoView } from '@/utils/scrollCommandCenterSection'
 
 export { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
@@ -132,6 +136,10 @@ interface PropertyOverviewHeaderProps {
   ) => void | Promise<void>
   onViewFullBreakdown?: () => void
   fromQueue?: FromQueueState | null
+  /** Snapshot queue neighbour before Pin Lookup deprioritize PATCH. */
+  onBeforePinDeprioritize?: () => void
+  /** After Pin Lookup multi-PIN deprioritize succeeds (queue hold / refresh). */
+  onAfterPinDeprioritize?: () => void | Promise<void>
 }
 
 function formatPropertyAddress(data: CommandCenterPayload): string {
@@ -152,6 +160,8 @@ function PropertyOverviewHeader({
   onStatusChanged,
   onViewFullBreakdown,
   fromQueue,
+  onBeforePinDeprioritize,
+  onAfterPinDeprioritize,
   statusSelectorRef,
 }: PropertyOverviewHeaderProps & { statusSelectorRef?: React.RefObject<HTMLDivElement | null> }) {
   const [scoreDialogOpen, setScoreDialogOpen] = useState(false)
@@ -252,6 +262,8 @@ function PropertyOverviewHeader({
           layout="inline"
           autoPreview
           isCookCounty={Boolean(commandCenterData.is_cook_county_eligible)}
+          onBeforeDeprioritize={onBeforePinDeprioritize}
+          onAfterDeprioritize={onAfterPinDeprioritize}
         />
       ) : null}
     </Box>,
@@ -1223,6 +1235,105 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     }
   }, [fromQueue, advanceInQueue, exitQueueCaughtUp, queryClient])
 
+  type QueueAdvanceHoldState = {
+    startedAt: number
+    durationMs: number
+    nextId: number | null
+    flash?: QueueFlashSnackbar
+    message: string
+    progress: number
+  }
+
+  const [queueAdvanceHold, setQueueAdvanceHold] = useState<QueueAdvanceHoldState | null>(null)
+  const holdTimeoutRef = useRef<number | null>(null)
+  const holdRafRef = useRef<number | null>(null)
+
+  const clearQueueAdvanceHoldTimers = useCallback(() => {
+    if (holdTimeoutRef.current != null) {
+      window.clearTimeout(holdTimeoutRef.current)
+      holdTimeoutRef.current = null
+    }
+    if (holdRafRef.current != null) {
+      window.cancelAnimationFrame(holdRafRef.current)
+      holdRafRef.current = null
+    }
+  }, [])
+
+  const cancelQueueAdvanceHold = useCallback((opts?: { snackStay?: boolean }) => {
+    clearQueueAdvanceHoldTimers()
+    setQueueAdvanceHold(null)
+    if (opts?.snackStay) {
+      setActivitySnackbar({ open: true, message: 'Staying on this lead.' })
+    }
+  }, [clearQueueAdvanceHoldTimers])
+
+  const snapshotNextQueueLeadId = useCallback((): number | null | undefined => {
+    if (!fromQueue || queueNavLoading || !queueNavigation) return undefined
+    return forwardStack.at(-1) ?? queueNavigation.next_id ?? null
+  }, [fromQueue, forwardStack, queueNavLoading, queueNavigation])
+
+  const scheduleQueueAdvanceHold = useCallback((opts: {
+    nextId: number | null | undefined
+    flash?: QueueFlashSnackbar
+    message: string
+  }) => {
+    if (!fromQueue) return
+    // Nav still loading — refresh queues / snack, never arm a hold.
+    if (opts.nextId === undefined) {
+      void advanceAfterTaskComplete(undefined, opts.flash ?? { message: opts.message })
+      return
+    }
+
+    clearQueueAdvanceHoldTimers()
+    const startedAt = Date.now()
+    const durationMs = QUEUE_ADVANCE_HOLD_MS
+    const nextId = opts.nextId
+    const flash = opts.flash
+    setQueueAdvanceHold({
+      startedAt,
+      durationMs,
+      nextId,
+      flash,
+      message: opts.message,
+      progress: 100,
+    })
+
+    const tick = () => {
+      const elapsed = Date.now() - startedAt
+      const remaining = Math.max(0, 100 * (1 - elapsed / durationMs))
+      setQueueAdvanceHold((prev) => (
+        prev ? { ...prev, progress: remaining } : null
+      ))
+      if (elapsed < durationMs) {
+        holdRafRef.current = window.requestAnimationFrame(tick)
+      }
+    }
+    holdRafRef.current = window.requestAnimationFrame(tick)
+
+    holdTimeoutRef.current = window.setTimeout(() => {
+      clearQueueAdvanceHoldTimers()
+      setQueueAdvanceHold(null)
+      void advanceAfterTaskComplete(nextId, flash)
+    }, durationMs)
+  }, [fromQueue, advanceAfterTaskComplete, clearQueueAdvanceHoldTimers])
+
+  // Drop a pending hold when the lead identity changes; always clear timers on unmount.
+  useEffect(() => {
+    clearQueueAdvanceHoldTimers()
+    setQueueAdvanceHold(null)
+    return () => {
+      clearQueueAdvanceHoldTimers()
+    }
+  }, [leadId, clearQueueAdvanceHoldTimers])
+
+  const handleManualQueueAdvance = useCallback((nextLeadId: number) => {
+    cancelQueueAdvanceHold()
+    advanceInQueue(nextLeadId)
+  }, [advanceInQueue, cancelQueueAdvanceHold])
+
+  /** Captured before Pin Lookup deprioritize PATCH removes this lead from the queue. */
+  const pinDeprioritizeNextIdRef = useRef<number | null | undefined>(undefined)
+
   const handleStatusChanged = useCallback(async (
     nextStatus?: LeadStatus,
     result?: {
@@ -1297,20 +1408,17 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       fromQueue
       && (meta?.completedTaskId != null || meta?.completedHubSpotTaskId != null)
     ) {
-      const nextLeadId: number | null | undefined =
-        queueNavLoading || !queueNavigation
-          ? undefined
-          : (forwardStack.at(-1) ?? queueNavigation.next_id ?? null)
-      void advanceAfterTaskComplete(nextLeadId)
+      scheduleQueueAdvanceHold({
+        nextId: snapshotNextQueueLeadId(),
+        message: meta?.warning ?? ACTIVITY_SUCCESS_MESSAGES[type] ?? 'Activity saved',
+      })
     }
   }, [
     queryClient,
     leadId,
     fromQueue,
-    advanceAfterTaskComplete,
-    queueNavigation,
-    queueNavLoading,
-    forwardStack,
+    scheduleQueueAdvanceHold,
+    snapshotNextQueueLeadId,
   ])
 
   const handleRaAction = useCallback(async (action: string) => {
@@ -1330,11 +1438,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         return
       case 'add_to_mail_batch': {
         // Snapshot neighbour before enqueue removes this lead from Today's Action.
-        // Prefer session forward stack; undefined = nav still loading (do not advance).
-        const nextLeadId: number | null | undefined =
-          !fromQueue || queueNavLoading || !queueNavigation
-            ? undefined
-            : (forwardStack.at(-1) ?? queueNavigation.next_id ?? null)
+        const nextLeadId = snapshotNextQueueLeadId()
         const result = await openLetterService.enqueue([leadId], fromQueue?.key ?? 'command-center')
         const flash = {
           message: formatEnqueueSummary(result),
@@ -1351,8 +1455,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         await queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
         await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
         if (result.added > 0 && fromQueue) {
-          // Same as task completion: leave this lead and open the next due row.
-          await advanceAfterTaskComplete(nextLeadId, flash)
+          scheduleQueueAdvanceHold({
+            nextId: nextLeadId,
+            flash,
+            message: flash.message,
+          })
         }
         return
       }
@@ -1473,18 +1580,25 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               : 'Lead moved to Skip Trace',
         })
         if (!result.already_done) {
+          const advanceNextId = (
+            fromQueue && SKIP_TRACE_AUTO_ADVANCE_QUEUE_KEYS.has(fromQueue.key)
+          )
+            ? snapshotNextQueueLeadId()
+            : undefined
           await handleStatusChanged(result.lead_status as LeadStatus, {
             lead_score: result.lead_score,
             recommended_action: result.recommended_action,
           })
           // Status change alone stays put; Move to Skip Trace completes current
           // work and drops the lead from due-work queues — advance like task done.
-          if (fromQueue && SKIP_TRACE_AUTO_ADVANCE_QUEUE_KEYS.has(fromQueue.key)) {
-            const nextLeadId: number | null | undefined =
-              queueNavLoading || !queueNavigation
-                ? undefined
-                : (forwardStack.at(-1) ?? queueNavigation.next_id ?? null)
-            await advanceAfterTaskComplete(nextLeadId)
+          // Snapshot next id *before* queue-navigation refetch in handleStatusChanged.
+          if (advanceNextId !== undefined) {
+            scheduleQueueAdvanceHold({
+              nextId: advanceNextId,
+              message: result.completed_task_id
+                ? 'Current task completed and lead moved to Skip Trace'
+                : 'Lead moved to Skip Trace',
+            })
           }
         }
         return
@@ -1544,10 +1658,8 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     openTasks,
     fromQueue,
     handleStatusChanged,
-    advanceAfterTaskComplete,
-    queueNavigation,
-    queueNavLoading,
-    forwardStack,
+    scheduleQueueAdvanceHold,
+    snapshotNextQueueLeadId,
   ])
 
   const handleCreateTask = useCallback(() => {
@@ -1695,8 +1807,15 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             fromQueue={fromQueue}
             navigation={sessionQueueNavigation}
             isLoading={queueNavLoading}
-            onAdvance={advanceInQueue}
+            onAdvance={handleManualQueueAdvance}
             onPrefetchLead={prefetchQueueLead}
+          />
+        )}
+        {queueAdvanceHold && (
+          <QueueAdvanceHoldBanner
+            message={queueAdvanceHold.message}
+            progress={queueAdvanceHold.progress}
+            onPause={() => cancelQueueAdvanceHold({ snackStay: true })}
           />
         )}
 
@@ -1714,6 +1833,19 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             onViewFullBreakdown={handleViewScoreBreakdown}
             fromQueue={fromQueue}
             statusSelectorRef={statusSelectorRef}
+            onBeforePinDeprioritize={() => {
+              pinDeprioritizeNextIdRef.current = snapshotNextQueueLeadId()
+            }}
+            onAfterPinDeprioritize={async () => {
+              await handleStatusChanged('deprioritize')
+              if (fromQueue) {
+                scheduleQueueAdvanceHold({
+                  nextId: pinDeprioritizeNextIdRef.current,
+                  flash: { message: 'Lead deprioritized' },
+                  message: 'Lead deprioritized',
+                })
+              }
+            }}
           />
         </Box>
       </Box>
@@ -1742,6 +1874,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 mailIneligibleReason={commandCenterData!.mail_ineligible_reason}
                 mailEligibleDate={commandCenterData!.mail_eligible_date}
                 ownerMailingReadiness={commandCenterData!.owner_mailing_readiness ?? null}
+                contactsLikelyPriorOwner={Boolean(
+                  commandCenterData!.contacts_likely_prior_owner,
+                )}
                 onApplyParsedMailing={async () => {
                   await commandCenterService.applyParsedOwnerMailing(leadId)
                   await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
@@ -1757,6 +1892,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 }}
                 onAction={handleRaAction}
                 onDeprioritize={async (reason) => {
+                  const nextLeadId = snapshotNextQueueLeadId()
                   const result = await commandCenterService.updateStatus(
                     leadId,
                     'deprioritize',
@@ -1766,10 +1902,18 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                     lead_score: result.lead_score,
                     recommended_action: result.recommended_action,
                   })
-                  setActivitySnackbar({
-                    open: true,
-                    message: 'Lead deprioritized',
-                  })
+                  if (fromQueue) {
+                    scheduleQueueAdvanceHold({
+                      nextId: nextLeadId,
+                      flash: { message: 'Lead deprioritized' },
+                      message: 'Lead deprioritized',
+                    })
+                  } else {
+                    setActivitySnackbar({
+                      open: true,
+                      message: 'Lead deprioritized',
+                    })
+                  }
                 }}
                 onCreateTask={handleCreateTask}
               />
@@ -1788,11 +1932,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 embedded
                 onTasksChanged={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
                 onAfterTaskCompleted={fromQueue ? () => {
-                  const nextLeadId: number | null | undefined =
-                    queueNavLoading || !queueNavigation
-                      ? undefined
-                      : (forwardStack.at(-1) ?? queueNavigation.next_id ?? null)
-                  void advanceAfterTaskComplete(nextLeadId)
+                  scheduleQueueAdvanceHold({
+                    nextId: snapshotNextQueueLeadId(),
+                    message: 'Task completed',
+                  })
                 } : undefined}
               />
             </Paper>

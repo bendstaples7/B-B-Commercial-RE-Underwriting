@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 
 INCOMPLETE_ADDRESS_REASON = 'incomplete_property_address'
 
-HEAL_INCOMPLETE_BATCH_SIZE = 200
+HEAL_INCOMPLETE_BATCH_SIZE = int(os.environ.get('PROPERTY_ADDRESS_HEAL_BATCH_SIZE', '300'))
+HEAL_PRIORITY_BATCH_SIZE = int(os.environ.get('PROPERTY_ADDRESS_HEAL_PRIORITY_BATCH', '50'))
+HEAL_GIS_WORKERS = int(os.environ.get('PROPERTY_ADDRESS_HEAL_GIS_WORKERS', '4'))
 HEAL_INCOMPLETE_CURSOR_KEY = 'property_address:heal_incomplete:last_id'
 HEAL_INCOMPLETE_LOCK_KEY = 'property_address:heal_incomplete_lock'
 
@@ -270,6 +272,63 @@ def street_only_line(
         text = text[:match.start()].strip(' ,')
 
     return text
+
+
+def find_sibling_complete_locality(lead: Lead) -> dict[str, Any] | None:
+    """Find a same property-owner, same-building lead with complete situs.
+
+    Used before Cook GIS so street-only duplicates (e.g. HubSpot husks) absorb
+    city/state/ZIP from the complete twin without waiting on the heal cursor.
+    Matches on owner first/last name — not CRM ``owner_user_id`` (assignee).
+    Never returns mailing_* fields.
+    """
+    street = _clean(getattr(lead, 'property_street', None))
+    lead_id = getattr(lead, 'id', None)
+    if not street or not isinstance(lead_id, int):
+        return None
+    if is_property_address_complete(lead=lead):
+        return None
+
+    from app.services.lead_merge_utils import streets_match_normalized
+
+    first = (getattr(lead, 'owner_first_name', None) or '').strip()
+    last = (getattr(lead, 'owner_last_name', None) or '').strip()
+    if not first:
+        return None
+
+    q = Lead.query.filter(
+        Lead.id != lead_id,
+        Lead.property_street.isnot(None),
+        Lead.property_street != '',
+        Lead.property_city.isnot(None),
+        Lead.property_city != '',
+        Lead.property_state.isnot(None),
+        Lead.property_state != '',
+        Lead.property_zip.isnot(None),
+        Lead.property_zip != '',
+        func.lower(func.trim(Lead.owner_first_name)) == first.lower(),
+    )
+    if last:
+        q = q.filter(func.lower(func.trim(Lead.owner_last_name)) == last.lower())
+    else:
+        q = q.filter(
+            or_(Lead.owner_last_name.is_(None), Lead.owner_last_name == ''),
+        )
+
+    for sibling in q.order_by(Lead.id.asc()).all():
+        if not streets_match_normalized(street, sibling.property_street):
+            continue
+        if not is_property_address_complete(lead=sibling):
+            continue
+        return {
+            'sibling_id': sibling.id,
+            'property_city': _clean(sibling.property_city),
+            'property_state': _clean(sibling.property_state),
+            'property_zip': _clean(sibling.property_zip),
+            # Never copy PIN across unit/sibling variants — condo stacks share
+            # owner+street loosely and would inherit the wrong unit PIN.
+        }
+    return None
 
 
 def is_property_address_complete(
@@ -822,16 +881,39 @@ def complete_property_address(
         'review_required': bool(getattr(lead, 'review_required', False)),
     }
 
+    # Sibling locality before GIS — same-owner complete twin fills blanks.
+    city_in = lead.property_city
+    state_in = lead.property_state
+    zip_in = lead.property_zip
+    pin_in = getattr(lead, 'county_assessor_pin', None)
+    sibling_sources: list[str] = []
+    sibling = find_sibling_complete_locality(lead)
+    if sibling:
+        if not _clean(city_in) and sibling.get('property_city'):
+            city_in = sibling['property_city']
+            sibling_sources.append('sibling_locality')
+        if not _clean(state_in) and sibling.get('property_state'):
+            state_in = sibling['property_state']
+            sibling_sources.append('sibling_locality')
+        if not _clean(zip_in) and sibling.get('property_zip'):
+            zip_in = sibling['property_zip']
+            sibling_sources.append('sibling_locality')
+
     result = complete_property_address_fields(
         lead.property_street,
-        lead.property_city,
-        lead.property_state,
-        lead.property_zip,
+        city_in,
+        state_in,
+        zip_in,
         try_gis=try_gis,
         try_geocode=try_geocode,
         apply_market_defaults=apply_market_defaults,
-        county_assessor_pin=getattr(lead, 'county_assessor_pin', None),
+        county_assessor_pin=pin_in,
     )
+    if sibling_sources:
+        sources = list(result.get('sources') or [])
+        sources.extend(sibling_sources)
+        result['sources'] = sorted(set(sources))
+        result['sibling_id'] = sibling.get('sibling_id') if sibling else None
 
     changed_fields: list[str] = []
     for field in (
@@ -1033,6 +1115,105 @@ def _incomplete_property_address_clause():
     )
 
 
+def _priority_incomplete_clause():
+    """Incomplete situs on active work surfaces (TA due / skip-trace / outreach RA)."""
+    from datetime import date as date_cls
+
+    from app.models import LeadTask
+    from sqlalchemy import exists
+
+    has_due_task = exists().where(
+        and_(
+            LeadTask.lead_id == Lead.id,
+            LeadTask.status == 'open',
+            LeadTask.due_date.isnot(None),
+            LeadTask.due_date <= date_cls.today(),
+        )
+    )
+    return and_(
+        _incomplete_property_address_clause(),
+        or_(
+            has_due_task,
+            Lead.lead_status == 'skip_trace',
+            Lead.recommended_action.in_(
+                (
+                    'mail_ready',
+                    'call_ready',
+                    'follow_up_now',
+                    'hold',
+                    'ready_for_outreach',
+                )
+            ),
+        ),
+    )
+
+
+def _select_heal_batch(
+    *,
+    cursor: int,
+    batch_limit: int,
+    lead_id: int | None,
+) -> tuple[list[Lead], set[int], bool]:
+    """Priority incompletes first, then cursor backlog. Returns (leads, priority_ids, wrapped)."""
+    wrapped = False
+    if lead_id is not None:
+        leads = (
+            Lead.query
+            .filter(_incomplete_property_address_clause(), Lead.id == lead_id)
+            .limit(1)
+            .all()
+        )
+        return leads, {lead.id for lead in leads}, False
+
+    priority_limit = max(0, min(HEAL_PRIORITY_BATCH_SIZE, batch_limit))
+    priority_leads = (
+        Lead.query
+        .filter(_priority_incomplete_clause())
+        .order_by(Lead.id.asc())
+        .limit(priority_limit)
+        .all()
+    ) if priority_limit else []
+    priority_ids = {lead.id for lead in priority_leads}
+    remaining = max(batch_limit - len(priority_leads), 0)
+
+    cursor_leads: list[Lead] = []
+    if remaining:
+        query = (
+            Lead.query
+            .filter(
+                _incomplete_property_address_clause(),
+                Lead.id > cursor,
+            )
+            .order_by(Lead.id.asc())
+        )
+        if priority_ids:
+            query = query.filter(~Lead.id.in_(priority_ids))
+        cursor_leads = query.limit(remaining).all()
+        if not cursor_leads and not priority_leads and cursor > 0:
+            wrapped = True
+            cursor = 0
+            query = (
+                Lead.query
+                .filter(
+                    _incomplete_property_address_clause(),
+                    Lead.id > cursor,
+                )
+                .order_by(Lead.id.asc())
+            )
+            if priority_ids:
+                query = query.filter(~Lead.id.in_(priority_ids))
+            cursor_leads = query.limit(remaining).all()
+
+    # Priority first so active-queue gaps heal before deep backlog.
+    ordered: list[Lead] = list(priority_leads)
+    seen = set(priority_ids)
+    for lead in cursor_leads:
+        if lead.id not in seen:
+            ordered.append(lead)
+            seen.add(lead.id)
+    return ordered, priority_ids, wrapped
+
+
 def _heal_incomplete_cursor() -> int:
     from app.services.deploy_sync_policy import get_redis_value
 
@@ -1084,6 +1265,9 @@ def heal_incomplete_property_addresses(
         'completed': 0,
         'still_incomplete': 0,
         'errors': 0,
+        'absorbed': 0,
+        'flagged_duplicates': 0,
+        'priority_processed': 0,
         'last_id': cursor,
         'wrapped': False,
         'dry_run': bool(dry_run),
@@ -1093,52 +1277,104 @@ def heal_incomplete_property_addresses(
     if batch_limit == 0 and lead_id is None:
         return _decorate_heal_summary_with_geocode_circuit(summary)
 
-    if lead_id is not None:
-        leads = (
-            Lead.query
-            .filter(_incomplete_property_address_clause(), Lead.id == lead_id)
-            .limit(1)
-            .all()
-        )
-    else:
-        leads = (
-            Lead.query
-            .filter(_incomplete_property_address_clause(), Lead.id > cursor)
-            .order_by(Lead.id.asc())
-            .limit(batch_limit)
-            .all()
-        )
-        if not leads and cursor > 0:
-            cursor = 0
-            summary['wrapped'] = True
-            leads = (
-                Lead.query
-                .filter(_incomplete_property_address_clause(), Lead.id > cursor)
-                .order_by(Lead.id.asc())
-                .limit(batch_limit)
-                .all()
-            )
+    leads, priority_ids, wrapped = _select_heal_batch(
+        cursor=cursor,
+        batch_limit=batch_limit,
+        lead_id=lead_id,
+    )
+    summary['wrapped'] = wrapped
+    summary['priority_processed'] = len(priority_ids & {lead.id for lead in leads})
 
     completed_ids: list[int] = []
-    # Always advance past attempted leads — IntegrityError on street cleanup
-    # (uq_leads_owner_normalized_street) must not jam the hourly cursor forever.
+    rescore_ids: set[int] = set()
+    # Advance cursor only through non-priority backlog rows so priority re-heals
+    # until complete without starving the ID walk.
     advanced_cursor = cursor
     from sqlalchemy.exc import IntegrityError
+
+    # Prefetch GIS fills in parallel for leads that still need locality after
+    # sibling lookup. Sibling DB lookup stays on the main thread; workers only
+    # run pure field completion (Cook GIS HTTP).
+    gis_prefetch: dict[int, dict[str, Any]] = {}
+    if (
+        try_gis
+        and not dry_run
+        and HEAL_GIS_WORKERS > 1
+        and len(leads) > 1
+    ):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        snapshots: list[tuple[int, str | None, str | None, str | None, str | None, str | None]] = []
+        for item in leads:
+            sib = find_sibling_complete_locality(item)
+            city = item.property_city or (sib or {}).get('property_city')
+            state = item.property_state or (sib or {}).get('property_state')
+            zip_code = item.property_zip or (sib or {}).get('property_zip')
+            pin = getattr(item, 'county_assessor_pin', None)
+            if is_property_address_complete(
+                item.property_street, city, state, zip_code,
+            ):
+                continue
+            snapshots.append((
+                item.id,
+                item.property_street,
+                city,
+                state,
+                zip_code,
+                pin,
+            ))
+
+        def _prefetch_one(
+            payload: tuple[int, str | None, str | None, str | None, str | None, str | None],
+        ) -> tuple[int, dict[str, Any]]:
+            lid, street, city, state, zip_code, pin = payload
+            filled = complete_property_address_fields(
+                street,
+                city,
+                state,
+                zip_code,
+                try_gis=True,
+                try_geocode=False,
+                apply_market_defaults=False,
+                county_assessor_pin=pin,
+            )
+            return lid, filled
+
+        if snapshots:
+            workers = max(1, min(HEAL_GIS_WORKERS, len(snapshots)))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(_prefetch_one, snap) for snap in snapshots]
+                for fut in as_completed(futures):
+                    try:
+                        lid, filled = fut.result()
+                        gis_prefetch[lid] = filled
+                    except Exception as exc:
+                        logger.warning(
+                            'property address GIS prefetch failed: %s', exc,
+                        )
 
     for lead in leads:
         summary['processed'] += 1
         summary['lead_ids'].append(lead.id)
         try:
             if dry_run:
+                sib = find_sibling_complete_locality(lead)
+                city = lead.property_city or (sib or {}).get('property_city')
+                state = lead.property_state or (sib or {}).get('property_state')
+                zip_code = lead.property_zip or (sib or {}).get('property_zip')
                 result = complete_property_address_fields(
                     lead.property_street,
-                    lead.property_city,
-                    lead.property_state,
-                    lead.property_zip,
+                    city,
+                    state,
+                    zip_code,
                     try_gis=try_gis,
                     try_geocode=effective_try_geocode,
                     county_assessor_pin=getattr(lead, 'county_assessor_pin', None),
                 )
+                if sib:
+                    sources = list(result.get('sources') or [])
+                    sources.append('sibling_locality')
+                    result['sources'] = sorted(set(sources))
                 summary['previews'].append({
                     'lead_id': lead.id,
                     'before': {
@@ -1155,24 +1391,44 @@ def heal_incomplete_property_addresses(
                     },
                     'complete': bool(result.get('complete')),
                     'sources': result.get('sources') or {},
+                    'sibling_id': (sib or {}).get('sibling_id'),
                 })
                 if result.get('complete'):
                     summary['completed'] += 1
                 else:
                     summary['still_incomplete'] += 1
-                if lead_id is None:
-                    advanced_cursor = lead.id
+                if lead_id is None and lead.id not in priority_ids:
+                    advanced_cursor = max(advanced_cursor, lead.id)
                 continue
 
+            prefetched = gis_prefetch.get(lead.id)
             try:
                 with db.session.begin_nested():
-                    result = complete_property_address(
-                        lead,
-                        try_gis=try_gis,
-                        try_geocode=effective_try_geocode,
-                        actor=actor,
-                        commit=False,
-                    )
+                    if prefetched and prefetched.get('complete'):
+                        # Apply parallel GIS/sibling field result without a
+                        # second GIS round-trip.
+                        for field in (
+                            'property_city',
+                            'property_state',
+                            'property_zip',
+                        ):
+                            if not _clean(getattr(lead, field, None)) and prefetched.get(field):
+                                setattr(lead, field, prefetched[field])
+                        result = complete_property_address(
+                            lead,
+                            try_gis=False,
+                            try_geocode=effective_try_geocode,
+                            actor=actor,
+                            commit=False,
+                        )
+                    else:
+                        result = complete_property_address(
+                            lead,
+                            try_gis=try_gis,
+                            try_geocode=effective_try_geocode,
+                            actor=actor,
+                            commit=False,
+                        )
                     db.session.flush()
             except IntegrityError as street_exc:
                 logger.info(
@@ -1194,10 +1450,46 @@ def heal_incomplete_property_addresses(
             if result.get('complete'):
                 summary['completed'] += 1
                 completed_ids.append(lead.id)
+                rescore_ids.add(lead.id)
             else:
                 summary['still_incomplete'] += 1
-            if lead_id is None:
-                advanced_cursor = lead.id
+
+            # Absorb clear same-building twins (or flag for Needs Review).
+            absorbed_away = False
+            try:
+                from app.services.lead_dedup_service import try_absorb_duplicate_for_lead
+                absorb = try_absorb_duplicate_for_lead(lead, changed_by=actor)
+                if absorb:
+                    if absorb.get('merged'):
+                        summary['absorbed'] += len(absorb.get('merged_pairs') or [])
+                        winner_id = absorb.get('winner_id')
+                        if isinstance(winner_id, int):
+                            rescore_ids.add(winner_id)
+                        # Current lead may have been the loser and deleted.
+                        if any(
+                            pair.get('loser_id') == lead.id
+                            for pair in (absorb.get('merged_pairs') or [])
+                        ):
+                            absorbed_away = True
+                            completed_ids[:] = [
+                                lid for lid in completed_ids if lid != lead.id
+                            ]
+                            rescore_ids.discard(lead.id)
+                    if absorb.get('flagged'):
+                        summary['flagged_duplicates'] += 1
+            except Exception as absorb_exc:
+                logger.warning(
+                    'sibling absorb after heal failed lead=%s: %s',
+                    lead.id,
+                    absorb_exc,
+                )
+
+            if (
+                lead_id is None
+                and not absorbed_away
+                and lead.id not in priority_ids
+            ):
+                advanced_cursor = max(advanced_cursor, lead.id)
         except Exception as exc:
             summary['errors'] += 1
             logger.warning(
@@ -1205,13 +1497,13 @@ def heal_incomplete_property_addresses(
                 lead.id,
                 exc,
             )
-            if lead_id is None:
-                advanced_cursor = lead.id
+            if lead_id is None and lead.id not in priority_ids:
+                advanced_cursor = max(advanced_cursor, lead.id)
             continue
 
     if commit and not dry_run and leads:
         db.session.commit()
-        for completed_lead_id in completed_ids:
+        for completed_lead_id in sorted(rescore_ids):
             try:
                 from app.services.lead_refresh import refresh_lead_scoring
                 refresh_lead_scoring(completed_lead_id)

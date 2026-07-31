@@ -70,6 +70,7 @@ function buildCallMetadataFallback(
 ): Record<string, unknown> {
   const metadata: Record<string, unknown> = {
     outcome: payload.outcome,
+    direction: payload.direction ?? 'outbound',
   }
   if (payload.duration_minutes != null) metadata.duration_minutes = payload.duration_minutes
   if (payload.notes) metadata.notes = payload.notes
@@ -81,6 +82,11 @@ function buildCallMetadataFallback(
   if (contactName) metadata.contact_name = contactName
   return metadata
 }
+
+const DIRECTION_OPTIONS: { value: NonNullable<LogCallPayload['direction']>; label: string }[] = [
+  { value: 'outbound', label: 'Outbound' },
+  { value: 'inbound', label: 'Inbound' },
+]
 
 const OUTCOME_OPTIONS: { value: LogCallPayload['outcome']; label: string }[] = [
   { value: 'answered', label: 'Answered' },
@@ -118,6 +124,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
   })
   const mailCampaignOptions = recentMailCampaigns?.campaigns ?? []
   const [outcome, setOutcome] = useState<LogCallPayload['outcome'] | ''>('')
+  const [direction, setDirection] = useState<NonNullable<LogCallPayload['direction']>>('outbound')
   const [duration, setDuration] = useState('')
   const [notes, setNotes] = useState('')
   const [mailCampaignId, setMailCampaignId] = useState<number | ''>('')
@@ -225,6 +232,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
 
     const payload: LogCallPayload = {
       outcome: outcome as LogCallPayload['outcome'],
+      direction,
       duration_minutes: duration !== '' ? Number(duration) : null,
       notes: notes.trim() || null,
       mail_campaign_id: mailCampaignId === '' ? null : mailCampaignId,
@@ -260,7 +268,8 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
         }
       }
 
-      const summaryParts = [`Call logged: ${payload.outcome}`]
+      const directionLabel = direction === 'inbound' ? 'Inbound' : 'Outbound'
+      const summaryParts = [`${directionLabel} call: ${payload.outcome}`]
       if (payload.duration_minutes) {
         summaryParts.push(`${payload.duration_minutes} min`)
       }
@@ -288,6 +297,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
         savedMeta,
       )
       setOutcome('')
+      setDirection('outbound')
       setDuration('')
       setNotes('')
       setMailCampaignId('')
@@ -339,6 +349,49 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
             value={contactMethod}
             onChange={setContactMethod}
           />
+
+          <Box sx={{ mb: 1.25 }} data-testid="call-direction-buttons">
+            <FormLabel
+              id="call-direction-label"
+              sx={{ mb: 0.75, display: 'block', typography: 'body2' }}
+            >
+              Direction
+            </FormLabel>
+            <ToggleButtonGroup
+              exclusive
+              size="small"
+              value={direction}
+              onChange={(_e, next: NonNullable<LogCallPayload['direction']> | null) => {
+                if (next) setDirection(next)
+              }}
+              aria-labelledby="call-direction-label"
+              sx={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 0.5,
+                '& .MuiToggleButtonGroup-grouped': {
+                  border: 1,
+                  borderColor: 'divider',
+                  borderRadius: '4px !important',
+                  marginLeft: 0,
+                  textTransform: 'none',
+                  px: 1.25,
+                  py: 0.75,
+                  minHeight: 40,
+                },
+              }}
+            >
+              {DIRECTION_OPTIONS.map((opt) => (
+                <ToggleButton
+                  key={opt.value}
+                  value={opt.value}
+                  data-testid={`call-direction-${opt.value}`}
+                >
+                  {opt.label}
+                </ToggleButton>
+              ))}
+            </ToggleButtonGroup>
+          </Box>
 
           <Box sx={{ mb: 1.25 }} data-testid="call-outcome-buttons">
             <FormLabel

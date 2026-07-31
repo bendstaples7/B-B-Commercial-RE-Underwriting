@@ -1710,8 +1710,28 @@ class TestLogCall:
             assert response.status_code == 201
             data = response.get_json()
             assert data['event_type'] == 'call_logged'
-            assert 'Call logged: answered' in data['summary']
+            assert 'Outbound call: answered' in data['summary']
             assert data['metadata']['outcome'] == 'answered'
+            assert data['metadata']['direction'] == 'outbound'
+
+    def test_log_call_inbound_direction(self, client, app):
+        """POST /api/leads/<id>/calls persists inbound direction in summary and metadata."""
+        with app.app_context():
+            lead = _make_lead(app, '22c Inbound Call St')
+            response = client.post(
+                f'/api/leads/{lead.id}/calls',
+                data=json.dumps({
+                    'outcome': 'answered',
+                    'direction': 'inbound',
+                    'notes': 'They called about the letter.',
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 201
+            data = response.get_json()
+            assert 'Inbound call: answered' in data['summary']
+            assert data['metadata']['direction'] == 'inbound'
 
     def test_log_call_response_includes_summary(self, client, app):
         """POST /api/leads/<id>/calls returns summary for timeline display."""

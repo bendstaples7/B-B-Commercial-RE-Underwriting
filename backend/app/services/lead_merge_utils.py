@@ -190,8 +190,28 @@ def winner_sort_key(
     if record.get('has_email'):
         contact_bonus += 10
     sync_bonus = 5 if record.get('last_hubspot_sync_at') else 0
+    # Prefer PIN + unit-bearing streets over street-only husks that merely synced.
+    pin = (record.get('county_assessor_pin') or '').strip()
+    pin_bonus = 100 if pin else 0
+    street = (record.get('property_street') or '').strip()
+    key = dedup_street_key(street)
+    unit_bonus = 0
+    if key and street:
+        street_suffixes = {
+            'AVE', 'AVENUE', 'ST', 'STREET', 'RD', 'ROAD', 'BLVD', 'BOULEVARD',
+            'DR', 'DRIVE', 'CT', 'COURT', 'LN', 'LANE', 'PL', 'PLACE', 'TER',
+            'TERRACE', 'WAY', 'PKWY', 'PARKWAY', 'CIR', 'CIRCLE',
+        }
+        key_tokens = set(key.split())
+        extras = [
+            tok for tok in street.upper().replace(',', ' ').split()
+            if tok not in key_tokens and tok not in street_suffixes
+        ]
+        if extras:
+            unit_bonus = 50
+    situs_bonus = pin_bonus + unit_bonus
     # Negative id so lower id wins ties
-    return (hubspot_bonus, status_rank, contact_bonus + sync_bonus, 0, -lead_id)
+    return (hubspot_bonus, status_rank, situs_bonus, contact_bonus + sync_bonus, -lead_id)
 
 
 def pick_merge_winner(

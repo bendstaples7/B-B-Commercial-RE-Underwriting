@@ -36,7 +36,6 @@ import {
 import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
-import { MailEnqueueHistoryButton } from './MailEnqueueHistoryButton'
 
 export interface TodaysActionQueueProps {
   extraQueryKeys?: string[]
@@ -198,7 +197,6 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
             ))}
           </Select>
         </FormControl>
-        <MailEnqueueHistoryButton />
         {outreach !== '' && total > 0 && data != null && !isPlaceholderData && (
           <Button
             size="small"

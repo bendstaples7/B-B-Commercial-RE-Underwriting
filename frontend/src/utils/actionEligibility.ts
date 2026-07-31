@@ -100,7 +100,7 @@ export function evaluateAddToMailBatch(input: {
   }
   return blocked(
     REASON_MAIL_INVALID_ADDRESS,
-    'Owner mailing address is not ready for the mail queue',
+    'Owner mailing address needs a fix before mail',
   )
 }
 

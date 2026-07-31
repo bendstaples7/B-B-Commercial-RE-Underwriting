@@ -199,6 +199,42 @@ def _house_number_range_variants(normalised: str, *, max_extras: int = 8) -> lis
     return variants
 
 
+def _house_number_step_variants(
+    normalised: str,
+    *,
+    steps: tuple[int, ...] = (2, 4, 6),
+) -> list[str]:
+    """±step house numbers on the same street (Chicago odd/even sides).
+
+    Used when the exact marketing address misses in Socrata — e.g. lead ``1233``
+    when assessor situs is ``1235``. Order: +2, -2, +4, -4, +6, -6.
+    """
+    import re as _re
+
+    text = (normalised or '').strip()
+    if not text:
+        return []
+    m = _re.match(r'^(\d+)(?:-\d+)?\s+(.+)$', text)
+    if not m:
+        return []
+    base = int(m.group(1))
+    rest = m.group(2)
+    out: list[str] = []
+    seen: set[str] = set()
+    for step in steps:
+        if step <= 0:
+            continue
+        for delta in (step, -step):
+            hn = base + delta
+            if hn <= 0:
+                continue
+            addr = f'{hn} {rest}'
+            if addr not in seen:
+                seen.add(addr)
+                out.append(addr)
+    return out
+
+
 def _lookup_pin_from_address(address: str, parcel_addresses_url: str) -> Optional[str]:
     """Address → 14-digit PIN via Cook County parcel addresses dataset.
 

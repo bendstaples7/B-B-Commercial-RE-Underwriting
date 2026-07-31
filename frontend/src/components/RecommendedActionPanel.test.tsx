@@ -807,10 +807,10 @@ describe('RecommendedActionPanel', () => {
       )
 
       expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
-        'Held in Skip Trace',
+        'Deprioritized for the recent-sale hold',
       )
       expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
-        'undated handoff becomes active work',
+        'moves to Skip Trace for active work',
       )
       expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
         formatDateOnly('2027-03-31'),
@@ -1234,6 +1234,105 @@ describe('RecommendedActionPanel', () => {
     expect(screen.queryByTestId('action-center-tile-suppress')).not.toBeInTheDocument()
     expect(screen.queryByText(/Suppress Lead/i)).not.toBeInTheDocument()
     expect(screen.queryByTestId('ra-label')).not.toBeInTheDocument()
+  })
+
+  it('shows recent-sale hold copy when status is deprioritize with hold RA', () => {
+    render(
+      <RecommendedActionPanel
+        recommendedAction={{
+          ...makeRA(
+            'hold',
+            'Recent-sale hold',
+            'Deprioritized until the two-year date, then moves to Skip Trace.',
+          ),
+          winning_rule: 'recent_sale_hold',
+        }}
+        leadStatus="deprioritize"
+        openTasks={[]}
+        onAction={vi.fn()}
+        onDeprioritize={vi.fn()}
+      />,
+    )
+    expect(screen.getByTestId('ra-label')).toHaveTextContent('Recent-sale hold')
+    expect(screen.getByText(/moves to Skip Trace/i)).toBeInTheDocument()
+    expect(screen.queryByText('Deprioritized')).not.toBeInTheDocument()
+    expect(screen.queryByText('Parked from active queues.')).not.toBeInTheDocument()
+  })
+
+  it('shows original vs corrected owner mailing with Use corrected address', () => {
+    render(
+      <RecommendedActionPanel
+        recommendedAction={makeRA('mail_ready', 'Send Letter')}
+        leadStatus="mailing_no_contact_made"
+        openTasks={[]}
+        onAction={vi.fn()}
+        mailEligible={false}
+        mailIneligibleReason="invalid_owner_address"
+        ownerMailingReadiness={{
+          is_mailable: false,
+          reason: 'Incomplete owner mailing city/state/zip',
+          raw: {
+            street: '3056 N Oakley Ave Ste 1n',
+            city: 'Chicago',
+            state: 'Il',
+            zip: '60603',
+          },
+          parsed: {
+            street: '3056 N Oakley Ave Ste 1n',
+            city: 'Chicago',
+            state: 'IL',
+            zip: '60603',
+          },
+          can_apply_parsed: true,
+        }}
+        onApplyParsedMailing={vi.fn()}
+      />,
+    )
+
+    const alert = screen.getByTestId('owner-mailing-readiness')
+    expect(alert).toHaveTextContent('Owner mailing address needs a fix before mail')
+    expect(alert).toHaveTextContent('Original')
+    expect(alert).toHaveTextContent('Corrected')
+    expect(screen.getByTestId('mailing-original-state-struck')).toHaveTextContent('Il')
+    expect(screen.getByTestId('mailing-address-corrected')).toHaveTextContent(
+      '3056 N Oakley Ave Ste 1n, Chicago, IL 60603',
+    )
+    expect(screen.getByTestId('apply-parsed-owner-mailing')).toHaveTextContent(
+      'Use corrected address',
+    )
+  })
+
+  it('hides mailing fix banner when contacts are prior-owner / post-sale stale', () => {
+    render(
+      <RecommendedActionPanel
+        recommendedAction={makeRA('mail_ready', 'Send Letter')}
+        leadStatus="skip_trace"
+        openTasks={[]}
+        onAction={vi.fn()}
+        mailEligible={false}
+        mailIneligibleReason="invalid_owner_address"
+        contactsLikelyPriorOwner
+        ownerMailingReadiness={{
+          is_mailable: true,
+          reason: null,
+          raw: {
+            street: '3056 N Oakley Ave Ste 1n',
+            city: 'Chicago',
+            state: 'Il',
+            zip: '60603',
+          },
+          parsed: {
+            street: '3056 N Oakley Ave Ste 1n',
+            city: 'Chicago',
+            state: 'IL',
+            zip: '60603',
+          },
+          can_apply_parsed: true,
+        }}
+        onApplyParsedMailing={vi.fn()}
+      />,
+    )
+    expect(screen.queryByTestId('owner-mailing-readiness')).not.toBeInTheDocument()
   })
 })
 

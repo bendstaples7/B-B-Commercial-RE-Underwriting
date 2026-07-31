@@ -818,7 +818,20 @@ class QueueService:
         else:
             query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
-        return [_leads_to_queue_rows(leads), total]
+        rows = _leads_to_queue_rows(leads)
+        from app.services.lead_dedup_service import cluster_preview_for_lead
+
+        by_id = {lead.id: lead for lead in leads}
+        for row in rows:
+            lead = by_id.get(row['id'])
+            if lead is None or lead.review_reason != 'duplicate_lead_cluster':
+                continue
+            preview = cluster_preview_for_lead(lead)
+            if preview:
+                row['duplicate_cluster_ids'] = preview['cluster_ids']
+                row['suggested_winner_id'] = preview['suggested_winner_id']
+                row['duplicate_confidence'] = preview['confidence']
+        return [rows, total]
 
     def get_skip_trace(
         self,
