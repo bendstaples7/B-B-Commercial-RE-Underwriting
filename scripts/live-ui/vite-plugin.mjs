@@ -6,7 +6,7 @@
  *   → runs Playwright snapshot against the running app (uses saved session)
  */
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -37,6 +37,16 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body))
 }
 
+function ensureAuthDir() {
+  mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 })
+  chmodSync(AUTH_DIR, 0o700)
+}
+
+function isLoopbackRequest(req) {
+  const addr = req.socket?.remoteAddress || ''
+  return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(addr)
+}
+
 function runSnapshot(args) {
   return new Promise((resolveRun, reject) => {
     const child = spawn(process.execPath, [resolve(HERE, 'snapshot.mjs'), ...args], {
@@ -62,15 +72,19 @@ function runSnapshot(args) {
 export function liveUiCapturePlugin() {
   return {
     name: 'bb-live-ui-capture',
+    apply: 'serve',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url?.split('?')[0]
+        if (url?.startsWith('/__bb/live-ui/') && !isLoopbackRequest(req)) {
+          return sendJson(res, 403, { ok: false, error: 'loopback only' })
+        }
         if (req.method === 'POST' && url === '/__bb/live-ui/session') {
           try {
             const body = await readJson(req)
             const token = body.session_token || body.localStorage?.session_token
             if (!token) return sendJson(res, 400, { ok: false, error: 'session_token required' })
-            mkdirSync(AUTH_DIR, { recursive: true })
+            ensureAuthDir()
             const payload = {
               exportedAt: new Date().toISOString(),
               origin: body.origin || 'http://localhost:3000',
@@ -81,7 +95,11 @@ export function liveUiCapturePlugin() {
                 user_id: body.user_id || body.localStorage?.user_id || '',
               },
             }
-            writeFileSync(SESSION_EXPORT, JSON.stringify(payload, null, 2), 'utf8')
+            writeFileSync(SESSION_EXPORT, JSON.stringify(payload, null, 2), {
+              encoding: 'utf8',
+              mode: 0o600,
+            })
+            chmodSync(SESSION_EXPORT, 0o600)
             return sendJson(res, 200, { ok: true, path: SESSION_EXPORT })
           } catch (err) {
             return sendJson(res, 500, { ok: false, error: String(err?.message || err) })

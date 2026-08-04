@@ -110,7 +110,16 @@ async function main() {
         context.pages().find((p) => /localhost|127\.0\.0\.1/.test(p.url())) ||
         context.pages()[0] ||
         (await context.newPage())
-      if (!page.url().includes(new URL(targetUrl).pathname.split('?')[0].slice(0, 24))) {
+      const wanted = new URL(targetUrl)
+      const samePath = (current) => {
+        try {
+          const now = new URL(current)
+          return now.pathname.replace(/\/$/, '') === wanted.pathname.replace(/\/$/, '')
+        } catch {
+          return false
+        }
+      }
+      if (!samePath(page.url())) {
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 120000 })
       }
     } else {

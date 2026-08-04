@@ -3,7 +3,14 @@
  * Auth is JWT in localStorage (`session_token` / `user_id`) — not HTTP cookies.
  */
 import { createRequire } from 'node:module'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -16,6 +23,7 @@ export const STORAGE_STATE_PATH = resolve(AUTH_DIR, 'storageState.json')
 export const SESSION_EXPORT_PATH = resolve(AUTH_DIR, 'session-export.json')
 
 const require = createRequire(resolve(FRONTEND, 'package.json'))
+const SESSION_EXPIRY_SAFETY_SECONDS = 5 * 60
 
 export function loadDotEnvFiles() {
   for (const rel of ['.env', 'backend/.env', 'frontend/.env']) {
@@ -40,7 +48,8 @@ export function loadDotEnvFiles() {
 
 export function ensureDirs() {
   mkdirSync(ARTIFACT_DIR, { recursive: true })
-  mkdirSync(AUTH_DIR, { recursive: true })
+  mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 })
+  chmodSync(AUTH_DIR, 0o700)
 }
 
 export function getPlaywright() {
@@ -109,7 +118,30 @@ export function readSessionExport(path = SESSION_EXPORT_PATH) {
   const token = data.session_token || data.localStorage?.session_token
   const userId = data.user_id || data.localStorage?.user_id
   if (!token) return null
+  const expiresAt = jwtExpiresAt(token)
+  const minValidUntil = Date.now() + SESSION_EXPIRY_SAFETY_SECONDS * 1000
+  if (!expiresAt || expiresAt <= minValidUntil) {
+    try {
+      unlinkSync(path)
+    } catch {
+      /* stale export cleanup best effort */
+    }
+    return null
+  }
   return { sessionToken: token, userId, raw: data }
+}
+
+function jwtExpiresAt(token) {
+  const parts = String(token).split('.')
+  if (parts.length < 2) return null
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'))
+    const exp = Number(payload.exp)
+    if (!Number.isFinite(exp)) return null
+    return exp * 1000
+  } catch {
+    return null
+  }
 }
 
 export function writeSessionExport({ sessionToken, userId, origin }) {
@@ -124,13 +156,18 @@ export function writeSessionExport({ sessionToken, userId, origin }) {
       user_id: userId || '',
     },
   }
-  writeFileSync(SESSION_EXPORT_PATH, JSON.stringify(payload, null, 2), 'utf8')
+  writeFileSync(SESSION_EXPORT_PATH, JSON.stringify(payload, null, 2), {
+    encoding: 'utf8',
+    mode: 0o600,
+  })
+  chmodSync(SESSION_EXPORT_PATH, 0o600)
   return SESSION_EXPORT_PATH
 }
 
 export async function writePlaywrightStorageState(context, path = STORAGE_STATE_PATH) {
   ensureDirs()
   await context.storageState({ path })
+  chmodSync(path, 0o600)
   return path
 }
 

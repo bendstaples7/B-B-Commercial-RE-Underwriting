@@ -153,16 +153,32 @@ def mailer_history_summary(raw: Any) -> dict[str, Any]:
     }
 
 
-def _dedupe_key(row: dict[str, Any]) -> tuple:
-    """Identity for a mail-history row: (campaign_id, olc_order_id) when
-    either is present, else a best-effort (sent_at, label) fallback for
-    legacy free-text rows that never carried OLC ids.
+def _present_identifier(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _dedupe_keys(row: dict[str, Any]) -> set[tuple[str, str | None, str | None]]:
+    """Identities for a mail-history row.
+
+    OLC-backed rows can arrive with only one of campaign_id / olc_order_id, or
+    with numeric IDs represented as strings. Treat any shared normalized OLC
+    identifier as the same send; fall back to text identity for legacy rows.
     """
     campaign_id = row.get('campaign_id')
     olc_order_id = row.get('olc_order_id')
-    if campaign_id is not None or olc_order_id is not None:
-        return ('olc', campaign_id, olc_order_id)
-    return ('text', row.get('sent_at'), row.get('label'))
+    keys: set[tuple[str, str | None, str | None]] = set()
+    normalized_campaign_id = _present_identifier(campaign_id)
+    normalized_olc_order_id = _present_identifier(olc_order_id)
+    if normalized_campaign_id is not None:
+        keys.add(('olc-campaign', normalized_campaign_id, None))
+    if normalized_olc_order_id is not None:
+        keys.add(('olc-order', normalized_olc_order_id, None))
+    if keys:
+        return keys
+    return {('text', _present_identifier(row.get('sent_at')), _present_identifier(row.get('label')))}
 
 
 def _timeline_mail_sent_rows(lead: Any) -> list[dict[str, Any]]:
@@ -243,8 +259,8 @@ def consolidate_mailer_history(lead: Any, *, heal: bool = True) -> dict[str, Any
     ``mailer_history`` JSONB column (silent omit) while the ``mail_sent``
     LeadTimelineEntry still recorded it — see the 10305-class bug where a
     lead's import-string history undercounted mailers actually sent. This
-    unions both sources, dedupes by ``(campaign_id, olc_order_id)`` (falling
-    back to ``(sent_at, label)`` for legacy free-text rows with no OLC id),
+    unions both sources, dedupes by any shared normalized OLC identifier
+    (falling back to ``(sent_at, label)`` for legacy free-text rows),
     and — when ``heal`` is True — appends any timeline-only mailer as a plain
     OLC dict onto ``lead.mailer_history`` so future reads see it directly
     from the JSONB column without needing this union again.
@@ -258,15 +274,17 @@ def consolidate_mailer_history(lead: Any, *, heal: bool = True) -> dict[str, Any
     ``healed_count`` (rows newly appended to the JSONB column this call).
     """
     jsonb_rows = normalize_mailer_history(getattr(lead, 'mailer_history', None))
-    seen_keys = {_dedupe_key(row) for row in jsonb_rows}
+    seen_keys: set[tuple[str, str | None, str | None]] = set()
+    for row in jsonb_rows:
+        seen_keys.update(_dedupe_keys(row))
 
     merged_rows = list(jsonb_rows)
     healed_entries: list[dict[str, Any]] = []
     for row in _timeline_mail_sent_rows(lead):
-        key = _dedupe_key(row)
-        if key in seen_keys:
+        keys = _dedupe_keys(row)
+        if keys & seen_keys:
             continue
-        seen_keys.add(key)
+        seen_keys.update(keys)
         merged_rows.append(row)
         healed_entries.append({
             'sent_at': row.get('sent_at'),

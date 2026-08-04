@@ -27,19 +27,29 @@ function fail(msg) {
   ok = false
 }
 
+function cellBlock(id) {
+  const start = src.indexOf(`id: '${id}'`)
+  if (start === -1) return ''
+  const next = src.indexOf('\n    {', start + 1)
+  return next === -1 ? src.slice(start) : src.slice(start, next)
+}
+
 // units-details and category must declare allowWrap: true
 for (const id of ['units-details', 'category']) {
-  const re = new RegExp(`id:\\s*'${id}'[\\s\\S]*?allowWrap:\\s*true`)
-  if (!re.test(src)) {
+  const block = cellBlock(id)
+  if (!/allowWrap:\s*true/.test(block)) {
     fail(`FORBID: quick-stat ${id} must set allowWrap: true`)
+  }
+  if (/whiteSpace:\s*['"]nowrap['"]/.test(block)) {
+    fail(`FORBID: quick-stat ${id} must not hard-code whiteSpace nowrap`)
   }
 }
 
 // No nowrap trap on units/category value path — allowWrap branch must not
 // fall through to nowrap for those cells. Detect raw nowrap assignment on
 // the value Typography without allowWrap gating is OK only for est-value.
-if (/id:\s*'units-details'[\s\S]{0,200}whiteSpace:\s*['"]nowrap['"]/.test(src)) {
-  fail('FORBID: units-details must not hard-code whiteSpace nowrap')
+if (!/whiteSpace:\s*cell\.allowWrap\s*\?\s*['"]normal['"]\s*:\s*['"]nowrap['"]/.test(src)) {
+  fail('FORBID: quick-stat whiteSpace must be gated by cell.allowWrap')
 }
 
 if (!src.includes("contain: 'layout style'") && !src.includes('contain: "layout style"')) {

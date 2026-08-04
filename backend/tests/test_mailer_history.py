@@ -125,6 +125,44 @@ class TestConsolidateMailerHistory:
             assert summary['count'] == 1
             assert summary['healed_count'] == 0
 
+    def test_union_dedupes_campaign_only_jsonb_against_timeline_order(self, app):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                mailer_history=[
+                    {'campaign_id': 5, 'template_name': 'Blue', 'sent_at': '2024-01-01'},
+                ],
+            )
+            _add_mail_sent_entry(
+                lead.id,
+                occurred_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                metadata={'campaign_id': 5, 'olc_order_id': '77', 'template_name': 'Blue'},
+            )
+            db.session.commit()
+
+            summary = consolidate_mailer_history(lead)
+            assert summary['count'] == 1
+            assert summary['healed_count'] == 0
+
+    def test_union_dedupes_olc_order_id_across_json_types(self, app):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                mailer_history=[
+                    {'olc_order_id': 77, 'template_name': 'Blue', 'sent_at': '2024-01-01'},
+                ],
+            )
+            _add_mail_sent_entry(
+                lead.id,
+                occurred_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                metadata={'olc_order_id': '77', 'template_name': 'Blue'},
+            )
+            db.session.commit()
+
+            summary = consolidate_mailer_history(lead)
+            assert summary['count'] == 1
+            assert summary['healed_count'] == 0
+
     def test_import_string_plus_timeline_mail_sent_heals_and_counts_gt_1(self, app):
         """10305-class: import free-text history undercounts a mailer that
         the timeline recorded — union must surface both and heal the gap.

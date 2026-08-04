@@ -166,8 +166,9 @@ export const ccKpiValueSx: SxProps<Theme> = {
  * maxWidth ceilings / trail ml:auto canyon (slack lives inside the KPI band).
  */
 export const ccHeaderAddressColumnSx: SxProps<Theme> = {
-  // Hug street text beside KPIs. minWidth 0 allows ellipsis under pressure.
-  flex: { xs: '1 1 calc(100% - 48px)', md: '0 1 auto' },
+  // Hug street text beside KPIs. At md+ the address keeps its one-line width;
+  // KPI cells and trail panels take responsive pressure first.
+  flex: { xs: '1 1 calc(100% - 48px)', md: '0 0 auto' },
   minWidth: 0,
   maxWidth: { xs: '100%', md: 'none' },
   width: { md: 'auto' },
@@ -180,7 +181,7 @@ export const ccHeaderPrimaryClusterSx: SxProps<Theme> = {
   // Vertically center 2×2 KPI callouts against the taller address column.
   alignItems: 'center',
   gap: { xs: 1.25, md: 1 },
-  flex: { xs: '1 1 100%', md: '0 1 auto' },
+  flex: { xs: '1 1 100%', md: '1 1 auto' },
   minWidth: { xs: 0, md: 0 },
   maxWidth: '100%',
 }
@@ -199,18 +200,18 @@ export const ccHeaderTrailingPanelsSx: SxProps<Theme> = {
   // Grow into remaining row width; panels share it evenly.
   flex: { xs: '1 1 100%', md: '1 1 auto' },
   ml: 0,
-  minWidth: { xs: '100%', md: 'min-content' },
+  minWidth: { xs: '100%', md: 0 },
   maxWidth: '100%',
   width: { md: 'auto' },
   contain: 'layout',
   '& [data-testid="header-condo-check"], & [data-testid="header-lead-score"]': {
-    // Floor 12rem; grow freely (no 300px ceiling) to kill whitespace left of condo.
-    flex: { md: '1 1 clamp(12rem, 16vw, 300px)' },
+    // Basis targets 12rem+, but minWidth 0 lets panels shrink under pressure.
+    flex: { md: '1 1 clamp(10rem, 13vw, 260px)' },
     width: { md: 'auto' },
-    minWidth: { md: '12rem' },
+    minWidth: { md: 0 },
     maxWidth: { xs: '100%', md: 'none' },
     ml: '0 !important',
-    overflow: 'visible',
+    overflow: 'hidden',
     contain: 'layout style',
     isolation: 'isolate',
   },
@@ -232,8 +233,8 @@ export const ccHeaderPaperSx: SxProps<Theme> = {
  * Grow 3 = primary slack sink so Last sale sits beside condo.
  */
 export const ccHeaderQuickStatsSx: SxProps<Theme> = {
-  // Hug 2×2 content — trail panels (not KPIs) absorb leftover width.
-  flex: { xs: '1 1 100%', md: '0 1 auto' },
+  // Grow within the primary cluster so the KPI→condo gap never parks slack.
+  flex: { xs: '1 1 100%', md: '1 1 auto' },
   minWidth: { xs: '100%', md: 0 },
   maxWidth: { xs: '100%', md: 'none' },
   width: { md: 'auto' },

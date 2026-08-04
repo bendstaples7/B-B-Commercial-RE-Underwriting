@@ -4,7 +4,8 @@
  */
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { Box, Chip, CssBaseline, Typography } from '@mui/material'
+import { Box, Chip, CssBaseline, IconButton, Typography } from '@mui/material'
+import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import { ThemeProvider, createTheme } from '@mui/material/styles'
 import {
   ccHeaderAddressColumnSx,
@@ -103,6 +104,15 @@ function HarnessHeader() {
           width: '100%',
         }}
       >
+        <IconButton
+          data-testid="back-button"
+          edge="start"
+          aria-label="Go back"
+          size="small"
+          sx={{ mt: 0.25, flex: '0 0 auto' }}
+        >
+          <ArrowBackIcon />
+        </IconButton>
         <Box sx={ccHeaderPrimaryClusterSx} data-testid="cc-header-primary-cluster">
           <Box sx={ccHeaderAddressColumnSx}>
             <Box

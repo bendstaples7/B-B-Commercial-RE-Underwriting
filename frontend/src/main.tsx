@@ -10,7 +10,6 @@ import { PipelineStatusProvider } from './context/PipelineStatusContext'
 import { ShellStatusProvider } from './context/ShellStatusContext'
 import { AuthProvider } from './context/AuthContext'
 import { QuickAddFabHost } from '@/components/QuickAddFab'
-import { LiveUiCaptureHost } from '@/components/dev/LiveUiCaptureHost'
 
 // ---------------------------------------------------------------------------
 // Global mutation error handler
@@ -35,6 +34,12 @@ const queryClient = new QueryClient({
     },
   },
 })
+
+const DevLiveUiCaptureHost = import.meta.env.DEV
+  ? React.lazy(() => import('@/components/dev/LiveUiCaptureHost').then((mod) => ({
+      default: mod.LiveUiCaptureHost,
+    })))
+  : null
 
 // Holistic SaaS theme nudge (command-center redesign): soft gray canvas, muted
 // secondary, and slightly larger radius app-wide. Command Center card/tile chrome
@@ -200,7 +205,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
                 <ShellStatusProvider>
                   <App />
                   <QuickAddFabHost />
-                  {import.meta.env.DEV ? <LiveUiCaptureHost /> : null}
+                  {DevLiveUiCaptureHost ? (
+                    <React.Suspense fallback={null}>
+                      <DevLiveUiCaptureHost />
+                    </React.Suspense>
+                  ) : null}
                 </ShellStatusProvider>
               </PipelineStatusProvider>
             </NotificationProvider>

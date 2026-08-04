@@ -266,9 +266,14 @@ jobs:
       - name: Seed CI user and lead
         id: seed
         run: |
+          set -euo pipefail
           SEED_JSON=$(python ../scripts/live-ui/ci_seed_auth_lead.py)
-          echo "$SEED_JSON"
+          echo "$SEED_JSON" | python -c "import sys,json; data=json.load(sys.stdin); print(f\"seeded lead_id={data['lead_id']} user_id={data['user_id']}\")"
           LEAD_ID=$(echo "$SEED_JSON" | python -c "import sys,json; print(json.load(sys.stdin)['lead_id'])")
+          if [ -z "$LEAD_ID" ]; then
+            echo "::error::Seed script did not return lead_id"
+            exit 1
+          fi
           echo "lead_id=$LEAD_ID" >> "$GITHUB_OUTPUT"
         working-directory: backend
 

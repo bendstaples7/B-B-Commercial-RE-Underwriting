@@ -50,6 +50,17 @@ function fail(viewport, msg, detail) {
   process.exit(1)
 }
 
+function assertScreenshot(viewport, path, label) {
+  if (!existsSync(path)) {
+    fail(viewport, `Screenshot veto: missing ${path}`)
+  }
+  const bytes = statSync(path).size
+  if (bytes < 4000) {
+    fail(viewport, `Screenshot veto: ${label} PNG too small (${bytes} bytes) — likely blank`)
+  }
+  return bytes
+}
+
 async function startViteHarness() {
   const vitePath = resolve(FRONTEND, 'node_modules/vite/dist/node/index.js')
   const { createServer } = await import(pathToFileURL(vitePath).href)
@@ -147,7 +158,7 @@ async function collectMetrics(page) {
 
     return {
       header: rectOf('[data-testid="property-overview-header"]'),
-      back: rectOf('[data-testid="property-overview-back"], [aria-label="Back"]'),
+      back: rectOf('[data-testid="back-button"], [aria-label="Go back"], [aria-label="Back"]'),
       address: rectOf('[data-testid="property-overview-address"]'),
       est: rectOf('[data-testid="quick-stat-est-value"]'),
       stats: rectOf('[data-testid="property-overview-quick-stats"]'),
@@ -181,16 +192,17 @@ async function assertViewport(page, viewport) {
   const metrics = await collectMetrics(page)
   mkdirSync(ARTIFACT_DIR, { recursive: true })
   const shotPath = resolve(ARTIFACT_DIR, `cc-header-packing-${viewport.width}.png`)
+  const canonicalShotPath = resolve(ARTIFACT_DIR, 'cc-header-packing.png')
   await page.getByTestId('property-overview-header').screenshot({ path: shotPath })
   // Keep canonical name for the narrowest width (CI consumers).
   if (viewport.width === 1280) {
     await page
       .getByTestId('property-overview-header')
-      .screenshot({ path: resolve(ARTIFACT_DIR, 'cc-header-packing.png') })
+      .screenshot({ path: canonicalShotPath })
   }
 
-  const { address, est, stats, condo, score, header } = metrics
-  if (!address || !est || !stats || !condo || !score || !metrics.unitsCell || !metrics.categoryCell) {
+  const { back, address, est, stats, condo, score, header } = metrics
+  if (!back || !address || !est || !stats || !condo || !score || !metrics.unitsCell || !metrics.categoryCell) {
     fail(viewport, 'Missing landmark boxes', metrics)
   }
 
@@ -228,6 +240,12 @@ async function assertViewport(page, viewport) {
   if (canyon > GAP_MAX_PX) {
     fail(viewport, `KPI→trail canyon: stats.right→condo ${canyon.toFixed(1)}px > ${GAP_MAX_PX}`)
   }
+  if (back.right > address.left + OVERLAP_EPS) {
+    fail(viewport, 'Back button must sit before the address cluster without overlap', {
+      back,
+      address,
+    })
+  }
 
   // Lead Signals must sit flush right — no leftover whitespace after the score card.
   if (header && score) {
@@ -242,6 +260,7 @@ async function assertViewport(page, viewport) {
   }
 
   const named = [
+    ['back', back],
     ['address', address],
     ['stats', stats],
     ['condo', condo],
@@ -315,12 +334,9 @@ async function assertViewport(page, viewport) {
     fail(viewport, 'Paint veto: Units cell samples missed Units tree', metrics.unitsPaint)
   }
 
-  if (!existsSync(shotPath)) {
-    fail(viewport, `Screenshot veto: missing ${shotPath}`)
-  }
-  const bytes = statSync(shotPath).size
-  if (bytes < 4000) {
-    fail(viewport, `Screenshot veto: header PNG too small (${bytes} bytes) — likely blank`)
+  const bytes = assertScreenshot(viewport, shotPath, 'header')
+  if (viewport.width === 1280) {
+    assertScreenshot(viewport, canonicalShotPath, 'canonical header')
   }
 
   const bleed = await page.evaluate(() => {

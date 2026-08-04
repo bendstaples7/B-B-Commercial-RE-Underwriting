@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Seed a CI user + minimal lead for authenticated live-UI Playwright smoke.
 
-Prints JSON: {"email","password","user_id","lead_id"}
+Prints JSON: {"email","user_id","lead_id"}
 
 Usage (from repo root, with Flask app context / DATABASE_URL):
   cd backend && python ../scripts/live-ui/ci_seed_auth_lead.py
@@ -83,7 +83,6 @@ def main() -> int:
 
         out = {
             'email': EMAIL,
-            'password': PASSWORD,
             'user_id': user.user_id,
             'lead_id': lead.id,
         }
