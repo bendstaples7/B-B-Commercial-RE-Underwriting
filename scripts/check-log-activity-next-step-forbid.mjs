@@ -26,8 +26,8 @@ if (!form.includes('ActivityNextStepPanel')) {
 }
 
 // Ban inline complete-task / follow-up checkbox markup in the form.
-if (/data-testid=["']complete-call-task-checkbox["']/.test(form)) {
-  fail('FORBID: complete-call-task-checkbox must not live in LogActivityForm (use ActivityNextStepPanel)')
+if (/data-testid=["'](?:complete-call-task-checkbox|complete-activity-task-checkbox)["']/.test(form)) {
+  fail('FORBID: complete-task checkbox must not live in LogActivityForm (use ActivityNextStepPanel)')
 }
 if (/data-testid=["']create-follow-up-checkbox["']/.test(form)) {
   fail('FORBID: create-follow-up-checkbox must not be inlined in LogActivityForm')

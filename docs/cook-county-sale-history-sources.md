@@ -8,9 +8,11 @@ into `acquisition_date` for related-PIN / MyDec; primary Assessor may update):
    candidates on the same dataset (`wvhk-k5uv`)
 3. **Illinois MyDec** (PTAX-203 on data.illinois.gov, Cook County, ~2013+)
 
-Provenance is exposed on `sale_date_meta.source` as one of:
+Provenance is exposed on `sale_date_meta.source_token` as one of the tokens
+below. `sale_date_meta.source` carries the matching human-readable label
+(`Assessor`, `Assessor related PIN`, `MyDec`).
 
-| Token | Meaning |
+| Token (`source_token`) | Meaning |
 |-------|---------|
 | `assessor` | Primary PIN Assessor sale |
 | `assessor_related_pin` | Sibling / AKA / building-candidate PIN Assessor sale (`sale_source_pin` in enrichment metadata) |

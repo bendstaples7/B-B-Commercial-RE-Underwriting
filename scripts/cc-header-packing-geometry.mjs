@@ -439,6 +439,9 @@ async function assertResidentialViewport(page, viewport) {
   if (metrics.condo) {
     fail(viewport, 'Residential fixture must not show condo panel')
   }
+  if (metrics.fixture !== 'residential') {
+    fail(viewport, `Expected residential fixture (got ${metrics.fixture ?? 'missing'})`, metrics)
+  }
   if (metrics.kpiBand !== 'centered-residential') {
     fail(viewport, `Expected data-cc-kpi-band=centered-residential (got ${metrics.kpiBand})`)
   }
@@ -509,7 +512,7 @@ async function assertResidentialViewport(page, viewport) {
 
   return {
     ok: true,
-    fixture: 'residential',
+    fixture: metrics.fixture,
     viewport,
     symmetrySkewPx: Number(skew.toFixed(2)),
     leftGapPx: Number(leftGap.toFixed(2)),
@@ -553,10 +556,16 @@ async function main() {
 
     for (const viewport of VIEWPORTS) {
       const page = await browser.newPage({ viewport })
+      const pageErrors = []
+      page.on('pageerror', (e) => pageErrors.push(String(e)))
       const residentialUrl = new URL(harnessUrl)
       residentialUrl.searchParams.set('fixture', 'residential')
       await page.goto(residentialUrl.href, { waitUntil: 'networkidle', timeout: 120000 })
       await page.getByTestId('property-overview-header').waitFor({ state: 'visible', timeout: 60000 })
+      if (pageErrors.length) {
+        console.error(`[${viewport.width}] Residential harness page errors:`, pageErrors)
+        process.exit(1)
+      }
       const resResult = await assertResidentialViewport(page, viewport)
       residentialResults.push(resResult)
       await page.close()

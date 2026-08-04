@@ -972,7 +972,7 @@ export function PropertySidebar({
                     const el = document.getElementById('mail-history-section')
                     if (!el) return
                     el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                    window.history.replaceState(null, '', '#mail-history-section')
+                    window.history.replaceState(window.history.state, '', '#mail-history-section')
                   }}
                 >
                   See mail history

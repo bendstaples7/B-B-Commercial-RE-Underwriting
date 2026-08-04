@@ -53,6 +53,44 @@ describe('MailHistorySection', () => {
     expect(screen.getByText(/No attributed responses/i)).toBeInTheDocument()
   })
 
+  it('labels timeline-sourced mailers as Timeline (not Imported)', () => {
+    render(
+      <ThemeProvider theme={theme}>
+        <MailHistorySection
+          commandCenterData={basePayload({
+            mailer_history_summary: {
+              count: 1,
+              last_sent_at: '02/01/2024',
+              rows: [
+                {
+                  id: 'tl-1',
+                  sent_at: '02/01/2024',
+                  label: 'Legacy letter',
+                  creative: null,
+                  template_name: null,
+                  campaign_id: null,
+                  olc_order_id: null,
+                  address_feedback: null,
+                  cancelled: false,
+                  source: 'timeline',
+                },
+              ],
+            },
+          } as Partial<CommandCenterPayload>)}
+          propertyDetail={
+            {
+              id: 1,
+              mailer_history: null,
+              marketing_lists: [],
+            } as unknown as PropertyDetail
+          }
+        />
+      </ThemeProvider>,
+    )
+    expect(screen.getByText('Timeline')).toBeInTheDocument()
+    expect(screen.queryByText('Imported')).not.toBeInTheDocument()
+  })
+
   it('shows returned addresses and attributed responses when present', () => {
     render(
       <ThemeProvider theme={theme}>

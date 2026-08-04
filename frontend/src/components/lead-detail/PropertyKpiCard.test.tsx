@@ -177,9 +177,12 @@ describe('PropertyKpiCard', () => {
     )
     expect(screen.getByTestId('kpi-deal-description')).toHaveTextContent('Corner lot')
     expect(screen.queryByTestId('kpi-mailer-history')).not.toBeInTheDocument()
+    const deal = screen.getByTestId('kpi-deal-description')
     const mail = screen.getByTestId('mail-history-section')
     expect(mail).toBeInTheDocument()
     expect(mail).toHaveTextContent('Letter A')
     expect(screen.getByTestId('property-kpi-card').contains(mail)).toBe(true)
+    // Mail history must follow At a glance wide rows (deal description).
+    expect(deal.compareDocumentPosition(mail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

@@ -69,7 +69,7 @@ jobs:
             while IFS= read -r path; do
               [ -z "$path" ] && continue
               case "$path" in
-                frontend/*|.github/workflows/ci.yml)
+                frontend/*|scripts/check-sale-source-scrape-forbid.mjs|scripts/check-log-activity-next-step-forbid.mjs|.github/workflows/ci.yml)
                   frontend=true
                   ;;
               esac

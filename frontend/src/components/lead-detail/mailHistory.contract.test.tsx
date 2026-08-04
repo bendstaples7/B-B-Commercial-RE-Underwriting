@@ -28,6 +28,10 @@ describe('mail history surface contracts', () => {
     expect(kpi).toMatch(/import\s*\{[^}]*MailHistorySection/)
     expect(kpi).not.toContain("id: 'mailer-history'")
     expect(kpi).not.toContain('formatMailerGlance')
+    const wideIdx = kpi.indexOf('wideRows.map')
+    const mountIdx = kpi.indexOf('<MailHistorySection')
+    expect(wideIdx).toBeGreaterThan(-1)
+    expect(mountIdx).toBeGreaterThan(wideIdx)
   })
 
   it('forbids detailed Mail history markup in LeadDetailTabPanel and ActivityPanel', () => {

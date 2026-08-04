@@ -2327,14 +2327,16 @@ export interface CommandCenterPayload {
     sale_date?: string | null;
     sale_price?: number | null;
     sale_type?: string | null;
+    /** Clerk document number when the Socrata row includes it. */
+    doc_no?: string | null;
   }>;
   sale_date_meta?: {
     last_updated_at?: string | null;
     last_checked_at?: string | null;
     /** Human-readable label (Assessor, MyDec, Import, …). */
     source?: string | null;
-    /** Machine provenance when known: assessor | assessor_related_pin | mydec. */
-    source_token?: string | null;
+    /** Machine provenance when known. */
+    source_token?: 'assessor' | 'assessor_related_pin' | 'mydec' | null;
     status?: string | null;
     error_reason?: string | null;
   };

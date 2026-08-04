@@ -98,7 +98,13 @@ export function MailHistorySection({
                     {row.label}
                     {row.campaign_id != null ? ` (#${row.campaign_id})` : ''}
                   </TableCell>
-                  <TableCell>{row.source === 'olc' ? 'Open Letter' : 'Imported'}</TableCell>
+                  <TableCell>
+                    {row.source === 'olc'
+                      ? 'Open Letter'
+                      : row.source === 'timeline'
+                        ? 'Timeline'
+                        : 'Imported'}
+                  </TableCell>
                   <TableCell>
                     {[
                       row.address_feedback ? `Feedback: ${row.address_feedback}` : null,

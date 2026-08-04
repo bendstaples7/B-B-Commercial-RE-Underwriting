@@ -61,6 +61,11 @@ class CookCountyAssessorPlugin(DataSourcePlugin):
         if pin and str(pin).strip():
             return self._lookup_by_pin(str(pin).strip(), lead=lead)
         address = getattr(lead, "property_street", None) or ""
+        # Prefer PIN extracted from the street so related-PIN / MyDec still run
+        # (lookup() drops lead= and skips the sale ladder).
+        extracted = extract_pin(address)
+        if extracted:
+            return self._lookup_by_pin(extracted, lead=lead)
         owner_name = (
             f"{getattr(lead, 'owner_first_name', '') or ''} "
             f"{getattr(lead, 'owner_last_name', '') or ''}"
