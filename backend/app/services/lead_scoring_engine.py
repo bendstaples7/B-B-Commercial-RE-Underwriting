@@ -602,12 +602,41 @@ class LeadScoringEngine:
                     'owner_mailing_returned',
                     {**returned_signals, 'has_phone': False, 'has_email': False},
                 )
-            # Residential leads with a mailing address fall through to score/mail
-            # rules; commercial and address-less skip-trace still need contact work.
-            if _is_commercial_lead(lead) or not _has_mailing_address(lead):
+            # Commercial skip-trace always needs contact work (LLC/entity
+            # resolution owns that path) — a mailing address alone does not
+            # confirm the right person, regardless of phone/email on file.
+            if _is_commercial_lead(lead):
                 return (
                     'add_contact_info', 'skip_trace_status',
                     {'lead_status': lead.lead_status, 'requires_skip_trace': True},
+                )
+            # Residential leads with a mailing address fall through to score/mail
+            # rules. Address-less residential skip-trace (including leads
+            # demoted from mailing_no_contact_made because the owner mailing
+            # is no longer complete) still needs contact work — but never
+            # report "add_contact_info" when a phone/email is already on
+            # file; that label means there is no way to reach the owner.
+            if not _has_mailing_address(lead):
+                has_phone_st, has_email_st, _has_match_st = _resolve_crm_flags(lead)
+                skip_trace_signals = {
+                    'lead_status': lead.lead_status,
+                    'requires_skip_trace': True,
+                }
+                if has_phone_st:
+                    return (
+                        'call_ready',
+                        'skip_trace_status',
+                        {**skip_trace_signals, 'has_phone': True, 'has_email': has_email_st},
+                    )
+                if has_email_st:
+                    return (
+                        'ready_for_outreach',
+                        'skip_trace_status',
+                        {**skip_trace_signals, 'has_phone': False, 'has_email': True},
+                    )
+                return (
+                    'add_contact_info', 'skip_trace_status',
+                    {**skip_trace_signals, 'has_phone': False, 'has_email': False},
                 )
 
         has_phone, has_email, has_property_match = _resolve_crm_flags(lead)

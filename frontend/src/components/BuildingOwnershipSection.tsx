@@ -30,7 +30,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { buildingOwnershipService } from '@/services/api'
-import { formatDateTime } from '@/utils/formatters'
+import { formatAssessorPinAddress, formatDateTime } from '@/utils/formatters'
 import { formatCookCountyPin } from '@/utils/cookCountyPin'
 import { ccCardSx, ccMetaSx, ccSectionTitleSx, ccSubsectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
 import { CondoCheckSummary } from '@/components/lead-detail/CondoCheckSummary'
@@ -67,6 +67,9 @@ type OwnershipOverridePayload = {
 
 type AssessorPinRow = {
   pin?: string
+  property_street?: string | null
+  unit?: string | null
+  apt?: string | null
   property_class?: string
   is_condo_class?: boolean
 }
@@ -544,6 +547,17 @@ export function BuildingOwnershipSection({
         </Box>
       )}
 
+      {Boolean(commandCenterData.building_ownership_pending) && (
+        <Alert
+          severity="info"
+          sx={{ mb: 1.5 }}
+          data-testid="building-ownership-pending"
+          icon={<CircularProgress size={18} color="inherit" />}
+        >
+          Checking building ownership…
+        </Alert>
+      )}
+
       {error && hasAnalysisId && !analyzeSnapshot && (
         <Alert severity="warning" sx={{ mb: 1.5 }}>
           Could not load PIN details. You can re-run the automated check if needed.
@@ -559,10 +573,11 @@ export function BuildingOwnershipSection({
             {pinExplanation(pinCount || assessorPins.length, units, assessorPins)}
           </Typography>
           <TableContainer sx={{ mb: 1.5, overflowX: 'auto' }}>
-            <Table size="small" sx={{ minWidth: 320 }}>
+            <Table size="small" sx={{ minWidth: 480 }}>
               <TableHead>
                 <TableRow>
                   <TableCell>PIN</TableCell>
+                  <TableCell>Address</TableCell>
                   <TableCell>Class</TableCell>
                   <TableCell>Condo signal</TableCell>
                 </TableRow>
@@ -571,6 +586,7 @@ export function BuildingOwnershipSection({
                 {assessorPins.map((row, index) => (
                   <TableRow key={row.pin ?? `pin-${index}`}>
                     <TableCell>{row.pin ?? '—'}</TableCell>
+                    <TableCell>{formatAssessorPinAddress(row)}</TableCell>
                     <TableCell>{row.property_class ?? '—'}</TableCell>
                     <TableCell>{row.is_condo_class ? 'Yes' : 'No'}</TableCell>
                   </TableRow>

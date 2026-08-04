@@ -27,6 +27,7 @@ import CloseIcon from '@mui/icons-material/Close'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { buildingOwnershipService, leadTaskService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
+import { formatAssessorPinAddress } from '@/utils/formatters'
 import {
   enqueueResultSeverity,
   formatEnqueueSummary,
@@ -74,6 +75,9 @@ const RISK_LABELS: Record<CondoRiskStatus, string> = {
 
 type AssessorPinRow = {
   pin?: string
+  property_street?: string | null
+  unit?: string | null
+  apt?: string | null
   property_class?: string
   is_condo_class?: boolean
 }
@@ -448,6 +452,7 @@ export function BuildingOwnershipReviewDrawer({
                   <TableHead>
                     <TableRow>
                       <TableCell>PIN</TableCell>
+                      <TableCell>Address</TableCell>
                       <TableCell>Class</TableCell>
                       <TableCell>Condo signal</TableCell>
                     </TableRow>
@@ -456,6 +461,7 @@ export function BuildingOwnershipReviewDrawer({
                     {assessorPins.map((row, index) => (
                       <TableRow key={row.pin ?? `pin-row-${index}`}>
                         <TableCell>{row.pin ?? '—'}</TableCell>
+                        <TableCell>{formatAssessorPinAddress(row)}</TableCell>
                         <TableCell>{row.property_class ?? '—'}</TableCell>
                         <TableCell>{row.is_condo_class ? 'Yes' : 'No'}</TableCell>
                       </TableRow>

@@ -35,6 +35,12 @@ const queryClient = new QueryClient({
   },
 })
 
+const DevLiveUiCaptureHost = import.meta.env.DEV
+  ? React.lazy(() => import('@/components/dev/LiveUiCaptureHost').then((mod) => ({
+      default: mod.LiveUiCaptureHost,
+    })))
+  : null
+
 // Holistic SaaS theme nudge (command-center redesign): soft gray canvas, muted
 // secondary, and slightly larger radius app-wide. Command Center card/tile chrome
 // stays in `commandCenterChrome.ts` — do not push CC-only spacing into createTheme.
@@ -199,6 +205,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
                 <ShellStatusProvider>
                   <App />
                   <QuickAddFabHost />
+                  {DevLiveUiCaptureHost ? (
+                    <React.Suspense fallback={null}>
+                      <DevLiveUiCaptureHost />
+                    </React.Suspense>
+                  ) : null}
                 </ShellStatusProvider>
               </PipelineStatusProvider>
             </NotificationProvider>

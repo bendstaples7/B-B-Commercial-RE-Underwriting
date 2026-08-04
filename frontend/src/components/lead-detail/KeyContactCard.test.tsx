@@ -47,9 +47,23 @@ describe('resolveKeyContactChannels', () => {
       }),
     )
     expect(channels).toEqual([
-      { kind: 'phone', value: '(312) 806-0441' },
-      { kind: 'phone', value: '(708) 222-6620' },
+      { kind: 'phone', phone: { value: '(312) 806-0441' } },
+      { kind: 'phone', phone: { value: '(708) 222-6620' } },
       { kind: 'email', value: 'ssuperman0018@yahoo.com' },
+    ])
+  })
+
+  it('carries the full LeadPhone DTO (confidence_score) instead of a stripped string', () => {
+    const channels = resolveKeyContactChannels(
+      basePayload({
+        phones: [{ id: 1, value: '(312) 806-0441', confidence_score: 85, label: 'mobile' }],
+      }),
+    )
+    expect(channels).toEqual([
+      {
+        kind: 'phone',
+        phone: { id: 1, value: '(312) 806-0441', confidence_score: 85, label: 'mobile' },
+      },
     ])
   })
 })
@@ -139,5 +153,45 @@ describe('KeyContactCard', () => {
     expect(screen.getByTestId('key-contact-mailing-empty')).toHaveTextContent(
       'No mailing address on file',
     )
+  })
+
+  it('shows a confidence chip and copy control for phones with a confidence_score', () => {
+    renderCard(
+      basePayload({
+        phones: [{ id: 1, value: '(312) 806-0441', confidence_score: 85, label: 'mobile' }],
+      }),
+    )
+    expect(screen.getByTestId('key-contact-phone')).toHaveTextContent('(312) 806-0441')
+    expect(screen.getByTestId('phone-confidence-(312) 806-0441')).toHaveTextContent('85%')
+    expect(screen.getByLabelText('Copy phone')).toBeInTheDocument()
+  })
+
+  it('shows a copy control for email and mailing address', () => {
+    renderCard(
+      basePayload({
+        email_1: 'owner@example.com',
+        mailing_address: '12709 Holbrook Dr',
+        mailing_city: 'Orland Park',
+        mailing_state: 'IL',
+        mailing_zip: '60467',
+      }),
+    )
+    expect(screen.getByTestId('key-contact-email-copy')).toBeInTheDocument()
+    expect(screen.getByTestId('key-contact-mailing-copy')).toBeInTheDocument()
+  })
+
+  it('omits email/copy actions while contacts are likely prior owner but still shows mailing copy', () => {
+    renderCard(
+      basePayload({
+        email_1: 'old@example.com',
+        mailing_address: '100 Main St',
+        mailing_city: 'Chicago',
+        mailing_state: 'IL',
+        mailing_zip: '60614',
+        contacts_likely_prior_owner: true,
+      }),
+    )
+    expect(screen.queryByTestId('key-contact-email-copy')).not.toBeInTheDocument()
+    expect(screen.getByTestId('key-contact-mailing-copy')).toBeInTheDocument()
   })
 })

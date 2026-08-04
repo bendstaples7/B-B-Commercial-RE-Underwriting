@@ -10,6 +10,7 @@ from app.models.lead import Lead
 from app.models.user import User
 from app.services.auth_service import AuthService
 from app.services.building_ownership_backfill import (
+    ensure_building_ownership_on_command_center,
     is_commercial_cook_county_lead,
     lead_needs_building_ownership_analysis,
     query_lead_ids_for_building_ownership_backfill,
@@ -201,3 +202,228 @@ class TestStartupBackfillDispatchGuard:
                     ) as mock_release:
                         assert try_claim_startup_backfill_dispatch() is False
                         mock_release.assert_called_once()
+
+
+class TestEnsureBuildingOwnershipOnCommandCenter:
+    """Part B — auto condo re-check on Command Center GET (user 2C)."""
+
+    def _reset_cc_recheck_claims(self):
+        from app.services import building_ownership_backfill as bob
+
+        bob._cc_recheck_inflight_local.clear()
+
+    def test_schedules_when_never_analyzed(self, app):
+        with app.app_context():
+            self._reset_cc_recheck_claims()
+            lead_id = _commercial_lead(app)
+            lead = db.session.get(Lead, lead_id)
+            with patch(
+                'app.services.deploy_sync_policy._redis_client',
+                return_value=None,
+            ), patch(
+                'app.services.building_ownership_backfill.enqueue_building_ownership_analysis',
+                return_value=True,
+            ) as mock_enqueue:
+                pending = ensure_building_ownership_on_command_center(lead)
+                assert pending is True
+                db.session.commit()
+                mock_enqueue.assert_called_once_with(lead_id, force=False)
+
+    def test_schedules_when_stale(self, app):
+        with app.app_context():
+            self._reset_cc_recheck_claims()
+            lead_id = _commercial_lead(app)
+            lead = db.session.get(Lead, lead_id)
+            analysis = AddressGroupAnalysis(
+                normalized_address='3017 W GEORGE ST',
+                source_type='commercial',
+                condo_risk_status='likely_not_condo',
+                building_sale_possible='yes',
+                analyzed_at=datetime.now(timezone.utc) - timedelta(days=90),
+            )
+            db.session.add(analysis)
+            db.session.flush()
+            lead.condo_analysis_id = analysis.id
+            db.session.commit()
+
+            with patch(
+                'app.services.deploy_sync_policy._redis_client',
+                return_value=None,
+            ), patch(
+                'app.services.building_ownership_backfill.enqueue_building_ownership_analysis',
+                return_value=True,
+            ) as mock_enqueue:
+                pending = ensure_building_ownership_on_command_center(lead)
+                assert pending is True
+                db.session.commit()
+                mock_enqueue.assert_called_once_with(lead_id, force=False)
+
+    def test_does_not_force_recheck_when_inconclusive_but_fresh(self, app):
+        """Fresh inconclusive must not re-enqueue (FE polls pending every 2.5s)."""
+        with app.app_context():
+            self._reset_cc_recheck_claims()
+            lead_id = _commercial_lead(app)
+            lead = db.session.get(Lead, lead_id)
+            analysis = AddressGroupAnalysis(
+                normalized_address='3017 W GEORGE ST',
+                source_type='commercial',
+                condo_risk_status='needs_review',
+                building_sale_possible='unknown',
+                analyzed_at=datetime.now(timezone.utc),
+            )
+            db.session.add(analysis)
+            db.session.flush()
+            lead.condo_analysis_id = analysis.id
+            lead.condo_risk_status = 'needs_review'
+            db.session.commit()
+
+            assert lead_needs_building_ownership_analysis(lead) is False
+
+            with patch(
+                'app.services.deploy_sync_policy._redis_client',
+                return_value=None,
+            ), patch(
+                'app.services.building_ownership_backfill.enqueue_building_ownership_analysis',
+            ) as mock_enqueue:
+                pending = ensure_building_ownership_on_command_center(lead)
+                assert pending is False
+                mock_enqueue.assert_not_called()
+
+    def test_forces_recheck_on_inconclusive_when_analysis_older_than_cooldown(self, app):
+        with app.app_context():
+            self._reset_cc_recheck_claims()
+            lead_id = _commercial_lead(app)
+            lead = db.session.get(Lead, lead_id)
+            analysis = AddressGroupAnalysis(
+                normalized_address='3017 W GEORGE ST',
+                source_type='commercial',
+                condo_risk_status='needs_review',
+                building_sale_possible='unknown',
+                analyzed_at=datetime.now(timezone.utc) - timedelta(hours=7),
+            )
+            db.session.add(analysis)
+            db.session.flush()
+            lead.condo_analysis_id = analysis.id
+            lead.condo_risk_status = 'needs_review'
+            db.session.commit()
+
+            assert lead_needs_building_ownership_analysis(lead) is False
+
+            with patch(
+                'app.services.deploy_sync_policy._redis_client',
+                return_value=None,
+            ), patch(
+                'app.services.building_ownership_backfill.enqueue_building_ownership_analysis',
+                return_value=True,
+            ) as mock_enqueue:
+                pending = ensure_building_ownership_on_command_center(lead)
+                assert pending is True
+                db.session.commit()
+                mock_enqueue.assert_called_once_with(lead_id, force=True)
+
+                # Second open while claim is active: pending, but no re-enqueue.
+                mock_enqueue.reset_mock()
+                pending_again = ensure_building_ownership_on_command_center(lead)
+                assert pending_again is True
+                mock_enqueue.assert_not_called()
+
+    def test_does_not_force_recheck_when_manually_overridden(self, app):
+        with app.app_context():
+            self._reset_cc_recheck_claims()
+            lead_id = _commercial_lead(app)
+            lead = db.session.get(Lead, lead_id)
+            analysis = AddressGroupAnalysis(
+                normalized_address='3017 W GEORGE ST',
+                source_type='commercial',
+                condo_risk_status='needs_review',
+                building_sale_possible='unknown',
+                manually_reviewed=True,
+                manual_override_status='needs_review',
+                analyzed_at=datetime.now(timezone.utc),
+            )
+            db.session.add(analysis)
+            db.session.flush()
+            lead.condo_analysis_id = analysis.id
+            lead.condo_risk_status = 'needs_review'
+            db.session.commit()
+
+            with patch(
+                'app.services.deploy_sync_policy._redis_client',
+                return_value=None,
+            ), patch(
+                'app.services.building_ownership_backfill.enqueue_building_ownership_analysis',
+            ) as mock_enqueue:
+                pending = ensure_building_ownership_on_command_center(lead)
+                assert pending is False
+                mock_enqueue.assert_not_called()
+
+    def test_no_schedule_when_status_settled_and_fresh(self, app):
+        with app.app_context():
+            self._reset_cc_recheck_claims()
+            lead_id = _commercial_lead(app)
+            lead = db.session.get(Lead, lead_id)
+            analysis = AddressGroupAnalysis(
+                normalized_address='3017 W GEORGE ST',
+                source_type='commercial',
+                condo_risk_status='likely_not_condo',
+                building_sale_possible='yes',
+                analyzed_at=datetime.now(timezone.utc),
+            )
+            db.session.add(analysis)
+            db.session.flush()
+            lead.condo_analysis_id = analysis.id
+            lead.condo_risk_status = 'likely_not_condo'
+            db.session.commit()
+
+            with patch(
+                'app.services.deploy_sync_policy._redis_client',
+                return_value=None,
+            ), patch(
+                'app.services.building_ownership_backfill.enqueue_building_ownership_analysis',
+            ) as mock_enqueue:
+                pending = ensure_building_ownership_on_command_center(lead)
+                assert pending is False
+                mock_enqueue.assert_not_called()
+
+    def test_residential_lead_never_scheduled(self, app):
+        with app.app_context():
+            self._reset_cc_recheck_claims()
+            lead = Lead(
+                owner_first_name='Res',
+                owner_last_name='Owner',
+                property_street='100 Main St',
+                property_city='Chicago',
+                property_state='IL',
+                lead_category='residential',
+                lead_status='skip_trace',
+                lead_score=50,
+                has_property_match=True,
+                source_type='import',
+            )
+            db.session.add(lead)
+            db.session.commit()
+
+            with patch(
+                'app.services.deploy_sync_policy._redis_client',
+                return_value=None,
+            ), patch(
+                'app.services.building_ownership_backfill.enqueue_building_ownership_analysis',
+            ) as mock_enqueue:
+                pending = ensure_building_ownership_on_command_center(lead)
+                assert pending is False
+                mock_enqueue.assert_not_called()
+
+
+class TestBuildingOwnershipAnalyzeLeadTaskForce:
+    """Celery task must forward the ``force`` flag through to analyze_lead."""
+
+    def test_task_forwards_force_flag(self, app):
+        with app.app_context():
+            lead_id = _commercial_lead(app)
+            from celery_worker import building_ownership_analyze_lead_task
+
+            with patch('app.create_app', return_value=app), patch.object(
+                BuildingOwnershipService, 'analyze_lead', return_value={'ok': True},
+            ) as mock_analyze:
+                building_ownership_analyze_lead_task.run(lead_id, force=True)
+                mock_analyze.assert_called_once_with(lead_id, force=True)

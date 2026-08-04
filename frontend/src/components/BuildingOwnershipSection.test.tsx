@@ -73,7 +73,12 @@ describe('BuildingOwnershipSection', () => {
         reason: 'Multiple PINs need review',
         confidence: 'medium',
         assessor_pins: [
-          { pin: '1', property_class: '2-11', is_condo_class: false },
+          {
+            pin: '1',
+            property_street: '3508 N Sacramento Ave',
+            property_class: '2-11',
+            is_condo_class: false,
+          },
           { pin: '2', property_class: '2-11', is_condo_class: false },
         ],
       },
@@ -104,6 +109,14 @@ describe('BuildingOwnershipSection', () => {
     await waitFor(() => {
       expect(screen.getByTestId('building-ownership-pin-explanation')).toBeInTheDocument()
     })
+    // Address column: PIN's own street when present, em dash otherwise.
+    expect(screen.getByText('3508 N Sacramento Ave')).toBeInTheDocument()
+    expect(screen.getAllByRole('columnheader').map((c) => c.textContent)).toEqual([
+      'PIN',
+      'Address',
+      'Class',
+      'Condo signal',
+    ])
     expect(screen.getByTestId('building-ownership-condoized-control')).toBeInTheDocument()
     expect(screen.getByTestId('building-ownership-condoized-unclear')).toHaveAttribute(
       'aria-pressed',

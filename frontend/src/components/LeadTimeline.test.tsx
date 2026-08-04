@@ -867,6 +867,12 @@ describe('LeadTimeline', () => {
         ),
       ).toBe('Email Logged')
     })
+
+    it('returns Mailer Sent for mail_sent events', () => {
+      expect(
+        getTimelineEventLabel(makeEntry(1, { event_type: 'mail_sent', summary: 'Campaign 2' })),
+      ).toBe('Mailer Sent')
+    })
   })
 
   describe('fail-closed lead scope', () => {

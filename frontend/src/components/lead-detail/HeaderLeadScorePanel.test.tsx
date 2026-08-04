@@ -33,14 +33,17 @@ function makeScore(overrides: Partial<PropertyScoreRecord> = {}): PropertyScoreR
 }
 
 describe('resolveTopScoreDrivers', () => {
-  it('prefers positive top_signals over score_details (top 4)', () => {
+  it('prefers positive top_signals over score_details (top 2 full labels)', () => {
     const drivers = resolveTopScoreDrivers(makeScore())
     expect(drivers.map((d) => d.dimension)).toEqual([
       'mailing_equity',
       'absentee_owner',
-      'tax_delinquency',
-      'years_owned',
     ])
+  })
+
+  it('honors explicit higher limit when requested', () => {
+    const drivers = resolveTopScoreDrivers(makeScore(), 4)
+    expect(drivers).toHaveLength(4)
   })
 
   it('falls back to score_details when top_signals empty', () => {
@@ -77,6 +80,16 @@ describe('HeaderLeadScorePanel', () => {
     expect(onOpenBreakdown).toHaveBeenCalledTimes(1)
   })
 
+  it('renders at most two driver chips with full labels (no ellipsis sx)', () => {
+    render(
+      <HeaderLeadScorePanel score={87} tier="A" scoreRecord={makeScore()} />,
+    )
+    const drivers = screen.getByTestId('header-score-drivers')
+    expect(drivers.querySelectorAll('.MuiChip-root')).toHaveLength(2)
+    expect(drivers).toHaveTextContent(/Mailing|Equity|Absentee/i)
+    expect(screen.queryByText(/\$ Hi/)).not.toBeInTheDocument()
+  })
+
   it('shows em dash and Unscored when score is null (not 0 / Low Priority)', () => {
     render(<HeaderLeadScorePanel score={null} tier={null} />)
     expect(screen.getByTestId('header-lead-score-value')).toHaveTextContent('—')
@@ -84,21 +97,33 @@ describe('HeaderLeadScorePanel', () => {
     expect(screen.getByTestId('header-lead-score')).not.toHaveTextContent('Low Priority')
   })
 
-  it('contains driver chips inside the panel (no overflow escape)', () => {
+  it('shows a score flash pill when provided', () => {
+    render(
+      <HeaderLeadScorePanel
+        score={87}
+        tier="A"
+        scoreRecord={makeScore()}
+        flash={{ label: '+5', tone: 'up' }}
+      />,
+    )
+    expect(screen.getByTestId('header-lead-score-flash')).toHaveTextContent('+5')
+  })
+
+  it('omits the flash pill when none is provided', () => {
+    render(<HeaderLeadScorePanel score={87} tier="A" scoreRecord={makeScore()} />)
+    expect(screen.queryByTestId('header-lead-score-flash')).not.toBeInTheDocument()
+  })
+
+  it('driver chip labels wrap (no nowrap+ellipsis truncation)', () => {
     render(
       <HeaderLeadScorePanel score={87} tier="A" scoreRecord={makeScore()} />,
     )
-    const panel = screen.getByTestId('header-lead-score')
-    expect(getComputedStyle(panel).overflow).toBe('hidden')
-    expect(getComputedStyle(panel).minWidth).toBe('0px')
-
     const drivers = screen.getByTestId('header-score-drivers')
     const chip = drivers.querySelector('.MuiChip-root') as HTMLElement
     expect(chip).toBeTruthy()
-    expect(getComputedStyle(chip).maxWidth).toBe('100%')
-    expect(getComputedStyle(chip).overflow).toBe('hidden')
     const label = chip.querySelector('.MuiChip-label') as HTMLElement
-    expect(getComputedStyle(label).textOverflow).toBe('ellipsis')
-    expect(getComputedStyle(label).overflow).toBe('hidden')
+    expect(getComputedStyle(label).whiteSpace).toMatch(/normal|pre-wrap/)
+    expect(getComputedStyle(label).textOverflow).not.toBe('ellipsis')
   })
 })
+

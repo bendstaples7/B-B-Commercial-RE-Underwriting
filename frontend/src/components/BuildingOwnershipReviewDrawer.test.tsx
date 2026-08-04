@@ -92,7 +92,12 @@ describe('BuildingOwnershipReviewDrawer', () => {
         reason: 'Needs review',
         confidence: 'low',
         assessor_pins: [
-          { pin: '1', property_class: '2-11', is_condo_class: false },
+          {
+            pin: '1',
+            property_street: '3508 S Sacramento Ave',
+            property_class: '2-11',
+            is_condo_class: false,
+          },
           { pin: '2', property_class: '2-11', is_condo_class: false },
         ],
       },
@@ -107,7 +112,12 @@ describe('BuildingOwnershipReviewDrawer', () => {
       analysis_details: {
         reason: 'Needs review',
         assessor_pins: [
-          { pin: '1', property_class: '2-11', is_condo_class: false },
+          {
+            pin: '1',
+            property_street: '3508 S Sacramento Ave',
+            property_class: '2-11',
+            is_condo_class: false,
+          },
           { pin: '2', property_class: '2-11', is_condo_class: false },
         ],
       },
@@ -127,6 +137,14 @@ describe('BuildingOwnershipReviewDrawer', () => {
     expect(screen.getByTestId('confirm-building-ownership')).toHaveTextContent(
       'Save ownership decision',
     )
+    // Address column: PIN's own street when present, em dash otherwise.
+    expect(screen.getByText('3508 S Sacramento Ave')).toBeInTheDocument()
+    expect(screen.getAllByRole('columnheader').map((c) => c.textContent)).toEqual([
+      'PIN',
+      'Address',
+      'Class',
+      'Condo signal',
+    ])
   })
 
   it('shows mail queue CTA when likely_not_condo and mailing address present', () => {

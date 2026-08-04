@@ -27,6 +27,59 @@ from app.services.lead_task_service import (
 
 logger = logging.getLogger(__name__)
 
+MAILING_DEMOTE_REASON = 'mailing_address_incomplete_demote'
+MAILING_DEMOTE_ACTOR = 'mailing_mailable_demote_heal'
+
+
+def maybe_demote_mailing_if_not_mailable(
+    lead: Lead,
+    *,
+    actor: str = MAILING_DEMOTE_ACTOR,
+    commit: bool = True,
+) -> dict:
+    """Demote a ``mailing_no_contact_made`` lead back to ``skip_trace`` when
+    its owner mailing address is no longer complete (blank street, missing
+    city/state/zip, previously-returned mail, etc.).
+
+    Symmetric with :class:`SkipTraceMailableHealService` (which promotes
+    ``skip_trace`` → ``mailing_no_contact_made`` once mailing becomes
+    complete): this heals the reverse drift where a mailing-stage lead's
+    address was edited/cleared/returned after it entered the mailing stage,
+    so it should no longer be treated as "already mailed" work.
+
+    ``move_to_skip_trace`` already refreshes scoring on commit, so the owner
+    mail gate's phone/email fallback (see ``_apply_owner_mail_gate`` in
+    ``lead_scoring_engine``) immediately promotes the demoted lead to
+    ``call_ready`` / ``ready_for_outreach`` when a phone or email is on file
+    — only leads with no contact info at all fall through to
+    ``add_contact_info``.
+
+    Returns ``{'demoted': bool, 'reason': str | None, 'lead_id': int, ...}``;
+    the ``...`` extra keys (``lead_status``, ``recommended_action``, etc.)
+    are only present when ``demoted`` is True (forwarded from
+    ``move_to_skip_trace``).
+    """
+    if lead.lead_status != 'mailing_no_contact_made':
+        return {'demoted': False, 'reason': 'not_mailing_status', 'lead_id': lead.id}
+
+    from app.services.open_letter_contact_mapper import is_owner_mailable_lead
+
+    if is_owner_mailable_lead(lead):
+        return {'demoted': False, 'reason': 'still_mailable', 'lead_id': lead.id}
+
+    result = SkipTraceEnqueue().move_to_skip_trace(
+        lead.id,
+        actor=actor,
+        commit=commit,
+        reason=MAILING_DEMOTE_REASON,
+    )
+    return {
+        'demoted': True,
+        'reason': None,
+        'lead_id': lead.id,
+        **result,
+    }
+
 
 def clear_dated_due_chores_entering_skip_trace(
     lead_id: int,
@@ -394,11 +447,14 @@ class SkipTraceEnqueue:
         lead.lead_status = "skip_trace"
         lead.needs_skip_trace = True
         if old_status != "skip_trace":
-            summary_reason = (
-                'after undeliverable mail'
-                if reason == 'invalid_mail_escalation'
-                else 'from quick actions'
-            )
+            if reason == 'invalid_mail_escalation':
+                summary_reason = 'after undeliverable mail'
+            elif reason == MAILING_DEMOTE_REASON:
+                summary_reason = (
+                    'because the owner mailing address is no longer complete'
+                )
+            else:
+                summary_reason = 'from quick actions'
             db.session.add(LeadTimelineEntry(
                 lead_id=lead_id,
                 event_type="status_changed",

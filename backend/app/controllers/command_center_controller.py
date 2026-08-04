@@ -36,7 +36,7 @@ from app.services.mail_task_lifecycle_service import (
     recent_sale_mail_eligible_date,
     resolve_mail_queue_status,
 )
-from app.services.helpers.mailer_history import mailer_history_summary
+from app.services.helpers.mailer_history import consolidate_mailer_history
 from app.services.open_letter_contact_mapper import is_owner_mailable_lead
 from app.services.mailing_address_service import owner_mailing_readiness_detail
 from app.services.scoring_rubric import (
@@ -494,6 +494,48 @@ def get_command_center(lead_id: int):
     if denied is not None:
         return denied
 
+    # Auto condo re-check on open: commercial Cook County leads that have
+    # never been analyzed, are stale, or are stuck on an inconclusive condo
+    # status get a fresh (or forced) building-ownership analysis scheduled.
+    building_ownership_pending = False
+    try:
+        from app import db as _db_condo
+        from app.services.building_ownership_backfill import (
+            ensure_building_ownership_on_command_center,
+        )
+        building_ownership_pending = ensure_building_ownership_on_command_center(lead)
+        if building_ownership_pending:
+            # Dispatch is deferred to after_commit — guarantee a commit
+            # happens even when nothing else in this GET needs to write.
+            _db_condo.session.commit()
+    except Exception:  # noqa: BLE001 — never block command center
+        logger.exception(
+            'ensure_building_ownership_on_command_center failed for lead %s', lead_id,
+        )
+        try:
+            _db_condo.session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Auto demote mailing_no_contact_made -> skip_trace when the owner mailing
+    # address is no longer complete (edited/cleared/returned after the lead
+    # entered mailing). Heals on open so the lead does not sit stuck as
+    # "already mailed" work it can no longer actually be mailed for.
+    try:
+        from app.services.skip_trace_enqueue import maybe_demote_mailing_if_not_mailable
+        demote_result = maybe_demote_mailing_if_not_mailable(lead)
+        if demote_result.get('demoted'):
+            lead = Lead.query.get(lead_id)
+    except Exception:  # noqa: BLE001 — never block command center
+        logger.exception(
+            'maybe_demote_mailing_if_not_mailable failed for lead %s', lead_id,
+        )
+        from app import db as _db_demote
+        try:
+            _db_demote.session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
     # Clear review_required flag when command center is opened
     if lead.review_required:
         lead.review_required = False
@@ -838,6 +880,75 @@ def get_command_center(lead_id: int):
     mail_eligible_date = recent_sale_mail_eligible_date(lead)
     from app.services.cook_county_enrichment_service import is_cook_county_lead
 
+    # Union JSONB mailer_history with mail_sent timeline rows (heals silent
+    # OLC omits onto the JSONB column) so the count/last-sent chip and the
+    # raw ``mailer_history`` field both reflect every mailer actually sent.
+    mailer_history_payload = consolidate_mailer_history(lead)
+    if mailer_history_payload.get('healed_count'):
+        try:
+            _db.session.commit()
+        except Exception:  # noqa: BLE001 — never block command center on heal write
+            logger.exception(
+                'consolidate_mailer_history heal commit failed for lead %s', lead_id,
+            )
+            _db.session.rollback()
+
+    # Activity surface: inject consolidated mailer rows that are not already
+    # present as first-class mail_sent timeline events (legacy import JSONB).
+    # Skip rows that already came from timeline heal, or that match page-1
+    # mail_sent by campaign_id / olc_order_id.
+    existing_mail_campaign_ids: set = set()
+    existing_mail_olc_ids: set = set()
+    for e in timeline_entries:
+        if getattr(e, 'event_type', None) != 'mail_sent':
+            continue
+        meta = getattr(e, 'event_metadata', None)
+        if not isinstance(meta, dict):
+            continue
+        cid = meta.get('campaign_id')
+        if cid is not None:
+            existing_mail_campaign_ids.add(cid)
+        oid = meta.get('olc_order_id')
+        if oid:
+            existing_mail_olc_ids.add(str(oid))
+    injected_mailer_timeline: list[dict] = []
+    for idx, row in enumerate(mailer_history_payload.get('rows') or []):
+        # Already represented in timeline (healed onto JSONB from mail_sent).
+        if row.get('source') == 'timeline':
+            continue
+        campaign_id = row.get('campaign_id')
+        olc_order_id = row.get('olc_order_id')
+        if campaign_id is not None and campaign_id in existing_mail_campaign_ids:
+            continue
+        if olc_order_id and str(olc_order_id) in existing_mail_olc_ids:
+            continue
+        has_campaign = campaign_id is not None
+        injected_mailer_timeline.append({
+            'id': -(10_000 + idx),
+            'event_type': 'mail_sent' if has_campaign else 'mailer_history',
+            'occurred_at': (
+                row.get('sent_at')
+                or (lead.created_at.isoformat() if lead.created_at else '')
+            ),
+            'source': 'manual',
+            'actor': 'System',
+            'summary': (
+                f"Mailer Sent: {row.get('label')}"
+                if has_campaign
+                else f"Mailer history: {row.get('label')}"
+            ),
+            'metadata': {
+                'label': row.get('label'),
+                'sent_at': row.get('sent_at'),
+                'campaign_id': campaign_id,
+                'olc_order_id': olc_order_id,
+                'creative': row.get('creative'),
+                'template_name': row.get('template_name'),
+                'source': row.get('source'),
+            },
+            'hubspot_activity_id': None,
+        })
+
     condo_confidence = None
     condo_check_reason = None
     condo_checked_at = None
@@ -1028,7 +1139,7 @@ def get_command_center(lead_id: int):
         'up_next_to_mail': lead.up_next_to_mail,
         'mail_queue_status': resolve_mail_queue_status(lead),
         'mailer_history': lead.mailer_history,
-        'mailer_history_summary': mailer_history_summary(lead.mailer_history),
+        'mailer_history_summary': mailer_history_payload,
         'mail_attributed_responses': _mail_attributed_timeline_entries(lead_id),
         'data_source': lead.data_source,
         'created_at': lead.created_at.isoformat() if lead.created_at else None,
@@ -1053,6 +1164,7 @@ def get_command_center(lead_id: int):
         'condo_check_reason': condo_check_reason,
         'condo_checked_at': condo_checked_at,
         'condo_check_drivers': condo_check_drivers,
+        'building_ownership_pending': building_ownership_pending,
         'needs_entity_research': needs_entity_research,
         'assessor_class': getattr(lead, 'assessor_class', None),
         'data_completeness_score': data_completeness_score,
@@ -1117,23 +1229,11 @@ def get_command_center(lead_id: int):
                 ])(
                     # Build the actor cache once for the whole page
                     _resolve_actors_batch([e.actor for e in timeline_entries if e.actor])
-                ) + (
-                    # Inject mailer history as a single timeline entry if present
-                    [{
-                        'id': -9999,
-                        'event_type': 'mailer_history',
-                        'occurred_at': lead.created_at.isoformat() if lead.created_at else '',
-                        'source': 'manual',
-                        'actor': 'System',
-                        'summary': f"Mailer history: {lead.mailer_history}",
-                        'metadata': None,
-                        'hubspot_activity_id': None,
-                    }] if lead.mailer_history else []
-                ),
-                key=lambda e: e['occurred_at'],
+                ) + injected_mailer_timeline,
+                key=lambda e: e['occurred_at'] or '',
                 reverse=True,
             ),
-            'total': timeline_total + (1 if lead.mailer_history else 0),
+            'total': timeline_total + len(injected_mailer_timeline),
             'page': 1,
             'per_page': 25,
         },
@@ -1703,6 +1803,9 @@ def log_note(lead_id: int):
         email_address=data.get('email_address'),
         email_label=data.get('email_label'),
         subject=data.get('subject'),
+        sent_from_email=data.get('sent_from_email'),
+        complete_task_id=data.get('complete_task_id'),
+        follow_up=data.get('follow_up'),
     )
     return jsonify(_serialize_timeline_entry(entry)), 201
 

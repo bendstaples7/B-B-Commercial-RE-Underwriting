@@ -61,6 +61,9 @@
     "generate-types": "openapi-typescript http://localhost:5000/api/openapi.json -o src/types/generated.ts",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "lint:fix": "eslint \"src/**/*.{ts,tsx}\" --fix",
-    "lint:strict": "eslint \"src/**/*.{ts,tsx}\" --max-warnings 0"
+    "lint:strict": "eslint \"src/**/*.{ts,tsx}\" --max-warnings 0",
+    "live-ui:auth-save": "node ../scripts/live-ui/auth-save.mjs",
+    "live-ui:import-session": "node ../scripts/live-ui/import-session.mjs",
+    "live-ui:snapshot": "node ../scripts/live-ui/snapshot.mjs"
   }
 }

@@ -1,8 +1,9 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import { liveUiCapturePlugin } from '../scripts/live-ui/vite-plugin.mjs'
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
   const rootDir = path.resolve(__dirname, '..')
   // Vite's envDir is the project root (shared with backend). Also merge
   // frontend/.env so VITE_* keys that only live there still reach import.meta.env.
@@ -18,7 +19,10 @@ export default defineConfig(({ mode }) => {
 
   return {
     envDir: rootDir,
-    plugins: [react()],
+    plugins: [
+      react(),
+      ...(command === 'serve' ? [liveUiCapturePlugin()] : []),
+    ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),

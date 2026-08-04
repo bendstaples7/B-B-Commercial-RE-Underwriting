@@ -5,8 +5,17 @@
 import React from 'react'
 import { Box, Tooltip, Typography } from '@mui/material'
 import type { CommandCenterPayload, CondoRiskStatus } from '@/types'
-import { ccKpiLabelSx, ccKpiValueSx } from '@/components/lead-detail/commandCenterChrome'
-import { formatMoneyValue, formatPropertyTypeLabel } from '@/utils/formatters'
+import {
+  ccHeaderQuickStatsSx,
+  ccKpiLabelSx,
+  ccKpiValueSx,
+} from '@/components/lead-detail/commandCenterChrome'
+import {
+  formatLeadCategoryLabel,
+  formatMoneyValue,
+  formatPropertyTypeLabel,
+} from '@/utils/formatters'
+import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
 
 const EM_DASH = '—'
 
@@ -31,8 +40,8 @@ export function formatSaleDatePart(saleDisplay: string | null | undefined): stri
 }
 
 /**
- * Last sale cell: always surface date + amount when both exist (two lines).
- * e.g. "01/03/1989\\n$305,000"
+ * Last sale cell: date + amount on one line when both exist.
+ * e.g. "01/03/1989 · $305,000"
  */
 export function formatLastSaleCell(
   price: number | null | undefined,
@@ -40,7 +49,7 @@ export function formatLastSaleCell(
 ): string | null {
   const money = formatMoneyValue(price ?? null)
   const datePart = formatSaleDatePart(saleDisplay)
-  if (money && datePart) return `${datePart}\n${money}`
+  if (money && datePart) return `${datePart} · ${money}`
   if (money) return money
   if (datePart) return datePart
   return null
@@ -66,6 +75,20 @@ export function resolveLastSaleCell(commandCenterData: CommandCenterPayload): st
   }
 
   return formatLastSaleCell(price, display)
+}
+
+/**
+ * Explicit copy for the "Assessor ran, no sale on file" case — never a bare
+ * em-dash. See `backend/app/services/plugins/cook_county_assessor.py` for
+ * why no additional open PIN-keyed source fills this gap (Recorder of Deeds
+ * has no public API; MyDec only covers 2013+).
+ */
+export function resolveNoSaleCopy(
+  commandCenterData: CommandCenterPayload,
+): string | null {
+  const meta = commandCenterData.sale_date_meta
+  if (!meta || meta.status !== 'no_sale') return null
+  return formatSaleDateFreshness(meta, { hasDisplayedSale: false })
 }
 
 export function formatUnitsDetailsCell(
@@ -130,6 +153,15 @@ export function resolveCondoCheckLines(
   const confidenceLine = pct != null ? `${pct}% confidence` : null
   const reason = (commandCenterData.condo_check_reason || '').trim() || null
 
+  if (commandCenterData.building_ownership_pending) {
+    return {
+      verdict: 'Checking…',
+      confidenceLine: null,
+      reasonLine: 'Condo check running',
+      tooltip: 'Building ownership analysis is in progress',
+    }
+  }
+
   if (!status && !commandCenterData.condo_analysis_id) {
     return {
       verdict: 'Not checked',
@@ -173,10 +205,12 @@ export function PropertyOverviewQuickStats({
 }: PropertyOverviewQuickStatsProps) {
   const estValue = formatMoneyValue(commandCenterData.assessed_value ?? null)
   const lastSale = resolveLastSaleCell(commandCenterData)
+  const noSaleCopy = lastSale ? null : resolveNoSaleCopy(commandCenterData)
   const unitsDetails = formatUnitsDetailsCell(
     commandCenterData.units ?? null,
     commandCenterData.property_type ?? null,
   )
+  const categoryLabel = formatLeadCategoryLabel(commandCenterData.lead_category ?? null)
 
   const cells: {
     id: string
@@ -194,45 +228,58 @@ export function PropertyOverviewQuickStats({
     {
       id: 'last-sale',
       label: 'Last sale',
-      value: lastSale ?? EM_DASH,
-      allowWrap: true,
+      value: lastSale ?? noSaleCopy ?? EM_DASH,
+      // Prefer single line; wrap only as CSS overflow fallback is via nowrap+ellipsis.
+      allowWrap: false,
     },
     {
       id: 'units-details',
       label: 'Units / details',
+      // User lock 1B: Units may wrap — never nowrap into Category / condo.
       value: unitsDetails ?? EM_DASH,
+      allowWrap: true,
+    },
+    {
+      id: 'category',
+      label: 'Category',
+      value: categoryLabel || EM_DASH,
+      allowWrap: true,
     },
   ]
 
   return (
     <Box
       data-testid="property-overview-quick-stats"
-      sx={{
-        // Compact 2-col KPI band — shifted left; condo lives in its own panel.
-        flex: { xs: '1 1 100%', md: '0 0 auto' },
-        minWidth: { xs: '100%', md: 200 },
-        maxWidth: { xs: '100%', md: 240 },
-        display: 'grid',
-        gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-        columnGap: { xs: 1.25, md: 1.5 },
-        rowGap: { xs: 0.75, md: 0.85 },
-        alignContent: 'center',
-        justifyItems: 'stretch',
-        px: { md: 0.25 },
-        mr: { md: 0 },
-      }}
+      sx={ccHeaderQuickStatsSx}
     >
       {cells.map((cell) => {
         const body = (
-          <Box data-testid={`quick-stat-${cell.id}`} sx={{ minWidth: 0 }}>
+          <Box
+            data-testid={`quick-stat-${cell.id}`}
+            sx={{
+              minWidth: 0,
+              maxWidth: '100%',
+              overflow: 'hidden',
+              contain: 'layout style',
+              isolation: 'isolate',
+            }}
+          >
             <Typography sx={{ ...ccKpiLabelSx, fontSize: '0.65rem' }}>{cell.label}</Typography>
             <Typography
+              data-testid={`quick-stat-${cell.id}-value`}
               sx={{
                 ...ccKpiValueSx,
                 fontSize: '0.875rem',
                 mt: 0.125,
                 lineHeight: 1.25,
-                whiteSpace: cell.allowWrap ? 'pre-line' : 'nowrap',
+                minWidth: 0,
+                maxWidth: '100%',
+                // Last sale: one line. Units/Category: wrap within cell only (no Category spill).
+                whiteSpace: cell.allowWrap ? 'normal' : 'nowrap',
+                overflowWrap: cell.allowWrap ? 'break-word' : undefined,
+                wordBreak: cell.allowWrap ? 'break-word' : undefined,
+                textOverflow: cell.allowWrap ? undefined : 'ellipsis',
+                overflow: 'hidden',
               }}
               title={cell.tooltip ? undefined : cell.value.replace(/\n/g, ' · ')}
             >

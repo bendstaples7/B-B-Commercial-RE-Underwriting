@@ -50,11 +50,10 @@ export function HeaderCondoCheckPanel({
           : `Condo check: ${lines.verdict}`
       }
       sx={{
-        flex: { xs: '1 1 100%', md: '0 1 auto' },
-        width: { md: 300 },
-        minWidth: { md: 260 },
-        maxWidth: { xs: '100%', md: 340 },
-        flexShrink: 1,
+        flex: { xs: '1 1 100%', md: '1 1 clamp(10rem, 13vw, 260px)' },
+        width: { md: 'auto' },
+        minWidth: { md: 0 },
+        maxWidth: { xs: '100%', md: 'none' },
         cursor: clickable ? 'pointer' : 'default',
         borderRadius: 1,
         '&:hover': clickable

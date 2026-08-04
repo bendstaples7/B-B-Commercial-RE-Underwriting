@@ -124,13 +124,36 @@ def test_priority_2_deal_won_returns_none():
 # Priority 2.5: skip_trace → add_contact_info always
 # ---------------------------------------------------------------------------
 
-def test_priority_2_5_skip_trace_returns_add_contact_info_even_with_phone_email():
-    """Commercial / no-mailing skip_trace still returns add_contact_info."""
-    lead = make_lead(lead_status='skip_trace', has_phone=True, has_email=True)
+def test_priority_2_5_skip_trace_no_mailing_no_contact_returns_add_contact_info():
+    """Residential no-mailing skip_trace with no phone/email still needs contact info."""
+    lead = make_lead(lead_status='skip_trace', has_phone=False, has_email=False)
     lead.mailing_address = None
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'add_contact_info'
+
+
+def test_priority_2_5_skip_trace_no_mailing_prefers_call_ready_with_phone():
+    """Residential no-mailing skip_trace with a phone on file is still call-capable.
+
+    A phone/email means there IS a way to reach the owner, so it must never
+    be masked by ``add_contact_info`` just because the owner mailing address
+    is incomplete (e.g. a lead demoted from mailing_no_contact_made when its
+    mailing address was edited/cleared and no longer validates).
+    """
+    lead = make_lead(lead_status='skip_trace', has_phone=True, has_email=False)
+    lead.mailing_address = None
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result == 'call_ready'
+
+
+def test_priority_2_5_skip_trace_no_mailing_prefers_ready_for_outreach_with_email_only():
+    lead = make_lead(lead_status='skip_trace', has_phone=False, has_email=True)
+    lead.mailing_address = None
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result == 'ready_for_outreach'
 
 
 def test_priority_2_5_residential_with_mailing_does_not_force_add_contact_info():
@@ -161,7 +184,10 @@ def test_priority_2_5_commercial_skip_trace_still_add_contact_info_with_mailing(
 
 def test_priority_2_5_fires_before_follow_up_overdue():
     """skip_trace without mailing intercepts before follow_up_overdue check."""
-    lead = make_lead(lead_status='skip_trace', follow_up_overdue=True, is_warm=True)
+    lead = make_lead(
+        lead_status='skip_trace', follow_up_overdue=True, is_warm=True,
+        has_phone=False, has_email=False,
+    )
     lead.mailing_address = None
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)

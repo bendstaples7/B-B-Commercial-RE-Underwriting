@@ -129,6 +129,13 @@ jobs:
         run: npm install --no-save @rollup/rollup-linux-x64-gnu
         working-directory: frontend
 
+      - name: Assert CC packing geometry CI gate present
+        run: |
+          node scripts/check-cc-header-packing-ci-gate.mjs
+          node scripts/check-cc-kpi-nowrap-forbid.mjs
+          node scripts/check-cc-header-slack-park-forbid.mjs
+          node scripts/check-live-ui-ci-gate.mjs
+
       - name: TypeScript type-check
         run: npx tsc --noEmit
         working-directory: frontend
@@ -146,6 +153,23 @@ jobs:
       - name: Run tests (includes App shell smoke test)
         run: npm test
         working-directory: frontend
+
+      - name: CC header packing geometry (Playwright)
+        # Hostile Chromium layout — real React/MUI harness (not static HTML twin).
+        # Forbids jsdom-only ALIGNED theater for Property Overview packing.
+        run: |
+          npx playwright install chromium \
+            || { sleep 5; npx playwright install chromium; }
+          node ../scripts/cc-header-packing-geometry.mjs
+        working-directory: frontend
+
+      - name: Upload CC header packing screenshot on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-header-packing-geometry
+          path: artifacts/cc-header-packing.png
+          if-no-files-found: ignore
 
       - name: Production build
         run: npm run build
@@ -169,6 +193,173 @@ jobs:
           path: frontend/dist
           retention-days: 1
           if-no-files-found: error
+
+  live-ui-auth-smoke:
+    name: Live-UI — authenticated Playwright smoke
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: public.ecr.aws/docker/library/postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: live_ui_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: public.ecr.aws/docker/library/redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/live_ui_db
+      FLASK_ENV: development
+      SECRET_KEY: ci-live-ui-secret
+      JWT_SECRET_KEY: ci-live-ui-jwt-secret
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      BB_DISABLE_AUTO_RESTART: '1'
+      FLASK_SKIP_RELOADER: '1'
+      BB_E2E_EMAIL: live-ui-ci@example.com
+      BB_E2E_PASSWORD: LiveUiCiPassw0rd!
+      BB_LIVE_UI_BASE_URL: http://127.0.0.1:3000
+      BB_LIVE_UI_API_URL: http://127.0.0.1:5000/api
+      VITE_API_BASE_URL: http://127.0.0.1:5000/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+        working-directory: backend
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci || npm ci || npm ci
+        working-directory: frontend
+
+      - name: Install optional native dependencies (Linux CI fix)
+        run: npm install --no-save @rollup/rollup-linux-x64-gnu
+        working-directory: frontend
+
+      - name: Migrate database
+        run: |
+          export FLASK_APP=run.py
+          flask db upgrade head
+        working-directory: backend
+
+      - name: Seed CI user and lead
+        id: seed
+        run: |
+          set -euo pipefail
+          SEED_JSON=$(python ../scripts/live-ui/ci_seed_auth_lead.py) || {
+            echo "::error::Seed script failed"
+            exit 1
+          }
+          echo "$SEED_JSON" | python -c "import sys,json; data=json.load(sys.stdin); print(f\"seeded lead_id={data['lead_id']} user_id={data['user_id']}\")"
+          LEAD_ID=$(echo "$SEED_JSON" | python -c "import sys,json; print(json.load(sys.stdin)['lead_id'])") || {
+            echo "::error::Seed script did not return lead_id"
+            exit 1
+          }
+          if [ -z "$LEAD_ID" ]; then
+            echo "::error::Seed script did not return lead_id"
+            exit 1
+          fi
+          echo "lead_id=$LEAD_ID" >> "$GITHUB_OUTPUT"
+        working-directory: backend
+
+      - name: Start Flask backend
+        run: |
+          nohup python run.py > /tmp/live-ui-flask.log 2>&1 &
+          echo $! > /tmp/live-ui-flask.pid
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:5000/api/health >/dev/null; then
+              echo "Flask healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Flask failed to become healthy"
+          cat /tmp/live-ui-flask.log || true
+          exit 1
+        working-directory: backend
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: http://127.0.0.1:5000/api
+
+      - name: Start Vite preview
+        run: |
+          npx vite preview --host 127.0.0.1 --port 3000 --strictPort > /tmp/live-ui-vite.log 2>&1 &
+          echo $! > /tmp/live-ui-vite.pid
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:3000/ >/dev/null; then
+              echo "Vite preview up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Vite preview failed"
+          cat /tmp/live-ui-vite.log || true
+          exit 1
+        working-directory: frontend
+
+      - name: Install Playwright Chromium
+        run: |
+          npx playwright install --with-deps chromium \
+            || { sleep 5; npx playwright install --with-deps chromium; }
+        working-directory: frontend
+
+      - name: Authenticated live-UI snapshot
+        run: |
+          set -euo pipefail
+          LEAD_ID="${{ steps.seed.outputs.lead_id }}"
+          node scripts/live-ui/auth-save.mjs
+          node scripts/live-ui/snapshot.mjs \
+            --url "/leads/${LEAD_ID}" \
+            --selector '[data-testid="property-overview-header"]' \
+            --label ci-auth
+          PNG=$(ls -1t artifacts/live-ui/*-ci-auth.png | head -n 1)
+          echo "Validating $PNG"
+          node scripts/live-ui/claim-guard.mjs --validate-png "$PNG"
+
+      - name: Upload live-UI smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-ui-auth-smoke
+          path: |
+            artifacts/live-ui/
+            /tmp/live-ui-flask.log
+            /tmp/live-ui-vite.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   validate-workflows:
     name: Validate workflow YAML syntax
@@ -526,6 +717,7 @@ jobs:
       - deploy-contract
       - duplication-check
       - vps-readiness
+      - live-ui-auth-smoke
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate required job results
@@ -540,6 +732,7 @@ jobs:
           echo "  deploy-contract=${{ needs.deploy-contract.result }}"
           echo "  duplication-check=${{ needs.duplication-check.result }}"
           echo "  vps-readiness=${{ needs.vps-readiness.result }}"
+          echo "  live-ui-auth-smoke=${{ needs.live-ui-auth-smoke.result }}"
 
           fail=0
           for result in \
@@ -550,7 +743,8 @@ jobs:
             "${{ needs.validate-workflows.result }}" \
             "${{ needs.deploy-contract.result }}" \
             "${{ needs.duplication-check.result }}" \
-            "${{ needs.vps-readiness.result }}"
+            "${{ needs.vps-readiness.result }}" \
+            "${{ needs.live-ui-auth-smoke.result }}"
           do
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "Unsuccessful job result: $result"

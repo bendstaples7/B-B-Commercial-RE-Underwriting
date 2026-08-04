@@ -1,0 +1,35 @@
+---
+description: Authenticated live UI must be seen (PNG) before UI done claims
+globs:
+alwaysApply: true
+---
+
+# Live-UI visibility (no blind UI claims)
+
+Harness / lookbook / jsdom green is **not** proof the signed-in product looks
+correct. Before claiming any user-facing UI is done, ready, fixed, or ready to
+retest, run the **live-ui-visibility** skill.
+
+## Required
+
+1. Authenticated capture of the real route (Playwright snapshot, Capture FAB,
+   or Chromium CDP/session export) → `artifacts/live-ui/*.png`
+2. Agent **Reads** that PNG (vision) and notes gaps / clips / wraps / overlaps
+3. Final message includes `### Live-UI` with `VERDICT: SEEN` or `NOT SEEN`
+4. `SEEN` must **cite** `artifacts/live-ui/<file>.png` (hooks validate on-disk
+   PNG + JSON, `loginWall: false`, ≤2h)
+
+## Hard enforcement
+
+- Cursor hooks (`live-ui-visibility-*`) STOP follow-up on blind done / fake SEEN
+- CI: `check-live-ui-ci-gate.mjs` + job `live-ui-auth-smoke`
+- Validator: `scripts/live-ui/claim-guard.mjs`
+
+## Forbidden
+
+- Claiming packing/layout fixed from harness geometry alone
+- Asking the user what the UI looks like before attempting Live-UI channels
+- Emitting `SEEN` without a screenshot artifact read this turn
+- Asking for human retest while `VERDICT: NOT SEEN`
+
+See `.cursor/skills/live-ui-visibility/SKILL.md` and `scripts/live-ui/`.

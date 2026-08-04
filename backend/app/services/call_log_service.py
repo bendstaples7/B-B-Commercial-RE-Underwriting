@@ -391,8 +391,17 @@ class CallLogService:
         email_address: str | None = None,
         email_label: str | None = None,
         subject: str | None = None,
+        sent_from_email: str | None = None,
+        complete_task_id: int | None = None,
+        follow_up: dict | None = None,
     ) -> LeadTimelineEntry:
-        """Log a note on a lead."""
+        """Log a note (or email) on a lead.
+
+        Mirrors ``log_call``'s optional task-completion and follow-up
+        creation so notes/emails have the same "next step" capabilities as
+        calls. Scoring is refreshed once at the end when those side effects
+        run.
+        """
         if not body or not body.strip():
             raise LeadTaskValidationError("Note body cannot be empty.", field='body')
 
@@ -413,8 +422,34 @@ class CallLogService:
         _validate_contact_email_for_lead(lead_id, contact_id, contact_email_id)
         contact_name = _resolve_contact_name(lead_id, contact_id)
 
+        if complete_task_id is not None:
+            from app.models import LeadTask
+
+            task = LeadTask.query.filter_by(
+                id=complete_task_id, lead_id=lead_id, status='open',
+            ).first()
+            if task is None:
+                raise LeadTaskValidationError(
+                    f"Open task {complete_task_id} not found for lead {lead_id}.",
+                    field='complete_task_id',
+                )
+
+        if follow_up:
+            title = (follow_up.get('title') or '').strip()
+            due_date = follow_up.get('due_date')
+            if not title:
+                raise LeadTaskValidationError(
+                    'Follow-up task title is required.',
+                    field='follow_up.title',
+                )
+            if due_date is None:
+                raise LeadTaskValidationError(
+                    'Follow-up task due date is required.',
+                    field='follow_up.due_date',
+                )
+
         has_email_context = any([
-            contact_email_id, email_address, email_label, subject,
+            contact_email_id, email_address, email_label, subject, sent_from_email,
         ])
         if has_email_context or body.strip().startswith('[Email]'):
             summary = _build_email_summary(body, subject, contact_name, email_address, email_label)
@@ -434,6 +469,8 @@ class CallLogService:
             metadata['email_address'] = email_address
         if email_label:
             metadata['email_label'] = email_label
+        if sent_from_email:
+            metadata['sent_from_email'] = sent_from_email
 
         is_email = has_email_context or body.strip().startswith('[Email]')
         entry = LeadTimelineEntry(
@@ -447,6 +484,36 @@ class CallLogService:
         )
         db.session.add(entry)
         db.session.commit()
+
+        if complete_task_id is not None or follow_up:
+            from app.services.lead_task_service import LeadTaskService
+
+            task_svc = LeadTaskService()
+
+            if complete_task_id is not None:
+                task_svc.complete(
+                    complete_task_id, lead_id, actor=actor, recompute_action=False,
+                )
+                metadata['completed_task_id'] = complete_task_id
+                entry.event_metadata = dict(metadata)
+                db.session.add(entry)
+                db.session.commit()
+
+            if follow_up:
+                created = task_svc.create(
+                    lead_id,
+                    {
+                        'title': follow_up['title'],
+                        'due_date': follow_up['due_date'],
+                        'task_type': follow_up.get('task_type', 'call_owner_today'),
+                    },
+                    actor=actor,
+                    recompute_action=False,
+                )
+                metadata['follow_up_task_id'] = created.id
+                entry.event_metadata = dict(metadata)
+                db.session.add(entry)
+                db.session.commit()
 
         try:
             from app.services.lead_refresh import refresh_lead_scoring

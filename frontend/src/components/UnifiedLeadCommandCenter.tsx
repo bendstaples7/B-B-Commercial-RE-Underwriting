@@ -27,6 +27,7 @@ import {
   DialogTitle,
   Chip,
   Link as MuiLink,
+  Stack,
   useMediaQuery,
   useTheme,
 } from '@mui/material'
@@ -70,6 +71,10 @@ import { PropertySidebar } from '@/components/lead-detail/PropertySidebar'
 import { BuildingOwnershipSection } from '@/components/BuildingOwnershipSection'
 import {
   ccCardSx,
+  ccHeaderAddressColumnSx,
+  ccHeaderPaperSx,
+  ccHeaderPrimaryClusterSx,
+  ccHeaderTrailingPanelsSx,
   ccHeroAddressSx,
   ccHeroSecondarySx,
   ccPageBgSx,
@@ -80,7 +85,7 @@ import { KeyContactCard } from '@/components/lead-detail/KeyContactCard'
 import { PropertyKpiCard } from '@/components/lead-detail/PropertyKpiCard'
 import { PropertyOverviewQuickStats } from '@/components/lead-detail/PropertyOverviewQuickStats'
 import { HeaderCondoCheckPanel } from '@/components/lead-detail/HeaderCondoCheckPanel'
-import { HeaderLeadScorePanel } from '@/components/lead-detail/HeaderLeadScorePanel'
+import { HeaderLeadScorePanel, type ScoreFlash } from '@/components/lead-detail/HeaderLeadScorePanel'
 import { DeepDiveDetailsCard } from '@/components/lead-detail/DeepDiveDetailsCard'
 import { SuppressLeadDialog } from '@/components/SuppressLeadDialog'
 import { AppSnackbar } from '@/components/AppSnackbar'
@@ -96,6 +101,7 @@ import {
   QUEUE_ADVANCE_HOLD_MS,
 } from '@/components/lead-detail/QueueAdvanceHoldBanner'
 import { scrollCommandCenterSectionIntoView } from '@/utils/scrollCommandCenterSection'
+import { parseHubSpotTaskId } from '@/utils/callCompletableTask'
 
 export { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
 export { tabParamToIndex } from '@/components/lead-detail/LeadDetailTabPanel'
@@ -140,6 +146,8 @@ interface PropertyOverviewHeaderProps {
   onBeforePinDeprioritize?: () => void
   /** After Pin Lookup multi-PIN deprioritize succeeds (queue hold / refresh). */
   onAfterPinDeprioritize?: () => void | Promise<void>
+  /** Brief score delta pill shown after an activity save (call/note/email). */
+  scoreFlash?: ScoreFlash | null
 }
 
 function formatPropertyAddress(data: CommandCenterPayload): string {
@@ -163,6 +171,7 @@ function PropertyOverviewHeader({
   onBeforePinDeprioritize,
   onAfterPinDeprioritize,
   statusSelectorRef,
+  scoreFlash,
 }: PropertyOverviewHeaderProps & { statusSelectorRef?: React.RefObject<HTMLDivElement | null> }) {
   const [scoreDialogOpen, setScoreDialogOpen] = useState(false)
   const [pinSnack, setPinSnack] = useState<string | null>(null)
@@ -274,20 +283,20 @@ function PropertyOverviewHeader({
       <Paper
         component="header"
         data-testid="property-overview-header"
+        data-live-ui-surface="property-overview-header"
         elevation={0}
-        sx={{
-          ...ccCardSx,
-          p: { xs: 1.25, sm: 1.5 },
-          mb: 0,
-        }}
+        sx={ccHeaderPaperSx}
       >
           <Box
             sx={{
               display: 'flex',
+              // ONE horizontal bar on md+ — never wrap condo under Last sale.
               flexWrap: { xs: 'wrap', md: 'nowrap' },
-              alignItems: 'flex-start',
-              gap: { xs: 1.25, md: 1.5 },
+              // Center KPIs / condo / score against the taller address column.
+              alignItems: 'center',
+              gap: { xs: 1.25, md: 1.25 },
               minWidth: 0,
+              width: '100%',
             }}
           >
           <IconButton
@@ -301,14 +310,8 @@ function PropertyOverviewHeader({
             <ArrowBackIcon />
           </IconButton>
 
-          <Box
-            sx={{
-              // Option A: address column only as wide as needed; panels pack right.
-              flex: { xs: '1 1 calc(100% - 48px)', md: '1 1 auto' },
-              minWidth: { xs: 0, md: 0 },
-              maxWidth: { xs: '100%', md: '42%' },
-            }}
-          >
+          <Box sx={ccHeaderPrimaryClusterSx} data-testid="cc-header-primary-cluster">
+          <Box sx={ccHeaderAddressColumnSx}>
             <Box
               sx={{
                 display: 'flex',
@@ -316,21 +319,25 @@ function PropertyOverviewHeader({
                 alignItems: 'flex-start',
                 gap: 0.35,
                 minWidth: 0,
-                width: '100%',
+                // Hug content on md so KPIs sit beside the street text (no mid-row canyon).
+                width: { xs: '100%', md: 'auto' },
+                maxWidth: '100%',
               }}
               data-testid="property-overview-address"
             >
               <Typography
+                data-testid="property-overview-address-line"
                 sx={{
                   ...ccHeroAddressSx,
                   fontSize: { xs: '1.15rem', sm: '1.35rem' },
                   minWidth: 0,
                   maxWidth: '100%',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  overflowWrap: 'normal',
-                  wordBreak: 'keep-all',
+                  // Desktop: one line; do not wrap. Ellipsis only if the row truly overflows.
+                  whiteSpace: { xs: 'normal', md: 'nowrap' },
+                  overflow: { xs: 'visible', md: 'hidden' },
+                  textOverflow: { xs: 'clip', md: 'ellipsis' },
+                  overflowWrap: { xs: 'anywhere', md: 'normal' },
+                  wordBreak: { xs: 'normal', md: 'keep-all' },
                 }}
                 title={fullAddress}
               >
@@ -347,9 +354,10 @@ function PropertyOverviewHeader({
                     minWidth: 0,
                     maxWidth: '100%',
                     textAlign: 'left',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
+                    // AKA secondary — single line; ellipsis OK if longer than street.
+                    whiteSpace: { xs: 'normal', md: 'nowrap' },
+                    overflow: { xs: 'visible', md: 'hidden' },
+                    textOverflow: { xs: 'clip', md: 'ellipsis' },
                   }}
                   title={akaDisplay}
                 >
@@ -408,27 +416,10 @@ function PropertyOverviewHeader({
             </Box>
           </Box>
 
-          <Box
-            sx={{
-              display: 'flex',
-              flexWrap: { xs: 'wrap', md: 'nowrap' },
-              alignItems: 'stretch',
-              gap: 1,
-              flexShrink: 0,
-              ml: { md: 'auto' },
-              minWidth: 0,
-              maxWidth: '100%',
-              '& [data-testid="header-condo-check"], & [data-testid="header-lead-score"]': {
-                width: { md: 280 },
-                minWidth: { md: 240 },
-                maxWidth: { xs: '100%', md: 300 },
-                flex: '0 1 auto',
-                ml: '0 !important',
-              },
-            }}
-          >
-            <PropertyOverviewQuickStats commandCenterData={commandCenterData} />
+          <PropertyOverviewQuickStats commandCenterData={commandCenterData} />
+          </Box>
 
+          <Box sx={ccHeaderTrailingPanelsSx} data-testid="cc-header-trailing-panels">
             <HeaderCondoCheckPanel
               commandCenterData={commandCenterData}
               onOpenBuildingOwnership={() => {
@@ -441,6 +432,7 @@ function PropertyOverviewHeader({
               tier={scoreTier}
               scoreRecord={scoreRecord}
               onOpenBreakdown={() => setScoreDialogOpen(true)}
+              flash={scoreFlash}
             />
           </Box>
           </Box>
@@ -844,6 +836,17 @@ function normalizeTimelineEntriesForLead(
   }))
 }
 
+type ActivityFeedFilter = 'all' | 'mail'
+
+function isMailTimelineEntry(entry: LeadTimelineEntry): boolean {
+  return (
+    entry.event_type === 'mail_sent'
+    || entry.event_type === 'mailer_history'
+    || entry.event_type === 'mail_queued'
+    || entry.event_type === 'mail_delivered'
+  )
+}
+
 const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
   function ActivityPanel(
     { leadId, initialEntries, initialTotal, highlightEntryId, variant = 'accordion', embedded = false },
@@ -851,6 +854,7 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
   ) {
     const panelRef = useRef<HTMLDivElement>(null)
     const [fullscreenOpen, setFullscreenOpen] = useState(false)
+    const [feedFilter, setFeedFilter] = useState<ActivityFeedFilter>('all')
     const initialScopedEntries = normalizeTimelineEntriesForLead(initialEntries, leadId)
     const [timelineEntries, setTimelineEntries] = useState<LeadTimelineEntry[]>(() =>
       scopeRowsToLead(initialScopedEntries, leadId, 'timeline'),
@@ -860,9 +864,18 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
     leadIdRef.current = leadId
     const timelineEntriesRef = useRef(timelineEntries)
     timelineEntriesRef.current = timelineEntries
+    // Durable backstop for rows added via `prependEntry` (call/note/status
+    // saves). `timelineEntries` local state can, in principle, be replaced by
+    // the sync effect below before a slow/racy commandCenter refetch has
+    // caught up with the write — this map survives that and gets re-merged
+    // in on every sync pass until the server confirms the same id, so a
+    // refetch that *briefly* omits the new row can never make it vanish from
+    // the feed (see lead 10737).
+    const pendingPrependsRef = useRef<Map<number, LeadTimelineEntry>>(new Map())
 
     React.useEffect(() => {
       setFullscreenOpen(false)
+      setFeedFilter('all')
     }, [leadId])
 
     // Drop prior-lead rows entirely when navigating. Only keep optimistic
@@ -872,9 +885,23 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
     React.useEffect(() => {
       const serverEntries = normalizeTimelineEntriesForLead(initialEntries, leadId)
       const serverIds = new Set(serverEntries.map((e) => e.id))
-      const optimisticOnly = timelineEntriesRef.current.filter(
+
+      // Server has caught up with these — stop tracking them as pending.
+      for (const id of Array.from(pendingPrependsRef.current.keys())) {
+        if (serverIds.has(id)) pendingPrependsRef.current.delete(id)
+      }
+
+      const localOptimistic = timelineEntriesRef.current.filter(
         (e) => e.lead_id === leadId && !serverIds.has(e.id),
       )
+      const stillPending = Array.from(pendingPrependsRef.current.values()).filter(
+        (e) => (
+          e.lead_id === leadId
+          && !serverIds.has(e.id)
+          && !localOptimistic.some((o) => o.id === e.id)
+        ),
+      )
+      const optimisticOnly = [...stillPending, ...localOptimistic]
       const scoped = scopeRowsToLeadWithTotal(
         [...optimisticOnly, ...serverEntries],
         leadId,
@@ -900,6 +927,12 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
           ...entry,
           lead_id: entry.lead_id ?? activeLeadId,
         }
+        pendingPrependsRef.current.set(normalized.id, normalized)
+        // Safety net: never track a pending row forever if the server
+        // genuinely never reflects it (e.g. scoping rejects it upstream).
+        window.setTimeout(() => {
+          pendingPrependsRef.current.delete(normalized.id)
+        }, 60000)
         setTimelineEntries((prev) =>
           scopeRowsToLead([normalized, ...prev], activeLeadId, 'timeline'),
         )
@@ -919,22 +952,64 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
         'timeline',
         result.total,
       )
+      const rows =
+        feedFilter === 'mail'
+          ? scoped.rows.filter(isMailTimelineEntry)
+          : scoped.rows
       return {
-        entries: scoped.rows,
+        entries: rows,
         total: scoped.total,
       }
     }
 
+    const visibleEntries = useMemo(
+      () => (
+        feedFilter === 'mail'
+          ? timelineEntries.filter(isMailTimelineEntry)
+          : timelineEntries
+      ),
+      [feedFilter, timelineEntries],
+    )
+    // Mail filter is client-side over loaded pages — keep load-more so older
+    // mailers on later pages remain reachable; total is at least visible count.
+    const visibleTotal =
+      feedFilter === 'mail'
+        ? Math.max(visibleEntries.length, timelineTotal)
+        : timelineTotal
+
     const timeline = (
       <LeadTimeline
         leadId={leadId}
-        initialEntries={timelineEntries}
-        initialTotal={timelineTotal}
+        initialEntries={visibleEntries}
+        initialTotal={visibleTotal}
         onLoadMore={handleLoadMore}
         highlightEntryId={highlightEntryId}
         variant={fullscreenOpen ? 'feed' : variant}
         previewMode={fullscreenOpen ? false : undefined}
       />
+    )
+
+    const filterChips = (
+      <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap data-testid="activity-feed-filters">
+        <Chip
+          size="small"
+          label="All"
+          clickable
+          color={feedFilter === 'all' ? 'primary' : 'default'}
+          variant={feedFilter === 'all' ? 'filled' : 'outlined'}
+          onClick={() => setFeedFilter('all')}
+          data-testid="activity-filter-all"
+        />
+        <Chip
+          size="small"
+          label="Mail"
+          clickable
+          color={feedFilter === 'mail' ? 'primary' : 'default'}
+          variant={feedFilter === 'mail' ? 'filled' : 'outlined'}
+          onClick={() => setFeedFilter('mail')}
+          data-testid="activity-filter-mail"
+        />
+      </Stack>
     )
 
     return (
@@ -960,7 +1035,9 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
               <Typography sx={{ ...ccSectionTitleSx, mb: 0 }} component="h2">
                 Activity
               </Typography>
-              <Button
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                {filterChips}
+                <Button
                 size="small"
                 startIcon={<OpenInFullIcon fontSize="small" />}
                 onClick={() => setFullscreenOpen(true)}
@@ -969,6 +1046,7 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
               >
                 Full screen
               </Button>
+              </Box>
             </Box>
             {timeline}
           </>
@@ -993,7 +1071,9 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
             <Typography component="span" variant="h6" fontWeight={700}>
               Activity
             </Typography>
-            <IconButton
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              {filterChips}
+              <IconButton
               aria-label="Close full screen activity"
               onClick={() => setFullscreenOpen(false)}
               data-testid="activity-fullscreen-close"
@@ -1001,6 +1081,7 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
             >
               <CloseIcon />
             </IconButton>
+            </Box>
           </DialogTitle>
           <DialogContent
             dividers
@@ -1044,6 +1125,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     queryKey: ['commandCenter', leadId],
     queryFn: () => commandCenterService.getCommandCenter(leadId),
     staleTime: LEAD_WORKSPACE_STALE_MS,
+    // Poll while condo analysis was auto-scheduled on open until it settles.
+    refetchInterval: (query) =>
+      query.state.data?.building_ownership_pending ? 2500 : false,
   })
   const openTasks = useMemo(
     () => commandCenterData?.open_tasks ?? [],
@@ -1092,6 +1176,14 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     staleTime: LEAD_WORKSPACE_STALE_MS,
   })
 
+  // Mirrors of the latest fetched data for callbacks (e.g. score-flash delta)
+  // that must read current values without forcing a new function identity
+  // on every refetch.
+  const scoreDataRef = useRef(scoreData)
+  scoreDataRef.current = scoreData
+  const commandCenterDataRef = useRef(commandCenterData)
+  commandCenterDataRef.current = commandCenterData
+
   const prefetchQueueLead = useCallback(
     (targetLeadId: number) => {
       prefetchLeadWorkspace(queryClient, targetLeadId)
@@ -1130,6 +1222,16 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const showLead = !!commandCenterData && !commandCenterError
   const [activityModal, setActivityModal] = useState<ActivityLogType | null>(null)
   const [highlightEntryId, setHighlightEntryId] = useState<number | null>(null)
+  const [scoreFlash, setScoreFlash] = useState<ScoreFlash | null>(null)
+  const scoreFlashTimeoutRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (scoreFlashTimeoutRef.current != null) {
+        window.clearTimeout(scoreFlashTimeoutRef.current)
+      }
+    }
+  }, [])
   const [activitySnackbar, setActivitySnackbar] = useState<{
     open: boolean
     message: string
@@ -1334,6 +1436,35 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   /** Captured before Pin Lookup deprioritize PATCH removes this lead from the queue. */
   const pinDeprioritizeNextIdRef = useRef<number | null | undefined>(undefined)
 
+  /**
+   * Shared by status-change and activity-save paths: optimistically patches
+   * the new row into the `commandCenter` cache's `timeline.entries` (so any
+   * consumer reading that cache sees it immediately, independent of the
+   * ActivityPanel ref) and prepends it into the live ActivityPanel, with the
+   * usual highlight flash.
+   */
+  const prependTimelineEntry = useCallback((entry: LeadTimelineEntry) => {
+    queryClient.setQueryData<CommandCenterPayload>(
+      ['commandCenter', leadId],
+      (current) => {
+        if (!current) return current
+        const normalized: LeadTimelineEntry = { ...entry, lead_id: entry.lead_id ?? leadId }
+        if (current.timeline.entries.some((e) => e.id === normalized.id)) return current
+        return {
+          ...current,
+          timeline: {
+            ...current.timeline,
+            entries: [normalized, ...current.timeline.entries],
+            total: current.timeline.total + 1,
+          },
+        }
+      },
+    )
+    activityRef.current?.prependEntry(entry)
+    setHighlightEntryId(entry.id)
+    window.setTimeout(() => setHighlightEntryId(null), 2000)
+  }, [queryClient, leadId])
+
   const handleStatusChanged = useCallback(async (
     nextStatus?: LeadStatus,
     result?: {
@@ -1372,9 +1503,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       },
     )
     if (result?.timeline_entry) {
-      activityRef.current?.prependEntry(result.timeline_entry)
-      setHighlightEntryId(result.timeline_entry.id)
-      window.setTimeout(() => setHighlightEntryId(null), 2000)
+      prependTimelineEntry(result.timeline_entry)
     }
     // Header prefers leadScore history over CC lead_score — must refresh or score looks stuck.
     // Fire-and-forget: awaiting RQ refetch under Vitest fake timers can deadlock.
@@ -1384,7 +1513,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     void queryClient.invalidateQueries({ queryKey: ['queue-navigation', fromQueue.key] })
     void queryClient.invalidateQueries({ queryKey: [`queue-${fromQueue.key}`] })
     // Stay on this lead after status change — only task/activity completion advances the queue.
-  }, [queryClient, leadId, fromQueue])
+  }, [queryClient, leadId, fromQueue, prependTimelineEntry])
 
   const handleActivitySaved = useCallback((
     entry: LeadTimelineEntry,
@@ -1395,16 +1524,58 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       warning?: string
     },
   ) => {
-    activityRef.current?.prependEntry(entry)
-    setHighlightEntryId(entry.id)
+    prependTimelineEntry(entry)
     setActivitySnackbar({
       open: true,
       message: meta?.warning ?? ACTIVITY_SUCCESS_MESSAGES[type],
       severity: meta?.warning ? 'warning' : 'success',
     })
     setActivityModal(null)
-    queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-    window.setTimeout(() => setHighlightEntryId(null), 2000)
+
+    // Optimistically drop the task the response says was completed — do not
+    // wait for the full refetch below (visible immediately even during a
+    // queue-advance hold).
+    if (meta?.completedTaskId != null || meta?.completedHubSpotTaskId != null) {
+      queryClient.setQueryData<CommandCenterPayload>(
+        ['commandCenter', leadId],
+        (current) => {
+          if (!current) return current
+          const nextTasks = current.open_tasks.filter((task) => {
+            if (meta.completedTaskId != null && task.id === meta.completedTaskId) return false
+            if (
+              meta.completedHubSpotTaskId != null
+              && parseHubSpotTaskId(task.id) === meta.completedHubSpotTaskId
+            ) return false
+            return true
+          })
+          if (nextTasks.length === current.open_tasks.length) return current
+          return { ...current, open_tasks: nextTasks }
+        },
+      )
+    }
+
+    void queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+
+    // Score gauge must move (or explicitly say it didn't) even while a queue
+    // advance hold is showing — never wait for the hold to pass. Fire-and-
+    // forget: awaiting RQ refetch under Vitest fake timers can deadlock.
+    const previousScore = scoreDataRef.current?.latest?.total_score
+      ?? commandCenterDataRef.current?.lead_score
+      ?? null
+    void queryClient.invalidateQueries({ queryKey: ['leadScore', leadId] }).then(() => {
+      const refreshed = queryClient.getQueryData<PropertyScoreResponse>(['leadScore', leadId])
+      const nextScore = refreshed?.latest?.total_score ?? null
+      if (previousScore == null || nextScore == null) return
+      const delta = Math.round(nextScore) - Math.round(previousScore)
+      if (scoreFlashTimeoutRef.current != null) window.clearTimeout(scoreFlashTimeoutRef.current)
+      setScoreFlash(
+        delta === 0
+          ? { label: 'Score unchanged', tone: 'neutral' }
+          : { label: `${delta > 0 ? '+' : ''}${delta}`, tone: delta > 0 ? 'up' : 'down' },
+      )
+      scoreFlashTimeoutRef.current = window.setTimeout(() => setScoreFlash(null), 4000)
+    })
+
     if (
       fromQueue
       && (meta?.completedTaskId != null || meta?.completedHubSpotTaskId != null)
@@ -1420,6 +1591,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     fromQueue,
     scheduleQueueAdvanceHold,
     snapshotNextQueueLeadId,
+    prependTimelineEntry,
   ])
 
   const handleRaAction = useCallback(async (action: string) => {
@@ -1800,6 +1972,12 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         pb: 3,
       }}
     >
+      {/*
+        position: sticky already establishes a containing block (same as
+        relative) for the absolutely-positioned QueueAdvanceHoldBanner below —
+        the banner overlays this chrome with zero in-flow height instead of
+        pushing Property Overview down.
+      */}
       <Box
         data-testid="cc-sticky-chrome"
         sx={{ position: 'sticky', top: 0, zIndex: 100, bgcolor: 'grey.50', maxWidth: '100%' }}
@@ -1835,6 +2013,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             onViewFullBreakdown={handleViewScoreBreakdown}
             fromQueue={fromQueue}
             statusSelectorRef={statusSelectorRef}
+            scoreFlash={scoreFlash}
             onBeforePinDeprioritize={() => {
               pinDeprioritizeNextIdRef.current = snapshotNextQueueLeadId()
             }}

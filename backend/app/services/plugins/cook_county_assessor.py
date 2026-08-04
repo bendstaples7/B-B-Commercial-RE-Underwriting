@@ -239,6 +239,19 @@ def list_parcel_sale_history(
 
     When external sources return nothing, seeds a single row from the lead's
     verified/imported sale fields so Info never contradicts a confirmed date.
+
+    Open-data research note (no viable additional PIN-keyed source found):
+    the Cook County Recorder of Deeds / Clerk's Recordings System
+    (crs.cookcountyclerkil.gov) only exposes a web search UI — no public
+    Socrata/REST API. Illinois MyDec transfer-tax declarations (the closest
+    thing to a deed-level feed) are on the Illinois Open Data portal but only
+    cover 2013-present, so pre-2013 sales (e.g. a 1993 conveyance a site like
+    Redfin may show from title-company/MLS history) are out of reach of any
+    open API. This Socrata "Parcel Sales" dataset (``wvhk-k5uv``) — already
+    queried above, live and cached — is the assessor's own historical sales
+    compilation and the most complete open, PIN-keyed source available; when
+    it has no row for a PIN, treat the sale as genuinely unknown (``no_sale``)
+    rather than retrying against another source.
     """
     capped = min(max(int(limit), 0), 100)
     if capped <= 0:

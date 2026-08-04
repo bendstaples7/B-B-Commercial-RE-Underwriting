@@ -7,7 +7,6 @@ import {
   Box,
   Chip,
   CircularProgress,
-  Stack,
   Typography,
   type SxProps,
   type Theme,
@@ -46,7 +45,7 @@ export function humanizeCondoDriver(rule: string): string {
 }
 
 function condoGaugeColor(verdict: string, pct: number | null): string {
-  if (verdict === 'Not checked') return '#CBD5E1'
+  if (verdict === 'Not checked' || verdict.startsWith('Checking')) return '#CBD5E1'
   if (verdict === 'Not condos') return '#22C55E'
   if (verdict === 'Condos') return '#F59E0B'
   if (pct != null && pct <= 30) return '#F59E0B'
@@ -118,8 +117,8 @@ export function CondoCheckSummary({
           flexDirection: 'row',
           alignItems: 'center',
           gap: 1.25,
-          py: 0.5,
-          px: 1.25,
+          py: 1,
+          px: 1.75,
           borderRadius: 1,
           border: '1px solid',
           borderColor: 'divider',
@@ -127,6 +126,7 @@ export function CondoCheckSummary({
           textAlign: 'left',
           minWidth: 0,
           width: '100%',
+          overflow: 'visible',
         },
         ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
       ]}
@@ -186,14 +186,8 @@ export function CondoCheckSummary({
         </Box>
       </Box>
 
-      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-        <Stack
-          direction="row"
-          justifyContent="space-between"
-          alignItems="baseline"
-          spacing={1}
-          sx={{ minWidth: 0 }}
-        >
+      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 0.45 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0.15, minWidth: 0 }}>
           <Typography
             variant="caption"
             fontWeight={700}
@@ -212,13 +206,13 @@ export function CondoCheckSummary({
               variant="caption"
               color="text.disabled"
               data-testid={`${testIdStem}-updated`}
-              sx={{ fontSize: '0.65rem', lineHeight: 1.2, flexShrink: 0 }}
+              sx={{ fontSize: '0.65rem', lineHeight: 1.2, whiteSpace: 'nowrap' }}
               title={updatedAt ? `Checked ${updatedAt}` : undefined}
             >
               Updated: {updatedAt ?? '—'}
             </Typography>
           )}
-        </Stack>
+        </Box>
 
         <Typography
           data-testid={`${testIdStem}-verdict`}
@@ -247,13 +241,14 @@ export function CondoCheckSummary({
             }}
             data-testid={`${testIdStem}-drivers`}
           >
-            {drivers.slice(0, 3).map((driver) => (
+            {drivers.slice(0, 2).map((driver) => (
               <Chip
                 key={driver}
                 size="small"
                 icon={iconForDriver(driver)}
                 label={driver}
                 title={driver}
+                data-testid={`${testIdStem}-driver-chip`}
                 sx={{
                   width: '100%',
                   maxWidth: '100%',
@@ -266,6 +261,7 @@ export function CondoCheckSummary({
                   fontWeight: 600,
                   fontSize: '0.65rem',
                   py: 0.35,
+                  overflow: 'visible',
                   '& .MuiChip-icon': {
                     color: '#B45309',
                     ml: 0.35,

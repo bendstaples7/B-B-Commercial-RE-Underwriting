@@ -43,9 +43,9 @@ const FAKE = {
   systemNote: 'Incomplete data (missing PINs) — cannot classify reliably',
   pinExplain: '3 PINs at this address · no condo class. Imported units: 12. Multiple PINs alone do not mean condo.',
   pins: [
-    { pin: '14-20-123-456-0000', cls: '3-18', condo: 'No' },
-    { pin: '14-20-123-457-0000', cls: '3-18', condo: 'No' },
-    { pin: '14-20-123-458-0000', cls: '2-11', condo: 'No' },
+    { pin: '14-20-123-456-0000', address: '3508 N Sacramento Ave', cls: '3-18', condo: 'No' },
+    { pin: '14-20-123-457-0000', address: '3508 N Sacramento Ave Unit 2', cls: '3-18', condo: 'No' },
+    { pin: '14-20-123-458-0000', address: '3508 N Sacramento Ave Unit 3', cls: '2-11', condo: 'No' },
   ],
 }
 
@@ -123,10 +123,11 @@ function FakeToggles({ value }: { value: string }) {
 
 function PinTable() {
   return (
-    <Table size="small" sx={{ minWidth: 280 }}>
+    <Table size="small" sx={{ minWidth: 420 }}>
       <TableHead>
         <TableRow>
           <TableCell>PIN</TableCell>
+          <TableCell>Address</TableCell>
           <TableCell>Class</TableCell>
           <TableCell>Condo signal</TableCell>
         </TableRow>
@@ -135,6 +136,7 @@ function PinTable() {
         {FAKE.pins.map((row) => (
           <TableRow key={row.pin}>
             <TableCell>{row.pin}</TableCell>
+            <TableCell>{row.address}</TableCell>
             <TableCell>{row.cls}</TableCell>
             <TableCell>{row.condo}</TableCell>
           </TableRow>

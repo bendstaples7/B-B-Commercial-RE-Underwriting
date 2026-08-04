@@ -5,6 +5,7 @@ import {
   formatMoneyValue,
   formatUnitsDetailsCell,
   resolveLastSaleCell,
+  resolveNoSaleCopy,
   PropertyOverviewQuickStats,
 } from './PropertyOverviewQuickStats'
 import type { CommandCenterPayload } from '@/types'
@@ -32,8 +33,8 @@ describe('PropertyOverviewQuickStats formatters', () => {
   it('formats money and last sale with date + amount', () => {
     expect(formatMoneyValue(520000)).toBe('$520,000')
     expect(formatMoneyValue(null)).toBeNull()
-    expect(formatLastSaleCell(310000, '1993-04-15')).toBe('04/15/1993\n$310,000')
-    expect(formatLastSaleCell(310000, '1/3/1989')).toBe('1/3/1989\n$310,000')
+    expect(formatLastSaleCell(310000, '1993-04-15')).toBe('04/15/1993 · $310,000')
+    expect(formatLastSaleCell(310000, '1/3/1989')).toBe('1/3/1989 · $310,000')
     expect(formatLastSaleCell(null, '1/3/1989')).toBe('1/3/1989')
     expect(formatLastSaleCell(null, null)).toBeNull()
   })
@@ -47,7 +48,7 @@ describe('PropertyOverviewQuickStats formatters', () => {
           sale_history: [{ sale_date: '2008-10-07', sale_price: 425000 }],
         }),
       ),
-    ).toBe('10/07/2008\n$425,000')
+    ).toBe('10/07/2008 · $425,000')
   })
 
   it('formats units · type', () => {
@@ -55,6 +56,36 @@ describe('PropertyOverviewQuickStats formatters', () => {
     expect(formatUnitsDetailsCell(1, null)).toBe('1 Unit')
     expect(formatUnitsDetailsCell(null, 'duplex')).toBe('Duplex')
     expect(formatUnitsDetailsCell(null, null)).toBeNull()
+  })
+
+  it('surfaces explicit no-sale copy when Assessor ran but found nothing (lead 10970 class)', () => {
+    const payload = basePayload({
+      most_recent_sale_display: null,
+      most_recent_sale: null,
+      most_recent_sale_price: null,
+      sale_date_meta: {
+        last_updated_at: null,
+        last_checked_at: '2026-07-30T21:24:42.709208',
+        source: 'Cook County records',
+        status: 'no_sale',
+      },
+    })
+    expect(resolveLastSaleCell(payload)).toBeNull()
+    expect(resolveNoSaleCopy(payload)).toBe('No sale found as of Jul 2026')
+  })
+
+  it('does not show no-sale copy once a sale is actually resolved', () => {
+    const payload = basePayload({
+      most_recent_sale_display: '1993-04-01',
+      most_recent_sale_price: 310000,
+      sale_date_meta: {
+        last_updated_at: null,
+        last_checked_at: '2026-07-30T21:24:42.709208',
+        source: 'Cook County records',
+        status: 'success',
+      },
+    })
+    expect(resolveNoSaleCopy(payload)).toBeNull()
   })
 })
 
@@ -88,6 +119,23 @@ describe('PropertyOverviewQuickStats', () => {
     expect(screen.getByTestId('quick-stat-units-details')).toHaveTextContent(/3 Units/)
   })
 
+  it('shows "No sale found" copy instead of a bare em-dash when Assessor ran empty', () => {
+    render(
+      <PropertyOverviewQuickStats
+        commandCenterData={basePayload({
+          county_assessor_pin: '13262150360000',
+          sale_date_meta: {
+            last_updated_at: null,
+            last_checked_at: '2026-07-30T21:24:42.709208',
+            source: 'Cook County records',
+            status: 'no_sale',
+          },
+        })}
+      />,
+    )
+    expect(screen.getByTestId('quick-stat-last-sale')).toHaveTextContent('No sale found as of Jul 2026')
+  })
+
   it('does not embed Condo check in the KPI grid (lives in HeaderCondoCheckPanel)', () => {
     render(
       <PropertyOverviewQuickStats
@@ -102,5 +150,14 @@ describe('PropertyOverviewQuickStats', () => {
     )
     expect(screen.queryByTestId('quick-stat-condo-check')).not.toBeInTheDocument()
     expect(screen.getByTestId('quick-stat-est-value')).toBeInTheDocument()
+  })
+
+  it('shows Category as 4th KPI cell (user 12B)', () => {
+    render(
+      <PropertyOverviewQuickStats
+        commandCenterData={basePayload({ lead_category: 'residential' })}
+      />,
+    )
+    expect(screen.getByTestId('quick-stat-category')).toHaveTextContent('Residential')
   })
 })
