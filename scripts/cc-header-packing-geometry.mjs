@@ -161,6 +161,7 @@ async function collectMetrics(page) {
       back: rectOf('[data-testid="back-button"], [aria-label="Go back"], [aria-label="Back"]'),
       address: rectOf('[data-testid="property-overview-address"]'),
       est: rectOf('[data-testid="quick-stat-est-value"]'),
+      lastSale: rectOf('[data-testid="quick-stat-last-sale"]'),
       stats: rectOf('[data-testid="property-overview-quick-stats"]'),
       condo: rectOf('[data-testid="header-condo-check"]'),
       score: rectOf('[data-testid="header-lead-score"]'),
@@ -184,6 +185,13 @@ async function collectMetrics(page) {
       driverCount: driverChips.length,
       driverReport,
       condoVerdict,
+      kpiBand: document
+        .querySelector('[data-testid="property-overview-quick-stats"]')
+        ?.getAttribute('data-cc-kpi-band'),
+      trailMode: trail?.getAttribute('data-cc-trail-mode'),
+      fixture: document
+        .querySelector('[data-testid="property-overview-header"]')
+        ?.getAttribute('data-cc-fixture'),
     }
   })
 }
@@ -416,6 +424,103 @@ async function assertViewport(page, viewport) {
   }
 }
 
+const SYMMETRY_MAX_PX = 32
+
+async function assertResidentialViewport(page, viewport) {
+  const metrics = await collectMetrics(page)
+  mkdirSync(ARTIFACT_DIR, { recursive: true })
+  const shotPath = resolve(ARTIFACT_DIR, `cc-header-packing-residential-${viewport.width}.png`)
+  await page.getByTestId('property-overview-header').screenshot({ path: shotPath })
+
+  const { back, address, est, stats, score, header } = metrics
+  if (!back || !address || !est || !stats || !score) {
+    fail(viewport, 'Residential: missing landmark boxes', metrics)
+  }
+  if (metrics.condo) {
+    fail(viewport, 'Residential fixture must not show condo panel')
+  }
+  if (metrics.fixture !== 'residential') {
+    fail(viewport, `Expected residential fixture (got ${metrics.fixture ?? 'missing'})`, metrics)
+  }
+  if (metrics.kpiBand !== 'centered-residential') {
+    fail(viewport, `Expected data-cc-kpi-band=centered-residential (got ${metrics.kpiBand})`)
+  }
+  if (metrics.trailMode !== 'grow-score') {
+    fail(viewport, `Expected trail grow-score (got ${metrics.trailMode})`)
+  }
+  // Match main: score uses clamp(10rem, 13vw, 260px) grow — not content-hug.
+  const SCORE_MIN_PX = 160
+  if (score.width < SCORE_MIN_PX) {
+    fail(viewport, `Residential score too narrow vs main clamp: ${score.width.toFixed(1)}px < ${SCORE_MIN_PX}`)
+  }
+
+  // Optical center of KPI grid ≈ midpoint of address.right and score.left
+  const spanMid = (address.right + score.left) / 2
+  const kpiMid = (stats.left + stats.right) / 2
+  // Prefer est+lastSale block midpoint when available (hug-width grid inside band)
+  const gridLeft = est.left
+  const gridRight = metrics.lastSale ? metrics.lastSale.right : est.right
+  const gridMid = (gridLeft + gridRight) / 2
+  const skew = Math.abs(gridMid - spanMid)
+  if (skew > SYMMETRY_MAX_PX) {
+    fail(
+      viewport,
+      `Residential KPI not centered: |gridMid-spanMid|=${skew.toFixed(1)}px > ${SYMMETRY_MAX_PX}`,
+      { spanMid, gridMid, kpiMid, addressRight: address.right, scoreLeft: score.left },
+    )
+  }
+
+  // Forbid left-parked KPIs: left gap much smaller than right gap while slack exists
+  const leftGap = Math.max(0, est.left - address.right)
+  const rightGap = Math.max(0, score.left - (metrics.lastSale?.right ?? stats.right))
+  const slack = leftGap + rightGap
+  if (slack > 80 && leftGap < 16 && rightGap > leftGap * 3) {
+    fail(viewport, `Left-parked KPIs: leftGap=${leftGap.toFixed(1)} rightGap=${rightGap.toFixed(1)}`)
+  }
+
+  // alignItems:center → tops differ when score is taller than the 2×2; compare midlines.
+  const statsMidY = (stats.top + stats.bottom) / 2
+  const scoreMidY = (score.top + score.bottom) / 2
+  if (Math.abs(statsMidY - scoreMidY) > ROW_TOP_EPS) {
+    fail(viewport, 'Residential: KPIs and score not vertically centered on one row', {
+      statsTop: stats.top,
+      scoreTop: score.top,
+      statsMidY,
+      scoreMidY,
+      addressTop: address.top,
+    })
+  }
+  // Address may be taller (status chip); require vertical overlap with KPI band.
+  if (address.bottom < stats.top + OVERLAP_EPS || address.top > stats.bottom - OVERLAP_EPS) {
+    fail(viewport, 'Residential: address and KPI band must share the header row')
+  }
+
+  if (header && score) {
+    const afterScore = header.right - score.right
+    // Paper padding (~12–16); trail grows with score clamp like main.
+    const FLUSH_MAX_PX = 40
+    if (afterScore > FLUSH_MAX_PX) {
+      fail(viewport, `Residential score not flush right: ${afterScore.toFixed(1)}px`)
+    }
+  }
+
+  if (!/Gresham/i.test(metrics.addressLineText || '')) {
+    fail(viewport, 'Residential address missing Gresham', metrics.addressLineText)
+  }
+
+  assertScreenshot(viewport, shotPath, 'residential header')
+
+  return {
+    ok: true,
+    fixture: metrics.fixture,
+    viewport,
+    symmetrySkewPx: Number(skew.toFixed(2)),
+    leftGapPx: Number(leftGap.toFixed(2)),
+    rightGapPx: Number(rightGap.toFixed(2)),
+    screenshotPath: shotPath,
+  }
+}
+
 async function main() {
   let chromium
   try {
@@ -428,6 +533,7 @@ async function main() {
   const { server, harnessUrl } = await startViteHarness()
   const browser = await chromium.launch({ headless: true })
   const results = []
+  const residentialResults = []
   try {
     for (const viewport of VIEWPORTS) {
       const page = await browser.newPage({ viewport })
@@ -448,6 +554,23 @@ async function main() {
       await page.close()
     }
 
+    for (const viewport of VIEWPORTS) {
+      const page = await browser.newPage({ viewport })
+      const pageErrors = []
+      page.on('pageerror', (e) => pageErrors.push(String(e)))
+      const residentialUrl = new URL(harnessUrl)
+      residentialUrl.searchParams.set('fixture', 'residential')
+      await page.goto(residentialUrl.href, { waitUntil: 'networkidle', timeout: 120000 })
+      await page.getByTestId('property-overview-header').waitFor({ state: 'visible', timeout: 60000 })
+      if (pageErrors.length) {
+        console.error(`[${viewport.width}] Residential harness page errors:`, pageErrors)
+        process.exit(1)
+      }
+      const resResult = await assertResidentialViewport(page, viewport)
+      residentialResults.push(resResult)
+      await page.close()
+    }
+
     console.log(
       JSON.stringify(
         {
@@ -455,6 +578,7 @@ async function main() {
           mode: 'real-react-mui-multi-width',
           visible: true,
           viewports: results,
+          residentialViewports: residentialResults,
         },
         null,
         2,

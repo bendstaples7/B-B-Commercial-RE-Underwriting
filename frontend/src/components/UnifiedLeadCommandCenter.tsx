@@ -83,7 +83,7 @@ import {
 } from '@/components/lead-detail/commandCenterChrome'
 import { KeyContactCard } from '@/components/lead-detail/KeyContactCard'
 import { PropertyKpiCard } from '@/components/lead-detail/PropertyKpiCard'
-import { PropertyOverviewQuickStats } from '@/components/lead-detail/PropertyOverviewQuickStats'
+import { PropertyOverviewQuickStats, shouldShowCondoCheckCell } from '@/components/lead-detail/PropertyOverviewQuickStats'
 import { HeaderCondoCheckPanel } from '@/components/lead-detail/HeaderCondoCheckPanel'
 import { HeaderLeadScorePanel, type ScoreFlash } from '@/components/lead-detail/HeaderLeadScorePanel'
 import { DeepDiveDetailsCard } from '@/components/lead-detail/DeepDiveDetailsCard'
@@ -205,6 +205,8 @@ function PropertyOverviewHeader({
 
   const displayScore = scoreRecord?.total_score ?? commandCenterData.lead_score
   const scoreTier = scoreRecord?.score_tier ?? scoreToTier(displayScore)
+  const showCondoCheck = shouldShowCondoCheckCell(commandCenterData)
+  const centerKpis = !showCondoCheck
 
   const handleBack = () => {
     if (fromQueue) {
@@ -416,10 +418,17 @@ function PropertyOverviewHeader({
             </Box>
           </Box>
 
-          <PropertyOverviewQuickStats commandCenterData={commandCenterData} />
+          <PropertyOverviewQuickStats
+            commandCenterData={commandCenterData}
+            centerInGap={centerKpis}
+          />
           </Box>
 
-          <Box sx={ccHeaderTrailingPanelsSx} data-testid="cc-header-trailing-panels">
+          <Box
+            sx={ccHeaderTrailingPanelsSx}
+            data-testid="cc-header-trailing-panels"
+            data-cc-trail-mode={centerKpis ? 'grow-score' : 'grow-with-condo'}
+          >
             <HeaderCondoCheckPanel
               commandCenterData={commandCenterData}
               onOpenBuildingOwnership={() => {

@@ -7,6 +7,7 @@ import { Box, Tooltip, Typography } from '@mui/material'
 import type { CommandCenterPayload, CondoRiskStatus } from '@/types'
 import {
   ccHeaderQuickStatsSx,
+  ccHeaderQuickStatsCenteredSx,
   ccKpiLabelSx,
   ccKpiValueSx,
 } from '@/components/lead-detail/commandCenterChrome'
@@ -78,10 +79,10 @@ export function resolveLastSaleCell(commandCenterData: CommandCenterPayload): st
 }
 
 /**
- * Explicit copy for the "Assessor ran, no sale on file" case — never a bare
- * em-dash. See `backend/app/services/plugins/cook_county_assessor.py` for
- * why no additional open PIN-keyed source fills this gap (Recorder of Deeds
- * has no public API; MyDec only covers 2013+).
+ * Explicit copy for the "Assessor ladder ran, no sale on file" case — never a
+ * bare em-dash. See `docs/cook-county-sale-history-sources.md` and
+ * `backend/app/services/helpers/cook_county_sale_date_resolver.py` (primary
+ * Assessor → related PIN → MyDec). Do not scrape Redfin for this gap.
  */
 export function resolveNoSaleCopy(
   commandCenterData: CommandCenterPayload,
@@ -198,10 +199,13 @@ export function resolveCondoCheckLines(
 
 export interface PropertyOverviewQuickStatsProps {
   commandCenterData: CommandCenterPayload
+  /** Residential (no condo): center the 2×2 in the address↔score gap. */
+  centerInGap?: boolean
 }
 
 export function PropertyOverviewQuickStats({
   commandCenterData,
+  centerInGap = false,
 }: PropertyOverviewQuickStatsProps) {
   const estValue = formatMoneyValue(commandCenterData.assessed_value ?? null)
   const lastSale = resolveLastSaleCell(commandCenterData)
@@ -250,7 +254,8 @@ export function PropertyOverviewQuickStats({
   return (
     <Box
       data-testid="property-overview-quick-stats"
-      sx={ccHeaderQuickStatsSx}
+      data-cc-kpi-band={centerInGap ? 'centered-residential' : 'tight-with-condo'}
+      sx={centerInGap ? ccHeaderQuickStatsCenteredSx : ccHeaderQuickStatsSx}
     >
       {cells.map((cell) => {
         const body = (

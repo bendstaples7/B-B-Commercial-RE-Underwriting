@@ -67,8 +67,13 @@ describe('header packing contracts (structure + forbid)', () => {
 
     expect(ulcc).toContain('ccHeaderPrimaryClusterSx')
     expect(ulcc).toContain('ccHeaderTrailingPanelsSx')
+    expect(ulcc).not.toContain('ccHeaderTrailingPanelsHugSx')
     expect(ulcc).toContain('ccHeaderPaperSx')
     expect(ulcc).toContain('PropertyOverviewQuickStats')
+    expect(ulcc).toContain('centerInGap')
+    expect(ulcc).toContain('shouldShowCondoCheckCell')
+    expect(chrome).toContain('ccHeaderQuickStatsCenteredSx')
+    expect(chrome).not.toContain('ccHeaderTrailingPanelsHugSx')
     expect(ulcc).not.toMatch(/maxWidth:\s*\{\s*[^}]*md:\s*['"]42%['"]/)
     expect(lookbook).not.toMatch(/maxWidth:\s*['"]42%['"]/)
     expect(chrome).not.toMatch(/maxWidth:\s*\{\s*[^}]*md:\s*['"]42%['"]/)
@@ -91,6 +96,21 @@ describe('header packing contracts (structure + forbid)', () => {
 
   it('keeps 2-col quick-stats grid (user 1B)', () => {
     expect(JSON.stringify(ccHeaderQuickStatsSx)).toMatch(/repeat\(2/)
+  })
+
+  it('left-aligns KPI columns with a wider inter-column gap', () => {
+    const stats = JSON.stringify(ccHeaderQuickStatsSx)
+    const centered = readSrc('src/components/lead-detail/commandCenterChrome.ts')
+    expect(stats).toMatch(/justifyItems['"]?\s*:\s*['"]start['"]/)
+    expect(stats).toMatch(/textAlign['"]?\s*:\s*['"]left['"]/)
+    expect(stats).toMatch(/"columnGap":\{"xs":2,"md":2\.5\}/)
+    // Residential centering must not re-center items inside columns.
+    expect(centered).toMatch(
+      /ccHeaderQuickStatsCenteredSx[\s\S]{0,200}justifyItems:\s*['"]start['"]/,
+    )
+    expect(centered).not.toMatch(
+      /ccHeaderQuickStatsCenteredSx[\s\S]{0,200}justifyItems:\s*['"]center['"]/,
+    )
   })
 
   it('forbids nowrap on Units/details (spill into Category)', () => {

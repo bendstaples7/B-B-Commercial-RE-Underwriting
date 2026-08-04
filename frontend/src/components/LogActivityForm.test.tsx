@@ -249,24 +249,23 @@ describe('LogActivityForm — mode="note"', () => {
     expect(mockLogNote).not.toHaveBeenCalled()
   })
 
-  it('does not show the next-step cadence section when there are no open tasks', () => {
+  it('always shows the next-step section; follow-up defaults off when no completable task', () => {
     render(<LogActivityForm mode="note" leadId={1} openTasks={[]} onSaved={vi.fn()} />)
 
-    expect(screen.queryByTestId('activity-next-step-actions')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('create-follow-up-checkbox')).not.toBeInTheDocument()
+    expect(screen.getByTestId('activity-next-step-actions')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /Create a follow-up task/i })).not.toBeChecked()
+    expect(screen.queryByRole('checkbox', { name: /Complete task:/i })).not.toBeInTheDocument()
   })
 
-  it('shows the next-step cadence section when open tasks are present', async () => {
+  it('shows complete-task + follow-up defaults on for open tasks and sends both in the payload', async () => {
     mockLogNote.mockResolvedValue(makeTimelineEntry({ event_type: 'note_added', summary: 'Note' }))
     render(<LogActivityForm mode="note" leadId={1} openTasks={[makeOpenTask()]} onSaved={vi.fn()} />)
 
     expect(screen.getByTestId('activity-next-step-actions')).toBeInTheDocument()
-    // Call-specific complete-task checkbox must not leak into note mode.
-    expect(screen.queryByTestId('complete-call-task-checkbox')).not.toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /Complete task:/i })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /Create a follow-up task/i })).toBeChecked()
 
     await user.type(screen.getByTestId('note-body-input'), 'Owner called back')
-    await user.click(screen.getByTestId('create-follow-up-checkbox'))
-    await user.click(screen.getByTestId('follow-up-3d'))
     await user.click(screen.getByTestId('note-save-btn'))
 
     await waitFor(() => {
@@ -274,6 +273,7 @@ describe('LogActivityForm — mode="note"', () => {
         1,
         expect.objectContaining({
           body: 'Owner called back',
+          complete_task_id: 7,
           follow_up: expect.objectContaining({ title: 'Follow up call' }),
         }),
       )
@@ -372,6 +372,7 @@ describe('LogActivityForm — mode="email"', () => {
           sent_from_email: 'agent@bbrealestate.com',
         }),
       }),
+      undefined,
     )
   })
 
@@ -383,10 +384,68 @@ describe('LogActivityForm — mode="email"', () => {
     expect(mockLogNote).not.toHaveBeenCalled()
   })
 
-  it('shows the next-step cadence section when open tasks are present', () => {
+  it('shows complete-task + follow-up defaults on for open tasks (parity with call/note)', () => {
     render(<LogActivityForm mode="email" leadId={1} openTasks={[makeOpenTask()]} onSaved={vi.fn()} />)
 
     expect(screen.getByTestId('activity-next-step-actions')).toBeInTheDocument()
-    expect(screen.getByTestId('create-follow-up-checkbox')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /Complete task:/i })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /Create a follow-up task/i })).toBeChecked()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Cross-mode next-step parity (Detect)
+// ---------------------------------------------------------------------------
+
+describe('LogActivityForm — cross-mode next-step parity', () => {
+  it.each(['call', 'note', 'email'] as const)(
+    'mode=%s shows complete + follow-up checked for the same open task fixture',
+    (mode) => {
+      render(
+        <LogActivityForm mode={mode} leadId={1} openTasks={[makeOpenTask()]} onSaved={vi.fn()} />,
+      )
+      expect(screen.getByTestId('activity-next-step-actions')).toBeInTheDocument()
+      expect(screen.getByRole('checkbox', { name: /Complete task:/i })).toBeChecked()
+      expect(screen.getByRole('checkbox', { name: /Create a follow-up task/i })).toBeChecked()
+    },
+  )
+
+  it.each(['note', 'email'] as const)(
+    'mode=%s does not offer complete for skip_trace_owner',
+    (mode) => {
+      render(
+        <LogActivityForm
+          mode={mode}
+          leadId={1}
+          openTasks={[
+            makeOpenTask({
+              id: 9,
+              title: 'Skip trace owner',
+              task_type: 'skip_trace_owner',
+            }),
+          ]}
+          onSaved={vi.fn()}
+        />,
+      )
+      expect(screen.queryByRole('checkbox', { name: /Complete task:/i })).not.toBeInTheDocument()
+    },
+  )
+
+  it('note mode does not offer complete for add_to_mail_batch', () => {
+    render(
+      <LogActivityForm
+        mode="note"
+        leadId={1}
+        openTasks={[
+          makeOpenTask({
+            id: 8,
+            title: 'Add to mail batch',
+            task_type: 'add_to_mail_batch',
+          }),
+        ]}
+        onSaved={vi.fn()}
+      />,
+    )
+    expect(screen.queryByRole('checkbox', { name: /Complete task:/i })).not.toBeInTheDocument()
   })
 })

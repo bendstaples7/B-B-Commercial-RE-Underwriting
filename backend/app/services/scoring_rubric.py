@@ -287,8 +287,15 @@ def display_most_recent_sale(lead: Lead) -> str | None:
 def humanize_sale_date_source(changed_by: str | None) -> str | None:
     if not changed_by:
         return None
+    from app.services.helpers.cook_county_sale_date_resolver import (
+        PROVENANCE_DISPLAY,
+        provenance_token_from_changed_by,
+    )
+    token = provenance_token_from_changed_by(changed_by)
+    if token and token in PROVENANCE_DISPLAY:
+        return PROVENANCE_DISPLAY[token]
     if changed_by.startswith('enrichment:cook_county_assessor'):
-        return 'Cook County records'
+        return 'Assessor'
     if changed_by.startswith('import_job:'):
         return 'Import'
     if changed_by.startswith('enrichment:'):
@@ -297,6 +304,14 @@ def humanize_sale_date_source(changed_by: str | None) -> str | None:
     if changed_by == 'manual':
         return 'Manual'
     return changed_by
+
+
+def sale_date_provenance_token(changed_by: str | None) -> str | None:
+    """Machine provenance for sale_date_meta.source when known."""
+    from app.services.helpers.cook_county_sale_date_resolver import (
+        provenance_token_from_changed_by,
+    )
+    return provenance_token_from_changed_by(changed_by)
 
 
 _SALE_RETRIEVED_KEYS = frozenset({
@@ -373,7 +388,12 @@ def _pick_sale_probe_enrichment(lead_id: int, source_ids_by_name: dict[str, int]
 
 def resolve_sale_date_meta(lead: Lead) -> dict:
     """Audit + enrichment freshness for sale-date fields shown in Command Center."""
-    null_meta = {'last_updated_at': None, 'last_checked_at': None, 'source': None}
+    null_meta = {
+        'last_updated_at': None,
+        'last_checked_at': None,
+        'source': None,
+        'source_token': None,
+    }
     from flask import has_app_context
 
     if not has_app_context():
@@ -420,6 +440,9 @@ def resolve_sale_date_meta(lead: Lead) -> dict:
     )
 
     last_updated_at = row.changed_at.isoformat() if row and row.changed_at else None
+    # Public `source` stays human-readable (main contract). Machine token is
+    # `source_token` for clients that need assessor | assessor_related_pin | mydec.
+    source_token = sale_date_provenance_token(row.changed_by) if row else None
     source = humanize_sale_date_source(row.changed_by) if row else None
 
     # Sale-date probe: prefer cook_county_assessor. Commercial valuation is
@@ -447,8 +470,19 @@ def resolve_sale_date_meta(lead: Lead) -> dict:
                 enrich, is_assessor=is_assessor,
             )
             enrichment_error = getattr(enrich, 'error_reason', None)
+            retrieved = getattr(enrich, 'retrieved_data', None) or {}
+            if source is None and isinstance(retrieved, dict):
+                from app.services.helpers.cook_county_sale_date_resolver import (
+                    PROVENANCE_DISPLAY,
+                )
+                meta_prov = retrieved.get('sale_date_provenance')
+                if meta_prov in PROVENANCE_DISPLAY:
+                    source = PROVENANCE_DISPLAY[meta_prov]
+                    source_token = meta_prov
             if source is None:
-                source = 'Cook County records'
+                source = 'Assessor' if is_assessor else 'Cook County records'
+                if is_assessor and source_token is None:
+                    source_token = 'assessor'
 
     if last_updated_at is None and last_checked_at is None:
         return null_meta
@@ -457,6 +491,7 @@ def resolve_sale_date_meta(lead: Lead) -> dict:
         'last_updated_at': last_updated_at,
         'last_checked_at': last_checked_at,
         'source': source,
+        'source_token': source_token,
     }
     if enrichment_status is not None:
         meta['status'] = enrichment_status

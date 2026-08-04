@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   findCallCompletableTask,
+  findPrimaryOpenTask,
+  findCompletableTaskForMode,
+  findEmailCompletableTask,
   isCallCompletableTask,
+  isEmailCompletableTask,
   parseHubSpotTaskId,
 } from './callCompletableTask'
 import type { LeadTask } from '@/types'
@@ -36,6 +40,18 @@ describe('isCallCompletableTask', () => {
   it('matches follow-up titles', () => {
     expect(isCallCompletableTask('custom', 'Follow up on 1726 W Roscoe St')).toBe(true)
     expect(isCallCompletableTask('custom', 'Follow-up with owner')).toBe(true)
+  })
+})
+
+describe('isEmailCompletableTask', () => {
+  it('allows mail batch and email outreach', () => {
+    expect(isEmailCompletableTask('add_to_mail_batch', 'Add to mail')).toBe(true)
+    expect(isEmailCompletableTask('custom', 'Email outreach')).toBe(true)
+  })
+
+  it('rejects skip-trace and research', () => {
+    expect(isEmailCompletableTask('skip_trace_owner', 'Skip trace')).toBe(false)
+    expect(isEmailCompletableTask('research_missing_pin', 'Research PIN')).toBe(false)
   })
 })
 
@@ -82,5 +98,40 @@ describe('findCallCompletableTask', () => {
       }),
     ]
     expect(findCallCompletableTask(tasks)?.id).toBe(99)
+  })
+})
+
+describe('findPrimaryOpenTask', () => {
+  it('returns the soonest open task regardless of call-completable matching', () => {
+    const tasks = [
+      makeTask({ id: 1, title: 'Email outreach', task_type: 'custom', due_date: '2026-08-10' }),
+      makeTask({ id: 2, title: 'Research PIN', task_type: 'research_missing_pin', due_date: '2026-08-01' }),
+    ]
+    expect(findPrimaryOpenTask(tasks)?.id).toBe(2)
+  })
+
+  it('returns null when no open tasks', () => {
+    expect(findPrimaryOpenTask([])).toBeNull()
+  })
+})
+
+describe('findCompletableTaskForMode', () => {
+  it('uses call matcher for call and note; email may complete mail outreach', () => {
+    const tasks = [
+      makeTask({ id: 1, title: 'Email outreach', task_type: 'custom' }),
+      makeTask({ id: 2, title: 'Call owner', task_type: 'call_owner_today' }),
+    ]
+    expect(findCompletableTaskForMode('call', tasks)?.id).toBe(2)
+    expect(findCompletableTaskForMode('note', tasks)?.id).toBe(2)
+    expect(findCompletableTaskForMode('email', tasks)?.id).toBe(1)
+  })
+
+  it('never auto-completes skip_trace_owner or mail batch from note', () => {
+    const skip = [makeTask({ id: 1, title: 'Skip trace owner', task_type: 'skip_trace_owner' })]
+    const mail = [makeTask({ id: 2, title: 'Add to mail', task_type: 'add_to_mail_batch' })]
+    expect(findCompletableTaskForMode('note', skip)).toBeNull()
+    expect(findCompletableTaskForMode('note', mail)).toBeNull()
+    expect(findCompletableTaskForMode('email', skip)).toBeNull()
+    expect(findEmailCompletableTask(mail)?.id).toBe(2)
   })
 })

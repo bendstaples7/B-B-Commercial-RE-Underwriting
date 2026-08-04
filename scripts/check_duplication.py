@@ -238,6 +238,65 @@ def check_queue_advance_bleed_regression_test() -> list[str]:
     return errors
 
 
+def check_cook_county_sale_date_resolver_structure() -> list[str]:
+    """Single choke point for Cook sale-date resolve order (systemic-structure)."""
+    errors: list[str] = []
+    resolver = (
+        ROOT / "backend" / "app" / "services" / "helpers"
+        / "cook_county_sale_date_resolver.py"
+    )
+    plugin = (
+        ROOT / "backend" / "app" / "services" / "plugins"
+        / "cook_county_assessor.py"
+    )
+    if not resolver.exists():
+        errors.append(
+            "Missing cook_county_sale_date_resolver.py "
+            "(Assessor primary → related PIN → MyDec must share one writer)"
+        )
+        return errors
+    text = resolver.read_text(encoding="utf-8")
+    for needle in (
+        "def resolve_cook_county_sale_date",
+        "PROVENANCE_ASSESSOR",
+        "PROVENANCE_RELATED",
+        "PROVENANCE_MYDEC",
+        "assessor_related_pin",
+    ):
+        if needle not in text:
+            errors.append(
+                f"cook_county_sale_date_resolver.py must define/contain {needle!r}"
+            )
+    if not plugin.exists():
+        errors.append("cook_county_assessor.py missing")
+        return errors
+    plugin_text = plugin.read_text(encoding="utf-8")
+    if "resolve_cook_county_sale_date" not in plugin_text:
+        errors.append(
+            "CookCountyAssessorPlugin must call resolve_cook_county_sale_date "
+            "(do not invent a parallel sale ladder)"
+        )
+    if "lookup_for_lead" not in plugin_text:
+        errors.append(
+            "CookCountyAssessorPlugin must expose lookup_for_lead for the sale ladder"
+        )
+    # Forbid parallel MyDec/sale writers that bypass the resolver for Cook.
+    services = ROOT / "backend" / "app" / "services"
+    for path in sorted(services.rglob("*.py")):
+        rel = path.relative_to(ROOT).as_posix()
+        if rel.endswith("cook_county_sale_date_resolver.py"):
+            continue
+        if rel.endswith("illinois_mydec.py"):
+            continue
+        body = path.read_text(encoding="utf-8")
+        if "it54-y4c6" in body and "cook_county" in rel:
+            if "resolve_cook_county_sale_date" not in body and "illinois_mydec" not in body:
+                errors.append(
+                    f"{rel} references MyDec dataset but bypasses shared helpers"
+                )
+    return errors
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check for structural duplication")
     parser.add_argument("--base", default="origin/main", help="Unused; reserved for diff checks")
@@ -252,6 +311,7 @@ def main() -> None:
     errors.extend(check_dead_api_exports())
     errors.extend(check_lead_command_center_remount_key())
     errors.extend(check_queue_advance_bleed_regression_test())
+    errors.extend(check_cook_county_sale_date_resolver_structure())
 
     if errors:
         _fail(errors)
