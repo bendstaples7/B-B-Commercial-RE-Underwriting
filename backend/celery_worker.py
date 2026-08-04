@@ -611,7 +611,7 @@ def entity_resolution_resolve_lead_task(lead_id: int, actor: str = "entity_resol
 
 
 @celery.task(name='building_ownership.analyze_lead')
-def building_ownership_analyze_lead_task(lead_id: int) -> dict:
+def building_ownership_analyze_lead_task(lead_id: int, force: bool = False) -> dict:
     """Run building ownership / condo classification for one commercial lead."""
     import logging
     _logger = logging.getLogger('celery.building_ownership.analyze_lead')
@@ -621,7 +621,7 @@ def building_ownership_analyze_lead_task(lead_id: int) -> dict:
         app = create_app()
         with app.app_context():
             from app.services.building_ownership_service import BuildingOwnershipService
-            return BuildingOwnershipService().analyze_lead(lead_id)
+            return BuildingOwnershipService().analyze_lead(lead_id, force=force)
     except Exception as exc:
         _logger.error("building_ownership.analyze_lead failed for lead %s: %s", lead_id, exc)
         raise

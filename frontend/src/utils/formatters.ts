@@ -43,6 +43,15 @@ export function formatPropertyTypeLabel(raw: string | null | undefined): string 
     .join(' ')
 }
 
+/** Residential / Commercial (and other lead_category values) for header KPI. */
+export function formatLeadCategoryLabel(raw: string | null | undefined): string {
+  if (!raw) return ''
+  const key = raw.trim().toLowerCase()
+  if (key === 'residential') return 'Residential'
+  if (key === 'commercial') return 'Commercial'
+  return formatPropertyTypeLabel(raw)
+}
+
 export function outreachStatusLabel(status: string): string {
   return humanize(status)
 }
@@ -85,4 +94,16 @@ export function formatMoneyValue(value: number | string | null | undefined): str
   const n = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(n)) return null
   return `$${Math.round(n).toLocaleString()}`
+}
+
+/** Assessor PIN row street (+ unit/apt when present) — condo/ownership PIN tables. */
+export function formatAssessorPinAddress(row: {
+  property_street?: string | null
+  unit?: string | null
+  apt?: string | null
+} | null | undefined): string {
+  const street = row?.property_street?.trim()
+  if (!street) return '—'
+  const unit = (row?.unit || row?.apt)?.toString().trim()
+  return unit ? `${street}, ${unit}` : street
 }

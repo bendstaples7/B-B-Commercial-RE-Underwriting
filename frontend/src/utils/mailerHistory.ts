@@ -6,7 +6,7 @@
  * raw `mailer_history` only.
  */
 
-export type MailerHistorySource = 'olc' | 'imported'
+export type MailerHistorySource = 'olc' | 'imported' | 'timeline'
 
 export interface MailerHistoryRow {
   id: string
@@ -24,6 +24,7 @@ export interface MailerHistoryRow {
 export interface MailerHistorySummary {
   count: number
   last_sent_at: string | null
+  healed_count?: number
   rows: MailerHistoryRow[]
 }
 
@@ -69,8 +70,13 @@ function normalizeOne(entry: unknown, idx: number): MailerHistoryRow | null {
     if (!label && obj.campaign_id != null) label = `Campaign ${obj.campaign_id}`
     if (!label && obj.address_feedback) label = `Address feedback: ${obj.address_feedback}`
     if (!label) label = 'Mailer'
+    const rawSource = obj.source
     const source: MailerHistorySource =
-      obj.campaign_id != null || obj.olc_order_id ? 'olc' : 'imported'
+      rawSource === 'timeline' || rawSource === 'olc' || rawSource === 'imported'
+        ? rawSource
+        : obj.campaign_id != null || obj.olc_order_id
+          ? 'olc'
+          : 'imported'
     return {
       id: `mail-${idx}`,
       sent_at: obj.sent_at != null ? String(obj.sent_at) : null,

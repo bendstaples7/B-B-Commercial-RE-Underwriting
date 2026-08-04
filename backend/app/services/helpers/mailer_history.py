@@ -125,9 +125,8 @@ def _normalize_one(entry: Any, idx: int) -> dict[str, Any] | None:
     }
 
 
-def mailer_history_summary(raw: Any) -> dict[str, Any]:
-    """Count + last sent_at for summary chips (date-aware ordering)."""
-    rows = normalize_mailer_history(raw)
+def _last_sent_from_rows(rows: list[dict[str, Any]]) -> Any:
+    """Date-aware last-sent lookup shared by summary + consolidate."""
     last_sent = None
     last_dt: datetime | None = None
     for row in rows:
@@ -141,8 +140,150 @@ def mailer_history_summary(raw: Any) -> dict[str, Any]:
                 last_sent = sent
         elif last_sent is None:
             last_sent = str(sent)
+    return last_sent
+
+
+def mailer_history_summary(raw: Any) -> dict[str, Any]:
+    """Count + last sent_at for summary chips (date-aware ordering)."""
+    rows = normalize_mailer_history(raw)
     return {
         'count': len(rows),
-        'last_sent_at': last_sent,
+        'last_sent_at': _last_sent_from_rows(rows),
         'rows': rows,
+    }
+
+
+def _dedupe_key(row: dict[str, Any]) -> tuple:
+    """Identity for a mail-history row: (campaign_id, olc_order_id) when
+    either is present, else a best-effort (sent_at, label) fallback for
+    legacy free-text rows that never carried OLC ids.
+    """
+    campaign_id = row.get('campaign_id')
+    olc_order_id = row.get('olc_order_id')
+    if campaign_id is not None or olc_order_id is not None:
+        return ('olc', campaign_id, olc_order_id)
+    return ('text', row.get('sent_at'), row.get('label'))
+
+
+def _timeline_mail_sent_rows(lead: Any) -> list[dict[str, Any]]:
+    """Normalize ``mail_sent`` LeadTimelineEntry rows into the mail-history shape."""
+    lead_id = getattr(lead, 'id', None)
+    if not lead_id:
+        return []
+    from app.models.lead_timeline_entry import LeadTimelineEntry
+
+    entries = (
+        LeadTimelineEntry.query.filter(
+            LeadTimelineEntry.lead_id == lead_id,
+            LeadTimelineEntry.event_type == 'mail_sent',
+            LeadTimelineEntry.is_deleted.is_(False),
+        )
+        .order_by(LeadTimelineEntry.occurred_at.asc())
+        .all()
+    )
+    rows: list[dict[str, Any]] = []
+    for entry in entries:
+        metadata = entry.event_metadata if isinstance(entry.event_metadata, dict) else {}
+        campaign_id = metadata.get('campaign_id')
+        olc_order_id = metadata.get('olc_order_id')
+        template_name = metadata.get('template_name')
+        creative = metadata.get('creative')
+        label_parts = [p for p in (template_name, creative) if p]
+        label = ', '.join(str(p) for p in label_parts) if label_parts else None
+        if not label and olc_order_id:
+            label = f'OLC order {olc_order_id}'
+        if not label and campaign_id is not None:
+            label = f'Campaign {campaign_id}'
+        if not label:
+            label = entry.summary or 'Mailer sent'
+        rows.append({
+            'id': f'timeline-{entry.id}',
+            'sent_at': entry.occurred_at.isoformat() if entry.occurred_at else None,
+            'label': label,
+            'creative': creative,
+            'template_name': template_name,
+            'campaign_id': campaign_id,
+            'olc_order_id': olc_order_id,
+            'address_feedback': metadata.get('address_feedback'),
+            'cancelled': bool(metadata.get('cancelled')),
+            'source': 'timeline',
+        })
+    return rows
+
+
+def _heal_mailer_history_gaps(lead: Any, healed_entries: list[dict[str, Any]]) -> None:
+    """Append OLC dicts missing from ``lead.mailer_history`` and flag_modified.
+
+    Mirrors the canonical JSONB-append pattern used by mail_campaign_service
+    (``_stamp_address_feedback`` / ``_stamp_silent_omit``): read the current
+    list, append plain dicts, reassign, then ``flag_modified``.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    raw = getattr(lead, 'mailer_history', None)
+    if isinstance(raw, list):
+        history = list(raw)
+    elif raw:
+        history = [raw]
+    else:
+        history = []
+    for entry in healed_entries:
+        history.append({
+            k: v for k, v in entry.items()
+            if v is not None
+        })
+    lead.mailer_history = history
+    flag_modified(lead, 'mailer_history')
+
+
+def consolidate_mailer_history(lead: Any, *, heal: bool = True) -> dict[str, Any]:
+    """Union ``lead.mailer_history`` JSONB with ``mail_sent`` timeline rows.
+
+    The OLC submit pipeline occasionally drops a campaign send from the
+    ``mailer_history`` JSONB column (silent omit) while the ``mail_sent``
+    LeadTimelineEntry still recorded it — see the 10305-class bug where a
+    lead's import-string history undercounted mailers actually sent. This
+    unions both sources, dedupes by ``(campaign_id, olc_order_id)`` (falling
+    back to ``(sent_at, label)`` for legacy free-text rows with no OLC id),
+    and — when ``heal`` is True — appends any timeline-only mailer as a plain
+    OLC dict onto ``lead.mailer_history`` so future reads see it directly
+    from the JSONB column without needing this union again.
+
+    There is no separate mail-campaign/lead join table today (a
+    ``MailCampaign`` only stores lead ids in JSON tracking columns), so the
+    two sources unioned here — JSONB history and timeline ``mail_sent``
+    entries — are the complete set of "easily available" sources.
+
+    Returns the same shape as :func:`mailer_history_summary` plus
+    ``healed_count`` (rows newly appended to the JSONB column this call).
+    """
+    jsonb_rows = normalize_mailer_history(getattr(lead, 'mailer_history', None))
+    seen_keys = {_dedupe_key(row) for row in jsonb_rows}
+
+    merged_rows = list(jsonb_rows)
+    healed_entries: list[dict[str, Any]] = []
+    for row in _timeline_mail_sent_rows(lead):
+        key = _dedupe_key(row)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        merged_rows.append(row)
+        healed_entries.append({
+            'sent_at': row.get('sent_at'),
+            'template_name': row.get('template_name'),
+            'creative': row.get('creative'),
+            'campaign_id': row.get('campaign_id'),
+            'olc_order_id': row.get('olc_order_id'),
+            'address_feedback': row.get('address_feedback'),
+            'cancelled': row.get('cancelled') or False,
+        })
+
+    if heal and healed_entries:
+        _heal_mailer_history_gaps(lead, healed_entries)
+
+    return {
+        'count': len(merged_rows),
+        'last_sent_at': _last_sent_from_rows(merged_rows),
+        'rows': merged_rows,
+        'healed_count': len(healed_entries),
     }

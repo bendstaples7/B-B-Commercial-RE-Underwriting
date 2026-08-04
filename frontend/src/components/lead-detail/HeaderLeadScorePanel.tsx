@@ -6,7 +6,6 @@ import {
   Box,
   Chip,
   CircularProgress,
-  Stack,
   Typography,
 } from '@mui/material'
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney'
@@ -99,10 +98,10 @@ function iconForDimension(dimension: string) {
   return <InsightsIcon sx={{ fontSize: 12 }} />
 }
 
-/** Top positive drivers for the compact header chips (max 4). */
+/** Top positive drivers for the compact header chips (max 2 — full labels, no ellipsis). */
 export function resolveTopScoreDrivers(
   score: PropertyScoreRecord | null | undefined,
-  limit = 4,
+  limit = 2,
 ): ScoreSignal[] {
   if (!score) return []
   const fromSignals = (score.top_signals ?? [])
@@ -117,11 +116,24 @@ export function resolveTopScoreDrivers(
     .map(([dimension, points]) => ({ dimension, points }))
 }
 
+export interface ScoreFlash {
+  label: string
+  tone: 'up' | 'down' | 'neutral'
+}
+
+const SCORE_FLASH_TONE_COLORS: Record<ScoreFlash['tone'], { bg: string; fg: string }> = {
+  up: { bg: '#DCFCE7', fg: '#15803D' },
+  down: { bg: '#FEE2E2', fg: '#B91C1C' },
+  neutral: { bg: '#F1F5F9', fg: '#475569' },
+}
+
 export interface HeaderLeadScorePanelProps {
   score: number | null | undefined
   tier: ScoreTier | null | undefined
   scoreRecord?: PropertyScoreRecord | null
   onOpenBreakdown?: () => void
+  /** Brief "+N" / "-N" / "Score unchanged" pill after an activity save. */
+  flash?: ScoreFlash | null
 }
 
 export function HeaderLeadScorePanel({
@@ -129,6 +141,7 @@ export function HeaderLeadScorePanel({
   tier,
   scoreRecord,
   onOpenBreakdown,
+  flash,
 }: HeaderLeadScorePanelProps) {
   const hasScore = score != null && Number.isFinite(Number(score))
   const rounded = hasScore ? Math.round(Number(score)) : null
@@ -172,21 +185,22 @@ export function HeaderLeadScorePanel({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 1.25,
-        flex: { xs: '1 1 100%', md: '1 1 320px' },
-        width: { md: 360 },
-        minWidth: 0,
-        maxWidth: { xs: '100%', md: 400 },
-        flexShrink: 1,
-        ml: { md: 'auto' },
-        py: 0.5,
-        px: 1.25,
+        flex: { xs: '1 1 100%', md: '1 1 clamp(12rem, 16vw, 300px)' },
+        width: { md: 'auto' },
+        minWidth: { xs: 0, md: '12rem' },
+        maxWidth: { xs: '100%', md: 'none' },
+        ml: 0,
+        py: 1,
+        px: 1.75,
         borderRadius: 1,
         border: '1px solid',
         borderColor: 'divider',
         bgcolor: 'background.paper',
-        overflow: 'hidden',
+        overflow: 'visible',
         cursor: clickable ? 'pointer' : 'default',
         textAlign: 'left',
+        contain: 'layout style',
+        isolation: 'isolate',
         '&:hover': clickable
           ? { borderColor: 'text.disabled', bgcolor: 'action.hover' }
           : undefined,
@@ -208,6 +222,31 @@ export function HeaderLeadScorePanel({
           justifyContent: 'center',
         }}
       >
+        {flash && (
+          <Box
+            data-testid="header-lead-score-flash"
+            sx={{
+              position: 'absolute',
+              top: -8,
+              right: -8,
+              zIndex: 2,
+              px: 0.6,
+              py: 0.1,
+              borderRadius: 5,
+              fontSize: '0.62rem',
+              fontWeight: 800,
+              lineHeight: 1.4,
+              whiteSpace: 'nowrap',
+              bgcolor: SCORE_FLASH_TONE_COLORS[flash.tone].bg,
+              color: SCORE_FLASH_TONE_COLORS[flash.tone].fg,
+              border: '1px solid',
+              borderColor: SCORE_FLASH_TONE_COLORS[flash.tone].fg,
+              boxShadow: 1,
+            }}
+          >
+            {flash.label}
+          </Box>
+        )}
         <CircularProgress
           variant="determinate"
           value={100}
@@ -251,14 +290,8 @@ export function HeaderLeadScorePanel({
         </Box>
       </Box>
 
-      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-        <Stack
-          direction="row"
-          justifyContent="space-between"
-          alignItems="baseline"
-          spacing={1}
-          sx={{ minWidth: 0 }}
-        >
+      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 0.45 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0.15, minWidth: 0 }}>
           <Typography
             variant="caption"
             fontWeight={700}
@@ -276,12 +309,12 @@ export function HeaderLeadScorePanel({
             variant="caption"
             color="text.disabled"
             data-testid="header-score-updated"
-            sx={{ fontSize: '0.65rem', lineHeight: 1.2, flexShrink: 0 }}
+            sx={{ fontSize: '0.65rem', lineHeight: 1.2, whiteSpace: 'nowrap' }}
             title={updatedAt ? `Model updated ${updatedAt}` : undefined}
           >
             Updated: {updatedAt ?? '—'}
           </Typography>
-        </Stack>
+        </Box>
 
         {drivers.length === 0 ? (
           <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
@@ -291,9 +324,8 @@ export function HeaderLeadScorePanel({
           <Box
             data-testid="header-score-drivers"
             sx={{
-              display: 'grid',
-              gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
-              gridTemplateRows: 'auto auto',
+              display: 'flex',
+              flexDirection: 'column',
               gap: 0.5,
               width: '100%',
               minWidth: 0,
@@ -310,19 +342,22 @@ export function HeaderLeadScorePanel({
                   icon={iconForDimension(driver.dimension)}
                   label={meta.label}
                   title={meta.label}
+                  data-testid={`header-score-driver-${driver.dimension}`}
                   sx={{
                     width: '100%',
                     maxWidth: '100%',
                     minWidth: 0,
-                    height: 24,
+                    height: 'auto',
+                    minHeight: 24,
                     justifyContent: 'flex-start',
                     borderRadius: 0.75,
                     bgcolor: tone.bg,
                     color: tone.fg,
                     fontWeight: 600,
                     fontSize: '0.65rem',
-                    overflow: 'hidden',
+                    overflow: 'visible',
                     boxSizing: 'border-box',
+                    py: 0.35,
                     '& .MuiChip-icon': {
                       color: tone.fg,
                       ml: 0.35,
@@ -333,10 +368,11 @@ export function HeaderLeadScorePanel({
                       px: 0.5,
                       minWidth: 0,
                       flex: '1 1 auto',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
+                      whiteSpace: 'normal',
+                      overflow: 'visible',
+                      textOverflow: 'clip',
                       display: 'block',
+                      lineHeight: 1.25,
                     },
                   }}
                 />

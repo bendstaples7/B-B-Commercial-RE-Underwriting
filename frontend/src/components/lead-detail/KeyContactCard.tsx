@@ -1,8 +1,7 @@
 import { Box, Link, Paper, Stack, Typography } from '@mui/material'
-import PhoneOutlinedIcon from '@mui/icons-material/PhoneOutlined'
 import EmailOutlinedIcon from '@mui/icons-material/EmailOutlined'
 import LocalPostOfficeOutlinedIcon from '@mui/icons-material/LocalPostOfficeOutlined'
-import type { CommandCenterPayload } from '@/types'
+import type { CommandCenterPayload, LeadPhone } from '@/types'
 import {
   ccCardSx,
   ccMetaSx,
@@ -10,7 +9,9 @@ import {
   ccSectionTitleSx,
 } from '@/components/lead-detail/commandCenterChrome'
 import { PriorOwnerStaleOverlay } from '@/components/lead-detail/PriorOwnerStaleCallout'
-import { formatPhoneNumber, looksLikePhoneNumber, phoneTelHref } from '@/utils/phone'
+import { PhoneRow } from '@/components/PhoneRow'
+import { CopyIconButton } from '@/components/CopyIconButton'
+import { looksLikePhoneNumber } from '@/utils/phone'
 
 export interface KeyContactCardProps {
   name: string | null
@@ -19,7 +20,7 @@ export interface KeyContactCardProps {
 }
 
 export type KeyContactChannel =
-  | { kind: 'phone'; value: string }
+  | { kind: 'phone'; phone: LeadPhone }
   | { kind: 'email'; value: string }
 
 /** Owner mailing only (no property-address fallback) — used for mail / skip-trace confidence. */
@@ -61,17 +62,18 @@ function collectEmailSlotValues(data: CommandCenterPayload): string[] {
   return out
 }
 
-function primaryPhoneValue(data: CommandCenterPayload): string | null {
+/** First usable phone, preferring the full LeadPhone DTO (confidence, notes) over flat slots. */
+function primaryPhone(data: CommandCenterPayload): LeadPhone | null {
   if (data.phones?.length) {
     for (const p of data.phones) {
       const v = p?.value?.trim()
-      if (v && looksLikePhoneNumber(v)) return v
+      if (v && looksLikePhoneNumber(v)) return p
     }
   }
   for (let slot = 1; slot <= 7; slot += 1) {
     const raw = data[`phone_${slot}` as keyof CommandCenterPayload]
     if (typeof raw === 'string' && raw.trim() && looksLikePhoneNumber(raw)) {
-      return raw.trim()
+      return { value: raw.trim() }
     }
   }
   return null
@@ -86,10 +88,10 @@ export function resolveKeyContactChannels(data: CommandCenterPayload): KeyContac
   const channels: KeyContactChannel[] = []
   const seenPhones = new Set<string>()
 
-  const primary = primaryPhoneValue(data)
+  const primary = primaryPhone(data)
   if (primary) {
-    channels.push({ kind: 'phone', value: primary })
-    seenPhones.add(phoneKey(primary))
+    channels.push({ kind: 'phone', phone: primary })
+    seenPhones.add(phoneKey(primary.value))
   }
 
   let foundEmail = false
@@ -98,7 +100,7 @@ export function resolveKeyContactChannels(data: CommandCenterPayload): KeyContac
       const key = phoneKey(value)
       if (!seenPhones.has(key)) {
         seenPhones.add(key)
-        channels.push({ kind: 'phone', value })
+        channels.push({ kind: 'phone', phone: { value } })
       }
       continue
     }
@@ -119,8 +121,12 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
   const channels = resolveKeyContactChannels(commandCenterData)
   const mailing = formatKeyContactMailing(commandCenterData)
   const displayName = name?.trim() || 'No contact on file'
-  const phoneChannels = channels.filter((c) => c.kind === 'phone')
-  const emailChannels = channels.filter((c) => c.kind === 'email')
+  const phoneChannels = channels.filter(
+    (c): c is Extract<KeyContactChannel, { kind: 'phone' }> => c.kind === 'phone',
+  )
+  const emailChannels = channels.filter(
+    (c): c is Extract<KeyContactChannel, { kind: 'email' }> => c.kind === 'email',
+  )
   const contactsUntrusted = Boolean(commandCenterData.contacts_likely_prior_owner)
   const contactBody = (
     <>
@@ -134,29 +140,13 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
           </Typography>
         ) : (
           phoneChannels.map((ch, idx) => (
-            <Box
-              key={`phone-${phoneKey(ch.value)}`}
-              sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}
-            >
-              <PhoneOutlinedIcon sx={{ fontSize: 18, color: 'text.secondary', flexShrink: 0 }} />
-              {contactsUntrusted ? (
-                <Typography
-                  sx={{ ...ccMetaSx, fontSize: '0.9rem' }}
-                  data-testid={idx === 0 ? 'key-contact-phone' : `key-contact-phone-${idx + 1}`}
-                >
-                  {formatPhoneNumber(ch.value)}
-                </Typography>
-              ) : (
-                <Link
-                  href={phoneTelHref(ch.value)}
-                  underline="hover"
-                  sx={{ ...ccMetaSx, color: 'primary.main', fontSize: '0.9rem' }}
-                  data-testid={idx === 0 ? 'key-contact-phone' : `key-contact-phone-${idx + 1}`}
-                >
-                  {formatPhoneNumber(ch.value)}
-                </Link>
-              )}
-            </Box>
+            <PhoneRow
+              key={`phone-${phoneKey(ch.phone.value)}-${idx}`}
+              phone={ch.phone}
+              dense={false}
+              actionable={!contactsUntrusted}
+              valueTestId={idx === 0 ? 'key-contact-phone' : `key-contact-phone-${idx + 1}`}
+            />
           ))
         )}
         {emailChannels.length === 0 ? (
@@ -164,62 +154,79 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
             No email on file
           </Typography>
         ) : (
-          emailChannels.map((ch, idx) => (
-            <Box
-              key={`email-${ch.value.toLowerCase()}`}
-              sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}
-            >
-              <EmailOutlinedIcon sx={{ fontSize: 18, color: 'text.secondary', flexShrink: 0 }} />
-              {contactsUntrusted ? (
-                <Typography
-                  sx={{
-                    ...ccMetaSx,
-                    fontSize: '0.9rem',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  }}
-                  data-testid={idx === 0 ? 'key-contact-email' : `key-contact-email-${idx + 1}`}
-                >
-                  {ch.value}
-                </Typography>
-              ) : (
-                <Link
-                  href={`mailto:${ch.value}`}
-                  underline="hover"
-                  sx={{
-                    ...ccMetaSx,
-                    color: 'primary.main',
-                    fontSize: '0.9rem',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  }}
-                  data-testid={idx === 0 ? 'key-contact-email' : `key-contact-email-${idx + 1}`}
-                >
-                  {ch.value}
-                </Link>
-              )}
-            </Box>
-          ))
+          emailChannels.map((ch, idx) => {
+            const testId = idx === 0 ? 'key-contact-email' : `key-contact-email-${idx + 1}`
+            return (
+              <Box
+                key={`email-${ch.value.toLowerCase()}`}
+                sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}
+              >
+                <EmailOutlinedIcon sx={{ fontSize: 18, color: 'text.secondary', flexShrink: 0 }} />
+                {contactsUntrusted ? (
+                  <Typography
+                    sx={{
+                      ...ccMetaSx,
+                      fontSize: '0.9rem',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                    data-testid={testId}
+                  >
+                    {ch.value}
+                  </Typography>
+                ) : (
+                  <>
+                    <Link
+                      href={`mailto:${ch.value}`}
+                      underline="hover"
+                      sx={{
+                        ...ccMetaSx,
+                        color: 'primary.main',
+                        fontSize: '0.9rem',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                      data-testid={testId}
+                    >
+                      {ch.value}
+                    </Link>
+                    <CopyIconButton
+                      value={ch.value}
+                      ariaLabel="Copy email"
+                      testId={`${testId}-copy`}
+                    />
+                  </>
+                )}
+              </Box>
+            )
+          })
         )}
         <Box
-          sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, minWidth: 0 }}
+          sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, minWidth: 0 }}
           data-testid="key-contact-mailing-row"
         >
           <LocalPostOfficeOutlinedIcon
             sx={{ fontSize: 18, color: 'text.secondary', flexShrink: 0, mt: 0.15 }}
           />
           {mailing ? (
-            <Typography
-              sx={{
-                ...ccMetaSx,
-                fontSize: '0.9rem',
-                color: 'text.primary',
-                whiteSpace: 'pre-line',
-              }}
-              data-testid="key-contact-mailing"
-            >
-              {mailing}
-            </Typography>
+            <>
+              <Typography
+                sx={{
+                  ...ccMetaSx,
+                  fontSize: '0.9rem',
+                  color: 'text.primary',
+                  whiteSpace: 'pre-line',
+                }}
+                data-testid="key-contact-mailing"
+              >
+                {mailing}
+              </Typography>
+              <CopyIconButton
+                value={mailing}
+                ariaLabel="Copy mailing address"
+                testId="key-contact-mailing-copy"
+              />
+            </>
           ) : (
             <Typography sx={ccMetaSx} data-testid="key-contact-mailing-empty">
               No mailing address on file

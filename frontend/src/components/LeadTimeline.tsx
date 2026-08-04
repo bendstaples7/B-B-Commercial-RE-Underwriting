@@ -156,6 +156,9 @@ function buildEmailDetailRows(metadata: Record<string, unknown>): TimelineDetail
     const emailLabel = metadata.email_label ? ` (${metadata.email_label})` : ''
     rows.push({ label: 'Email', value: `${metadata.email_address}${emailLabel}` })
   }
+  if (typeof metadata.sent_from_email === 'string' && metadata.sent_from_email.trim()) {
+    rows.push({ label: 'Sent from', value: metadata.sent_from_email.trim() })
+  }
   const body = typeof metadata.body === 'string' ? metadata.body : ''
   const subject =
     (typeof metadata.subject === 'string' && metadata.subject.trim())
@@ -222,6 +225,26 @@ export function buildTimelineDetailRows(entry: LeadTimelineEntry): TimelineDetai
     return rows
   }
 
+  if (entry.event_type === 'mail_sent' || entry.event_type === 'mailer_history') {
+    if (metadata.campaign_id != null && metadata.campaign_id !== '') {
+      rows.push({ label: 'Campaign', value: String(metadata.campaign_id) })
+    }
+    if (typeof metadata.template_name === 'string' && metadata.template_name.trim()) {
+      rows.push({ label: 'Template', value: metadata.template_name.trim() })
+    }
+    if (typeof metadata.creative === 'string' && metadata.creative.trim()) {
+      rows.push({ label: 'Creative', value: metadata.creative.trim() })
+    }
+    if (typeof metadata.label === 'string' && metadata.label.trim()) {
+      rows.push({ label: 'Mailer', value: metadata.label.trim() })
+    }
+    if (rows.length === 0) {
+      const displayText = getEntryDisplayText(entry)
+      if (displayText) rows.push({ label: 'Details', value: displayText })
+    }
+    return rows
+  }
+
   const displayText = getEntryDisplayText(entry)
   if (displayText) {
     rows.push({ label: 'Details', value: displayText })
@@ -270,6 +293,8 @@ export function getTimelineEventLabel(entry: LeadTimelineEntry): string {
   if (entry.event_type === 'email_logged' || isEmailEntry(entry)) return 'Email Logged'
   if (entry.event_type === 'call_logged') return 'Call Logged'
   if (entry.event_type === 'note_added') return 'Note Added'
+  if (entry.event_type === 'mail_sent') return 'Mailer Sent'
+  if (entry.event_type === 'mailer_history') return 'Mailer History'
   return formatEventType(entry.event_type)
 }
 

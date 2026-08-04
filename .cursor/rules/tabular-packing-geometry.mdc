@@ -1,0 +1,34 @@
+# Tabular / packing geometry — real layout required
+
+## Hard ban
+
+Do **not** claim `VERDICT: ALIGNED` (or “ready to review” for packing/header
+multi-column surfaces) from:
+
+- jsdom / Vitest `getBoundingClientRect` alone
+- source `toContain` / class-name contracts alone
+- zero-sized box measurements (vacuous pass)
+- static HTML lookalike harnesses (must use real React/MUI)
+
+## Required proof
+
+For Command Center Property Overview packing and other dense horizontal packs:
+
+1. Fill the **packing composition checklist** before coding (clusters, who owns
+   `ml:auto`, minWidth sum @ ≤1280, hostile fixtures).
+2. `ml:auto` must own **only** the trailing cluster — never a parent that also
+   contains primary KPIs / identity (`property-overview-quick-stats`).
+3. Run Chromium geometry against the **real React harness**:
+   `node scripts/cc-header-packing-geometry.mjs`
+   (Vite + MUI + Playwright; includes elementFromPoint paint samples +
+   `artifacts/cc-header-packing.png` screenshot veto).
+4. KPI cells / condo / score: `overflow: hidden` or wrap-visible as appropriate,
+   `minWidth: 0`, `contain: layout` (or `layout style`), `isolation: isolate`.
+5. Units/Category values: `allowWrap: true` — never `whiteSpace: nowrap`
+   (`node scripts/check-cc-kpi-nowrap-forbid.mjs`).
+6. Hero street (md+): **one line** (`nowrap`), content-sized column — never
+   wrap into a tight `rem`/`%` clamp while the row has free space.
+7. Score driver chips: never `textOverflow: ellipsis` + nowrap truncation;
+   density via ≤2 full-label drivers.
+
+Class-name / source-grep tests remain wiring only.

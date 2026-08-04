@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterFileEdit": [
+      {
+        "command": "node .cursor/hooks/live-ui-visibility-after-file-edit.js"
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "command": "node .cursor/hooks/live-ui-visibility-after-response.js"
+      }
+    ],
+    "stop": [
+      {
+        "command": "node .cursor/hooks/live-ui-visibility-stop.js",
+        "loop_limit": 3
+      }
+    ]
+  }
+}

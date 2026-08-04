@@ -255,6 +255,113 @@ class TestGetCommandCenter:
             task_ids = [t['id'] for t in data['open_tasks']]
             assert task.id in task_ids
 
+    def test_building_ownership_pending_flag_true_when_scheduled(self, client, app):
+        """Part B: opening a never-analyzed commercial Cook County lead schedules
+        building-ownership analysis and flags it pending on the payload."""
+        with app.app_context():
+            from app.services import building_ownership_backfill as bob
+
+            bob._cc_recheck_inflight_local.clear()
+            lead = _make_lead(
+                app,
+                '3017 W George St',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60618',
+                lead_category='commercial',
+                lead_status='skip_trace',
+            )
+            with patch(
+                'app.services.deploy_sync_policy._redis_client',
+                return_value=None,
+            ), patch(
+                'app.services.building_ownership_backfill.enqueue_building_ownership_analysis',
+                return_value=True,
+            ) as mock_enqueue:
+                response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            assert response.status_code == 200
+            assert data['building_ownership_pending'] is True
+            mock_enqueue.assert_called_once_with(lead.id, force=False)
+
+    def test_building_ownership_pending_flag_false_when_settled(self, client, app):
+        """Residential leads (and settled commercial ones) never get the pending flag."""
+        with app.app_context():
+            lead = _make_lead(app, '3b CC St', lead_category='residential')
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            assert response.status_code == 200
+            assert data['building_ownership_pending'] is False
+
+    def test_mailer_history_summary_unions_timeline_mail_sent(self, client, app):
+        """Part C: mailer_history_summary counts a mail_sent timeline entry that
+        never made it into the JSONB column, and heals the JSONB column."""
+        with app.app_context():
+            from app.models import LeadTimelineEntry as _LTE
+
+            lead = _make_lead(
+                app,
+                '3c Mail St',
+                mailer_history='Boyfriend, OLM, Blue,  6/21/2024',
+            )
+            db.session.add(_LTE(
+                lead_id=lead.id,
+                event_type='mail_sent',
+                occurred_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                source='system',
+                actor='system',
+                summary='Mailer sent (campaign 42)',
+                event_metadata={'campaign_id': 42, 'olc_order_id': '100', 'template_name': 'Green'},
+            ))
+            db.session.commit()
+
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            assert response.status_code == 200
+            assert data['mailer_history_summary']['count'] == 2
+
+            db.session.refresh(lead)
+            assert isinstance(lead.mailer_history, list)
+            assert any(
+                isinstance(e, dict) and e.get('campaign_id') == 42
+                for e in lead.mailer_history
+            )
+
+    def test_auto_demotes_mailing_lead_with_incomplete_address_on_open(self, client, app):
+        """Part D: opening a mailing_no_contact_made lead whose owner mailing
+        address is no longer complete demotes it back to skip_trace."""
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '3d Mail St',
+                lead_status='mailing_no_contact_made',
+                mailing_address='',
+            )
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            assert response.status_code == 200
+            assert data['lead_status'] == 'skip_trace'
+
+            db.session.refresh(lead)
+            assert lead.lead_status == 'skip_trace'
+            assert lead.needs_skip_trace is True
+
+    def test_does_not_demote_mailable_mailing_lead_on_open(self, client, app):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '3e Mail St',
+                lead_status='mailing_no_contact_made',
+                mailing_address='123 Owner Way',
+                mailing_city='Chicago',
+                mailing_state='IL',
+                mailing_zip='60601',
+            )
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            assert response.status_code == 200
+            assert data['lead_status'] == 'mailing_no_contact_made'
+
     def test_open_tasks_are_lead_task_only_not_crm_tasks_union(self, client, app):
         """CC open_tasks comes from LeadTask only — CRM Task rows are not UNION'd in."""
         with app.app_context():

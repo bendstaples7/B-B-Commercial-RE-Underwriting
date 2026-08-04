@@ -1937,6 +1937,10 @@ export type TimelineEventType =
   | 'note_added'
   | 'email_logged'
   | 'call_logged'
+  | 'mail_sent'
+  | 'mail_queued'
+  | 'mail_delivered'
+  | 'mailer_history'
   | 'task_created'
   | 'task_completed'
   | 'task_snoozed'
@@ -2274,10 +2278,13 @@ export interface CommandCenterPayload {
   open_tasks: LeadTask[];
   up_next_to_mail?: boolean | null;
   mail_queue_status?: 'queued' | 'sent_recently' | null;
+  /** True when CC GET scheduled (or force-rechecked) building ownership / condo analysis. */
+  building_ownership_pending?: boolean;
   /** Canonical mailer history from backend normalizer (prefer over raw mailer_history). */
   mailer_history_summary?: {
     count: number;
     last_sent_at: string | null;
+    healed_count?: number;
     rows: Array<{
       id: string;
       sent_at: string | null;
@@ -2288,7 +2295,7 @@ export interface CommandCenterPayload {
       olc_order_id: string | null;
       address_feedback: string | null;
       cancelled: boolean;
-      source: 'olc' | 'imported';
+      source: 'olc' | 'imported' | 'timeline';
     }>;
   } | null;
   /** Timeline events with metadata.attributed_to_mail (full lead, not page 1 only). */
@@ -2382,7 +2389,7 @@ export interface LogCallFollowUpPayload {
 }
 
 export interface LogCallPayload {
-  outcome: 'answered' | 'voicemail' | 'no_answer' | 'busy' | 'wrong_number';
+  outcome: 'answered' | 'voicemail' | 'no_answer' | 'busy' | 'wrong_number' | 'not_interested';
   direction?: 'outbound' | 'inbound';
   duration_minutes?: number | null;
   notes?: string | null;
@@ -2402,6 +2409,9 @@ export interface LogNotePayload {
   email_address?: string | null;
   email_label?: string | null;
   subject?: string | null;
+  sent_from_email?: string | null;
+  complete_task_id?: number | null;
+  follow_up?: LogCallFollowUpPayload | null;
 }
 
 export interface BulkActionResult {

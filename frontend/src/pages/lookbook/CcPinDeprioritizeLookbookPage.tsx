@@ -29,6 +29,9 @@ import ManageSearchOutlinedIcon from '@mui/icons-material/ManageSearchOutlined'
 import {
   ccActionTileSx,
   ccCardSx,
+  ccHeaderAddressColumnSx,
+  ccHeaderPrimaryClusterSx,
+  ccHeaderTrailingPanelsSx,
   ccHeroAddressSx,
   ccHeroSecondarySx,
   ccMetaSx,
@@ -105,7 +108,7 @@ const VARIANT_COPY: Record<Variant, { label: string; blurb: string }> = {
   a: {
     label: 'A · Left stack + packed right',
     blurb:
-      'Street nowrap; AKA under. Production Est. value / Last sale / Units grid. One Deprioritize tile becomes Confirm deprioritize (filled) when likely condo — no duplicate.',
+      'Street ONE line (nowrap, address flex-grows). AKA under. Production KPI grid. ≤2 full-label score drivers. Condo+score packed after KPIs (no ml:auto canyon).',
   },
   b: {
     label: 'B · Full-width street row',
@@ -119,7 +122,32 @@ const VARIANT_COPY: Record<Variant, { label: string; blurb: string }> = {
   },
 }
 
-/** Marketing street — always one line. */
+/** Option A — production: one-line content-sized street. */
+const streetSxReadable = {
+  ...ccHeroAddressSx,
+  fontSize: { xs: '1.15rem', sm: '1.35rem' },
+  minWidth: 0,
+  maxWidth: '100%',
+  whiteSpace: 'nowrap' as const,
+  overflow: 'hidden' as const,
+  textOverflow: 'ellipsis' as const,
+  overflowWrap: 'normal' as const,
+  wordBreak: 'keep-all' as const,
+}
+
+const akaSxReadable = {
+  ...ccHeroSecondarySx,
+  mt: 0.15,
+  fontSize: '0.8rem',
+  minWidth: 0,
+  maxWidth: '100%',
+  textAlign: 'left' as const,
+  whiteSpace: 'nowrap' as const,
+  overflow: 'hidden' as const,
+  textOverflow: 'ellipsis' as const,
+}
+
+/** Variants B/C contrast — historical nowrap+ellipsis. */
 const streetSx = {
   ...ccHeroAddressSx,
   fontSize: { xs: '1.15rem', sm: '1.35rem' },
@@ -240,29 +268,27 @@ function DevQuickStats() {
   )
 }
 
-/** Dense wrappers — override production panel max-widths that create empty middle. */
+/** Trailing condo + score only (packed after KPIs, no ml:auto) — never includes quick-stats. */
 function PackedPanels({ ultraTight }: { ultraTight?: boolean }) {
   return (
     <Box
       sx={{
-        display: 'flex',
-        flexWrap: 'nowrap',
-        alignItems: 'stretch',
-        gap: 1,
-        flexShrink: 0,
-        ml: 'auto',
-        minWidth: 0,
-        maxWidth: '100%',
-        '& [data-testid="header-condo-check"], & [data-testid="header-lead-score"]': {
-          width: ultraTight ? 240 : 280,
-          minWidth: ultraTight ? 200 : 240,
-          maxWidth: ultraTight ? 260 : 300,
-          flex: '0 1 auto',
-          ml: '0 !important',
-          py: 0.35,
-          px: 1,
-        },
+        ...ccHeaderTrailingPanelsSx,
+        ...(ultraTight
+          ? {
+              '& [data-testid="header-condo-check"], & [data-testid="header-lead-score"]': {
+                width: 180,
+                minWidth: 160,
+                maxWidth: 200,
+                flex: '0 1 auto',
+                ml: '0 !important',
+                py: 0.35,
+                px: 1,
+              },
+            }
+          : {}),
       }}
+      data-testid="cc-header-trailing-panels"
     >
       <Box sx={{ flex: '0 1 auto', minWidth: 0 }}>
         <CondoCheckSummary commandCenterData={FAKE_PAYLOAD} testIdStem="header-condo" />
@@ -331,27 +357,29 @@ function HeaderVariantA() {
           <ArrowBackIcon fontSize="small" />
         </IconButton>
 
-        <Box sx={{ flex: '1 1 auto', minWidth: 0, maxWidth: '42%' }}>
-          <Box data-testid="lookbook-property-overview-address">
-            <Typography sx={streetSx} title={STREET}>
-              {STREET}
-            </Typography>
-            <Typography
-              component="div"
-              data-testid="lookbook-property-overview-aka"
-              sx={akaSx}
-              title={AKA}
-            >
-              Also known as:{' '}
-              <Box component="span" sx={{ color: 'text.primary', fontWeight: 500 }}>
-                {AKA}
-              </Box>
-            </Typography>
+        <Box sx={ccHeaderPrimaryClusterSx}>
+          <Box sx={ccHeaderAddressColumnSx}>
+            <Box data-testid="lookbook-property-overview-address">
+              <Typography sx={streetSxReadable} title={STREET}>
+                {STREET}
+              </Typography>
+              <Typography
+                component="div"
+                data-testid="lookbook-property-overview-aka"
+                sx={akaSxReadable}
+                title={AKA}
+              >
+                Also known as:{' '}
+                <Box component="span" sx={{ color: 'text.primary', fontWeight: 500 }}>
+                  {AKA}
+                </Box>
+              </Typography>
+            </Box>
+            <MetaLine />
           </Box>
-          <MetaLine />
+          <DevQuickStats />
         </Box>
 
-        <DevQuickStats />
         <PackedPanels />
       </Box>
       <TaxBanner />
@@ -635,9 +663,8 @@ export default function CcPinDeprioritizeLookbookPage() {
         Lookbook · Top rail (v2)
       </Typography>
       <Typography sx={{ ...ccMetaSx, mb: 2, maxWidth: 920 }}>
-        Fresh options. Shared rule: <strong>marketing street never wraps</strong> (one line +
-        ellipsis). AKA under. Panels packed — no empty middle. Reply <strong>A</strong>,{' '}
-        <strong>B</strong>, or <strong>C</strong>.
+        Option <strong>A</strong> matches production: street <strong>one line</strong> (content-sized),
+        KPIs adjacent, ≤2 full score drivers, condo+score trail. B/C keep contrast variants.
       </Typography>
 
       <Tabs

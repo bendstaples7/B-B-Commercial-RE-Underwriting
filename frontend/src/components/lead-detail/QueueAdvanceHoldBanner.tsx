@@ -1,10 +1,16 @@
 /**
  * Queue advance hold chrome — brief draining progress before auto-advancing
  * to the next lead, with Pause to stay put.
+ *
+ * Renders as a zero-in-flow-height overlay absolutely positioned inside its
+ * sticky parent (cc-sticky-chrome) so it never pushes Property Overview down.
  */
 import { Box, Button, LinearProgress, Typography } from '@mui/material'
 
 export const QUEUE_ADVANCE_HOLD_MS = 2000
+
+/** Above cc-sticky-chrome's own z-index so the overlay always wins the stack. */
+export const QUEUE_ADVANCE_HOLD_Z_INDEX = 150
 
 export interface QueueAdvanceHoldBannerProps {
   message: string
@@ -26,12 +32,17 @@ export function QueueAdvanceHoldBanner({
       role="status"
       aria-live="polite"
       sx={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: QUEUE_ADVANCE_HOLD_Z_INDEX,
         px: { xs: 1, sm: 2 },
         py: 0.75,
         bgcolor: 'background.paper',
         borderBottom: 1,
         borderColor: 'divider',
-        overflow: 'visible',
+        boxShadow: '0 2px 8px rgba(16, 24, 40, 0.12)',
       }}
     >
       <Box

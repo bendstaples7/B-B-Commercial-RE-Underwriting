@@ -45,6 +45,38 @@ def _seed_lead(**overrides) -> Lead:
 
 
 class TestCollectAssessorPinsAka:
+    def test_lead_own_pin_carries_property_street(self, app):
+        """The lead's own PIN must not lose its address to the `seen` dedupe.
+
+        `_add_pin(lead.county_assessor_pin)` runs before any address-row
+        lookup, so without an explicit `property_street` in `extra` the row
+        is added street-less and a later address-row hit for the same PIN is
+        silently skipped as a duplicate — leaving the PIN table Address
+        column blank for the most common (single-PIN) case.
+        """
+        with app.app_context():
+            lead = _seed_lead(county_assessor_pin='14-19-122-001-0000')
+            mock_connector = MagicMock()
+            mock_connector.market = 'cook_county_il'
+            mock_connector.lookup_address_by_pin.return_value = None
+
+            with patch(
+                'app.services.building_ownership_service.connector_for_lead',
+                return_value=mock_connector,
+            ), patch(
+                'app.services.building_ownership_service.lookup_all_pins_at_address',
+                return_value=[
+                    {'pin': '14-19-122-001-0000', 'property_street': '3715 N LEAVITT ST'},
+                ],
+            ), patch(
+                'app.services.gis.cook_county_parcel_spatial.lookup_nearby_parcel_candidates',
+                return_value=[],
+            ):
+                rows = BuildingOwnershipService()._collect_assessor_pins(lead)
+
+            own_pin_row = next(r for r in rows if r['pin'] == '14-19-122-001-0000')
+            assert own_pin_row['property_street'] == '3715-3721 N Leavitt St'
+
     def test_collect_unions_aka_street_pins(self, app):
         with app.app_context():
             lead = _seed_lead(assessor_aka_street='2155 W Bradley Pl')

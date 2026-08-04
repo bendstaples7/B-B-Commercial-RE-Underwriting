@@ -20,17 +20,41 @@ BACKFILL_BATCH_SIZE = 50
 BACKFILL_PER_RUN_CAP = 100
 BACKFILL_STALE_DAYS = 30
 TERMINAL_STATUSES = frozenset({'suppressed', 'do_not_contact', 'deal_won', 'deal_lost'})
+# condo_risk_status values where the classifier could not reach a confident
+# call. Opening the Command Center on one of these is a good trigger to force
+# a re-check even when the existing analysis is technically "fresh" (not
+# stale) — the lead may have new GIS/PIN data since the last inconclusive run.
+FORCE_RECHECK_CONDO_STATUSES = frozenset({
+    'needs_review', 'partial_condo_possible', 'unknown',
+})
+# Only force-recheck inconclusive condo when the last analysis is older than this.
+# Prevents CC GET + FE poll (2.5s) from re-enqueuing on every open while status
+# stays needs_review / unknown after a fresh run.
+FORCE_RECHECK_MIN_AGE = timedelta(hours=6)
+# While a CC-triggered job is in flight, return pending without re-scheduling.
+_CC_RECHECK_INFLIGHT_TTL_SECONDS = 180
+_CC_RECHECK_INFLIGHT_KEY_PREFIX = 'building_ownership:cc_recheck:'
+# Process-local fallback when Redis is unavailable (single-worker / tests).
+_cc_recheck_inflight_local: dict[int, float] = {}
 _STARTUP_BACKFILL_GUARD_KEY = 'building_ownership:startup_backfill_dispatched'
 _STARTUP_BACKFILL_GUARD_TTL_SECONDS = 3600
 _STARTUP_BACKFILL_ADVISORY_LOCK_KEY = 8242002
 
 
-def enqueue_building_ownership_analysis(lead_id: int) -> bool:
+def enqueue_building_ownership_analysis(lead_id: int, *, force: bool = False) -> bool:
     """Enqueue async building ownership analysis (no sync fallback)."""
     try:
         from celery_worker import building_ownership_analyze_lead_task
-        building_ownership_analyze_lead_task.apply_async(args=[lead_id], ignore_result=True)
-        logger.info('Dispatched building_ownership.analyze_lead for lead %s', lead_id)
+        building_ownership_analyze_lead_task.apply_async(
+            args=[lead_id],
+            kwargs={'force': force} if force else None,
+            ignore_result=True,
+        )
+        logger.info(
+            'Dispatched building_ownership.analyze_lead for lead %s (force=%s)',
+            lead_id,
+            force,
+        )
         return True
     except Exception as exc:
         logger.warning(
@@ -41,12 +65,12 @@ def enqueue_building_ownership_analysis(lead_id: int) -> bool:
         return False
 
 
-def dispatch_building_ownership_analysis(lead_id: int) -> bool:
+def dispatch_building_ownership_analysis(lead_id: int, *, force: bool = False) -> bool:
     """Enqueue async building ownership analysis; fall back to sync if broker unavailable."""
-    if enqueue_building_ownership_analysis(lead_id):
+    if enqueue_building_ownership_analysis(lead_id, force=force):
         return True
     try:
-        BuildingOwnershipService().analyze_lead(lead_id)
+        BuildingOwnershipService().analyze_lead(lead_id, force=force)
         return True
     except Exception as sync_exc:
         logger.error(
@@ -57,11 +81,11 @@ def dispatch_building_ownership_analysis(lead_id: int) -> bool:
         return False
 
 
-def schedule_building_ownership_after_commit(lead_id: int) -> None:
+def schedule_building_ownership_after_commit(lead_id: int, *, force: bool = False) -> None:
     """Dispatch building ownership analysis only after the current DB transaction commits."""
     session = db.session()
-    pending: set[int] = session.info.setdefault('building_ownership_pending', set())
-    pending.add(lead_id)
+    pending: dict[int, bool] = session.info.setdefault('building_ownership_pending', {})
+    pending[lead_id] = pending.get(lead_id, False) or force
 
     if session.info.get('building_ownership_listener'):
         return
@@ -69,11 +93,11 @@ def schedule_building_ownership_after_commit(lead_id: int) -> None:
 
     @event.listens_for(session, 'after_commit', once=True)
     def _dispatch_after_commit(sess) -> None:
-        lead_ids = sess.info.pop('building_ownership_pending', set())
+        pending_map = sess.info.pop('building_ownership_pending', {})
         sess.info.pop('building_ownership_listener', None)
-        for lid in lead_ids:
+        for lid, forced in pending_map.items():
             # After-commit: enqueue only; sync fallback needs an active session.
-            enqueue_building_ownership_analysis(lid)
+            enqueue_building_ownership_analysis(lid, force=forced)
 
     @event.listens_for(session, 'after_rollback', once=True)
     def _clear_after_rollback(sess) -> None:
@@ -203,6 +227,131 @@ def lead_needs_building_ownership_analysis(
         analyzed_at = analyzed_at.replace(tzinfo=timezone.utc)
     stale_before = datetime.now(timezone.utc) - timedelta(days=stale_days)
     return analyzed_at < stale_before
+
+
+def _has_manual_condo_override(lead: Lead) -> bool:
+    analysis_id = getattr(lead, 'condo_analysis_id', None)
+    if not analysis_id:
+        return False
+    analysis = db.session.get(AddressGroupAnalysis, analysis_id)
+    return bool(
+        analysis is not None
+        and analysis.manually_reviewed
+        and analysis.manual_override_status
+    )
+
+
+def _analysis_older_than(lead: Lead, min_age: timedelta) -> bool:
+    """True when condo analysis is missing or older than *min_age*."""
+    analysis_id = getattr(lead, 'condo_analysis_id', None)
+    if not analysis_id:
+        return True
+    analysis = db.session.get(AddressGroupAnalysis, analysis_id)
+    if analysis is None or not analysis.analyzed_at:
+        return True
+    analyzed_at = analysis.analyzed_at
+    if analyzed_at.tzinfo is None:
+        analyzed_at = analyzed_at.replace(tzinfo=timezone.utc)
+    return analyzed_at < datetime.now(timezone.utc) - min_age
+
+
+def _try_claim_cc_recheck(lead_id: int) -> bool:
+    """Claim the right to schedule a CC-triggered recheck.
+
+    Returns True when this caller should schedule. False when another recent
+    claim is still in flight (return pending without re-enqueue).
+    """
+    import time
+
+    key = f'{_CC_RECHECK_INFLIGHT_KEY_PREFIX}{lead_id}'
+    try:
+        from app.services.deploy_sync_policy import _redis_client
+
+        client = _redis_client()
+        if client is not None:
+            claimed = client.set(key, '1', nx=True, ex=_CC_RECHECK_INFLIGHT_TTL_SECONDS)
+            return bool(claimed)
+    except Exception:  # noqa: BLE001 — fall through to local claim
+        logger.debug('CC recheck redis claim failed for lead %s', lead_id, exc_info=True)
+
+    now = time.monotonic()
+    expires = _cc_recheck_inflight_local.get(lead_id)
+    if expires is not None and expires > now:
+        return False
+    _cc_recheck_inflight_local[lead_id] = now + _CC_RECHECK_INFLIGHT_TTL_SECONDS
+    return True
+
+
+def _cc_recheck_inflight(lead_id: int) -> bool:
+    """True when a CC-triggered recheck claim is still active."""
+    import time
+
+    key = f'{_CC_RECHECK_INFLIGHT_KEY_PREFIX}{lead_id}'
+    try:
+        from app.services.deploy_sync_policy import _redis_client
+
+        client = _redis_client()
+        if client is not None:
+            return bool(client.exists(key))
+    except Exception:  # noqa: BLE001
+        pass
+    expires = _cc_recheck_inflight_local.get(lead_id)
+    return expires is not None and expires > time.monotonic()
+
+
+def ensure_building_ownership_on_command_center(lead: Lead) -> bool:
+    """Ensure a commercial Cook County lead has a current condo classification
+    when its Command Center is opened.
+
+    Schedules analysis when either:
+      1. ``lead_needs_building_ownership_analysis`` says the lead has never
+         been analyzed or the existing analysis is stale, or
+      2. the lead's ``condo_risk_status`` is still inconclusive (``needs_review``
+         / ``partial_condo_possible`` / ``unknown``) **and** the last analysis
+         is older than ``FORCE_RECHECK_MIN_AGE`` — opening the lead is a good
+         trigger to force a re-check (new GIS/PIN data may have landed).
+         Fresh inconclusive results do **not** re-enqueue (avoids a Celery
+         storm when the FE polls ``building_ownership_pending`` every 2.5s).
+         Never forces a re-check when a human has manually overridden the
+         status.
+
+    Returns True when analysis was scheduled this call **or** a recent CC
+    recheck is still in flight, so callers can surface
+    ``building_ownership_pending``. Callers running inside a Flask request
+    should ensure a ``db.session.commit()`` happens before the response is
+    sent when this returns True after scheduling — dispatch is deferred to
+    ``after_commit``.
+    """
+    lead_id = int(lead.id)
+
+    if lead_needs_building_ownership_analysis(lead):
+        if not _try_claim_cc_recheck(lead_id):
+            return True
+        schedule_building_ownership_after_commit(lead_id)
+        return True
+
+    if not is_commercial_cook_county_lead(lead):
+        return False
+    if lead.lead_status in TERMINAL_STATUSES:
+        return False
+
+    condo_status = str(getattr(lead, 'condo_risk_status', None) or '').strip().lower()
+    if (
+        condo_status in FORCE_RECHECK_CONDO_STATUSES
+        and not _has_manual_condo_override(lead)
+        and _analysis_older_than(lead, FORCE_RECHECK_MIN_AGE)
+    ):
+        if not _try_claim_cc_recheck(lead_id):
+            return True
+        schedule_building_ownership_after_commit(lead_id, force=True)
+        return True
+
+    # In-flight claim from an earlier open — keep FE polling until TTL expires
+    # or analysis settles into a non-force status / fresher analyzed_at.
+    if condo_status in FORCE_RECHECK_CONDO_STATUSES and _cc_recheck_inflight(lead_id):
+        return True
+
+    return False
 
 
 def query_lead_ids_for_building_ownership_backfill(

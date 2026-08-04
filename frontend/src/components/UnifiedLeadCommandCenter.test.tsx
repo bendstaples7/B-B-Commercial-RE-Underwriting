@@ -861,6 +861,237 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
 })
 
 // ---------------------------------------------------------------------------
+// 2d. Score flash + optimistic task/timeline updates after logging a call
+//     (user 8A: score + Not Interested during hold; lead 10737: timeline race)
+// ---------------------------------------------------------------------------
+
+function makeScoreRecord(overrides: Partial<import('@/types').PropertyScoreRecord> = {}) {
+  return {
+    id: 1,
+    property_id: 1,
+    score_version: 'residential_v1_internal_data',
+    total_score: 40,
+    score_tier: 'C' as const,
+    data_quality_score: 80,
+    recommended_action: { value: 'nurture', label: 'Nurture', explanation: '', signals: {} },
+    top_signals: [],
+    score_details: {},
+    missing_data: [],
+    created_at: '2026-07-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+describe('UnifiedLeadCommandCenter — score flash and optimistic updates after call log', () => {
+  it('flashes the score delta and optimistically drops the completed task without waiting for refetch', async () => {
+    const api = await import('@/services/api')
+    const mockLogCall = api.callLogService.logCall as ReturnType<typeof vi.fn>
+    const mockGetScore = api.leadScoreService.getLeadScore as ReturnType<typeof vi.fn>
+
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        lead_score: 40,
+        open_tasks: [{
+          id: 55,
+          lead_id: 1,
+          task_type: 'call_owner_today',
+          title: 'Call owner today',
+          status: 'open',
+          due_date: null,
+          created_at: '2026-01-01T00:00:00Z',
+          completed_at: null,
+          created_by: 'system',
+          source: 'native',
+        }],
+      }),
+    )
+
+    let releaseCcRefetch: (() => void) | undefined
+    let ccCallCount = 0
+    vi.mocked(commandCenterService.getCommandCenter).mockImplementation(async () => {
+      ccCallCount += 1
+      if (ccCallCount === 1) {
+        return makeCommandCenterPayload({
+          lead_score: 40,
+          open_tasks: [{
+            id: 55,
+            lead_id: 1,
+            task_type: 'call_owner_today',
+            title: 'Call owner today',
+            status: 'open',
+            due_date: null,
+            created_at: '2026-01-01T00:00:00Z',
+            completed_at: null,
+            created_by: 'system',
+            source: 'native',
+          }],
+        })
+      }
+      // Refetch triggered by the activity save — held open on purpose so the
+      // test can prove the task row disappears *before* this resolves.
+      return new Promise((resolve) => {
+        releaseCcRefetch = () => resolve(makeCommandCenterPayload({ lead_score: 48, open_tasks: [] }))
+      })
+    })
+
+    let resolveNextScore: (() => void) | undefined
+    let scoreCallCount = 0
+    mockGetScore.mockImplementation(async () => {
+      scoreCallCount += 1
+      if (scoreCallCount === 1) {
+        return { data: { latest: makeScoreRecord({ total_score: 40 }), history: [] } }
+      }
+      return new Promise((resolve) => {
+        resolveNextScore = () => resolve({ data: { latest: makeScoreRecord({ total_score: 48 }), history: [] } })
+      })
+    })
+
+    mockLogCall.mockResolvedValue({
+      id: 900,
+      lead_id: 1,
+      event_type: 'call_logged',
+      occurred_at: '2026-07-30T12:00:00Z',
+      source: 'manual',
+      actor: 'user',
+      summary: 'Outbound call: answered',
+      metadata: { outcome: 'answered' },
+      hubspot_activity_id: null,
+      is_deleted: false,
+      created_at: '2026-07-30T12:00:00Z',
+    })
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    renderComponent()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('header-lead-score-value')).toHaveTextContent('40')
+    })
+    expect(screen.getByTestId('task-item-55')).toBeInTheDocument()
+
+    await user.click(await screen.findByTestId('action-center-tile-log_call'))
+    await user.click(screen.getByTestId('call-outcome-answered'))
+    await user.click(screen.getByTestId('call-save-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-success-alert')).toHaveTextContent('Call logged.')
+    })
+
+    // Optimistic — the commandCenter refetch above is still pending.
+    expect(screen.queryByTestId('task-item-55')).not.toBeInTheDocument()
+
+    // Release the held score + commandCenter refetches and confirm the flash.
+    resolveNextScore?.()
+    await waitFor(() => {
+      expect(screen.getByTestId('header-lead-score-flash')).toHaveTextContent('+8')
+    })
+
+    releaseCcRefetch?.()
+    await waitFor(() => {
+      expect(ccCallCount).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  it('flashes "Score unchanged" when the post-call score delta is zero', async () => {
+    const api = await import('@/services/api')
+    const mockLogCall = api.callLogService.logCall as ReturnType<typeof vi.fn>
+    const mockGetScore = api.leadScoreService.getLeadScore as ReturnType<typeof vi.fn>
+
+    let scoreCallCount = 0
+    mockGetScore.mockImplementation(async () => {
+      scoreCallCount += 1
+      return { data: { latest: makeScoreRecord({ total_score: 40 }), history: [] } }
+    })
+
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({ lead_score: 40, open_tasks: [] }),
+    )
+
+    mockLogCall.mockResolvedValue({
+      id: 902,
+      lead_id: 1,
+      event_type: 'call_logged',
+      occurred_at: '2026-07-30T12:00:00Z',
+      source: 'manual',
+      actor: 'user',
+      summary: 'Outbound call: no_answer',
+      metadata: { outcome: 'no_answer' },
+      hubspot_activity_id: null,
+      is_deleted: false,
+      created_at: '2026-07-30T12:00:00Z',
+    })
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    renderComponent()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('header-lead-score-value')).toHaveTextContent('40')
+    })
+
+    await user.click(await screen.findByTestId('action-center-tile-log_call'))
+    await user.click(screen.getByTestId('call-outcome-no_answer'))
+    await user.click(screen.getByTestId('call-save-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('header-lead-score-flash')).toHaveTextContent('Score unchanged')
+    })
+    expect(scoreCallCount).toBeGreaterThanOrEqual(2)
+  })
+
+  it('keeps a logged call at the top of Activity when the refetch briefly omits its id (lead 10737)', async () => {
+    const api = await import('@/services/api')
+    const mockLogCall = api.callLogService.logCall as ReturnType<typeof vi.fn>
+
+    // Every refetch — including the one `handleActivitySaved` triggers —
+    // returns a timeline that never contains the new entry's id, simulating
+    // a race where the server read lags behind the write.
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        timeline: { entries: [], total: 0, page: 1, per_page: 20 },
+      }),
+    )
+
+    mockLogCall.mockResolvedValue({
+      id: 901,
+      lead_id: 1,
+      event_type: 'call_logged',
+      occurred_at: '2026-07-30T12:00:00Z',
+      source: 'manual',
+      actor: 'user',
+      summary: 'Outbound call: answered',
+      metadata: { outcome: 'answered' },
+      hubspot_activity_id: null,
+      is_deleted: false,
+      created_at: '2026-07-30T12:00:00Z',
+    })
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    renderComponent()
+
+    await user.click(await screen.findByTestId('action-center-tile-log_call'))
+    await user.click(screen.getByTestId('call-outcome-answered'))
+    await user.click(screen.getByTestId('call-save-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-success-alert')).toHaveTextContent('Call logged.')
+    })
+    expect(screen.getByTestId('entry-summary-901')).toBeInTheDocument()
+
+    // Let the (id-omitting) refetch that `handleActivitySaved` triggers
+    // actually land — the row must survive the resulting cache sync instead
+    // of being dropped because the server payload doesn't contain its id yet.
+    await waitFor(() => {
+      expect(vi.mocked(commandCenterService.getCommandCenter).mock.calls.length).toBeGreaterThanOrEqual(2)
+    })
+    expect(screen.getByTestId('entry-summary-901')).toBeInTheDocument()
+
+    // It is the newest (first) row, not merely present somewhere in the feed.
+    const timeline = screen.getByTestId('lead-timeline')
+    const rows = timeline.querySelectorAll('[data-testid^="entry-summary-"]')
+    expect(rows[0]).toHaveAttribute('data-testid', 'entry-summary-901')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 3. Error state for invalid ID
 // ---------------------------------------------------------------------------
 

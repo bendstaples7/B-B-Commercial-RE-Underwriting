@@ -169,57 +169,66 @@ function rowsForActiveLead<T extends { lead_id?: number | null }>(rows: readonly
   return partitionRowsByLead(rows, ACTIVE_LEAD_ID).kept
 }
 
-// Mock LogNoteForm — renders a button that calls onSaved with a synthetic entry
-// Used by Property 14 to trigger the prepend logic in ActivityPanel
-vi.mock('@/components/LogNoteForm', () => ({
-  LogNoteForm: ({ onSaved, leadId }: { onSaved: (entry: any) => void; leadId: number }) => (
-    <button
-      data-testid="mock-log-note-btn"
-      onClick={() =>
-        onSaved({
-          id: 999999,
-          lead_id: leadId,
-          event_type: 'note_added',
-          occurred_at: new Date().toISOString(),
-          source: 'manual',
-          actor: 'Test User',
-          summary: 'Property 14 test note',
-          metadata: null,
-          hubspot_activity_id: null,
-          is_deleted: false,
-          created_at: new Date().toISOString(),
-        })
-      }
-    >
-      Add Note
-    </button>
-  ),
-}))
-
-// Mock LogCallForm — same pattern, used as an alternative in Property 14
-vi.mock('@/components/LogCallForm', () => ({
-  LogCallForm: ({ onSaved, leadId }: { onSaved: (entry: any) => void; leadId: number }) => (
-    <button
-      data-testid="mock-log-call-btn"
-      onClick={() =>
-        onSaved({
-          id: 999998,
-          lead_id: leadId,
-          event_type: 'call_logged',
-          occurred_at: new Date().toISOString(),
-          source: 'manual',
-          actor: 'Test User',
-          summary: 'Property 14 test call',
-          metadata: null,
-          hubspot_activity_id: null,
-          is_deleted: false,
-          created_at: new Date().toISOString(),
-        })
-      }
-    >
-      Log Call
-    </button>
-  ),
+// Mock LogActivityForm — renders a button per mode that calls onSaved with a
+// synthetic entry. Used by Property 14 to trigger the prepend logic in
+// ActivityPanel (note mode) and as an alternative call-mode trigger.
+vi.mock('@/components/LogActivityForm', () => ({
+  LogActivityForm: ({
+    mode,
+    onSaved,
+    leadId,
+  }: {
+    mode: 'call' | 'note' | 'email'
+    onSaved: (entry: any) => void
+    leadId: number
+  }) => {
+    if (mode === 'call') {
+      return (
+        <button
+          data-testid="mock-log-call-btn"
+          onClick={() =>
+            onSaved({
+              id: 999998,
+              lead_id: leadId,
+              event_type: 'call_logged',
+              occurred_at: new Date().toISOString(),
+              source: 'manual',
+              actor: 'Test User',
+              summary: 'Property 14 test call',
+              metadata: null,
+              hubspot_activity_id: null,
+              is_deleted: false,
+              created_at: new Date().toISOString(),
+            })
+          }
+        >
+          Log Call
+        </button>
+      )
+    }
+    return (
+      <button
+        data-testid="mock-log-note-btn"
+        onClick={() =>
+          onSaved({
+            id: 999999,
+            lead_id: leadId,
+            event_type: 'note_added',
+            occurred_at: new Date().toISOString(),
+            source: 'manual',
+            actor: 'Test User',
+            summary: 'Property 14 test note',
+            metadata: null,
+            hubspot_activity_id: null,
+            is_deleted: false,
+            created_at: new Date().toISOString(),
+          })
+        }
+      >
+        Add Note
+      </button>
+    )
+  },
 }))
 
 // ---------------------------------------------------------------------------

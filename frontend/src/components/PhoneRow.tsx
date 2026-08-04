@@ -39,6 +39,8 @@ export interface PhoneRowProps {
   dense?: boolean
   /** When false, render the number as plain text (no tel: link). */
   actionable?: boolean
+  /** data-testid applied to the rendered value (Link or Typography). */
+  valueTestId?: string
 }
 
 export interface PhoneListProps {
@@ -53,6 +55,7 @@ export function PhoneRow({
   showLabel = false,
   dense = true,
   actionable = true,
+  valueTestId,
 }: PhoneRowProps) {
   const [copied, setCopied] = useState(false)
   const value = typeof phone === 'string' ? phone : phone.value
@@ -89,6 +92,7 @@ export function PhoneRow({
           underline="hover"
           onClick={(e) => e.stopPropagation()}
           noWrap
+          data-testid={valueTestId}
           sx={{ flexShrink: 0 }}
         >
           {displayPhone}
@@ -97,6 +101,7 @@ export function PhoneRow({
         <Typography
           variant={dense ? 'caption' : 'body2'}
           noWrap
+          data-testid={valueTestId}
           sx={{ flexShrink: 0 }}
         >
           {displayPhone}

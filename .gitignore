@@ -106,3 +106,10 @@ DEPLOY_SHA
 
 # Local supervised-dev PID files (python dev.py)
 .dev/
+
+# Playwright packing geometry screenshots (CI/local gate artifacts)
+artifacts/
+
+# Live-UI auth exports (JWT session) — never commit
+artifacts/auth/
+artifacts/live-ui/

@@ -219,11 +219,22 @@ class BuildingOwnershipService:
             for row in lookup_all_pins_at_address(text):
                 _add_pin(row.get('pin'), row)
 
+        # `_add_pin` dedupes on `seen` and keeps the first `extra` a pin was
+        # added with, so the lead's own PIN must carry `property_street` here
+        # — an address-row lookup later (which does carry it) would otherwise
+        # be skipped as a duplicate, leaving the UI's "Lead PIN" row blank.
+        lead_street_extra = (
+            {'property_street': lead.property_street} if lead.property_street else None
+        )
+
         for seed in seed_pins or []:
-            _add_pin(seed)
+            _add_pin(
+                seed,
+                lead_street_extra if seed == lead.county_assessor_pin else None,
+            )
 
         if lead.county_assessor_pin:
-            _add_pin(lead.county_assessor_pin)
+            _add_pin(lead.county_assessor_pin, lead_street_extra)
 
         connector = connector_for_lead(lead)
         is_cook = (

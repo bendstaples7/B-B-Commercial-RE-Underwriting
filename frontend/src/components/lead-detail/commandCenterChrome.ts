@@ -1,8 +1,8 @@
-/**
+﻿/**
  * Shared Command Center visual language.
  *
- * Hierarchy (largest → smallest):
- *   property overview address → section title → row / body → meta / caption
+ * Hierarchy (largest ΓåÆ smallest):
+ *   property overview address ΓåÆ section title ΓåÆ row / body ΓåÆ meta / caption
  *
  * Cards: one outlined surface per job. Nested Papers/borders are avoided.
  */
@@ -14,14 +14,14 @@ export const ccPageBgSx: SxProps<Theme> = {
   minHeight: '100%',
 }
 
-/** Hero street address — largest text on the page. */
+/** Hero street address ΓÇö largest text on the page. */
 export const ccHeroAddressSx: SxProps<Theme> = {
   fontSize: { xs: '1.35rem', sm: '1.65rem' },
   fontWeight: 700,
   letterSpacing: -0.02,
   lineHeight: 1.25,
   color: 'text.primary',
-  // Prefer natural word breaks only — do not shatter mid-token on wide layouts.
+  // Prefer natural word breaks only ΓÇö do not shatter mid-token on wide layouts.
   overflowWrap: 'break-word',
   wordBreak: 'normal',
 }
@@ -98,7 +98,7 @@ export const ccStackGap = 2.5
 
 /** Action Center icon tile button. */
 export const ccActionTileSx: SxProps<Theme> = {
-  // Grow equally; do not cap width — a maxWidth leaves empty row space that
+  // Grow equally; do not cap width ΓÇö a maxWidth leaves empty row space that
   // is still too small for the next tile's minWidth, so Deprioritize wraps.
   flex: '1 1 0',
   minWidth: { xs: 'calc(50% - 4px)', sm: 0 },
@@ -150,4 +150,103 @@ export const ccKpiValueSx: SxProps<Theme> = {
   color: 'text.primary',
   lineHeight: 1.3,
   mt: 0.25,
+}
+
+/**
+ * Property Overview header — ONE fluid horizontal bar on md+:
+ *   [back][address][2×2 KPIs][condo][score]
+ *
+ * KPI grid (locked):
+ *   Est. value     | Last sale
+ *   Units/details  | Category
+ *
+ * Proportional clamp() slots (not fixed px) so the bar holds at any viewport.
+ * Primary/KPIs absorb leftover slack so Lead Signals sits flush right; panels
+ * ride a 300px ceiling. FORBID fixed pair widths / flexShrink:0 / address
+ * maxWidth ceilings / trail ml:auto canyon (slack lives inside the KPI band).
+ */
+export const ccHeaderAddressColumnSx: SxProps<Theme> = {
+  // Hug street text beside KPIs. minWidth 0 allows ellipsis under pressure.
+  flex: { xs: '1 1 calc(100% - 48px)', md: '0 1 auto' },
+  minWidth: 0,
+  maxWidth: { xs: '100%', md: 'none' },
+  width: { md: 'auto' },
+}
+
+/** Address + 2×2 KPI band — hug content; trail panels absorb leftover width. */
+export const ccHeaderPrimaryClusterSx: SxProps<Theme> = {
+  display: 'flex',
+  flexWrap: 'nowrap',
+  // Vertically center 2×2 KPI callouts against the taller address column.
+  alignItems: 'center',
+  gap: { xs: 1.25, md: 1 },
+  flex: { xs: '1 1 100%', md: '0 1 auto' },
+  minWidth: { xs: 0, md: 0 },
+  maxWidth: '100%',
+}
+
+/**
+ * Condo + score on the SAME row as KPIs — grow to fill slack left of condo
+ * so Lead Signals stays flush right (no white gap before/after the pair).
+ * FORBID md flex-basis/width 100% — that forces a second row under Last sale.
+ * FORBID flexShrink:0 / width:368 — breaks responsive packing.
+ */
+export const ccHeaderTrailingPanelsSx: SxProps<Theme> = {
+  display: 'flex',
+  flexWrap: 'nowrap',
+  alignItems: 'stretch',
+  gap: 1,
+  // Grow into remaining row width; panels share it evenly.
+  flex: { xs: '1 1 100%', md: '1 1 auto' },
+  ml: 0,
+  minWidth: { xs: '100%', md: 'min-content' },
+  maxWidth: '100%',
+  width: { md: 'auto' },
+  contain: 'layout',
+  '& [data-testid="header-condo-check"], & [data-testid="header-lead-score"]': {
+    // Floor 12rem; grow freely (no 300px ceiling) to kill whitespace left of condo.
+    flex: { md: '1 1 clamp(12rem, 16vw, 300px)' },
+    width: { md: 'auto' },
+    minWidth: { md: '12rem' },
+    maxWidth: { xs: '100%', md: 'none' },
+    ml: '0 !important',
+    overflow: 'visible',
+    contain: 'layout style',
+    isolation: 'isolate',
+  },
+}
+
+/** @deprecated Use ccHeaderTrailingPanelsSx — kept name alias during migration. */
+export const ccHeaderTrailingPackSx = ccHeaderTrailingPanelsSx
+
+/** Header Paper — visible overflow so Updated/chips are not clipped by the card. */
+export const ccHeaderPaperSx: SxProps<Theme> = {
+  ...ccCardSx,
+  overflow: 'visible',
+  p: { xs: 1.25, sm: 1.5 },
+  mb: 0,
+}
+
+/**
+ * 2×2 KPI band — Est | Last sale / Units | Category.
+ * Grow 3 = primary slack sink so Last sale sits beside condo.
+ */
+export const ccHeaderQuickStatsSx: SxProps<Theme> = {
+  // Hug 2×2 content — trail panels (not KPIs) absorb leftover width.
+  flex: { xs: '1 1 100%', md: '0 1 auto' },
+  minWidth: { xs: '100%', md: 0 },
+  maxWidth: { xs: '100%', md: 'none' },
+  width: { md: 'auto' },
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, auto)',
+  columnGap: { xs: 1.25, md: 1.25 },
+  rowGap: { xs: 0.75, md: 0.65 },
+  alignContent: 'center',
+  justifyItems: 'start',
+  justifyContent: 'start',
+  overflow: 'hidden',
+  contain: 'layout',
+  isolation: 'isolate',
+  px: { md: 0.25 },
+  mr: { md: 0 },
 }

@@ -21,9 +21,7 @@ import type { SxProps, Theme } from '@mui/material/styles'
 import { useQuery } from '@tanstack/react-query'
 import type { LeadTask, LeadTimelineEntry } from '@/types'
 import { contactService } from '@/services/api'
-import { LogNoteForm } from '@/components/LogNoteForm'
-import { LogCallForm, type LogCallSavedMeta } from '@/components/LogCallForm'
-import { LogEmailForm } from '@/components/LogEmailForm'
+import { LogActivityForm, type LogCallSavedMeta } from '@/components/LogActivityForm'
 
 export type ActivityLogType = 'note' | 'call' | 'email'
 
@@ -183,13 +181,14 @@ export function LogActivityModal({
     if (reason === 'escapeKeyDown') onClose()
   }
 
-  const isCall = activityType === 'call'
+  // Wide modal for all activity types — note/email now share the same
+  // "next step" cadence layout as call, so all three need the wider frame.
   const contentSx: SxProps<Theme> = {
     // Explicit visible cursor — never inherit drag chrome from the title bar.
     cursor: 'auto',
     overflowY: 'auto',
     overflowX: 'hidden',
-    pt: isCall ? 1.5 : 2,
+    pt: 1.5,
     pb: 1.5,
     maxHeight: isMobile ? 'calc(70vh - 56px)' : 'min(70vh, 640px)',
     '& .MuiFormControl-root': { overflow: 'visible' },
@@ -218,8 +217,8 @@ export function LogActivityModal({
           bottom: 24,
           left: 'auto',
           top: 'auto',
-          width: isCall ? 'min(980px, calc(100vw - 48px))' : 'min(480px, calc(100vw - 48px))',
-          maxWidth: isCall ? 980 : 480,
+          width: 'min(980px, calc(100vw - 48px))',
+          maxWidth: 980,
           maxHeight: 'min(80vh, 720px)',
         }),
     transform: `translate(${offset.x}px, ${offset.y}px)`,
@@ -300,28 +299,16 @@ export function LogActivityModal({
         </IconButton>
       </DialogTitle>
       <DialogContent dividers sx={contentSx}>
-        {activityType === 'note' && (
-          <LogNoteForm leadId={leadId} onSaved={handleSaved} onCancel={onClose} />
-        )}
-        {activityType === 'call' && (
-          <LogCallForm
-            leadId={leadId}
-            contacts={contacts}
-            contactsLoading={contactsLoading}
-            openTasks={openTasks}
-            onSaved={handleSaved}
-            onCancel={onClose}
-          />
-        )}
-        {activityType === 'email' && (
-          <LogEmailForm
-            leadId={leadId}
-            contacts={contacts}
-            contactsLoading={contactsLoading}
-            onSaved={handleSaved}
-            onCancel={onClose}
-          />
-        )}
+        <LogActivityForm
+          key={activityType}
+          mode={activityType}
+          leadId={leadId}
+          contacts={contacts}
+          contactsLoading={contactsLoading}
+          openTasks={openTasks}
+          onSaved={handleSaved}
+          onCancel={onClose}
+        />
       </DialogContent>
     </Dialog>
   )

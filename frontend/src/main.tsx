@@ -10,6 +10,7 @@ import { PipelineStatusProvider } from './context/PipelineStatusContext'
 import { ShellStatusProvider } from './context/ShellStatusContext'
 import { AuthProvider } from './context/AuthContext'
 import { QuickAddFabHost } from '@/components/QuickAddFab'
+import { LiveUiCaptureHost } from '@/components/dev/LiveUiCaptureHost'
 
 // ---------------------------------------------------------------------------
 // Global mutation error handler
@@ -199,6 +200,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
                 <ShellStatusProvider>
                   <App />
                   <QuickAddFabHost />
+                  {import.meta.env.DEV ? <LiveUiCaptureHost /> : null}
                 </ShellStatusProvider>
               </PipelineStatusProvider>
             </NotificationProvider>
