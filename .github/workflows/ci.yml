@@ -219,6 +219,8 @@ jobs:
       FLASK_ENV: development
       SECRET_KEY: ci-live-ui-secret
       JWT_SECRET_KEY: ci-live-ui-jwt-secret
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/0
       BB_DISABLE_AUTO_RESTART: '1'
       FLASK_SKIP_RELOADER: '1'
       BB_E2E_EMAIL: live-ui-ci@example.com
