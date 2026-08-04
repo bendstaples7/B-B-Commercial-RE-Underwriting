@@ -68,18 +68,18 @@ if (/ccHeaderTrailingPanelsSx[\s\S]{0,400}ml:\s*\{\s*md:\s*['"]auto['"]/.test(ch
   ok = false
 }
 
-if (!/ccHeaderAddressColumnSx[\s\S]{0,250}md:\s*['"]0 1 auto['"]/.test(chrome)) {
-  console.error('Missing address hug flex (md 0 1 auto)')
+if (!/ccHeaderAddressColumnSx[\s\S]{0,250}md:\s*['"]0 0 auto['"]/.test(chrome)) {
+  console.error('Missing address one-line flex (md 0 0 auto)')
   ok = false
 }
 
-if (!/ccHeaderPrimaryClusterSx[\s\S]{0,250}md:\s*['"]0 1 auto['"]/.test(chrome)) {
-  console.error('Missing primary cluster hug (md 0 1 auto) — trail panels absorb slack')
+if (!/ccHeaderPrimaryClusterSx[\s\S]{0,250}md:\s*['"]1 1 auto['"]/.test(chrome)) {
+  console.error('Missing primary cluster grow (md 1 1 auto) — keeps address/KPI gap tight')
   ok = false
 }
 
-if (!/ccHeaderQuickStatsSx[\s\S]{0,250}md:\s*['"]0 1 auto['"]/.test(chrome)) {
-  console.error('Missing KPI hug (md 0 1 auto) — trail panels absorb slack')
+if (!/ccHeaderQuickStatsSx[\s\S]{0,250}md:\s*['"]1 1 auto['"]/.test(chrome)) {
+  console.error('Missing KPI grow (md 1 1 auto) — absorbs primary-cluster slack')
   ok = false
 }
 
@@ -93,13 +93,13 @@ if (/ccHeaderQuickStatsSx[\s\S]{0,300}repeat\(2,\s*minmax\(0,\s*1fr\)\)/.test(ch
   ok = false
 }
 
-if (!/clamp\(12rem,\s*16vw,\s*300px\)/.test(chrome)) {
-  console.error('Missing trail panel clamp(12rem, 16vw, 300px)')
+if (!/clamp\(10rem,\s*13vw,\s*260px\)/.test(chrome)) {
+  console.error('Missing trail panel clamp(10rem, 13vw, 260px)')
   ok = false
 }
 
-if (!/clamp\(12rem,\s*16vw,\s*300px\)/.test(score) || !/clamp\(12rem,\s*16vw,\s*300px\)/.test(condo)) {
-  console.error('Panel wrappers must use clamp(12rem, 16vw, 300px)')
+if (!/clamp\(10rem,\s*13vw,\s*260px\)/.test(score) || !/clamp\(10rem,\s*13vw,\s*260px\)/.test(condo)) {
+  console.error('Panel wrappers must use clamp(10rem, 13vw, 260px)')
   ok = false
 }
 
