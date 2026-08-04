@@ -332,8 +332,8 @@ jobs:
 
       - name: Install Playwright Chromium
         run: |
-          npx playwright install chromium \
-            || { sleep 5; npx playwright install chromium; }
+          npx playwright install --with-deps chromium \
+            || { sleep 5; npx playwright install --with-deps chromium; }
         working-directory: frontend
 
       - name: Authenticated live-UI snapshot
