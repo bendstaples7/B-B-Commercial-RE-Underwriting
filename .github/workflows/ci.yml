@@ -134,6 +134,8 @@ jobs:
           node scripts/check-cc-header-packing-ci-gate.mjs
           node scripts/check-cc-kpi-nowrap-forbid.mjs
           node scripts/check-cc-header-slack-park-forbid.mjs
+          node scripts/check-sale-source-scrape-forbid.mjs
+          node scripts/check-log-activity-next-step-forbid.mjs
           node scripts/check-live-ui-ci-gate.mjs
 
       - name: TypeScript type-check

@@ -230,24 +230,40 @@ export const ccHeaderPaperSx: SxProps<Theme> = {
 
 /**
  * 2×2 KPI band — Est | Last sale / Units | Category.
- * Grow 3 = primary slack sink so Last sale sits beside condo.
+ * Grow within the primary cluster so the KPI→condo gap never parks slack.
+ * With condo: left-align cells beside condo (tight packing).
  */
 export const ccHeaderQuickStatsSx: SxProps<Theme> = {
-  // Grow within the primary cluster so the KPI→condo gap never parks slack.
   flex: { xs: '1 1 100%', md: '1 1 auto' },
   minWidth: { xs: '100%', md: 0 },
   maxWidth: { xs: '100%', md: 'none' },
   width: { md: 'auto' },
   display: 'grid',
   gridTemplateColumns: 'repeat(2, auto)',
-  columnGap: { xs: 1.25, md: 1.25 },
+  // Room between Est/Units | Last sale/Category; keep cells left-aligned in-col.
+  columnGap: { xs: 2, md: 2.5 },
   rowGap: { xs: 0.75, md: 0.65 },
   alignContent: 'center',
+  // Left-align so Est. value ↔ Units / details and Last sale ↔ Category share an edge.
   justifyItems: 'start',
   justifyContent: 'start',
+  textAlign: 'left',
   overflow: 'hidden',
   contain: 'layout',
   isolation: 'isolate',
   px: { md: 0.25 },
   mr: { md: 0 },
+}
+
+/**
+ * Residential (no condo): center the 2×2 block in the address↔score gap, but
+ * keep column cells left-aligned (justifyItems start) so stacked KPIs share an edge.
+ * Trail/score keep ccHeaderTrailingPanelsSx (clamp ~10–13vw / 260px).
+ */
+export const ccHeaderQuickStatsCenteredSx: SxProps<Theme> = {
+  ...ccHeaderQuickStatsSx,
+  justifyContent: 'center',
+  justifyItems: 'start',
+  // Mark for packing geometry / contracts.
+  '&': { ['--cc-kpi-band' as string]: 'centered-residential' },
 }

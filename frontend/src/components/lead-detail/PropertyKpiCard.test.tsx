@@ -31,7 +31,7 @@ function basePayload(overrides: Partial<CommandCenterPayload> = {}): CommandCent
 }
 
 describe('buildAtAGlanceRows', () => {
-  it('includes beds/baths, sqft, year, tax, deal, and mailer when present (no type — lives in Quick Stats)', () => {
+  it('includes beds/baths, sqft, year, tax, and deal when present (no type — lives in Quick Stats; mail history is MailHistorySection)', () => {
     const rows = buildAtAGlanceRows(
       basePayload({
         units: 4,
@@ -71,8 +71,7 @@ describe('buildAtAGlanceRows', () => {
     expect(byId.tax).toBe('$4,200')
     expect(byId['deal-source']).toBe('Driving for Dollars')
     expect(byId['deal-description']).toBe('Saw for-sale sign')
-    expect(byId['mailer-history']).toContain('2 mailers')
-    expect(byId['mailer-history']).toContain('Letter A')
+    expect(byId['mailer-history']).toBeUndefined()
   })
 })
 
@@ -146,5 +145,41 @@ describe('PropertyKpiCard', () => {
     } finally {
       el.remove()
     }
+  })
+
+  it('mounts MailHistorySection under At a glance after deal description', () => {
+    render(
+      <ThemeProvider theme={theme}>
+        <PropertyKpiCard
+          commandCenterData={basePayload({
+            deal_description: 'Corner lot',
+            mailer_history_summary: {
+              count: 1,
+              last_sent_at: '01/15/2024',
+              rows: [
+                {
+                  id: 'mail-0',
+                  sent_at: '01/15/2024',
+                  label: 'Letter A',
+                  creative: null,
+                  template_name: null,
+                  campaign_id: 1,
+                  olc_order_id: null,
+                  address_feedback: null,
+                  cancelled: false,
+                  source: 'olc',
+                },
+              ],
+            },
+          })}
+        />
+      </ThemeProvider>,
+    )
+    expect(screen.getByTestId('kpi-deal-description')).toHaveTextContent('Corner lot')
+    expect(screen.queryByTestId('kpi-mailer-history')).not.toBeInTheDocument()
+    const mail = screen.getByTestId('mail-history-section')
+    expect(mail).toBeInTheDocument()
+    expect(mail).toHaveTextContent('Letter A')
+    expect(screen.getByTestId('property-kpi-card').contains(mail)).toBe(true)
   })
 })

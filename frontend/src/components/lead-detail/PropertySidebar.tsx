@@ -963,12 +963,19 @@ export function PropertySidebar({
                   </Typography>
                 )}
                 <Link
-                  component={RouterLink}
-                  to={`?tab=marketing`}
+                  href="#mail-history-section"
                   variant="caption"
-                  sx={{ display: 'inline-block', mt: 0.5 }}
+                  underline="hover"
+                  sx={{ display: 'inline-block', mt: 0.5, cursor: 'pointer' }}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    const el = document.getElementById('mail-history-section')
+                    if (!el) return
+                    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                    window.history.replaceState(null, '', '#mail-history-section')
+                  }}
                 >
-                  See Marketing tab
+                  See mail history
                 </Link>
               </>
             )

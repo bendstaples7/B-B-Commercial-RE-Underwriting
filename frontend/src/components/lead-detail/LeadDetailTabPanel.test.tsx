@@ -147,8 +147,8 @@ describe('LeadDetailTabPanel prior-owner Info', () => {
   })
 })
 
-describe('LeadDetailTabPanel Marketing mail history', () => {
-  it('shows normalized legacy mailer history on Marketing tab', () => {
+describe('LeadDetailTabPanel Marketing tab', () => {
+  it('shows marketing lists only (mail history lives under At a glance)', () => {
     render(
       <MemoryRouter initialEntries={['/leads/1?tab=marketing']}>
         <LeadDetailTabPanel
@@ -191,10 +191,9 @@ describe('LeadDetailTabPanel Marketing mail history', () => {
       </MemoryRouter>,
     )
 
-    expect(screen.getByText('Mail history')).toBeInTheDocument()
-    expect(screen.getByText('1 mailer')).toBeInTheDocument()
-    expect(screen.getByText('Boyfriend, OLM, Blue')).toBeInTheDocument()
-    expect(screen.getByText('6/21/2024')).toBeInTheDocument()
+    expect(screen.queryByText('Mail history')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Mail history')).not.toBeInTheDocument()
+    expect(screen.queryByText('Responses attributed to mail')).not.toBeInTheDocument()
     expect(screen.getByText(/not a member of any marketing lists/i)).toBeInTheDocument()
   })
 })

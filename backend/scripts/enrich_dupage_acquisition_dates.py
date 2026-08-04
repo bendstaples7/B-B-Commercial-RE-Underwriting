@@ -27,12 +27,9 @@ import argparse
 import logging
 import os
 import sys
-import time
-from datetime import datetime, date
+from datetime import date
 from pathlib import Path
 from typing import Optional
-
-import requests
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -61,109 +58,33 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(mes
 logger = logging.getLogger('enrich_acq_dates')
 
 # ---------------------------------------------------------------------------
-# PTAX-203 Socrata API
+# PTAX-203 Socrata API (shared Illinois MyDec helper)
 # ---------------------------------------------------------------------------
-PTAX_API = 'https://data.illinois.gov/resource/it54-y4c6.json'
-# Fields we need: PIN, instrument date (= deed/transfer date), buyer name
-PTAX_FIELDS = 'line_1_primary_pin,line_4_instrument_date,step_4_buyer_name,line_1_city,line_5_instrument_type'
-DUPAGE_WHERE = "line_1_county='DuPage' AND line_4_instrument_date IS NOT NULL"
+from app.services.helpers.illinois_mydec import (  # noqa: E402
+    fetch_county_pin_to_date_map,
+    normalize_mydec_pin,
+)
+
 PAGE_SIZE = 5000
 
 
 def _normalize_pin(pin: str) -> str:
-    """Normalize PIN to match the format stored in leads.county_assessor_pin.
-
-    PTAX format:  '02-09-114-001-0000'  (with dashes, trailing zeros)
-    GIS format:   '0209114001'           (no dashes, no trailing segment)
-    We strip dashes and take first 10 digits.
-    """
-    if not pin:
-        return ''
-    clean = pin.replace('-', '').replace(' ', '')
-    # PTAX PINs are 14 digits (10-digit parcel + 4-digit segment)
-    # Our leads store 10-digit PINs
-    return clean[:10]
+    """Normalize PIN to match leads.county_assessor_pin (DuPage: 10 digits)."""
+    return normalize_mydec_pin(pin, keep_digits=10)
 
 
 def fetch_all_dupage_transfers(limit: Optional[int] = None) -> dict[str, date]:
     """Fetch all DuPage transfer records and return a dict of PIN → most recent deed date."""
     logger.info("Fetching DuPage transfer records from Illinois MyDec API...")
-
-    # Get total count first
-    r = requests.get(PTAX_API,
-        params={'$select': 'count(*)', '$where': DUPAGE_WHERE},
-        timeout=30)
-    r.raise_for_status()
-    total = int(r.json()[0]['count'])
-    logger.info("Total DuPage PTAX records available: %s", f"{total:,}")
-
-    if limit:
-        total = min(total, limit)
-        logger.info("Limiting to %s records", f"{total:,}")
-
-    # Build PIN → most_recent_date map
-    pin_to_date: dict[str, date] = {}
-    offset = 0
-    page_num = 0
-
-    while offset < total:
-        fetch_count = min(PAGE_SIZE, total - offset)
-        for attempt in range(3):
-            try:
-                r = requests.get(PTAX_API, params={
-                    '$select': PTAX_FIELDS,
-                    '$where': DUPAGE_WHERE,
-                    '$limit': fetch_count,
-                    '$offset': offset,
-                    '$order': 'line_4_instrument_date DESC',
-                }, timeout=45)
-                r.raise_for_status()
-                records = r.json()
-                break
-            except Exception as e:
-                if attempt < 2:
-                    logger.warning("Fetch attempt %d failed: %s — retrying in 10s", attempt + 1, e)
-                    time.sleep(10)
-                else:
-                    raise
-
-        if not records:
-            break
-
-        for rec in records:
-            raw_pin = rec.get('line_1_primary_pin', '')
-            normalized = _normalize_pin(raw_pin)
-            if not normalized:
-                continue
-
-            instrument_date_str = rec.get('line_4_instrument_date', '')
-            if not instrument_date_str:
-                continue
-            try:
-                # Format: "2019-07-11T00:00:00.000"
-                deed_date = datetime.fromisoformat(instrument_date_str.split('T')[0]).date()
-            except ValueError:
-                continue
-
-            # Keep the most recent deed date per PIN (= current owner's acquisition)
-            existing = pin_to_date.get(normalized)
-            if existing is None or deed_date > existing:
-                pin_to_date[normalized] = deed_date
-
-        page_num += 1
-        offset += len(records)
-
-        if page_num % 5 == 0:
-            logger.info(
-                "  Fetched %s/%s records | %s unique PINs mapped",
-                f"{offset:,}", f"{total:,}", f"{len(pin_to_date):,}"
-            )
-
-        time.sleep(0.1)  # polite rate limiting
-
+    pin_to_date = fetch_county_pin_to_date_map(
+        'DuPage',
+        pin_digits=10,
+        limit=limit,
+        page_size=PAGE_SIZE,
+    )
     logger.info(
-        "Fetch complete: %s records → %s unique DuPage PINs with deed dates",
-        f"{offset:,}", f"{len(pin_to_date):,}"
+        "Fetch complete: %s unique DuPage PINs with deed dates",
+        f"{len(pin_to_date):,}",
     )
     return pin_to_date
 

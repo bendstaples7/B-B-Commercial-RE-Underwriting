@@ -1,6 +1,7 @@
 /**
- * Match open tasks that may be completed when logging a call.
- * Mirrors backend/app/utils/call_completable_task.py
+ * Match open tasks that may be completed when logging activity.
+ * Call matcher mirrors backend/app/utils/call_completable_task.py.
+ * Note/email never auto-complete skip-trace / research / system tasks.
  */
 import type { LeadTask, LeadTaskType } from '@/types'
 
@@ -13,6 +14,14 @@ const NON_CALL_TASK_TYPES = new Set<LeadTaskType>([
   'match_hubspot_deal',
   'run_property_analysis',
   'add_to_mail_batch',
+  'skip_trace_owner',
+])
+
+/** System / ops tasks that must never auto-complete from Log note or email. */
+const NEVER_NOTE_EMAIL_COMPLETE = new Set<LeadTaskType>([
+  'research_missing_pin',
+  'match_hubspot_deal',
+  'run_property_analysis',
   'skip_trace_owner',
 ])
 
@@ -37,6 +46,20 @@ export function isCallCompletableTask(
   if (NON_CALL_TASK_TYPES.has(ttype as LeadTaskType)) return false
   if (isMailOrEmailOutreachTask(taskType, title)) return false
   return CALL_TITLE_RE.test(text) || FOLLOW_UP_TITLE_RE.test(text)
+}
+
+/**
+ * Email mode: call-completable outreach, or mail/email tasks.
+ * Still never skip-trace / research / match / analysis.
+ */
+export function isEmailCompletableTask(
+  taskType: string | null | undefined,
+  title: string | null | undefined,
+): boolean {
+  const ttype = (taskType || 'custom').trim()
+  if (NEVER_NOTE_EMAIL_COMPLETE.has(ttype as LeadTaskType)) return false
+  if (isMailOrEmailOutreachTask(taskType, title)) return true
+  return isCallCompletableTask(taskType, title)
 }
 
 /** Resolve numeric LeadTask id (legacy rows may still use ``hs-{id}``). */
@@ -81,21 +104,62 @@ function sortOpenTasks(tasks: LeadTask[]): LeadTask[] {
 /** Shared overdue → due-today ordering for open-task primary row selection. */
 export { sortOpenTasks }
 
-/** Prefer overdue → due today; first call-completable open task (native or HubSpot). */
-export function findCallCompletableTask(tasks: LeadTask[]): LeadTask | null {
+function findFirstMatching(
+  tasks: LeadTask[],
+  predicate: (task: LeadTask) => boolean,
+  soleFallback?: (task: LeadTask) => boolean,
+): LeadTask | null {
   const openTasks = sortOpenTasks(
     tasks.filter((t) => t.status === 'open' || t.status === 'overdue'),
   )
 
   for (const task of openTasks) {
-    if (isCallCompletableTask(task.task_type, task.title)) {
-      return task
-    }
+    if (predicate(task)) return task
   }
 
-  if (openTasks.length === 1 && !isMailOrEmailOutreachTask(openTasks[0].task_type, openTasks[0].title)) {
+  if (openTasks.length === 1 && soleFallback?.(openTasks[0])) {
     return openTasks[0]
   }
 
   return null
+}
+
+/** Prefer overdue → due today; first call-completable open task (native or HubSpot). */
+export function findCallCompletableTask(tasks: LeadTask[]): LeadTask | null {
+  return findFirstMatching(
+    tasks,
+    (task) => isCallCompletableTask(task.task_type, task.title),
+    (task) => !isMailOrEmailOutreachTask(task.task_type, task.title)
+      && !NEVER_NOTE_EMAIL_COMPLETE.has((task.task_type || 'custom') as LeadTaskType)
+      && (task.task_type || 'custom') !== 'add_to_mail_batch',
+  )
+}
+
+/**
+ * @deprecated Prefer findCompletableTaskForMode — kept for tests that assert
+ * soonest-open ordering helpers separately from mode matchers.
+ */
+export function findPrimaryOpenTask(tasks: LeadTask[]): LeadTask | null {
+  const openTasks = sortOpenTasks(
+    tasks.filter((t) => t.status === 'open' || t.status === 'overdue'),
+  )
+  return openTasks[0] ?? null
+}
+
+export function findEmailCompletableTask(tasks: LeadTask[]): LeadTask | null {
+  return findFirstMatching(
+    tasks,
+    (task) => isEmailCompletableTask(task.task_type, task.title),
+    (task) =>
+      !NEVER_NOTE_EMAIL_COMPLETE.has((task.task_type || 'custom') as LeadTaskType),
+  )
+}
+
+/** Mode-aware completable task for LogActivityForm next-step panel. */
+export function findCompletableTaskForMode(
+  mode: 'call' | 'note' | 'email',
+  tasks: LeadTask[],
+): LeadTask | null {
+  if (mode === 'call' || mode === 'note') return findCallCompletableTask(tasks)
+  return findEmailCompletableTask(tasks)
 }

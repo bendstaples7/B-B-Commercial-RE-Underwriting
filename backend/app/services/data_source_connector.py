@@ -526,13 +526,34 @@ class DataSourceConnector:
             new_str = str(new_value) if new_value is not None else None
 
             if old_str != new_str:
+                provenance = enrichment_data.fields.get("sale_date_provenance")
+                fill_if_null = bool(enrichment_data.fields.get("_sale_fill_if_null"))
+                if (
+                    field_name in ("acquisition_date", "most_recent_sale_price")
+                    and fill_if_null
+                    and old_value is not None
+                ):
+                    # Related-PIN / MyDec: fill-if-null only.
+                    continue
+
+                from app.services.helpers.cook_county_sale_date_resolver import (
+                    PROVENANCE_TO_CHANGED_BY,
+                )
+                if (
+                    field_name == "acquisition_date"
+                    and provenance in PROVENANCE_TO_CHANGED_BY
+                ):
+                    changed_by = PROVENANCE_TO_CHANGED_BY[provenance]
+                else:
+                    changed_by = f"enrichment:{source_name}"
+
                 # Record audit trail
                 audit = LeadAuditTrail(
                     lead_id=lead.id,
                     field_name=field_name,
                     old_value=old_str,
                     new_value=new_str,
-                    changed_by=f"enrichment:{source_name}",
+                    changed_by=changed_by,
                 )
                 db.session.add(audit)
 

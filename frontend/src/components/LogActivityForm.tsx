@@ -5,18 +5,16 @@
  * single component keyed by `mode`. Call mode keeps every prior capability:
  * outcomes (including Not Interested), direction, duration, contact method,
  * mail attribution, complete-task, follow-up cadence, next-step types, and
- * HubSpot task completion. Note and email modes share the same "next step"
- * follow-up cadence section whenever the lead has open tasks.
+ * HubSpot task completion. Note and email modes share the same Next-step panel
+ * (complete task + follow-up) via ActivityNextStepPanel.
  */
 import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Box,
   Button,
-  Checkbox,
   CircularProgress,
   FormControl,
-  FormControlLabel,
   FormHelperText,
   FormLabel,
   InputLabel,
@@ -40,11 +38,10 @@ import {
   contactMethodToCallPayload,
   contactMethodToEmailPayload,
 } from '@/components/ContactMethodFields'
-import { FollowUpHorizonControls } from '@/components/FollowUpHorizonControls'
-import { findCallCompletableTask, parseHubSpotTaskId } from '@/utils/callCompletableTask'
+import { ActivityNextStepPanel } from '@/components/ActivityNextStepPanel'
+import { findCompletableTaskForMode, parseHubSpotTaskId } from '@/utils/callCompletableTask'
 import {
   type FollowUpPreset,
-  formatFollowUpPresetLabel,
   followUpDueForPreset,
   resolveFollowUpDueDate,
 } from '@/utils/followUpPresets'
@@ -166,9 +163,12 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
     const formRef = useRef<HTMLDivElement>(null)
     const outcomeGroupRef = useRef<HTMLDivElement>(null)
 
-    const callTask = useMemo(() => findCallCompletableTask(openTasks), [openTasks])
-    const hasOpenTasks = openTasks.length > 0
-    const showNextStepSection = mode === 'call' || hasOpenTasks
+    const completableTask = useMemo(
+      () => findCompletableTaskForMode(mode, openTasks),
+      [mode, openTasks],
+    )
+    const hasOpenNonCompletableTasks =
+      !completableTask && openTasks.some((t) => t.status === 'open' || t.status === 'overdue')
 
     const { data: recentMailCampaigns } = useQuery({
       queryKey: ['mail-campaigns-for-lead', leadId],
@@ -201,8 +201,8 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
     // Shared contact method (phone for call, email for email)
     const [contactMethod, setContactMethod] = useState<ContactMethodValue>(EMPTY_CONTACT_METHOD)
 
-    // Shared next-step / follow-up cadence
-    const [createFollowUp, setCreateFollowUp] = useState(mode === 'call' && Boolean(callTask))
+    // Shared next-step / follow-up cadence — default on when a completable task exists
+    const [createFollowUp, setCreateFollowUp] = useState(Boolean(completableTask))
     const [followUpPreset, setFollowUpPreset] = useState<FollowUpPreset>('3')
     const [customDueDate, setCustomDueDate] = useState('')
     const [nextStepExpanded, setNextStepExpanded] = useState(false)
@@ -279,13 +279,42 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       }
     }
 
-    const resetNextStepState = (nextCallTask: LeadTask | null) => {
-      setCreateFollowUp(mode === 'call' && Boolean(nextCallTask))
+    const resetNextStepState = (nextCompletable: LeadTask | null) => {
+      setCreateFollowUp(Boolean(nextCompletable))
       setFollowUpPreset('3')
       setCustomDueDate('')
       setNextStepExpanded(false)
       setNextStepType('call_owner_today')
       setCustomTaskTitle('')
+      setCompleteTask(true)
+    }
+
+    const buildCompletionIds = () => {
+      const completingNativeTask =
+        completeTask &&
+        completableTask &&
+        completableTask.source !== 'hubspot' &&
+        typeof completableTask.id === 'number'
+      const completedTaskId = completingNativeTask ? (completableTask!.id as number) : null
+      const completingHubSpotTask = completeTask && completableTask && completableTask.source === 'hubspot'
+      const hubSpotTaskId = completingHubSpotTask ? parseHubSpotTaskId(completableTask!.id) : null
+      return { completedTaskId, hubSpotTaskId }
+    }
+
+    const maybeCompleteHubSpot = async (
+      hubSpotTaskId: number | null,
+      softWarning: string,
+    ): Promise<{ completedHubSpotTaskId?: number; completionWarning?: string }> => {
+      if (hubSpotTaskId == null) return {}
+      try {
+        await callLogService.markHubSpotTaskDone(leadId, hubSpotTaskId, {
+          idNamespace: 'lead_task',
+        })
+        return { completedHubSpotTaskId: hubSpotTaskId }
+      } catch (hubSpotErr) {
+        console.error('Activity logged but HubSpot task completion failed:', hubSpotErr)
+        return { completionWarning: softWarning }
+      }
     }
 
     const handleAddSentFromAddress = () => {
@@ -320,11 +349,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       setSubmitting(true)
 
       const followUpDue = getFollowUpDueDate()
-      const completingNativeTask =
-        completeTask && callTask && callTask.source !== 'hubspot' && typeof callTask.id === 'number'
-      const completedTaskId = completingNativeTask ? (callTask!.id as number) : null
-      const completingHubSpotTask = completeTask && callTask && callTask.source === 'hubspot'
-      const hubSpotTaskId = completingHubSpotTask ? parseHubSpotTaskId(callTask!.id) : null
+      const { completedTaskId, hubSpotTaskId } = buildCompletionIds()
 
       const payload: LogCallPayload = {
         outcome: outcome as LogCallPayload['outcome'],
@@ -340,19 +365,10 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       try {
         const entry = await callLogService.logCall(leadId, payload)
 
-        let completedHubSpotTaskId: number | undefined
-        let completionWarning: string | undefined
-        if (hubSpotTaskId != null) {
-          try {
-            await callLogService.markHubSpotTaskDone(leadId, hubSpotTaskId, {
-              idNamespace: 'lead_task',
-            })
-            completedHubSpotTaskId = hubSpotTaskId
-          } catch (hubSpotErr) {
-            console.error('Call logged but HubSpot task completion failed:', hubSpotErr)
-            completionWarning = 'Call saved; the HubSpot task is still open.'
-          }
-        }
+        const { completedHubSpotTaskId, completionWarning } = await maybeCompleteHubSpot(
+          hubSpotTaskId,
+          'Call saved; the HubSpot task is still open.',
+        )
 
         const directionLabel = direction === 'inbound' ? 'Inbound' : 'Outbound'
         const summaryParts = [`${directionLabel} call: ${payload.outcome}`]
@@ -384,8 +400,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
         setCallNotes('')
         setMailCampaignId('')
         setContactMethod(EMPTY_CONTACT_METHOD)
-        setCompleteTask(true)
-        resetNextStepState(callTask)
+        resetNextStepState(completableTask)
       } catch (err) {
         setSubmitError(err instanceof Error ? err.message : 'Failed to log call. Please try again.')
       } finally {
@@ -411,22 +426,39 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       setSubmitting(true)
 
       const followUpDue = getFollowUpDueDate()
+      const { completedTaskId, hubSpotTaskId } = buildCompletionIds()
       const payload: LogNotePayload = {
         body,
+        complete_task_id: completedTaskId,
         follow_up: buildFollowUpPayload(followUpDue),
       }
 
       try {
         const entry = await callLogService.logNote(leadId, payload)
-        onSaved({
-          ...entry,
-          summary: entry.summary ?? body.slice(0, 500),
-          event_type: entry.event_type ?? 'note_added',
-          source: entry.source ?? 'manual',
-          metadata: entry.metadata ?? { body },
-        })
+        const { completedHubSpotTaskId, completionWarning } = await maybeCompleteHubSpot(
+          hubSpotTaskId,
+          'Note saved; the HubSpot task is still open.',
+        )
+        const savedMeta: LogCallSavedMeta | undefined =
+          completedTaskId != null || completedHubSpotTaskId != null || completionWarning
+            ? {
+                completedTaskId: completedTaskId ?? undefined,
+                completedHubSpotTaskId,
+                warning: completionWarning,
+              }
+            : undefined
+        onSaved(
+          {
+            ...entry,
+            summary: entry.summary ?? body.slice(0, 500),
+            event_type: entry.event_type ?? 'note_added',
+            source: entry.source ?? 'manual',
+            metadata: entry.metadata ?? { body },
+          },
+          savedMeta,
+        )
         setBody('')
-        resetNextStepState(null)
+        resetNextStepState(completableTask)
       } catch (err) {
         // Preserve form data on server error — do NOT clear body
         setSubmitError(err instanceof Error ? err.message : 'Failed to save note. Please try again.')
@@ -454,16 +486,22 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
 
       const followUpDue = getFollowUpDueDate()
       const formattedBody = formatEmailNote(subject, body)
+      const { completedTaskId, hubSpotTaskId } = buildCompletionIds()
       const payload: LogNotePayload = {
         body: formattedBody,
         subject: subject.trim() || null,
         sent_from_email: sentFromEmail.trim() || null,
         ...contactMethodToEmailPayload(contactMethod),
+        complete_task_id: completedTaskId,
         follow_up: buildFollowUpPayload(followUpDue),
       }
 
       try {
         const entry = await callLogService.logNote(leadId, payload)
+        const { completedHubSpotTaskId, completionWarning } = await maybeCompleteHubSpot(
+          hubSpotTaskId,
+          'Email saved; the HubSpot task is still open.',
+        )
         const metadataFallback = buildEmailMetadataFallback(
           formattedBody,
           subject,
@@ -471,17 +509,28 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
           contactMethod,
           contacts,
         )
-        onSaved({
-          ...entry,
-          summary: entry.summary ?? formattedBody.slice(0, 500),
-          event_type: entry.event_type ?? 'email_logged',
-          source: entry.source ?? 'manual',
-          metadata: entry.metadata ?? metadataFallback,
-        })
+        const savedMeta: LogCallSavedMeta | undefined =
+          completedTaskId != null || completedHubSpotTaskId != null || completionWarning
+            ? {
+                completedTaskId: completedTaskId ?? undefined,
+                completedHubSpotTaskId,
+                warning: completionWarning,
+              }
+            : undefined
+        onSaved(
+          {
+            ...entry,
+            summary: entry.summary ?? formattedBody.slice(0, 500),
+            event_type: entry.event_type ?? 'email_logged',
+            source: entry.source ?? 'manual',
+            metadata: entry.metadata ?? metadataFallback,
+          },
+          savedMeta,
+        )
         setSubject('')
         setBody('')
         setContactMethod(EMPTY_CONTACT_METHOD)
-        resetNextStepState(null)
+        resetNextStepState(completableTask)
       } catch (err) {
         setSubmitError(err instanceof Error ? err.message : 'Failed to log email. Please try again.')
       } finally {
@@ -500,146 +549,34 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
     const isCallNotesOverLimit = callNotes.length > MAX_CALL_NOTES_LENGTH
     const isBodyOverLimit = body.length > MAX_BODY_LENGTH
 
-    const nextStepPanel = showNextStepSection && (
-      <Box
-        data-testid={mode === 'call' ? 'call-task-actions' : 'activity-next-step-actions'}
-        sx={{
-          height: '100%',
-          px: 1.5,
-          py: 1.25,
-          borderRadius: 1,
-          bgcolor: 'action.hover',
-          border: 1,
-          borderColor: 'divider',
+    const nextStepPanel = (
+      <ActivityNextStepPanel
+        completableTask={completableTask}
+        showNoCallTaskHint={mode === 'call'}
+        hasOpenNonCompletableTasks={hasOpenNonCompletableTasks}
+        completeTask={completeTask}
+        onCompleteTaskChange={setCompleteTask}
+        createFollowUp={createFollowUp}
+        onCreateFollowUpChange={setCreateFollowUp}
+        followUpPreset={followUpPreset}
+        customDueDate={customDueDate}
+        followUpError={followUpError}
+        followUpDuePreview={followUpDuePreview}
+        onFollowUpPresetChange={(value) => {
+          setFollowUpPreset(value)
+          setFollowUpError(null)
         }}
-      >
-        <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, letterSpacing: 0.01 }}>
-          Next step
-        </Typography>
-
-        {mode === 'call' && (
-          callTask ? (
-            <FormControlLabel
-              sx={{ alignItems: 'flex-start', m: 0, mb: 1, display: 'flex' }}
-              control={
-                <Checkbox
-                  checked={completeTask}
-                  onChange={(e) => setCompleteTask(e.target.checked)}
-                  data-testid="complete-call-task-checkbox"
-                  sx={{ pt: 0.25 }}
-                />
-              }
-              label={
-                <Box data-testid="complete-call-task-section">
-                  <Typography variant="body2">
-                    Complete task:{' '}
-                    <Typography component="span" variant="body2" fontWeight={600}>
-                      {callTask.title}
-                    </Typography>
-                  </Typography>
-                  {callTask.source === 'hubspot' && (
-                    <Typography variant="caption" color="text.secondary" display="block">
-                      Marks done in HubSpot when possible.
-                    </Typography>
-                  )}
-                </Box>
-              }
-            />
-          ) : openTasks.some((t) => t.status === 'open' || t.status === 'overdue') ? (
-            <Alert severity="info" sx={{ mb: 1, py: 0.5 }} data-testid="no-call-task-hint">
-              No open call or follow-up task to complete. Mail or email outreach tasks are not
-              completed from a call log.
-            </Alert>
-          ) : null
-        )}
-
-        <FormControlLabel
-          sx={{ alignItems: 'flex-start', m: 0, mb: createFollowUp ? 0.75 : 0, display: 'flex' }}
-          control={
-            <Checkbox
-              checked={createFollowUp}
-              onChange={(e) => setCreateFollowUp(e.target.checked)}
-              data-testid="create-follow-up-checkbox"
-              sx={{ pt: 0.25 }}
-            />
-          }
-          label={
-            <Typography variant="body2" data-testid="call-follow-up-section">
-              Create a follow-up task
-              {followUpDuePreview && (
-                <>
-                  {' — '}
-                  <Typography component="span" variant="body2" color="primary.main">
-                    {formatFollowUpPresetLabel(
-                      followUpPreset as Exclude<FollowUpPreset, 'custom'>,
-                      followUpDuePreview,
-                    )}
-                  </Typography>
-                </>
-              )}
-            </Typography>
-          }
-        />
-
-        {createFollowUp && (
-          <Box sx={{ width: '100%', minWidth: 0 }}>
-            <Button
-              size="small"
-              variant="text"
-              onClick={() => setNextStepExpanded((expanded) => !expanded)}
-              data-testid="change-next-step-btn"
-              sx={{ px: 0, mb: 0.5 }}
-            >
-              Change next step
-            </Button>
-            {nextStepExpanded && (
-              <>
-                <FormControl fullWidth size="small" sx={{ mb: 1 }}>
-                  <InputLabel id="next-step-type-label">Task type</InputLabel>
-                  <Select
-                    labelId="next-step-type-label"
-                    label="Task type"
-                    value={nextStepType}
-                    onChange={(e) => setNextStepType(
-                      e.target.value as 'call_owner_today' | 'add_to_mail_batch' | 'custom',
-                    )}
-                    inputProps={{ 'data-testid': 'next-step-type-select' }}
-                  >
-                    <MenuItem value="call_owner_today">Follow-up call</MenuItem>
-                    <MenuItem value="add_to_mail_batch">Add to mail queue</MenuItem>
-                    <MenuItem value="custom">Custom task</MenuItem>
-                  </Select>
-                </FormControl>
-                {nextStepType === 'custom' && (
-                  <TextField
-                    label="Task title"
-                    size="small"
-                    fullWidth
-                    value={customTaskTitle}
-                    onChange={(e) => setCustomTaskTitle(e.target.value)}
-                    inputProps={{ 'data-testid': 'next-step-custom-title', maxLength: 255 }}
-                    sx={{ mb: 1 }}
-                  />
-                )}
-              </>
-            )}
-            <FollowUpHorizonControls
-              variant="list"
-              preset={followUpPreset}
-              customDueDate={customDueDate}
-              error={followUpError}
-              onPresetChange={(value) => {
-                setFollowUpPreset(value)
-                setFollowUpError(null)
-              }}
-              onCustomDueDateChange={(value) => {
-                setCustomDueDate(value)
-                setFollowUpError(null)
-              }}
-            />
-          </Box>
-        )}
-      </Box>
+        onCustomDueDateChange={(value) => {
+          setCustomDueDate(value)
+          setFollowUpError(null)
+        }}
+        nextStepExpanded={nextStepExpanded}
+        onToggleNextStepExpanded={() => setNextStepExpanded((expanded) => !expanded)}
+        nextStepType={nextStepType}
+        onNextStepTypeChange={setNextStepType}
+        customTaskTitle={customTaskTitle}
+        onCustomTaskTitleChange={setCustomTaskTitle}
+      />
     )
 
     return (
@@ -656,7 +593,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
         )}
 
         <Grid container spacing={2} alignItems="stretch">
-          <Grid item xs={12} md={showNextStepSection ? 7 : 12}>
+          <Grid item xs={12} md={7}>
             {mode === 'call' && (
               <>
                 <ContactMethodFields
@@ -967,7 +904,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
             )}
           </Grid>
 
-          {showNextStepSection && <Grid item xs={12} md={5}>{nextStepPanel}</Grid>}
+          <Grid item xs={12} md={5}>{nextStepPanel}</Grid>
         </Grid>
 
         <Stack
@@ -997,10 +934,10 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
             {submitting
               ? 'Saving…'
               : mode === 'call'
-                ? (completeTask && callTask ? 'Log call and complete task' : 'Log call')
+                ? (completeTask && completableTask ? 'Log call and complete task' : 'Log call')
                 : mode === 'note'
-                  ? 'Save Note'
-                  : 'Log email'}
+                  ? (completeTask && completableTask ? 'Save note and complete task' : 'Save Note')
+                  : (completeTask && completableTask ? 'Log email and complete task' : 'Log email')}
           </Button>
         </Stack>
       </Box>

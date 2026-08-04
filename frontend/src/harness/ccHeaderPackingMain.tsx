@@ -1,6 +1,9 @@
 /**
  * Hostile CC header packing harness — real MUI + production packing tokens.
  * Served by Vite for Playwright geometry / paint gates (not a static HTML twin).
+ *
+ * ?fixture=residential — no-condo header for KPI centering symmetry gate
+ * (default) — condo hostile Hoyne fixture
  */
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -17,7 +20,10 @@ import {
 } from '@/components/lead-detail/commandCenterChrome'
 import { HeaderCondoCheckPanel } from '@/components/lead-detail/HeaderCondoCheckPanel'
 import { HeaderLeadScorePanel } from '@/components/lead-detail/HeaderLeadScorePanel'
-import { PropertyOverviewQuickStats } from '@/components/lead-detail/PropertyOverviewQuickStats'
+import {
+  PropertyOverviewQuickStats,
+  shouldShowCondoCheckCell,
+} from '@/components/lead-detail/PropertyOverviewQuickStats'
 import type { CommandCenterPayload, PropertyScoreRecord } from '@/types'
 
 const theme = createTheme()
@@ -57,6 +63,40 @@ const HOSTILE_PAYLOAD = {
   organizations: [],
 } as unknown as CommandCenterPayload
 
+/** Plain residential — short address, no condo, max slack for centering gate. */
+const RESIDENTIAL_PAYLOAD = {
+  id: 10970,
+  owner_first_name: 'Alejandro',
+  owner_last_name: 'Carbajal',
+  property_street: '2951 N Gresham Ave',
+  property_city: 'Chicago',
+  property_state: 'IL',
+  property_zip: '60618',
+  property_type: 'Two to Six Units',
+  lead_status: 'skip_trace',
+  lead_category: 'residential',
+  lead_score: 52,
+  assessed_value: 420000,
+  most_recent_sale: null,
+  most_recent_sale_price: null,
+  units: 2,
+  condo_risk_status: null,
+  condo_confidence: null,
+  condo_check_reason: null,
+  condo_check_drivers: null,
+  condo_checked_at: null,
+  condo_analysis_id: null,
+  building_ownership_pending: false,
+  building_sale_possible: null,
+  has_property_match: true,
+  analysis_session_id: null,
+  recommended_action: { value: 'nurture', label: 'Nurture', explanation: '', signals: {} },
+  open_tasks: [],
+  timeline: { entries: [], total: 0, page: 1, per_page: 20 },
+  contacts: [],
+  organizations: [],
+} as unknown as CommandCenterPayload
+
 const HOSTILE_SCORE: PropertyScoreRecord = {
   id: 1,
   property_id: 857859,
@@ -81,11 +121,30 @@ const HOSTILE_SCORE: PropertyScoreRecord = {
   created_at: '2026-08-01T12:00:00Z',
 }
 
-function HarnessHeader() {
+const RESIDENTIAL_SCORE: PropertyScoreRecord = {
+  ...HOSTILE_SCORE,
+  property_id: 10970,
+  total_score: 52,
+  score_tier: 'B',
+}
+
+function HarnessHeader({
+  payload,
+  score,
+  addressLine,
+}: {
+  payload: CommandCenterPayload
+  score: PropertyScoreRecord
+  addressLine: string
+}) {
+  const showCondo = shouldShowCondoCheckCell(payload)
+  const centerKpis = !showCondo
+
   return (
     <Box
       component="header"
       data-testid="property-overview-header"
+      data-cc-fixture={showCondo ? 'condo-hostile' : 'residential'}
       sx={{
         ...ccHeaderPaperSx,
         width: '100%',
@@ -96,7 +155,6 @@ function HarnessHeader() {
       <Box
         sx={{
           display: 'flex',
-          // Match production ULCC: one horizontal bar on md+.
           flexWrap: { xs: 'wrap', md: 'nowrap' },
           alignItems: 'center',
           gap: { xs: 1.25, md: 1.25 },
@@ -131,29 +189,35 @@ function HarnessHeader() {
                   textOverflow: 'ellipsis',
                 }}
               >
-                857-859 N Hoyne Ave, Chicago, IL 60622
+                {addressLine}
               </Typography>
-              <Typography sx={ccHeroSecondarySx} data-testid="property-overview-aka">
-                Also known as: 857 N Hoyne Ave / 859 N Hoyne Ave
-              </Typography>
+              {showCondo ? (
+                <Typography sx={ccHeroSecondarySx} data-testid="property-overview-aka">
+                  Also known as: 857 N Hoyne Ave / 859 N Hoyne Ave
+                </Typography>
+              ) : null}
               <Chip
                 size="small"
-                label="Mailing, No Contact Made"
+                label={showCondo ? 'Mailing, No Contact Made' : 'Skip Trace'}
                 color="primary"
                 data-testid="property-overview-status"
                 sx={{ mt: 0.5, height: 22, fontSize: '0.7rem' }}
               />
             </Box>
           </Box>
-          <PropertyOverviewQuickStats commandCenterData={HOSTILE_PAYLOAD} />
+          <PropertyOverviewQuickStats commandCenterData={payload} centerInGap={centerKpis} />
         </Box>
 
-        <Box sx={ccHeaderTrailingPanelsSx} data-testid="cc-header-trailing-panels">
-          <HeaderCondoCheckPanel commandCenterData={HOSTILE_PAYLOAD} />
+        <Box
+          sx={ccHeaderTrailingPanelsSx}
+          data-testid="cc-header-trailing-panels"
+          data-cc-trail-mode={centerKpis ? 'grow-score' : 'grow-with-condo'}
+        >
+          <HeaderCondoCheckPanel commandCenterData={payload} />
           <HeaderLeadScorePanel
-            score={HOSTILE_SCORE.total_score}
-            tier={HOSTILE_SCORE.score_tier}
-            scoreRecord={HOSTILE_SCORE}
+            score={score.total_score}
+            tier={score.score_tier}
+            scoreRecord={score}
           />
         </Box>
       </Box>
@@ -161,12 +225,27 @@ function HarnessHeader() {
   )
 }
 
+const params = new URLSearchParams(window.location.search)
+const fixture = params.get('fixture') === 'residential' ? 'residential' : 'condo'
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <Box sx={{ p: 2, bgcolor: 'grey.50', minHeight: '100vh' }}>
-        <HarnessHeader />
+        {fixture === 'residential' ? (
+          <HarnessHeader
+            payload={RESIDENTIAL_PAYLOAD}
+            score={RESIDENTIAL_SCORE}
+            addressLine="2951 N Gresham Ave, Chicago, IL 60618"
+          />
+        ) : (
+          <HarnessHeader
+            payload={HOSTILE_PAYLOAD}
+            score={HOSTILE_SCORE}
+            addressLine="857-859 N Hoyne Ave, Chicago, IL 60622"
+          />
+        )}
       </Box>
     </ThemeProvider>
   </StrictMode>,

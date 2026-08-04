@@ -2,10 +2,14 @@
 
 Fetches free property data from 3 existing Cook County Socrata APIs:
 1. Parcel Universe (pabr-t5kh) — assessed_value, lot_size, property_class, lat/lon
-2. Parcel Sales (wvhk-k5uv) — sale_date, sale_price
+2. Parcel Sales (wvhk-k5uv) — sale_date, sale_price (via sale-date resolve ladder)
 3. Improvement Characteristics (bcnq-qi2z) — year_built, sqft, bedrooms, bathrooms
 
 Takes a PIN (Property Index Number) and returns an EnrichmentData dict.
+
+Sale dates resolve through
+``helpers.cook_county_sale_date_resolver`` (primary PIN → related/AKA PINs →
+MyDec Cook). Do not scrape Redfin / MLS / Clerk UI from this plugin.
 """
 import logging
 from datetime import datetime
@@ -14,6 +18,13 @@ from urllib.parse import quote
 
 from app.services.data_source_connector import DataSourcePlugin, EnrichmentData
 from app.services.cache_loader_service import CacheLoaderService
+from app.services.helpers.cook_county_sale_date_resolver import (
+    PROVENANCE_ASSESSOR,
+    PROVENANCE_MYDEC,
+    PROVENANCE_RELATED,
+    resolve_cook_county_sale_date,
+    should_write_acquisition_date,
+)
 from app.services.plugins.pin_utils import extract_pin, normalize_pin_for_socrata
 
 logger = logging.getLogger(__name__)
@@ -39,12 +50,24 @@ class CookCountyAssessorPlugin(DataSourcePlugin):
                 address,
             )
             return None
-        return self._lookup_by_pin(pin)
+        return self._lookup_by_pin(pin, lead=None)
 
     def lookup_by_pin(self, pin: str) -> Optional[EnrichmentData]:
-        return self._lookup_by_pin(pin)
+        return self._lookup_by_pin(pin, lead=None)
 
-    def _lookup_by_pin(self, pin: str) -> Optional[EnrichmentData]:
+    def lookup_for_lead(self, lead) -> Optional[EnrichmentData]:
+        """Lead-aware lookup so sale dates can climb the related-PIN / MyDec ladder."""
+        pin = getattr(lead, "county_assessor_pin", None)
+        if pin and str(pin).strip():
+            return self._lookup_by_pin(str(pin).strip(), lead=lead)
+        address = getattr(lead, "property_street", None) or ""
+        owner_name = (
+            f"{getattr(lead, 'owner_first_name', '') or ''} "
+            f"{getattr(lead, 'owner_last_name', '') or ''}"
+        ).strip()
+        return self.lookup(address, owner_name)
+
+    def _lookup_by_pin(self, pin: str, *, lead) -> Optional[EnrichmentData]:
         fields: dict = {}
         normalized_pin = normalize_pin_for_socrata(pin)
 
@@ -56,15 +79,41 @@ class CookCountyAssessorPlugin(DataSourcePlugin):
         if parcel_info:
             fields.update(parcel_info)
 
-        sale_info = self._fetch_most_recent_sale(normalized_pin)
-        if sale_info:
-            fields.update(sale_info)
+        sale_fields = self._resolve_sale_fields(normalized_pin, lead=lead)
+        if sale_fields:
+            fields.update(sale_fields)
 
         if not fields:
             logger.info("CookCountyAssessorPlugin: no data found for PIN=%r", pin)
             return None
 
         return EnrichmentData(fields=fields)
+
+    def _resolve_sale_fields(self, primary_pin: str, *, lead) -> dict:
+        """Primary → related → MyDec via the shared resolver when *lead* is set."""
+        if lead is None:
+            # PIN-only callers (tests / cache warm) — primary Assessor only.
+            return self._fetch_most_recent_sale(primary_pin)
+
+        resolution = resolve_cook_county_sale_date(
+            lead,
+            fetch_assessor_sale=self._fetch_most_recent_sale,
+            fetch_mydec=True,
+        )
+        if resolution is None:
+            return {}
+
+        fill_if_null = resolution.provenance in (
+            PROVENANCE_RELATED,
+            PROVENANCE_MYDEC,
+        )
+        fields = resolution.to_enrichment_fields(fill_if_null=fill_if_null)
+        if not should_write_acquisition_date(lead, resolution):
+            # Keep provenance/metadata for the enrichment record; skip lead write.
+            fields.pop("acquisition_date", None)
+            fields.pop("most_recent_sale_price", None)
+            fields["_sale_fill_if_null"] = True
+        return fields
 
     def _fetch_improvement_characteristics(self, pin: str) -> dict:
         where = f"pin='{pin}'"
@@ -174,37 +223,49 @@ class CookCountyAssessorPlugin(DataSourcePlugin):
     def _fetch_most_recent_sale(self, pin: str) -> dict:
         # Prefer LAND AND BUILDING, then any sale for the PIN. Cook County often
         # leaves sale_type null on otherwise valid parcel sales (e.g. 853 W George).
+        normalized = normalize_pin_for_socrata(pin)
         for where in (
-            f"pin='{pin}' AND sale_type='LAND AND BUILDING'",
-            f"pin='{pin}'",
+            f"pin='{normalized}' AND sale_type='LAND AND BUILDING'",
+            f"pin='{normalized}'",
         ):
-            row = self._fetch_parcel_sale_row(pin, where)
+            row = self._fetch_parcel_sale_row(normalized, where)
             if row:
                 return self._sale_fields_from_row(row)
         return {}
 
     def _fetch_parcel_sale_row(self, pin: str, where: str) -> Optional[dict]:
-        url = (
-            _PARCEL_SALES_URL
-            + "?$select=pin,sale_date,sale_price,sale_type"
-            + "&$where=" + quote(where)
-            + "&$order=sale_date+DESC"
-            + "&$limit=1"
+        select_variants = (
+            "pin,sale_date,sale_price,sale_type,doc_no",
+            "pin,sale_date,sale_price,sale_type",
         )
-        try:
-            rows = self._cache_loader._socrata_get_with_retry(url, max_retries=2)
-        except Exception as exc:
+        last_exc: Exception | None = None
+        for select_cols in select_variants:
+            url = (
+                _PARCEL_SALES_URL
+                + f"?$select={select_cols}"
+                + "&$where=" + quote(where)
+                + "&$order=sale_date+DESC"
+                + "&$limit=1"
+            )
+            try:
+                rows = self._cache_loader._socrata_get_with_retry(url, max_retries=2)
+            except Exception as exc:
+                last_exc = exc
+                continue
+            if not rows:
+                return None
+            return rows[0]
+        if last_exc is not None:
             logger.warning(
                 "CookCountyAssessorPlugin: parcel sales fetch failed for PIN=%r: %s",
-                pin, exc,
+                pin, last_exc,
             )
-            return None
-        if not rows:
-            return None
-        return rows[0]
+        return None
 
     def _sale_fields_from_row(self, row: dict) -> dict:
-        fields: dict = {}
+        fields: dict = {
+            "sale_date_provenance": PROVENANCE_ASSESSOR,
+        }
 
         sale_date_raw = row.get("sale_date")
         if sale_date_raw:
@@ -220,6 +281,19 @@ class CookCountyAssessorPlugin(DataSourcePlugin):
                 fields["most_recent_sale_price"] = float(sale_price)
             except (ValueError, TypeError):
                 pass
+
+        # Metadata only — never scrape Clerk UI; doc_no from Socrata when present.
+        doc_no = row.get("doc_no")
+        if doc_no:
+            fields["sale_doc_no"] = str(doc_no)
+
+        sale_type = row.get("sale_type")
+        if sale_type:
+            fields["sale_type"] = str(sale_type)
+
+        pin = row.get("pin")
+        if pin:
+            fields["sale_source_pin"] = normalize_pin_for_socrata(str(pin))
 
         return fields
 
@@ -240,18 +314,10 @@ def list_parcel_sale_history(
     When external sources return nothing, seeds a single row from the lead's
     verified/imported sale fields so Info never contradicts a confirmed date.
 
-    Open-data research note (no viable additional PIN-keyed source found):
-    the Cook County Recorder of Deeds / Clerk's Recordings System
-    (crs.cookcountyclerkil.gov) only exposes a web search UI — no public
-    Socrata/REST API. Illinois MyDec transfer-tax declarations (the closest
-    thing to a deed-level feed) are on the Illinois Open Data portal but only
-    cover 2013-present, so pre-2013 sales (e.g. a 1993 conveyance a site like
-    Redfin may show from title-company/MLS history) are out of reach of any
-    open API. This Socrata "Parcel Sales" dataset (``wvhk-k5uv``) — already
-    queried above, live and cached — is the assessor's own historical sales
-    compilation and the most complete open, PIN-keyed source available; when
-    it has no row for a PIN, treat the sale as genuinely unknown (``no_sale``)
-    rather than retrying against another source.
+    Sale-date **enrichment** (Last sale on Command Center) uses the shared
+    resolve order in ``cook_county_sale_date_resolver`` (primary Assessor →
+    related/AKA PINs → MyDec). This history list remains Assessor-cache /
+    Socrata for the primary PIN only — not a Redfin scrape.
     """
     capped = min(max(int(limit), 0), 100)
     if capped <= 0:
@@ -285,19 +351,29 @@ def list_parcel_sale_history(
             where = f"pin='{normalized}'"
             url = (
                 _PARCEL_SALES_URL
-                + "?$select=pin,sale_date,sale_price,sale_type"
+                + "?$select=pin,sale_date,sale_price,sale_type,doc_no"
                 + "&$where=" + quote(where)
                 + "&$order=sale_date+DESC"
                 + f"&$limit={capped}"
             )
             try:
                 rows = plugin._cache_loader._socrata_get_with_retry(url, max_retries=2)
-            except Exception as exc:
-                logger.warning(
-                    "list_parcel_sale_history: Socrata fetch failed for PIN=%r: %s",
-                    normalized, exc,
+            except Exception:
+                url = (
+                    _PARCEL_SALES_URL
+                    + "?$select=pin,sale_date,sale_price,sale_type"
+                    + "&$where=" + quote(where)
+                    + "&$order=sale_date+DESC"
+                    + f"&$limit={capped}"
                 )
-                rows = []
+                try:
+                    rows = plugin._cache_loader._socrata_get_with_retry(url, max_retries=2)
+                except Exception as exc:
+                    logger.warning(
+                        "list_parcel_sale_history: Socrata fetch failed for PIN=%r: %s",
+                        normalized, exc,
+                    )
+                    rows = []
 
             for row in rows or []:
                 serialized = _serialize_sale_history_dict(row)
@@ -365,11 +441,15 @@ def _serialize_sale_history_row(row) -> dict:
         sale_price = None
 
     sale_type = getattr(row, 'sale_type', None)
-    return {
+    doc_no = getattr(row, 'doc_no', None) if hasattr(row, 'doc_no') else None
+    out = {
         'sale_date': sale_date_str,
         'sale_price': sale_price,
         'sale_type': str(sale_type) if sale_type else None,
     }
+    if doc_no:
+        out['doc_no'] = str(doc_no)
+    return out
 
 
 def _serialize_sale_history_dict(row: dict) -> dict | None:
@@ -391,8 +471,12 @@ def _serialize_sale_history_dict(row: dict) -> dict | None:
         sale_price = None
 
     sale_type = row.get('sale_type')
-    return {
+    out = {
         'sale_date': sale_date_str,
         'sale_price': sale_price,
         'sale_type': str(sale_type) if sale_type else None,
     }
+    doc_no = row.get('doc_no')
+    if doc_no:
+        out['doc_no'] = str(doc_no)
+    return out

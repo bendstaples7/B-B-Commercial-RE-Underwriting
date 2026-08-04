@@ -55,7 +55,11 @@ def test_sale_date_parser_rejects_embedded_and_impossible_dates():
 
 
 def test_humanize_sale_date_source():
-    assert humanize_sale_date_source('enrichment:cook_county_assessor') == 'Cook County records'
+    assert humanize_sale_date_source('enrichment:cook_county_assessor') == 'Assessor'
+    assert humanize_sale_date_source('enrichment:cook_county_assessor_related_pin') == (
+        'Assessor related PIN'
+    )
+    assert humanize_sale_date_source('enrichment:illinois_mydec') == 'MyDec'
     assert humanize_sale_date_source('import_job:42') == 'Import'
     assert humanize_sale_date_source('manual') == 'Manual'
 
@@ -94,7 +98,8 @@ def test_resolve_sale_date_meta_prefers_acquisition_audit(app):
         db.session.commit()
 
         meta = resolve_sale_date_meta(lead)
-        assert meta['source'] == 'Cook County records'
+        assert meta['source'] == 'Assessor'
+        assert meta['source_token'] == 'assessor'
         assert meta['last_updated_at'].startswith('2024-03-15')
 
 
@@ -128,6 +133,7 @@ def test_resolve_sale_date_meta_returns_null_without_preferred_field_audit(app):
             'last_updated_at': None,
             'last_checked_at': None,
             'source': None,
+            'source_token': None,
         }
 
 
@@ -219,7 +225,8 @@ def test_resolve_sale_date_meta_assessor_without_sale_keys_is_no_sale(app):
         meta = resolve_sale_date_meta(lead)
         assert meta['status'] == 'no_sale'
         assert meta['last_checked_at'].startswith('2026-07-17T18:46:01')
-        assert meta['source'] == 'Cook County records'
+        assert meta['source'] == 'Assessor'
+        assert meta['source_token'] == 'assessor'
 
 
 def test_resolve_sale_date_meta_ignores_future_imported_sale(app):
@@ -255,7 +262,8 @@ def test_resolve_sale_date_meta_ignores_future_imported_sale(app):
         db.session.commit()
 
         meta = resolve_sale_date_meta(lead)
-        assert meta['source'] == 'Cook County records'
+        assert meta['source'] == 'Assessor'
+        assert meta['source_token'] == 'assessor'
         assert meta['last_updated_at'].startswith('2024-03-15')
 
 
@@ -265,4 +273,5 @@ def test_resolve_sale_date_meta_returns_null_without_app_context():
         'last_updated_at': None,
         'last_checked_at': None,
         'source': None,
+        'source_token': None,
     }

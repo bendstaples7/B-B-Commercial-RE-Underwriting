@@ -1,5 +1,6 @@
 /**
  * At a glance — compact metric grid under Key Contact (label-over-value cells).
+ * Detailed mail history lives in MailHistorySection (below wide rows in this card).
  */
 import { Box, Link, Paper, Typography } from '@mui/material'
 import type { CommandCenterPayload, PropertyDetail } from '@/types'
@@ -8,8 +9,8 @@ import {
   ccMetaSx,
   ccSectionTitleSx,
 } from '@/components/lead-detail/commandCenterChrome'
+import { MailHistorySection } from '@/components/lead-detail/MailHistorySection'
 import { formatMoneyValue } from '@/utils/formatters'
-import { resolveMailerHistorySummary } from '@/utils/mailerHistory'
 
 export interface PropertyKpiCardProps {
   commandCenterData: CommandCenterPayload
@@ -42,20 +43,6 @@ function squareFeet(value: number | null | undefined): string | null {
   return `${Number(value).toLocaleString()} SF`
 }
 
-function formatMailerGlance(commandCenterData: CommandCenterPayload): string | null {
-  const summary = resolveMailerHistorySummary(
-    commandCenterData.mailer_history_summary,
-    (commandCenterData as { mailer_history?: unknown }).mailer_history,
-  )
-  if (summary.count <= 0) return null
-  const last = summary.last_sent_at ? ` · Last ${summary.last_sent_at}` : ''
-  const latest = summary.rows[0]
-  const latestLine = latest
-    ? `\n${latest.sent_at ? `${latest.sent_at}: ` : ''}${latest.label}`
-    : ''
-  return `${summary.count} mailer${summary.count === 1 ? '' : 's'}${last}${latestLine}`
-}
-
 export function buildAtAGlanceRows(
   commandCenterData: CommandCenterPayload,
   propertyDetail?: PropertyDetail | null,
@@ -64,7 +51,6 @@ export function buildAtAGlanceRows(
     propertyDetail?.tax_bill_2021 ?? commandCenterData.tax_bill_2021 ?? null,
   )
 
-  const mailer = formatMailerGlance(commandCenterData)
   const dealSource = commandCenterData.deal_source?.trim() || null
   const dealDescription = commandCenterData.deal_description?.trim() || null
 
@@ -101,12 +87,6 @@ export function buildAtAGlanceRows(
       id: 'deal-description',
       label: 'Deal description',
       value: dealDescription,
-      wide: true,
-    },
-    {
-      id: 'mailer-history',
-      label: 'Mailer history',
-      value: mailer,
       wide: true,
     },
   ]
@@ -309,6 +289,10 @@ export function PropertyKpiCard({
           </Typography>
         </Box>
       ))}
+      <MailHistorySection
+        commandCenterData={commandCenterData}
+        propertyDetail={propertyDetail}
+      />
     </Paper>
   )
 }

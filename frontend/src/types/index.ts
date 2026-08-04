@@ -2331,7 +2331,10 @@ export interface CommandCenterPayload {
   sale_date_meta?: {
     last_updated_at?: string | null;
     last_checked_at?: string | null;
+    /** Human-readable label (Assessor, MyDec, Import, …). */
     source?: string | null;
+    /** Machine provenance when known: assessor | assessor_related_pin | mydec. */
+    source_token?: string | null;
     status?: string | null;
     error_reason?: string | null;
   };
