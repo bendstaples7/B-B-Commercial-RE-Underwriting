@@ -283,6 +283,10 @@ def consolidate_mailer_history(lead: Any, *, heal: bool = True) -> dict[str, Any
     for row in _timeline_mail_sent_rows(lead):
         keys = _dedupe_keys(row)
         if keys & seen_keys:
+            # Still absorb this row's identifiers so a later partial match
+            # (campaign-only then order-only, or the reverse) cannot reopen
+            # the same send as a new heal.
+            seen_keys.update(keys)
             continue
         seen_keys.update(keys)
         merged_rows.append(row)

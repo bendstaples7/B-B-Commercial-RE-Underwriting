@@ -47,6 +47,15 @@ function isLoopbackRequest(req) {
   return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(addr)
 }
 
+/** Only relative app paths — never absolute http(s) URLs (SSRF). */
+function sanitizeCapturePath(raw) {
+  const value = String(raw || '/').trim() || '/'
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith('//')) {
+    return null
+  }
+  return value.startsWith('/') ? value : `/${value}`
+}
+
 function runSnapshot(args) {
   return new Promise((resolveRun, reject) => {
     const child = spawn(process.execPath, [resolve(HERE, 'snapshot.mjs'), ...args], {
@@ -118,10 +127,16 @@ export function liveUiCapturePlugin() {
             }
             const selector = body.selector || '[data-testid="property-overview-header"]'
             const label = body.label || 'capture-fab'
-            const target = body.url || body.pathname || '/'
+            const target = sanitizeCapturePath(body.url || body.pathname || '/')
+            if (!target) {
+              return sendJson(res, 400, {
+                ok: false,
+                error: 'url must be a relative path on this app (no absolute http/https)',
+              })
+            }
             const result = await runSnapshot([
               '--url',
-              String(target),
+              target,
               '--selector',
               selector,
               '--label',

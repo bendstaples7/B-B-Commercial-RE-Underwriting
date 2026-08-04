@@ -163,6 +163,32 @@ class TestConsolidateMailerHistory:
             assert summary['count'] == 1
             assert summary['healed_count'] == 0
 
+    def test_union_absorbs_skipped_row_identifiers(self, app):
+        """Campaign match must still absorb olc_order_id so a later order-only
+        timeline row cannot heal as a duplicate send."""
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                mailer_history=[
+                    {'campaign_id': 5, 'template_name': 'Blue', 'sent_at': '2024-01-01'},
+                ],
+            )
+            _add_mail_sent_entry(
+                lead.id,
+                occurred_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                metadata={'campaign_id': 5, 'olc_order_id': '77', 'template_name': 'Blue'},
+            )
+            _add_mail_sent_entry(
+                lead.id,
+                occurred_at=datetime(2024, 1, 2, tzinfo=timezone.utc),
+                metadata={'olc_order_id': '77', 'template_name': 'Blue'},
+            )
+            db.session.commit()
+
+            summary = consolidate_mailer_history(lead)
+            assert summary['count'] == 1
+            assert summary['healed_count'] == 0
+
     def test_import_string_plus_timeline_mail_sent_heals_and_counts_gt_1(self, app):
         """10305-class: import free-text history undercounts a mailer that
         the timeline recorded — union must surface both and heal the gap.

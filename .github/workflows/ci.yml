@@ -214,6 +214,15 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: public.ecr.aws/docker/library/redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/live_ui_db
       FLASK_ENV: development
@@ -267,9 +276,15 @@ jobs:
         id: seed
         run: |
           set -euo pipefail
-          SEED_JSON=$(python ../scripts/live-ui/ci_seed_auth_lead.py)
+          SEED_JSON=$(python ../scripts/live-ui/ci_seed_auth_lead.py) || {
+            echo "::error::Seed script failed"
+            exit 1
+          }
           echo "$SEED_JSON" | python -c "import sys,json; data=json.load(sys.stdin); print(f\"seeded lead_id={data['lead_id']} user_id={data['user_id']}\")"
-          LEAD_ID=$(echo "$SEED_JSON" | python -c "import sys,json; print(json.load(sys.stdin)['lead_id'])")
+          LEAD_ID=$(echo "$SEED_JSON" | python -c "import sys,json; print(json.load(sys.stdin)['lead_id'])") || {
+            echo "::error::Seed script did not return lead_id"
+            exit 1
+          }
           if [ -z "$LEAD_ID" ]; then
             echo "::error::Seed script did not return lead_id"
             exit 1
@@ -702,6 +717,7 @@ jobs:
       - deploy-contract
       - duplication-check
       - vps-readiness
+      - live-ui-auth-smoke
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate required job results
@@ -716,6 +732,7 @@ jobs:
           echo "  deploy-contract=${{ needs.deploy-contract.result }}"
           echo "  duplication-check=${{ needs.duplication-check.result }}"
           echo "  vps-readiness=${{ needs.vps-readiness.result }}"
+          echo "  live-ui-auth-smoke=${{ needs.live-ui-auth-smoke.result }}"
 
           fail=0
           for result in \
@@ -726,7 +743,8 @@ jobs:
             "${{ needs.validate-workflows.result }}" \
             "${{ needs.deploy-contract.result }}" \
             "${{ needs.duplication-check.result }}" \
-            "${{ needs.vps-readiness.result }}"
+            "${{ needs.vps-readiness.result }}" \
+            "${{ needs.live-ui-auth-smoke.result }}"
           do
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "Unsuccessful job result: $result"

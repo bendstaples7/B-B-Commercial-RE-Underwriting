@@ -952,8 +952,12 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
         'timeline',
         result.total,
       )
+      const rows =
+        feedFilter === 'mail'
+          ? scoped.rows.filter(isMailTimelineEntry)
+          : scoped.rows
       return {
-        entries: scoped.rows,
+        entries: rows,
         total: scoped.total,
       }
     }

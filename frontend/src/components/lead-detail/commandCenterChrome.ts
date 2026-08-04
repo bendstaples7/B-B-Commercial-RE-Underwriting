@@ -161,9 +161,9 @@ export const ccKpiValueSx: SxProps<Theme> = {
  *   Units/details  | Category
  *
  * Proportional clamp() slots (not fixed px) so the bar holds at any viewport.
- * Primary/KPIs absorb leftover slack so Lead Signals sits flush right; panels
- * ride a 300px ceiling. FORBID fixed pair widths / flexShrink:0 / address
- * maxWidth ceilings / trail ml:auto canyon (slack lives inside the KPI band).
+ * Address/KPIs hug; trail panels grow into leftover slack (clamp ~10–13vw,
+ * 260px cap). FORBID fixed pair widths / flexShrink:0 / address maxWidth
+ * ceilings / trail ml:auto canyon.
  */
 export const ccHeaderAddressColumnSx: SxProps<Theme> = {
   // Hug street text beside KPIs. At md+ the address keeps its one-line width;
@@ -205,7 +205,7 @@ export const ccHeaderTrailingPanelsSx: SxProps<Theme> = {
   width: { md: 'auto' },
   contain: 'layout',
   '& [data-testid="header-condo-check"], & [data-testid="header-lead-score"]': {
-    // Basis targets 12rem+, but minWidth 0 lets panels shrink under pressure.
+    // Basis targets ~10rem (fluid to 260px); minWidth 0 lets panels shrink.
     flex: { md: '1 1 clamp(10rem, 13vw, 260px)' },
     width: { md: 'auto' },
     minWidth: { md: 0 },

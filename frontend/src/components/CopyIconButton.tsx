@@ -19,9 +19,15 @@ export function CopyIconButton({
 }: CopyIconButtonProps) {
   const [copied, setCopied] = useState(false)
   const handleCopy = () => {
-    void navigator.clipboard.writeText(value)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+    void navigator.clipboard.writeText(value).then(
+      () => {
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1500)
+      },
+      () => {
+        /* Clipboard denied / insecure context — leave idle label. */
+      },
+    )
   }
   return (
     <Tooltip title={copied ? 'Copied!' : 'Copy'}>

@@ -29,12 +29,20 @@ from app.models.user import User  # noqa: E402
 from app.services.auth_service import AuthService  # noqa: E402
 
 
-EMAIL = os.environ.get('BB_E2E_EMAIL', 'live-ui-ci@example.com')
-PASSWORD = os.environ.get('BB_E2E_PASSWORD', 'LiveUiCiPassw0rd!')
+EMAIL = os.environ.get('BB_E2E_EMAIL', '').strip()
+PASSWORD = os.environ.get('BB_E2E_PASSWORD', '').strip()
 DISPLAY = 'Live UI CI'
 
 
 def main() -> int:
+    if not EMAIL or not PASSWORD:
+        print(
+            'BB_E2E_EMAIL and BB_E2E_PASSWORD are required '
+            '(no defaults — refuse predictable credentials).',
+            file=sys.stderr,
+        )
+        return 2
+
     app = create_app()
     with app.app_context():
         auth = AuthService()

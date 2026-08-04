@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -36,6 +37,7 @@ _CC_RECHECK_INFLIGHT_TTL_SECONDS = 180
 _CC_RECHECK_INFLIGHT_KEY_PREFIX = 'building_ownership:cc_recheck:'
 # Process-local fallback when Redis is unavailable (single-worker / tests).
 _cc_recheck_inflight_local: dict[int, float] = {}
+_cc_recheck_inflight_lock = threading.Lock()
 _STARTUP_BACKFILL_GUARD_KEY = 'building_ownership:startup_backfill_dispatched'
 _STARTUP_BACKFILL_GUARD_TTL_SECONDS = 3600
 _STARTUP_BACKFILL_ADVISORY_LOCK_KEY = 8242002
@@ -275,11 +277,12 @@ def _try_claim_cc_recheck(lead_id: int) -> bool:
         logger.debug('CC recheck redis claim failed for lead %s', lead_id, exc_info=True)
 
     now = time.monotonic()
-    expires = _cc_recheck_inflight_local.get(lead_id)
-    if expires is not None and expires > now:
-        return False
-    _cc_recheck_inflight_local[lead_id] = now + _CC_RECHECK_INFLIGHT_TTL_SECONDS
-    return True
+    with _cc_recheck_inflight_lock:
+        expires = _cc_recheck_inflight_local.get(lead_id)
+        if expires is not None and expires > now:
+            return False
+        _cc_recheck_inflight_local[lead_id] = now + _CC_RECHECK_INFLIGHT_TTL_SECONDS
+        return True
 
 
 def _cc_recheck_inflight(lead_id: int) -> bool:
@@ -295,8 +298,9 @@ def _cc_recheck_inflight(lead_id: int) -> bool:
             return bool(client.exists(key))
     except Exception:  # noqa: BLE001
         pass
-    expires = _cc_recheck_inflight_local.get(lead_id)
-    return expires is not None and expires > time.monotonic()
+    with _cc_recheck_inflight_lock:
+        expires = _cc_recheck_inflight_local.get(lead_id)
+        return expires is not None and expires > time.monotonic()
 
 
 def ensure_building_ownership_on_command_center(lead: Lead) -> bool:
