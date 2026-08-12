@@ -9,7 +9,8 @@
 #
 # After send_alert returns, OPS_ALERT_DELIVERY_FAILED is 0 on success / 1 on
 # delivery failure. send_alert itself always exits 0 so callers under
-# `set -euo pipefail` are not aborted (historical contract).
+# `set -euo pipefail` are not aborted (historical contract). Log writes are
+# best-effort so a full/unwritable log cannot skip email/webhook delivery.
 # =============================================================================
 
 send_alert() {
@@ -21,22 +22,46 @@ send_alert() {
     local full_subject
     full_subject="$(printf '%s %s' "$prefix" "$subject" | tr '\n\r' '  ')"
     local delivery_failed=0
+    local err_tmp=""
+
+    _ops_alert_log() {
+        # Best-effort only — never abort the caller on log I/O failure.
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >> "$log_target" 2>/dev/null || true
+    }
 
     mkdir -p "$(dirname "$log_target")" 2>/dev/null || true
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT: $subject" >> "$log_target"
+    _ops_alert_log "ALERT: $subject"
 
     if [[ "${ALERT_METHOD:-}" == "email" || "${ALERT_METHOD:-}" == "both" ]]; then
         # msmtp expects a full message on stdin (headers + blank line + body).
-        {
-            printf 'Subject: %s\n' "$full_subject"
-            printf '\n'
-            printf '%s\n' "$body"
-        } | msmtp --account="${MSMTP_ACCOUNT:-default}" "${ALERT_EMAIL:-}" \
-            2>>"$log_target" \
-            || {
-                echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (email): $?" >> "$log_target"
+        err_tmp="$(mktemp 2>/dev/null || true)"
+        if [[ -n "$err_tmp" ]]; then
+            if ! {
+                printf 'Subject: %s\n' "$full_subject"
+                printf '\n'
+                printf '%s\n' "$body"
+            } | msmtp --account="${MSMTP_ACCOUNT:-default}" "${ALERT_EMAIL:-}" \
+                2>"$err_tmp"
+            then
                 delivery_failed=1
-            }
+                _ops_alert_log "ALERT DELIVERY FAILED (email)"
+            fi
+            if [[ -s "$err_tmp" ]]; then
+                cat "$err_tmp" >> "$log_target" 2>/dev/null || true
+            fi
+            rm -f "$err_tmp" 2>/dev/null || true
+        else
+            if ! {
+                printf 'Subject: %s\n' "$full_subject"
+                printf '\n'
+                printf '%s\n' "$body"
+            } | msmtp --account="${MSMTP_ACCOUNT:-default}" "${ALERT_EMAIL:-}" \
+                2>/dev/null
+            then
+                delivery_failed=1
+                _ops_alert_log "ALERT DELIVERY FAILED (email)"
+            fi
+        fi
     fi
 
     if [[ "${ALERT_METHOD:-}" == "webhook" || "${ALERT_METHOD:-}" == "both" ]]; then
@@ -54,22 +79,38 @@ print(json.dumps({"text": text}))
         )" || payload=""
         if [[ -n "$payload" && -n "${WEBHOOK_URL:-}" ]]; then
             # --fail so HTTP 4xx/5xx count as delivery failures.
-            curl -sS --fail -X POST "$WEBHOOK_URL" \
-                -H "Content-Type: application/json" \
-                -d "$payload" \
-                --max-time 10 2>>"$log_target" \
-                || {
-                    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (webhook): $?" >> "$log_target"
+            err_tmp="$(mktemp 2>/dev/null || true)"
+            if [[ -n "$err_tmp" ]]; then
+                if ! curl -sS --fail -X POST "$WEBHOOK_URL" \
+                    -H "Content-Type: application/json" \
+                    -d "$payload" \
+                    --max-time 10 2>"$err_tmp"
+                then
                     delivery_failed=1
-                }
+                    _ops_alert_log "ALERT DELIVERY FAILED (webhook)"
+                fi
+                if [[ -s "$err_tmp" ]]; then
+                    cat "$err_tmp" >> "$log_target" 2>/dev/null || true
+                fi
+                rm -f "$err_tmp" 2>/dev/null || true
+            else
+                if ! curl -sS --fail -X POST "$WEBHOOK_URL" \
+                    -H "Content-Type: application/json" \
+                    -d "$payload" \
+                    --max-time 10 2>/dev/null
+                then
+                    delivery_failed=1
+                    _ops_alert_log "ALERT DELIVERY FAILED (webhook)"
+                fi
+            fi
         else
-            echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (webhook): empty payload or WEBHOOK_URL" >> "$log_target"
             delivery_failed=1
+            _ops_alert_log "ALERT DELIVERY FAILED (webhook): empty payload or WEBHOOK_URL"
         fi
     fi
 
     if [[ -z "${ALERT_METHOD:-}" || "${ALERT_METHOD:-}" == "none" ]]; then
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT_METHOD unset/none — logged only: $subject" >> "$log_target"
+        _ops_alert_log "ALERT_METHOD unset/none — logged only: $subject"
     fi
 
     OPS_ALERT_DELIVERY_FAILED="$delivery_failed"
