@@ -55,13 +55,16 @@ def _find_open_legacy_or_call_rematch_tasks(limit: int | None) -> list[LeadTask]
                 LeadTask.title.ilike('%follow up after mail%'),
                 LeadTask.title.ilike('%add to next mailer%'),
             ),
+            or_(
+                LeadTask.task_type.is_(None),
+                LeadTask.task_type != MAIL_REMATCH_TASK_TYPE,
+                ~LeadTask.title.ilike('%add to next mailer%'),
+            ),
         )
         .order_by(LeadTask.id.asc())
     )
     if limit is not None:
-        # Fetch a bit extra so already-converted rematch rows can be skipped
-        # without under-filling the requested limit.
-        query = query.limit(max(limit * 3, limit))
+        query = query.limit(limit)
     for task in query.all():
         if not is_mail_follow_up_task(task):
             continue
@@ -149,19 +152,19 @@ def main() -> None:
                 continue
 
             last_sent = last_mailed.get(lead.id)
-            due_preview = mail_rematch_due_date(last_sent, task.due_date)
-            if last_sent is None and task.due_date is None:
+            if last_sent is None:
                 skipped += 1
                 logger.warning(
-                    'Lead %s task %s: no last_sent and no due_date — skip',
+                    'Lead %s task %s: no last_sent — skip',
                     lead.id,
                     task.id,
                 )
                 print(
-                    f'Lead {lead.id} task {task.id}: skip (no send/due)',
+                    f'Lead {lead.id} task {task.id}: skip (no send)',
                     flush=True,
                 )
                 continue
+            due_preview = mail_rematch_due_date(last_sent, task.due_date)
 
             if args.apply:
                 convert_legacy_mail_follow_up_to_rematch(
