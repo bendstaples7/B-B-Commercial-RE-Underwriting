@@ -415,7 +415,55 @@ def main() -> int:
         errors.append(
             "install-backup-cron.sh must install celery-liveness-check.sh cron"
         )
-
+    if "LEAD_CC_MARKER=\"lead-cc-mount-health-managed\"" not in install_cron:
+        errors.append(
+            "install-backup-cron.sh must define LEAD_CC_MARKER="
+            "lead-cc-mount-health-managed"
+        )
+    if not re.search(
+        r'echo\s+"15 \* \* \* \* /home/deploy/check-lead-cc-mount-health\.sh '
+        r'\$LEAD_CC_LOG_REDIRECT # \$LEAD_CC_MARKER"',
+        install_cron,
+    ):
+        errors.append(
+            "install-backup-cron.sh must install hourly "
+            "check-lead-cc-mount-health.sh cron with managed marker"
+        )
+    if "lead-cc-mount-health.log" not in install_cron:
+        errors.append(
+            "install-backup-cron.sh must redirect lead CC mount health "
+            "to lead-cc-mount-health.log"
+        )
+    deploy_yml_text = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
+    if not re.search(
+        r"scp\s+[^\n]*scripts/check-lead-cc-mount-health\.sh\s+[^\n]+:/home/deploy/check-lead-cc-mount-health\.sh",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/check-lead-cc-mount-health.sh "
+            "to /home/deploy/check-lead-cc-mount-health.sh"
+        )
+    if not re.search(
+        r"scp\s+[^\n]*scripts/lead_cc_mount_health\.py\s+[^\n]+:/home/deploy/lead_cc_mount_health\.py",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/lead_cc_mount_health.py "
+            "to /home/deploy/lead_cc_mount_health.py"
+        )
+    # Executable + readable perms must ship with the files (cron otherwise fails).
+    if not re.search(
+        r"chmod 750[^\n]*check-lead-cc-mount-health\.sh", deploy_yml_text
+    ):
+        errors.append(
+            "deploy.yml chmod 750 line must include check-lead-cc-mount-health.sh"
+        )
+    if not re.search(
+        r"chmod 644[^\n]*lead_cc_mount_health\.py", deploy_yml_text
+    ):
+        errors.append(
+            "deploy.yml chmod 644 line must include lead_cc_mount_health.py"
+        )
     # 6c. Ops health soft-fails only async ensure (exit 2), not hard infra failures
     ops_health_yml = _read(REPO_ROOT / ".github" / "workflows" / "ops-health.yml")
     if "SOFT_ASYNC_ENSURE_FAILURE" not in ops_health_yml:

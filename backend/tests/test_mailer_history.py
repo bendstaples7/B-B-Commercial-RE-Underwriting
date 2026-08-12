@@ -36,6 +36,26 @@ def test_olc_dict_entries():
     assert rows[0]['campaign_id'] == 12
 
 
+def test_creative_preset_dict_becomes_string_label():
+    rows = normalize_mailer_history([
+        {
+            'sent_at': '2024-06-01T00:00:00Z',
+            'template_name': 'Standard',
+            'creative': {
+                'label': 'Bessy Tam',
+                'sender_display_name': 'Bessy Tam',
+                'first_name': 'Bessy',
+                'last_name': 'Tam',
+            },
+            'campaign_id': 2,
+        },
+    ])
+    assert len(rows) == 1
+    assert rows[0]['creative'] == 'Bessy Tam'
+    assert rows[0]['label'] == 'Standard, Bessy Tam'
+    assert '{' not in rows[0]['label']
+
+
 def test_cancelled_and_feedback():
     rows = normalize_mailer_history([
         {'address_feedback': 'RTS', 'cancelled': True},
@@ -227,6 +247,40 @@ class TestConsolidateMailerHistory:
             # Re-running normalize directly on the healed JSONB column now
             # finds the entry without needing the timeline union.
             assert mailer_history_summary(lead.mailer_history)['count'] == 2
+
+    def test_timeline_heal_preserves_raw_creative_dict(self, app):
+        """Heal must persist the creative snapshot dict, not only a label."""
+        with app.app_context():
+            lead = _make_lead(app, mailer_history=None)
+            creative = {
+                'label': 'Bessy Tam',
+                'sender_display_name': 'Bessy Tam',
+                'id': 'creative-1',
+            }
+            _add_mail_sent_entry(
+                lead.id,
+                occurred_at=datetime(2025, 2, 1, tzinfo=timezone.utc),
+                metadata={
+                    'campaign_id': 42,
+                    'olc_order_id': '99',
+                    'template_name': 'Standard',
+                    'creative': creative,
+                },
+            )
+            db.session.commit()
+
+            summary = consolidate_mailer_history(lead)
+            assert summary['healed_count'] == 1
+            assert summary['rows'][0]['creative'] == 'Bessy Tam'
+
+            db.session.commit()
+            db.session.refresh(lead)
+            healed = [
+                e for e in lead.mailer_history
+                if isinstance(e, dict) and e.get('campaign_id') == 42
+            ]
+            assert len(healed) == 1
+            assert healed[0]['creative'] == creative
 
     def test_no_timeline_entries_matches_plain_summary(self, app):
         with app.app_context():

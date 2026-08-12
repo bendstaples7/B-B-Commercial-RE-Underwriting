@@ -188,6 +188,13 @@ jobs:
           node ../scripts/spa-boot-check.mjs --dir dist --path /login
         working-directory: frontend
 
+      - name: Lead Command Center mount smoke (command-center must fire)
+        run: |
+          npx playwright install chromium \
+            || { sleep 5; npx playwright install chromium; }
+          node ../scripts/lead-cc-mount-smoke.mjs --dir dist --lead 643
+        working-directory: frontend
+
       - name: Upload frontend dist for deploy
         uses: actions/upload-artifact@v4
         with:

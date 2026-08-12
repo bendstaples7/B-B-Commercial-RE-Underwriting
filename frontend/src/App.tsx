@@ -570,7 +570,18 @@ function UnifiedLeadCommandCenterRoute() {
   }
   // key remounts the whole command center on lead change so local state
   // (timeline, dialogs, ownership form, etc.) cannot bleed across queue advance.
-  return <UnifiedLeadCommandCenter key={numericId} leadId={numericId} />
+  return (
+    <RouteErrorBoundary
+      key={numericId}
+      recoveryHref="/properties"
+      recoveryLabel="Back to Properties"
+      testId="lead-command-center-error-boundary"
+    >
+      {/* Render throws land here; chunk load / graph failures are gated by
+          Vite manualChunks + assert_frontend_dist_assets + lead-cc-mount-smoke. */}
+      <UnifiedLeadCommandCenter key={numericId} leadId={numericId} />
+    </RouteErrorBoundary>
+  )
 }
 
 /** Redirects /properties/:leadId → /leads/:leadId (history replace). */
@@ -962,11 +973,18 @@ interface ErrorBoundaryState {
   error: Error | null
 }
 
-class AnalysisErrorBoundary extends Component<
-  { children: React.ReactNode },
-  ErrorBoundaryState
-> {
-  constructor(props: { children: React.ReactNode }) {
+interface RouteErrorBoundaryProps {
+  children: React.ReactNode
+  /** Where the recovery button navigates (full page). */
+  recoveryHref: string
+  recoveryLabel: string
+  /** test id for the error alert */
+  testId?: string
+}
+
+/** Catches render errors so a child throw does not blank the whole SPA. */
+class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: RouteErrorBoundaryProps) {
     super(props)
     this.state = { error: null }
   }
@@ -982,19 +1000,19 @@ class AnalysisErrorBoundary extends Component<
   render() {
     if (this.state.error) {
       return (
-        <Paper elevation={2} sx={{ p: { xs: 2, sm: 3, md: 4 } }}>
+        <Box sx={{ p: 3 }} data-testid={this.props.testId ?? 'route-error-boundary'}>
           <Alert
             severity="error"
+            sx={{ mb: 2 }}
             action={
               <Button
                 color="inherit"
                 size="small"
                 onClick={() => {
-                  this.setState({ error: null })
-                  window.location.href = '/analysis'
+                  window.location.href = this.props.recoveryHref
                 }}
               >
-                Start Over
+                {this.props.recoveryLabel}
               </Button>
             }
           >
@@ -1009,10 +1027,23 @@ class AnalysisErrorBoundary extends Component<
               </Box>
             )}
           </Alert>
-        </Paper>
+        </Box>
       )
     }
     return this.props.children
+  }
+}
+
+class AnalysisErrorBoundary extends Component<
+  { children: React.ReactNode },
+  ErrorBoundaryState
+> {
+  render() {
+    return (
+      <RouteErrorBoundary recoveryHref="/analysis" recoveryLabel="Start Over" testId="analysis-error-boundary">
+        {this.props.children}
+      </RouteErrorBoundary>
+    )
   }
 }
 

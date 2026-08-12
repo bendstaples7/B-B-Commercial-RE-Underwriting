@@ -78,17 +78,21 @@ function EnrichmentDetailsCell({
   errorReason?: string | null
 }) {
   const [open, setOpen] = useState(false)
-  const hasData = status === 'success' && retrievedData && Object.keys(retrievedData).length > 0
+  const hasData = Boolean(
+    status === 'success' && retrievedData && Object.keys(retrievedData).length > 0,
+  )
+  // Hooks must run unconditionally — early return before useMemo crashed enrichment
+  // rows (and could blank the lead route with no ErrorBoundary).
+  const preview = useMemo(
+    () => (hasData && open && retrievedData ? JSON.stringify(retrievedData, null, 2) : ''),
+    [hasData, open, retrievedData],
+  )
 
   if (!hasData) {
     return <>{errorReason || '—'}</>
   }
 
-  const fieldCount = Object.keys(retrievedData).length
-  const preview = useMemo(
-    () => (open ? JSON.stringify(retrievedData, null, 2) : ''),
-    [open, retrievedData],
-  )
+  const fieldCount = Object.keys(retrievedData!).length
 
   return (
     <Box>

@@ -197,3 +197,62 @@ describe('LeadDetailTabPanel Marketing tab', () => {
     expect(screen.getByText(/not a member of any marketing lists/i)).toBeInTheDocument()
   })
 })
+
+describe('LeadDetailTabPanel Enrichment tab', () => {
+  it('renders enrichment success rows without hooks violation (empty + data rows)', () => {
+    render(
+      <MemoryRouter initialEntries={['/leads/1?tab=enrichment']}>
+        <LeadDetailTabPanel
+          leadId={1}
+          leadData={{
+            id: 1,
+            owner_first_name: 'Taylor',
+            owner_last_name: 'G',
+            property_street: '1023 W WELLINGTON AVE',
+            contacts: [],
+            enrichment_records: [
+              {
+                id: 1,
+                source: 'test_empty',
+                status: 'failed',
+                error_reason: 'no data',
+                retrieved_data: null,
+              },
+              {
+                id: 2,
+                source: 'test_ok',
+                status: 'success',
+                error_reason: null,
+                retrieved_data: { foo: 'bar', n: 1 },
+              },
+            ],
+            marketing_lists: [],
+            analysis_session: null,
+          } as unknown as PropertyDetail}
+          commandCenterData={{
+            id: 1,
+            owner_first_name: 'Taylor',
+            owner_last_name: 'G',
+            property_street: '1023 W WELLINGTON AVE',
+            lead_score: 50,
+            lead_status: 'skip_trace',
+            contacts: [],
+            recommended_action: {
+              value: 'nurture',
+              recommended_contact_method: 'phone',
+              label: 'Nurture',
+              explanation: null,
+              signals: {},
+            },
+            open_tasks: [],
+            timeline: { entries: [], total: 0, page: 1, per_page: 25 },
+          } as unknown as CommandCenterPayload}
+          scoreLoading={false}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('no data')).toBeInTheDocument()
+    expect(screen.getByText(/2 field\(s\) enriched/i)).toBeInTheDocument()
+  })
+})
