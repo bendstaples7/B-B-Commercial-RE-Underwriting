@@ -273,6 +273,19 @@ class CallLogService:
 
         db.session.add(lead)
 
+        # Inbound or answered contact ends the quarterly mail rematch loop.
+        if direction == 'inbound' or outcome == 'answered':
+            from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
+            cancel_mail_rematch_tasks(
+                lead_id,
+                actor=actor,
+                reason=(
+                    'inbound_call'
+                    if direction == 'inbound'
+                    else 'answered_call'
+                ),
+            )
+
         summary = _build_call_summary(
             outcome, duration_minutes, notes, contact_name, phone_number, phone_label,
             direction=direction,

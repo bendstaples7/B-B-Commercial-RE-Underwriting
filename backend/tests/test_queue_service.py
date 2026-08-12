@@ -338,7 +338,7 @@ def test_todays_action_excludes_follow_up_now_when_queued_for_mail(app):
 
 
 def test_todays_action_excludes_pending_mail_follow_up_without_due_date(app):
-    """Undated follow-up-after-mailer tasks do not put a lead on Today's Action."""
+    """Undated rematch tasks do not put a lead on Today's Action."""
     with app.app_context():
         lead = _make_lead(
             app,
@@ -349,8 +349,8 @@ def test_todays_action_excludes_pending_mail_follow_up_without_due_date(app):
         _make_task(
             app,
             lead.id,
-            task_type='call_owner_today',
-            title='Follow up after mailer — 3b Pending Mail St',
+            task_type='add_to_mail_batch',
+            title='Add to next mailer — 3b Pending Mail St',
             due_date=None,
         )
         svc = QueueService()
@@ -359,7 +359,7 @@ def test_todays_action_excludes_pending_mail_follow_up_without_due_date(app):
 
 
 def test_todays_action_includes_dated_mail_follow_up_due_today(app):
-    """After send, a follow-up-after-mailer due today appears on Today's Action."""
+    """After send, a rematch due today appears on Today's Action."""
     with app.app_context():
         lead = _make_lead(
             app,
@@ -370,8 +370,8 @@ def test_todays_action_includes_dated_mail_follow_up_due_today(app):
         _make_task(
             app,
             lead.id,
-            task_type='call_owner_today',
-            title='Follow up after mailer — 3c Dated Mail St',
+            task_type='add_to_mail_batch',
+            title='Add to next mailer — 3c Dated Mail St',
             due_date=date.today(),
         )
         svc = QueueService()

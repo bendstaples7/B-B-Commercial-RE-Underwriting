@@ -1699,7 +1699,7 @@ class TestTodaysActionMailAwaitingExclusion:
 
 
 class TestScheduleMailFollowUpTask:
-    def test_creates_follow_up_due_seven_days_after_send(self, app):
+    def test_creates_rematch_due_ninety_days_after_send(self, app):
         with app.app_context():
             from app import db
 
@@ -1715,9 +1715,9 @@ class TestScheduleMailFollowUpTask:
             db.session.commit()
 
             assert task is not None
-            assert task.task_type == 'call_owner_today'
+            assert task.task_type == 'add_to_mail_batch'
             assert task.due_date == sent_at.date() + timedelta(days=MAIL_FOLLOW_UP_OFFSET_DAYS)
-            assert 'Follow up after mailer' in task.title
+            assert 'Add to next mailer' in task.title
 
     def test_updates_pending_follow_up_due_date_on_send(self, app):
         with app.app_context():
@@ -1728,6 +1728,7 @@ class TestScheduleMailFollowUpTask:
             pending = create_pending_mail_follow_up_task(lead, actor=USER_ID)
             db.session.commit()
             assert pending.due_date is None
+            assert pending.task_type == 'add_to_mail_batch'
 
             sent_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
             task = schedule_mail_follow_up_task(
@@ -1766,9 +1767,71 @@ class TestScheduleMailFollowUpTask:
             )
             assert task is not None
             assert task.id == existing.id
+            assert task.task_type == 'add_to_mail_batch'
+            assert 'Add to next mailer' in task.title
             assert LeadTask.query.filter_by(
                 lead_id=lead.id, status='open',
             ).count() == 1
+
+    def test_legacy_follow_up_title_still_detected(self, app):
+        with app.app_context():
+            from app.services.mail_task_lifecycle_service import is_mail_follow_up_title
+
+            assert is_mail_follow_up_title('Follow up after mailer — 1 Main')
+            assert is_mail_follow_up_title('Add to next mailer — 1 Main')
+            assert not is_mail_follow_up_title('Add to mail batch — 1 Main')
+
+    def test_cancel_mail_rematch_cancels_dated_task(self, app):
+        with app.app_context():
+            from app import db
+            from app.services.mail_task_lifecycle_service import (
+                cancel_mail_rematch_tasks,
+                schedule_mail_follow_up_task,
+            )
+
+            lead = _make_lead(app, '6c Cancel Rematch St')
+            sent_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+            task = schedule_mail_follow_up_task(
+                lead=lead, sent_at=sent_at, actor=USER_ID,
+            )
+            db.session.commit()
+            assert task is not None and task.status == 'open'
+
+            cancelled = cancel_mail_rematch_tasks(
+                lead.id, actor=USER_ID, reason='answered_call',
+            )
+            db.session.commit()
+            assert cancelled == 1
+            assert LeadTask.query.get(task.id).status == 'cancelled'
+
+    def test_convert_legacy_follow_up_to_rematch(self, app):
+        with app.app_context():
+            from app import db
+            from app.services.mail_task_lifecycle_service import (
+                convert_legacy_mail_follow_up_to_rematch,
+            )
+
+            lead = _make_lead(app, '6d Convert Rematch St')
+            sent_at = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)
+            legacy = LeadTask(
+                lead_id=lead.id,
+                task_type='call_owner_today',
+                title='Follow up after mailer — 6d Convert Rematch St',
+                status='open',
+                due_date=sent_at.date() + timedelta(days=7),
+                created_by='test',
+            )
+            db.session.add(legacy)
+            db.session.commit()
+
+            convert_legacy_mail_follow_up_to_rematch(
+                legacy, lead, last_sent_at=sent_at, actor='test',
+            )
+            db.session.commit()
+            refreshed = LeadTask.query.get(legacy.id)
+            assert refreshed.task_type == 'add_to_mail_batch'
+            assert 'Add to next mailer' in refreshed.title
+            assert refreshed.due_date == sent_at.date() + timedelta(days=90)
 
 
 class TestEnqueueCreatesPendingMailFollowUp:
@@ -1786,7 +1849,8 @@ class TestEnqueueCreatesPendingMailFollowUp:
             pending = LeadTask.query.filter_by(lead_id=lead.id, status='open').all()
             assert len(pending) == 1
             assert pending[0].due_date is None
-            assert 'Follow up after mailer' in pending[0].title
+            assert 'Add to next mailer' in pending[0].title
+            assert pending[0].task_type == 'add_to_mail_batch'
 
     def test_remove_from_batch_cancels_pending_follow_up(self, app):
         with app.app_context():
@@ -1805,7 +1869,8 @@ class TestEnqueueCreatesPendingMailFollowUp:
 
             open_followups = [
                 t for t in LeadTask.query.filter_by(lead_id=lead.id).all()
-                if 'Follow up after mailer' in (t.title or '')
+                if 'Add to next mailer' in (t.title or '')
+                    or 'Follow up after mailer' in (t.title or '')
             ]
             assert open_followups
             assert all(t.status == 'cancelled' for t in open_followups)
@@ -1948,10 +2013,11 @@ class TestSubmitCampaignFollowUp:
             follow_up = LeadTask.query.filter(
                 LeadTask.lead_id == lead.id,
                 LeadTask.status == 'open',
-                LeadTask.task_type == 'call_owner_today',
+                LeadTask.task_type == 'add_to_mail_batch',
             ).first()
             assert follow_up is not None
-            assert 'Follow up after mailer' in follow_up.title
+            assert 'Add to next mailer' in follow_up.title
+            assert follow_up.due_date is not None
             refreshed = MailCampaign.query.get(campaign.id)
             assert refreshed.status == 'submitted'
             assert refreshed.submitted_count == 1

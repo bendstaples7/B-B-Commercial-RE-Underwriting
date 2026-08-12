@@ -25,10 +25,19 @@ from app.services.lead_task_service import complete_native_task_mirror
 
 logger = logging.getLogger(__name__)
 
-MAIL_FOLLOW_UP_OFFSET_DAYS = 7
-FOLLOW_UP_AFTER_MAIL_TITLE_RE = re.compile(r'follow up after mail', re.IGNORECASE)
+# Post-send rematch cadence: schedule add_to_mail_batch due send + 90 days.
+MAIL_REMATCH_OFFSET_DAYS = 90
+# Back-compat alias for callers/tests still importing the old name.
+MAIL_FOLLOW_UP_OFFSET_DAYS = MAIL_REMATCH_OFFSET_DAYS
+# Match legacy call follow-ups and the quarterly rematch title.
+FOLLOW_UP_AFTER_MAIL_TITLE_RE = re.compile(
+    r'(follow up after mail|add to next mailer)',
+    re.IGNORECASE,
+)
+MAIL_REMATCH_TASK_TYPE = 'add_to_mail_batch'
 SENT_RECENTLY_DAYS = 14
 RECENT_SALE_RECONCILIATION_BATCH_SIZE = 500
+TERMINAL_MAIL_STOP_STATUSES = frozenset({'suppressed', 'do_not_contact'})
 
 
 def recent_sale_mail_eligible_date(lead: Lead) -> date | None:
@@ -1114,17 +1123,20 @@ def resolve_mail_queue_status(lead: Lead) -> str | None:
 
 
 def is_mail_follow_up_title(title: str | None) -> bool:
-    """True when the title is the post-mailer call follow-up (pending or dated)."""
+    """True when the title is the post-mailer rematch task (pending or dated).
+
+    Matches legacy "Follow up after mailer" and current "Add to next mailer".
+    """
     return bool(FOLLOW_UP_AFTER_MAIL_TITLE_RE.search(title or ''))
 
 
 def is_mail_follow_up_task(task: LeadTask) -> bool:
-    """True when the task is the post-mailer call follow-up (pending or dated)."""
+    """True when the task is the post-mailer rematch cadence (pending or dated)."""
     return is_mail_follow_up_title(task.title)
 
 
 def find_open_mail_follow_up_task(lead_id: int) -> LeadTask | None:
-    """Open follow-up-after-mailer task for a lead, if any."""
+    """Open post-mailer rematch task for a lead, if any."""
     for task in LeadTask.query.filter_by(lead_id=lead_id, status='open').all():
         if is_mail_follow_up_task(task):
             return task
@@ -1154,7 +1166,7 @@ def lead_is_awaiting_mail_batch(lead_id: int) -> bool:
 
 
 def lead_has_mail_work_in_flight(lead_id: int) -> bool:
-    """Queued for mail or has a pending (undated) follow-up-after-mailer task."""
+    """Queued for mail or has a pending (undated) post-mail rematch task."""
     if lead_is_awaiting_mail_batch(lead_id):
         return True
     pending = find_open_mail_follow_up_task(lead_id)
@@ -1162,16 +1174,59 @@ def lead_has_mail_work_in_flight(lead_id: int) -> bool:
 
 
 def _mail_follow_up_title(lead: Lead) -> str:
-    return f'Follow up after mailer — {_lead_address_label(lead)}'
+    return f'Add to next mailer — {_lead_address_label(lead)}'
+
+
+def _cancel_open_rematch_task(
+    task: LeadTask,
+    *,
+    actor: str,
+    reason: str,
+    now: datetime,
+) -> None:
+    """Cancel one open rematch LeadTask and matching Task mirrors."""
+    task.status = 'cancelled'
+    task.completed_at = now
+    db.session.add(task)
+    for mirror in Task.query.filter(
+        Task.lead_id == task.lead_id,
+        Task.status.in_(['open', 'overdue']),
+    ).all():
+        mirror_matches = (
+            mirror.title == task.title
+            or is_mail_follow_up_title(mirror.title)
+        )
+        if not mirror_matches:
+            continue
+        mirror.status = 'cancelled'
+        mirror.updated_at = now
+        db.session.add(mirror)
+    db.session.add(
+        LeadTimelineEntry(
+            lead_id=task.lead_id,
+            event_type='task_completed',
+            occurred_at=now,
+            source='system',
+            actor=actor,
+            summary=f'Task cancelled: {task.title}',
+            event_metadata={
+                'task_id': task.id,
+                'task_type': task.task_type,
+                'title': task.title,
+                'reason': reason,
+                'status': 'cancelled',
+            },
+        ),
+    )
 
 
 def create_pending_mail_follow_up_task(
     lead: Lead,
     actor: str,
 ) -> LeadTask:
-    """Ensure an open follow-up-after-mailer task with due_date=NULL (awaiting send).
+    """Ensure an open rematch task with due_date=NULL (awaiting send).
 
-    If an open follow-up already exists (pending or dated from a prior send), leave
+    If an open rematch already exists (pending or dated from a prior send), leave
     it alone — do not clear a scheduled due date.
     """
     existing = find_open_mail_follow_up_task(lead.id)
@@ -1182,7 +1237,7 @@ def create_pending_mail_follow_up_task(
     title = _mail_follow_up_title(lead)
     task = LeadTask(  # cancelled if campaign submission fails before send
         lead_id=lead.id,
-        task_type='call_owner_today',
+        task_type=MAIL_REMATCH_TASK_TYPE,
         title=title,
         status='open',
         due_date=None,
@@ -1197,7 +1252,7 @@ def create_pending_mail_follow_up_task(
             status='open',
             source='manual',
             lead_id=lead.id,
-            task_type='call_owner_today',
+            task_type=MAIL_REMATCH_TASK_TYPE,
             due_date=None,
         ),
     )
@@ -1227,49 +1282,117 @@ def cancel_pending_mail_follow_up_tasks(
     *,
     reason: str = 'mail_batch_removed',
 ) -> int:
-    """Cancel undated follow-up-after-mailer tasks when mail is no longer in flight."""
+    """Cancel undated post-mail rematch tasks when mail is no longer in flight."""
     now = datetime.now(timezone.utc)
     cancelled = 0
     for task in LeadTask.query.filter_by(lead_id=lead_id, status='open').all():
         if not is_mail_follow_up_task(task) or task.due_date is not None:
             continue
-        task.status = 'cancelled'
-        task.completed_at = now
-        db.session.add(task)
+        _cancel_open_rematch_task(task, actor=actor, reason=reason, now=now)
         cancelled += 1
-        for mirror in Task.query.filter_by(
-            lead_id=lead_id, status='open', title=task.title,
-        ).all():
-            mirror.status = 'cancelled'
-            mirror.updated_at = now
-            db.session.add(mirror)
-        db.session.add(
-            LeadTimelineEntry(
-                lead_id=lead_id,
-                event_type='task_completed',
-                occurred_at=now,
-                source='system',
-                actor=actor,
-                summary=f'Task cancelled: {task.title}',
-                event_metadata={
-                    'task_id': task.id,
-                    'task_type': task.task_type,
-                    'title': task.title,
-                    'reason': reason,
-                    'status': 'cancelled',
-                },
-            ),
-        )
     return cancelled
 
 
+def cancel_mail_rematch_tasks(
+    lead_id: int,
+    actor: str = 'system',
+    *,
+    reason: str = 'mail_rematch_stopped',
+    pending_only: bool = False,
+) -> int:
+    """Cancel open post-mail rematch tasks (pending and/or dated).
+
+    Used when the rematch loop should stop (suppress/DNC already wipe all open
+    tasks; call this for call/conversation workflows or explicit stop-mail).
+    """
+    now = datetime.now(timezone.utc)
+    cancelled = 0
+    for task in LeadTask.query.filter_by(lead_id=lead_id, status='open').all():
+        if not is_mail_follow_up_task(task):
+            continue
+        if pending_only and task.due_date is not None:
+            continue
+        _cancel_open_rematch_task(task, actor=actor, reason=reason, now=now)
+        cancelled += 1
+    return cancelled
+
+
+def convert_legacy_mail_follow_up_to_rematch(
+    task: LeadTask,
+    lead: Lead,
+    *,
+    last_sent_at: datetime | None,
+    actor: str = 'backfill_mail_rematch_cadence',
+    offset_days: int = MAIL_REMATCH_OFFSET_DAYS,
+) -> LeadTask:
+    """Convert a legacy call follow-up-after-mailer task to quarterly rematch.
+
+    Due date = last_sent_at.date() + offset_days when last_sent_at is known;
+    otherwise keeps the existing due_date (may be None).
+    """
+    now = datetime.now(timezone.utc)
+    old_title = task.title
+    new_title = _mail_follow_up_title(lead)
+    due_date = (
+        last_sent_at.date() + timedelta(days=offset_days)
+        if last_sent_at is not None
+        else task.due_date
+    )
+    task.task_type = MAIL_REMATCH_TASK_TYPE
+    task.title = new_title
+    task.due_date = due_date
+    db.session.add(task)
+
+    for mirror in Task.query.filter(
+        Task.lead_id == lead.id,
+        Task.status.in_(['open', 'overdue']),
+    ).all():
+        mirror_matches = (
+            mirror.title == old_title
+            or is_mail_follow_up_title(mirror.title)
+            or (
+                mirror.task_type == 'call_owner_today'
+                and FOLLOW_UP_AFTER_MAIL_TITLE_RE.search(mirror.title or '')
+            )
+        )
+        if not mirror_matches:
+            continue
+        mirror.task_type = MAIL_REMATCH_TASK_TYPE
+        mirror.title = new_title
+        mirror.due_date = (
+            datetime.combine(due_date, datetime.min.time()) if due_date else None
+        )
+        mirror.updated_at = now
+        db.session.add(mirror)
+
+    db.session.add(
+        LeadTimelineEntry(
+            lead_id=lead.id,
+            event_type='task_snoozed',
+            occurred_at=now,
+            source='system',
+            actor=actor,
+            summary=f'Task converted to quarterly rematch: {new_title}',
+            event_metadata={
+                'task_id': task.id,
+                'task_type': task.task_type,
+                'title': new_title,
+                'previous_title': old_title,
+                'source': 'mail_rematch_backfill',
+                'due_date': due_date.isoformat() if due_date else None,
+            },
+        ),
+    )
+    return task
+
+
 def _has_equivalent_dated_mail_follow_up(lead_id: int, due_date: date) -> bool:
-    """True when an open call task already has a due date near the mail follow-up."""
+    """True when an open rematch-equivalent task already has a nearby due date."""
     open_tasks = LeadTask.query.filter_by(lead_id=lead_id, status='open').all()
     for task in open_tasks:
         if is_mail_follow_up_task(task):
             continue  # handled by update path
-        if task.task_type == 'call_owner_today' and task.due_date is not None:
+        if task.task_type == MAIL_REMATCH_TASK_TYPE and task.due_date is not None:
             if abs((task.due_date - due_date).days) <= 1:
                 return True
     return False
@@ -1281,11 +1404,11 @@ def schedule_mail_follow_up_task(
     actor: str,
     *,
     campaign_id: int | None = None,
-    offset_days: int = MAIL_FOLLOW_UP_OFFSET_DAYS,
+    offset_days: int = MAIL_REMATCH_OFFSET_DAYS,
 ) -> LeadTask | None:
-    """Set or create a call follow-up task due after assumed mail delivery.
+    """Set or create an add-to-mail-batch rematch task due after send.
 
-    Prefer updating a pending (undated) follow-up-after-mailer task created at enqueue.
+    Prefer updating a pending (undated) rematch task created at enqueue.
     """
     due_date = sent_at.date() + timedelta(days=offset_days)
     now = datetime.now(timezone.utc)
@@ -1296,6 +1419,7 @@ def schedule_mail_follow_up_task(
         old_title = existing.title
         existing.due_date = due_date
         existing.title = title
+        existing.task_type = MAIL_REMATCH_TASK_TYPE
         db.session.add(existing)
         for mirror in Task.query.filter(
             Task.lead_id == lead.id,
@@ -1305,8 +1429,7 @@ def schedule_mail_follow_up_task(
                 mirror.title == old_title
                 or mirror.title == title
                 or (
-                    mirror.task_type == 'call_owner_today'
-                    and mirror.due_date is None
+                    mirror.due_date is None
                     and FOLLOW_UP_AFTER_MAIL_TITLE_RE.search(mirror.title or '')
                 )
             )
@@ -1314,6 +1437,7 @@ def schedule_mail_follow_up_task(
                 continue
             mirror.due_date = datetime.combine(due_date, datetime.min.time())
             mirror.title = title
+            mirror.task_type = MAIL_REMATCH_TASK_TYPE
             mirror.updated_at = now
             db.session.add(mirror)
         db.session.add(
@@ -1341,7 +1465,7 @@ def schedule_mail_follow_up_task(
 
     task = LeadTask(
         lead_id=lead.id,
-        task_type='call_owner_today',
+        task_type=MAIL_REMATCH_TASK_TYPE,
         title=title,
         status='open',
         due_date=due_date,
@@ -1356,7 +1480,7 @@ def schedule_mail_follow_up_task(
             status='open',
             source='manual',
             lead_id=lead.id,
-            task_type='call_owner_today',
+            task_type=MAIL_REMATCH_TASK_TYPE,
             due_date=datetime.combine(due_date, datetime.min.time()),
         ),
     )
@@ -1389,8 +1513,10 @@ def ensure_due_today_call_task(
 ) -> LeadTask | None:
     """Create a due-today call task when urgency has no dated open work.
 
-    Skips when mail work is in flight (queued batch or pending mail follow-up)
-    or an open task already has a due date.
+    Skips when mail work is in flight (queued batch or pending mail rematch),
+    when any open rematch task exists (dated or not), or when an open task
+    already has a due date. Rematch cancellation for real call workflows is
+    handled in ``LeadTaskService.create`` and ``CallLogService.log_call``.
     """
     lead_id = lead.id
     if lead_has_mail_work_in_flight(lead_id):
