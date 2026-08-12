@@ -1170,7 +1170,11 @@ def _select_rematch_mirrors(
     *,
     allow_pending_title_match: bool = False,
 ) -> list[Task]:
-    """Select mirror rows safely: linked first, otherwise one unique title match."""
+    """Select mirror rows safely: linked first, otherwise one unique title match.
+
+    If ``mirror_task_id`` points at a missing or non-open Task, fall through to
+    the unique title-match scan so a remaining open mirror is not left stale.
+    """
     if task.mirror_task_id:
         mirror = db.session.get(Task, task.mirror_task_id)
         if (
@@ -1179,6 +1183,7 @@ def _select_rematch_mirrors(
             and mirror.status in ('open', 'overdue')
         ):
             return [mirror]
+        # Linked mirror unusable — fall through to unique title match.
 
     titles = {title for title in candidate_titles if title}
     candidates: list[Task] = []
@@ -1287,7 +1292,11 @@ def _cancel_open_rematch_task(
     reason: str,
     now: datetime,
 ) -> None:
-    """Cancel one open rematch LeadTask and matching Task mirrors."""
+    """Cancel one open rematch LeadTask and its selected Task mirror(s).
+
+    Prefer the linked ``mirror_task_id``; only cancel a unique title match when
+    no usable link exists (avoids wiping stale duplicate rematch-titled rows).
+    """
     task.status = 'cancelled'
     task.completed_at = now
     db.session.add(task)
@@ -1453,6 +1462,9 @@ def convert_legacy_mail_follow_up_to_rematch(
             due_date=due_date,
             now=now,
         )
+        if task.mirror_task_id != mirror.id:
+            task.mirror_task_id = mirror.id
+            db.session.add(task)
 
     db.session.add(
         LeadTimelineEntry(
@@ -1522,6 +1534,9 @@ def schedule_mail_follow_up_task(
                 due_date=due_date,
                 now=now,
             )
+            if existing.mirror_task_id != mirror.id:
+                existing.mirror_task_id = mirror.id
+                db.session.add(existing)
         db.session.add(
             LeadTimelineEntry(
                 lead_id=lead.id,

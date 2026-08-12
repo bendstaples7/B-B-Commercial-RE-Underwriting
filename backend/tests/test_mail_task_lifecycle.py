@@ -1923,6 +1923,91 @@ class TestScheduleMailFollowUpTask:
                 datetime.min.time(),
             )
 
+    def test_schedule_falls_through_when_linked_mirror_unusable(self, app):
+        """Dead mirror_task_id still syncs a unique open rematch-titled mirror."""
+        with app.app_context():
+            from app import db
+            from app.models.task import Task
+
+            lead = _make_lead(app, '6g Dead Mirror St')
+            pending = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 6g Dead Mirror St',
+                status='open',
+                due_date=None,
+                created_by='test',
+                mirror_task_id=999999,
+            )
+            orphan = Task(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 6g Dead Mirror St',
+                status='open',
+                source='manual',
+                due_date=None,
+            )
+            db.session.add_all([pending, orphan])
+            db.session.commit()
+
+            sent_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+            task = schedule_mail_follow_up_task(
+                lead=lead, sent_at=sent_at, actor=USER_ID,
+            )
+            db.session.commit()
+
+            assert task is not None
+            assert task.id == pending.id
+            assert task.due_date == sent_at.date() + timedelta(days=90)
+            synced = Task.query.get(orphan.id)
+            assert synced.due_date == datetime.combine(
+                task.due_date, datetime.min.time(),
+            )
+            assert task.mirror_task_id == orphan.id
+
+    def test_cancel_rematch_keeps_duplicate_title_mirror_when_linked(self, app):
+        """Cancel uses linked mirror only; duplicate rematch-titled rows stay open."""
+        with app.app_context():
+            from app import db
+            from app.models.task import Task
+            from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
+
+            lead = _make_lead(app, '6h Cancel Dup Mirror St')
+            rematch = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 6h Cancel Dup Mirror St',
+                status='open',
+                due_date=date.today() + timedelta(days=30),
+                created_by='test',
+            )
+            linked = Task(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title=rematch.title,
+                status='open',
+                source='manual',
+            )
+            duplicate = Task(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title=rematch.title,
+                status='open',
+                source='manual',
+            )
+            db.session.add_all([rematch, linked, duplicate])
+            db.session.flush()
+            rematch.mirror_task_id = linked.id
+            db.session.add(rematch)
+            db.session.commit()
+
+            cancel_mail_rematch_tasks(lead.id, actor=USER_ID, reason='test')
+            db.session.commit()
+
+            assert LeadTask.query.get(rematch.id).status == 'cancelled'
+            assert Task.query.get(linked.id).status == 'cancelled'
+            assert Task.query.get(duplicate.id).status == 'open'
+
     def test_convert_legacy_follow_up_requires_send_for_dated_task(self, app):
         with app.app_context():
             from app.services.mail_task_lifecycle_service import (

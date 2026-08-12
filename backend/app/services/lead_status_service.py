@@ -35,6 +35,8 @@ def apply_lead_status_change(
     """Update lead status with DNC/suppress side effects and timeline entry."""
     old_status = lead.lead_status
     if new_status == old_status:
+        # Idempotent bulk DNC/suppress must still clear leftover open tasks /
+        # rematch mirrors when the lead is already in that terminal status.
         if new_status in ('do_not_contact', 'suppressed'):
             lead.recommended_action = None
             _cancel_tasks_for_terminal_status(

@@ -237,6 +237,8 @@ class TestBulkSuppress:
             )
 
             assert response.status_code == 200
+            body = response.get_json()
+            assert body['successes'] == 1
             assert db.session.get(LeadTask, rematch.id).status == 'cancelled'
             assert db.session.get(Task, mirror.id).status == 'cancelled'
 
