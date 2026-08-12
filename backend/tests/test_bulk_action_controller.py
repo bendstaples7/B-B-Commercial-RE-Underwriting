@@ -276,6 +276,54 @@ class TestBulkSuppress:
             assert db.session.get(LeadTask, task.id).status == 'cancelled'
             assert synced == [['hs-bulk-suppress-1']]
 
+    def test_bulk_suppress_syncs_hubspot_backed_rematch_mirror(
+        self, client, app, monkeypatch,
+    ):
+        with app.app_context():
+            lead = _make_lead(app, '1 Bulk Suppress Mirror Hs St')
+            rematch = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 1 Bulk Suppress Mirror Hs St',
+                status='open',
+                due_date=date.today() + timedelta(days=30),
+                created_by='test',
+            )
+            mirror = Task(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title=rematch.title,
+                status='open',
+                source='manual',
+                due_date=datetime.combine(rematch.due_date, datetime.min.time()),
+                hubspot_task_id='hs-bulk-rematch-mirror-1',
+            )
+            db.session.add_all([rematch, mirror])
+            db.session.flush()
+            rematch.mirror_task_id = mirror.id
+            db.session.add(rematch)
+            db.session.commit()
+            synced: list[list[str]] = []
+
+            def _capture(ids):
+                synced.append(list(ids))
+
+            monkeypatch.setattr(
+                'app.services.hubspot_task_completion_service.sync_pending_hubspot_completions',
+                _capture,
+            )
+            response = client.post(
+                '/api/leads/bulk/suppress',
+                data=json.dumps({'lead_ids': [lead.id]}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 200
+            assert db.session.get(LeadTask, rematch.id).status == 'cancelled'
+            assert db.session.get(Task, mirror.id).status == 'cancelled'
+            assert synced == [['hs-bulk-rematch-mirror-1']]
+
     def test_bulk_suppress_empty_list_returns_zero_counts(self, client, app):
         """Bulk suppress with empty lead_ids returns 400 (schema requires min 1 ID)."""
         with app.app_context():

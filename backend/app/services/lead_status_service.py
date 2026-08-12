@@ -16,15 +16,21 @@ def _cancel_tasks_for_terminal_status(
     actor: str,
     status: str,
 ) -> set[str]:
-    hubspot_task_ids = {
-        str(task.hubspot_task_id)
-        for task in LeadTask.query.filter(
-            LeadTask.lead_id == lead_id,
-            LeadTask.status == 'open',
-            LeadTask.hubspot_task_id.isnot(None),
-        ).all()
-        if task.hubspot_task_id
-    }
+    from app.models.task import Task
+    from app.services.mail_task_lifecycle_service import is_mail_follow_up_task
+
+    hubspot_task_ids: set[str] = set()
+    open_tasks = LeadTask.query.filter(
+        LeadTask.lead_id == lead_id,
+        LeadTask.status == 'open',
+    ).all()
+    for task in open_tasks:
+        if task.hubspot_task_id:
+            hubspot_task_ids.add(str(task.hubspot_task_id))
+        if is_mail_follow_up_task(task) and task.mirror_task_id:
+            mirror = db.session.get(Task, task.mirror_task_id)
+            if mirror is not None and mirror.hubspot_task_id:
+                hubspot_task_ids.add(str(mirror.hubspot_task_id))
     from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
     cancel_mail_rematch_tasks(
         lead_id,
