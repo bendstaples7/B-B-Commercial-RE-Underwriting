@@ -2017,8 +2017,12 @@ class TestScheduleMailFollowUpTask:
             refreshed = LeadTask.query.get(orphan.id)
             assert refreshed.task_type == 'add_to_mail_batch'
             assert refreshed.due_date == rematch_due
+            assert refreshed.mirror_task_id is not None
             assert refreshed.mirror_task_id != owner_mirror.id
-            assert refreshed.mirror_task_id is None
+            replacement = Task.query.get(refreshed.mirror_task_id)
+            assert replacement is not None
+            assert replacement.status == 'open'
+            assert 'Add to next mailer' in replacement.title
             assert LeadTask.query.get(owner.id).mirror_task_id == owner_mirror.id
             assert Task.query.get(owner_mirror.id).title == (
                 'Add to next mailer — 6i Shared Mirror Guard St'
@@ -2208,7 +2212,14 @@ class TestScheduleMailFollowUpTask:
             )
             db.session.commit()
 
-            assert db.session.get(LeadTask, stale.id).mirror_task_id is None
+            refreshed = db.session.get(LeadTask, stale.id)
+            assert refreshed.mirror_task_id is not None
+            assert refreshed.mirror_task_id != protected_mirror.id
+            assert refreshed.mirror_task_id != completed_stale_mirror.id
+            replacement = db.session.get(Task, refreshed.mirror_task_id)
+            assert replacement is not None
+            assert replacement.status == 'open'
+            assert 'Add to next mailer' in replacement.title
             assert db.session.get(Task, protected_mirror.id).task_type == 'call_owner_today'
             assert db.session.get(Task, protected_mirror.id).status == 'open'
 

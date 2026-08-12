@@ -1256,6 +1256,49 @@ def _create_rematch_mirror(
     return mirror
 
 
+def _sync_or_create_rematch_mirror(
+    task: LeadTask,
+    lead_id: int,
+    candidate_titles: set[str | None],
+    *,
+    title: str,
+    due_date: date | None,
+    now: datetime,
+    allow_pending_title_match: bool = False,
+) -> None:
+    """Sync a safely selected rematch mirror, or create one when none is claimable.
+
+    Protected title matches (already linked to another LeadTask) are skipped by
+    ``_select_rematch_mirrors``. Existing-task update paths must still expose a
+    UI Task, so create and link a fresh mirror when selection is empty.
+    """
+    selected = _select_rematch_mirrors(
+        task,
+        lead_id,
+        candidate_titles,
+        allow_pending_title_match=allow_pending_title_match,
+    )
+    if selected:
+        for mirror in selected:
+            _sync_rematch_mirror(
+                mirror,
+                title=title,
+                due_date=due_date,
+                now=now,
+            )
+            if task.mirror_task_id != mirror.id:
+                task.mirror_task_id = mirror.id
+                db.session.add(task)
+        return
+
+    # Empty selection means no usable linked mirror (selection returns a usable
+    # link first). Drop any stale id and create a replacement UI Task.
+    if task.mirror_task_id is not None:
+        task.mirror_task_id = None
+        db.session.add(task)
+    _create_rematch_mirror(task, title=title, due_date=due_date)
+
+
 def find_open_mail_follow_up_task(lead_id: int) -> LeadTask | None:
     """Open post-mailer rematch task for a lead, if any."""
     for task in LeadTask.query.filter_by(lead_id=lead_id, status='open').all():
@@ -1464,33 +1507,14 @@ def convert_legacy_mail_follow_up_to_rematch(
     task.due_date = due_date
     db.session.add(task)
 
-    for mirror in _select_rematch_mirrors(
+    _sync_or_create_rematch_mirror(
         task,
         lead.id,
         {old_title, new_title},
-    ):
-        _sync_rematch_mirror(
-            mirror,
-            title=new_title,
-            due_date=due_date,
-            now=now,
-        )
-        if task.mirror_task_id != mirror.id:
-            task.mirror_task_id = mirror.id
-            db.session.add(task)
-    else:
-        # No usable mirror selected — drop a stale/missing link rather than keep
-        # pointing at another task's mirror or a dead Task id.
-        if task.mirror_task_id is not None:
-            linked = db.session.get(Task, task.mirror_task_id)
-            linked_usable = (
-                linked is not None
-                and linked.lead_id == lead.id
-                and linked.status in ('open', 'overdue')
-            )
-            if not linked_usable:
-                task.mirror_task_id = None
-                db.session.add(task)
+        title=new_title,
+        due_date=due_date,
+        now=now,
+    )
 
     db.session.add(
         LeadTimelineEntry(
@@ -1548,32 +1572,15 @@ def schedule_mail_follow_up_task(
         existing.title = title
         existing.task_type = MAIL_REMATCH_TASK_TYPE
         db.session.add(existing)
-        for mirror in _select_rematch_mirrors(
+        _sync_or_create_rematch_mirror(
             existing,
             lead.id,
             {old_title, title},
+            title=title,
+            due_date=due_date,
+            now=now,
             allow_pending_title_match=True,
-        ):
-            _sync_rematch_mirror(
-                mirror,
-                title=title,
-                due_date=due_date,
-                now=now,
-            )
-            if existing.mirror_task_id != mirror.id:
-                existing.mirror_task_id = mirror.id
-                db.session.add(existing)
-        else:
-            if existing.mirror_task_id is not None:
-                linked = db.session.get(Task, existing.mirror_task_id)
-                linked_usable = (
-                    linked is not None
-                    and linked.lead_id == lead.id
-                    and linked.status in ('open', 'overdue')
-                )
-                if not linked_usable:
-                    existing.mirror_task_id = None
-                    db.session.add(existing)
+        )
         db.session.add(
             LeadTimelineEntry(
                 lead_id=lead.id,
