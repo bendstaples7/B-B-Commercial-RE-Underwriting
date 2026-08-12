@@ -415,21 +415,42 @@ def main() -> int:
         errors.append(
             "install-backup-cron.sh must install celery-liveness-check.sh cron"
         )
-    if "check-lead-cc-mount-health.sh" not in install_cron:
+    if "LEAD_CC_MARKER=\"lead-cc-mount-health-managed\"" not in install_cron:
         errors.append(
-            "install-backup-cron.sh must install check-lead-cc-mount-health.sh cron"
+            "install-backup-cron.sh must define LEAD_CC_MARKER="
+            "lead-cc-mount-health-managed"
         )
-    if "lead-cc-mount-health-managed" not in install_cron:
+    if not re.search(
+        r'echo\s+"15 \* \* \* \* /home/deploy/check-lead-cc-mount-health\.sh '
+        r'\$LEAD_CC_LOG_REDIRECT # \$LEAD_CC_MARKER"',
+        install_cron,
+    ):
         errors.append(
-            "install-backup-cron.sh must use lead-cc-mount-health-managed marker"
+            "install-backup-cron.sh must install hourly "
+            "check-lead-cc-mount-health.sh cron with managed marker"
+        )
+    if "lead-cc-mount-health.log" not in install_cron:
+        errors.append(
+            "install-backup-cron.sh must redirect lead CC mount health "
+            "to lead-cc-mount-health.log"
         )
     deploy_yml_text = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
-    if "check-lead-cc-mount-health.sh" not in deploy_yml_text:
+    if not re.search(
+        r"scp\s+[^\n]*scripts/check-lead-cc-mount-health\.sh\s+[^\n]+:/home/deploy/check-lead-cc-mount-health\.sh",
+        deploy_yml_text,
+    ):
         errors.append(
-            "deploy.yml must scp check-lead-cc-mount-health.sh to the VPS"
+            "deploy.yml must scp scripts/check-lead-cc-mount-health.sh "
+            "to /home/deploy/check-lead-cc-mount-health.sh"
         )
-    if "lead_cc_mount_health.py" not in deploy_yml_text:
-        errors.append("deploy.yml must scp lead_cc_mount_health.py to the VPS")
+    if not re.search(
+        r"scp\s+[^\n]*scripts/lead_cc_mount_health\.py\s+[^\n]+:/home/deploy/lead_cc_mount_health\.py",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/lead_cc_mount_health.py "
+            "to /home/deploy/lead_cc_mount_health.py"
+        )
     # Executable + readable perms must ship with the files (cron otherwise fails).
     if not re.search(
         r"chmod 750[^\n]*check-lead-cc-mount-health\.sh", deploy_yml_text

@@ -2,9 +2,11 @@
 
 Pure helpers for nginx access-log scanning so CI can unit-test thresholds
 without a live nginx. Used by scripts/check-lead-cc-mount-health.sh.
-"""
-from __future__ import annotations
 
+Note: no ``from __future__ import annotations`` — this module is loaded via
+``importlib`` from bash; postponed annotations need ``sys.modules`` registration
+and we keep the helper import-safe without that footgun.
+"""
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone

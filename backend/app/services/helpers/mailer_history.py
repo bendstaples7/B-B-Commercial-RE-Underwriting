@@ -230,8 +230,9 @@ def _timeline_mail_sent_rows(lead: Any) -> list[dict[str, Any]]:
         template_name = metadata.get('template_name')
         if template_name is not None and not isinstance(template_name, str):
             template_name = str(template_name)
-        creative = _creative_display_label(metadata.get('creative'))
-        label_parts = [p for p in (template_name, creative) if p]
+        raw_creative = metadata.get('creative')
+        creative_label = _creative_display_label(raw_creative)
+        label_parts = [p for p in (template_name, creative_label) if p]
         label = ', '.join(label_parts) if label_parts else None
         if not label and olc_order_id:
             label = f'OLC order {olc_order_id}'
@@ -243,7 +244,9 @@ def _timeline_mail_sent_rows(lead: Any) -> list[dict[str, Any]]:
             'id': f'timeline-{entry.id}',
             'sent_at': entry.occurred_at.isoformat() if entry.occurred_at else None,
             'label': label,
-            'creative': creative,
+            # Display string for API/UI; heal uses _heal_creative (raw snapshot).
+            'creative': creative_label,
+            '_heal_creative': raw_creative,
             'template_name': template_name,
             'campaign_id': campaign_id,
             'olc_order_id': olc_order_id,
@@ -317,10 +320,11 @@ def consolidate_mailer_history(lead: Any, *, heal: bool = True) -> dict[str, Any
             continue
         seen_keys.update(keys)
         merged_rows.append(row)
+        heal_creative = row.get('_heal_creative', row.get('creative'))
         healed_entries.append({
             'sent_at': row.get('sent_at'),
             'template_name': row.get('template_name'),
-            'creative': row.get('creative'),
+            'creative': heal_creative,
             'campaign_id': row.get('campaign_id'),
             'olc_order_id': row.get('olc_order_id'),
             'address_feedback': row.get('address_feedback'),
@@ -330,9 +334,13 @@ def consolidate_mailer_history(lead: Any, *, heal: bool = True) -> dict[str, Any
     if heal and healed_entries:
         _heal_mailer_history_gaps(lead, healed_entries)
 
+    public_rows = [
+        {k: v for k, v in row.items() if not str(k).startswith('_')}
+        for row in merged_rows
+    ]
     return {
-        'count': len(merged_rows),
-        'last_sent_at': _last_sent_from_rows(merged_rows),
-        'rows': merged_rows,
+        'count': len(public_rows),
+        'last_sent_at': _last_sent_from_rows(public_rows),
+        'rows': public_rows,
         'healed_count': len(healed_entries),
     }

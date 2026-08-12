@@ -127,7 +127,9 @@ function startServer(dir, payload) {
           signals: 0,
         })
       }
-      if (urlPath.includes('/command-center')) return json(payload)
+      if (urlPath === `/api/leads/${leadId}/command-center` && req.method === 'GET') {
+        return json(payload)
+      }
       if (urlPath.includes('/navigation')) {
         return json({ position: 1, total: 1, prev_id: null, next_id: null })
       }
@@ -230,7 +232,14 @@ async function main() {
     }
 
     const rootKids = await page.$eval('#root', (el) => el.childElementCount).catch(() => 0)
-    const ccHits = apiHits.filter((u) => u.includes('/command-center'))
+    const ccHits = apiHits.filter((u) => {
+      try {
+        const path = new URL(u).pathname
+        return path === `/api/leads/${args.lead}/command-center`
+      } catch {
+        return u.includes(`/api/leads/${args.lead}/command-center`)
+      }
+    })
     const loadingCount = await page.locator('[aria-label="Loading lead"]').count()
     const bodyText = await page.evaluate(() => (document.body && document.body.innerText) || '')
     const hasStreetLandmark = Boolean(streetNeedle) && bodyText.includes(streetNeedle)

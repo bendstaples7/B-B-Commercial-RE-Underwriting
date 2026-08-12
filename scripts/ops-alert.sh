@@ -16,6 +16,7 @@ send_alert() {
     # Single-line subject for RFC822 header (msmtp has no CLI subject flag).
     local full_subject
     full_subject="$(printf '%s %s' "$prefix" "$subject" | tr '\n\r' '  ')"
+    local delivery_failed=0
 
     mkdir -p "$(dirname "$log_target")" 2>/dev/null || true
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT: $subject" >> "$log_target"
@@ -28,7 +29,10 @@ send_alert() {
             printf '%s\n' "$body"
         } | msmtp --account="${MSMTP_ACCOUNT:-default}" "${ALERT_EMAIL:-}" \
             2>>"$log_target" \
-            || echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (email): $?" >> "$log_target"
+            || {
+                echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (email): $?" >> "$log_target"
+                delivery_failed=1
+            }
     fi
 
     if [[ "${ALERT_METHOD:-}" == "webhook" || "${ALERT_METHOD:-}" == "both" ]]; then
@@ -50,13 +54,19 @@ print(json.dumps({"text": text}))
                 -H "Content-Type: application/json" \
                 -d "$payload" \
                 --max-time 10 2>>"$log_target" \
-                || echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (webhook): $?" >> "$log_target"
+                || {
+                    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (webhook): $?" >> "$log_target"
+                    delivery_failed=1
+                }
         else
             echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (webhook): empty payload or WEBHOOK_URL" >> "$log_target"
+            delivery_failed=1
         fi
     fi
 
     if [[ -z "${ALERT_METHOD:-}" || "${ALERT_METHOD:-}" == "none" ]]; then
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT_METHOD unset/none — logged only: $subject" >> "$log_target"
     fi
+
+    return "$delivery_failed"
 }

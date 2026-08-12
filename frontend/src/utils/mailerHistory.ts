@@ -87,7 +87,9 @@ function normalizeOne(entry: unknown, idx: number): MailerHistoryRow | null {
     const obj = entry as Record<string, unknown>
     const templateName = obj.template_name != null ? String(obj.template_name) : null
     const creative = creativeDisplayLabel(obj.creative)
-    const labelParts = [templateName, creative].filter(Boolean)
+    const labelParts = [templateName, creative]
+      .map((p) => (typeof p === 'string' ? p.trim() : p))
+      .filter(Boolean)
     let label = labelParts.length ? labelParts.join(', ') : null
     if (!label && obj.olc_order_id) label = `OLC order ${obj.olc_order_id}`
     if (!label && obj.campaign_id != null) label = `Campaign ${obj.campaign_id}`
@@ -191,7 +193,7 @@ export function resolveMailerHistorySummary(
           row.creative != null && typeof row.creative !== 'string'
         const labelLooksLikeDict =
           typeof row.label === 'string'
-          && /(?:^|,\s*)\{\s*['"]/.test(row.label)
+          && /\{\s*['"]/.test(row.label)
         const preferRebuilt =
           (creativeWasNonString || labelLooksLikeDict) && Boolean(labelFromParts)
         return {

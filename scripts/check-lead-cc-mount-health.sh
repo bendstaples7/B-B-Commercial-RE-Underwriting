@@ -36,7 +36,9 @@ fi
 
 mkdir -p "$(dirname "$LOG_FILE_DEFAULT")" 2>/dev/null || true
 log() {
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "$LOG_FILE_DEFAULT" 2>/dev/null || echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"
+    # Cron already redirects stdout/stderr to the log file — echo only (no tee)
+    # to avoid duplicate lines. Callers that want console+file can tee themselves.
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"
 }
 
 _send_ops_alert() {
@@ -52,9 +54,10 @@ _send_ops_alert() {
         # shellcheck source=ops-alert.sh
         source "${OPS_ALERT_LIB}"
         send_alert "$subject" "$body"
-    else
-        log "ALERT (no ops-alert.sh): $subject — $body"
+        return $?
     fi
+    log "ALERT (no ops-alert.sh): $subject — $body"
+    return 0
 }
 
 _maybe_alert_state() {
@@ -72,8 +75,12 @@ _maybe_alert_state() {
             return 0
         fi
     fi
-    _send_ops_alert "$subject" "$body"
-    echo "$now_epoch" > "$state_file" 2>/dev/null || true
+    if _send_ops_alert "$subject" "$body"; then
+        echo "$now_epoch" > "$state_file" 2>/dev/null || true
+        return 0
+    fi
+    log "alert delivery failed — not starting cooldown: $subject"
+    return 1
 }
 
 maybe_alert() {
@@ -135,20 +142,19 @@ trap 'rm -f "$LOG_TMP"' EXIT
 
 _read_logs_to_tmp() {
     local f
-    local ok=0
+    local failed=0
     : > "$LOG_TMP"
     for f in "${LOG_FILES[@]}"; do
         if cat "$f" >> "$LOG_TMP" 2>/dev/null; then
-            ok=1
             continue
         fi
         if sudo -n cat "$f" >> "$LOG_TMP" 2>/dev/null; then
-            ok=1
             continue
         fi
         log "WARN: cannot read $f (cat and sudo -n cat failed)"
+        failed=1
     done
-    if [[ "$ok" -eq 0 ]]; then
+    if [[ "$failed" -ne 0 ]]; then
         return 1
     fi
     BYTES_READ="$(wc -c < "$LOG_TMP" | tr -d ' ')"

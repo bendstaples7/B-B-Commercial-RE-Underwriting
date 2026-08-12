@@ -572,6 +572,7 @@ function UnifiedLeadCommandCenterRoute() {
   // (timeline, dialogs, ownership form, etc.) cannot bleed across queue advance.
   return (
     <RouteErrorBoundary
+      key={numericId}
       recoveryHref="/properties"
       recoveryLabel="Back to Properties"
       testId="lead-command-center-error-boundary"
@@ -1026,13 +1027,6 @@ class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, ErrorBoundar
               </Box>
             )}
           </Alert>
-          <Button
-            component={Link}
-            to={this.props.recoveryHref}
-            variant="outlined"
-          >
-            {this.props.recoveryLabel}
-          </Button>
         </Box>
       )
     }
