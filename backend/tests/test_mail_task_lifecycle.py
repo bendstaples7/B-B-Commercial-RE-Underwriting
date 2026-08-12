@@ -1965,6 +1965,56 @@ class TestScheduleMailFollowUpTask:
             )
             assert task.mirror_task_id == orphan.id
 
+    def test_schedule_creates_mirror_when_only_match_is_protected(self, app):
+        """Existing rematch gets a fresh mirror if the title match is claimed."""
+        with app.app_context():
+            from app import db
+            from app.models.task import Task
+
+            lead = _make_lead(app, '6g Protected Schedule Mirror St')
+            owner = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 6g Protected Schedule Mirror St',
+                status='completed',
+                due_date=date.today() + timedelta(days=90),
+                created_by='test',
+            )
+            owner_mirror = Task(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title=owner.title,
+                status='open',
+                source='manual',
+                due_date=datetime.combine(owner.due_date, datetime.min.time()),
+            )
+            pending = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 6g Protected Schedule Mirror St',
+                status='open',
+                due_date=None,
+                created_by='test',
+                mirror_task_id=999999,
+            )
+            db.session.add_all([owner, owner_mirror, pending])
+            db.session.flush()
+            owner.mirror_task_id = owner_mirror.id
+            db.session.add(owner)
+            db.session.commit()
+
+            sent_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+            task = schedule_mail_follow_up_task(
+                lead=lead, sent_at=sent_at, actor=USER_ID,
+            )
+            db.session.commit()
+
+            assert task is not None
+            assert task.id == pending.id
+            assert task.mirror_task_id not in {999999, owner_mirror.id}
+            assert db.session.get(LeadTask, owner.id).mirror_task_id == owner_mirror.id
+            assert db.session.get(Task, owner_mirror.id).status == 'open'
+
     def test_convert_does_not_steal_mirror_linked_to_other_rematch(self, app):
         """Stale-link repair must not claim another open LeadTask's mirror."""
         with app.app_context():
@@ -2022,6 +2072,7 @@ class TestScheduleMailFollowUpTask:
             replacement = Task.query.get(refreshed.mirror_task_id)
             assert replacement is not None
             assert replacement.status == 'open'
+            assert replacement.task_type == 'add_to_mail_batch'
             assert 'Add to next mailer' in replacement.title
             assert LeadTask.query.get(owner.id).mirror_task_id == owner_mirror.id
             assert Task.query.get(owner_mirror.id).title == (
@@ -2219,6 +2270,7 @@ class TestScheduleMailFollowUpTask:
             replacement = db.session.get(Task, refreshed.mirror_task_id)
             assert replacement is not None
             assert replacement.status == 'open'
+            assert replacement.task_type == 'add_to_mail_batch'
             assert 'Add to next mailer' in replacement.title
             assert db.session.get(Task, protected_mirror.id).task_type == 'call_owner_today'
             assert db.session.get(Task, protected_mirror.id).status == 'open'
