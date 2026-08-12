@@ -33,6 +33,10 @@ import {
   isSaleDateVerifiedWithinDays,
 } from '@/utils/saleDateFreshness'
 import { looksLikePhoneNumber } from '@/utils/phone'
+import {
+  formatAssessorBedsBaths,
+  formatNoteUnitMixLabel,
+} from '@/utils/notePropertyFacts'
 import { commandCenterService } from '@/services/api'
 import {
   CopyablePin,
@@ -647,11 +651,35 @@ export function PropertySidebar({
         <SidebarRow label="Type" value={commandCenterData.property_type} />
         <SidebarRow
           label="Beds / Baths"
-          value={
-            commandCenterData.bedrooms != null || commandCenterData.bathrooms != null
-              ? `${commandCenterData.bedrooms ?? '?'} bd / ${commandCenterData.bathrooms ?? '?'} ba`
-              : null
-          }
+          testId="sidebar-beds-baths"
+          value={(() => {
+            const facts = commandCenterData.note_property_facts
+            const mixLabel = formatNoteUnitMixLabel(facts?.unit_mix ?? null)
+            const assessorLabel = formatAssessorBedsBaths(
+              commandCenterData.bedrooms,
+              commandCenterData.bathrooms,
+            )
+            if (mixLabel && assessorLabel) {
+              return (
+                <Box sx={{ textAlign: 'right' }} data-testid="sidebar-beds-baths-dual">
+                  <Typography variant="body2" component="div" sx={{ fontWeight: 500 }}>
+                    Notes: {mixLabel}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" component="div">
+                    Assessor: {assessorLabel}
+                  </Typography>
+                </Box>
+              )
+            }
+            if (mixLabel) {
+              return (
+                <Typography variant="body2" component="div" data-testid="sidebar-beds-baths-notes">
+                  Notes: {mixLabel}
+                </Typography>
+              )
+            }
+            return assessorLabel
+          })()}
         />
         <SidebarRow
           label="Sq Ft"

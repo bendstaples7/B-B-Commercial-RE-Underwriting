@@ -74,7 +74,7 @@ _KNOWN_REVISIONS = frozenset({
     'mail_omit_20260727',
     # Assessor AKA situs when tax street differs from marketing street
     'aka_situs_20260729',
-    # Note-derived property facts JSONB + timeline backfill
+    # HubSpot note/call → units + unit_mix JSONB + timeline backfill
     'note_pf_20260812',
     # SPA boot-failure beacon events (blank SPA phone-home)
     'spa_boot_20260813',

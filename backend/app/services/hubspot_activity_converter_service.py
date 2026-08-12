@@ -899,6 +899,61 @@ class HubSpotActivityConverterService:
             )
             db.session.rollback()
 
+        self._apply_note_property_facts_for_interaction(interaction, associations)
+
+    def _apply_note_property_facts_for_interaction(self, interaction, associations):
+        """Fill blank units / commercial + note_property_facts from note/call body."""
+        if (interaction.interaction_type or '') not in ('note', 'call'):
+            return
+        lead_ids = [
+            a['target_id'] for a in associations
+            if a.get('target_type') == 'lead'
+        ]
+        if not lead_ids or not (interaction.body or '').strip():
+            return
+        try:
+            from app.models.lead import Lead
+            from app.services.helpers.note_property_facts import (
+                apply_note_property_facts_to_lead,
+            )
+            from app.services.lead_refresh import refresh_lead_scoring
+
+            source = (
+                'hubspot_call'
+                if interaction.interaction_type == 'call'
+                else 'hubspot_note'
+            )
+            for lead_id in lead_ids:
+                lead = Lead.query.get(lead_id)
+                if lead is None:
+                    continue
+                updated = apply_note_property_facts_to_lead(
+                    lead,
+                    interaction.body,
+                    source=source,
+                    hubspot_activity_id=interaction.hubspot_engagement_id,
+                )
+                if not updated:
+                    continue
+                db.session.add(lead)
+                db.session.commit()
+                if 'units' in updated or 'lead_category' in updated:
+                    try:
+                        refresh_lead_scoring(lead.id)
+                    except Exception as score_exc:
+                        logger.warning(
+                            "refresh_lead_scoring after note facts failed lead=%s: %s",
+                            lead.id,
+                            score_exc,
+                        )
+        except Exception as exc:
+            logger.warning(
+                "_apply_note_property_facts_for_interaction failed interaction_id=%s: %s",
+                getattr(interaction, 'id', None),
+                exc,
+            )
+            db.session.rollback()
+
     @staticmethod
     def _interaction_exists(hubspot_engagement_id):
         """Return True if an Interaction with this hubspot_engagement_id already exists."""

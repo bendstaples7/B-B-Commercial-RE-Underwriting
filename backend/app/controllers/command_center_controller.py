@@ -763,11 +763,33 @@ def get_command_center(lead_id: int):
     # Historic CRM/sheet signals: CoStar → commercial; ``Units: N`` in description.
     # Never overwrites authoritative GIS/assessor values already on the lead.
     from app.services.helpers.import_signal_fills import apply_import_signal_fills
+    from app.services.helpers.note_property_facts import (
+        apply_note_facts_from_timeline,
+        note_property_facts_needs_timeline_heal,
+    )
 
     import_signal_updates = apply_import_signal_fills(lead)
-    if import_signal_updates:
+    note_fact_updates: list[str] = []
+    if note_property_facts_needs_timeline_heal(getattr(lead, 'note_property_facts', None)):
+        note_fact_updates = apply_note_facts_from_timeline(lead)
+    if import_signal_updates or note_fact_updates:
         _db.session.add(lead)
         _db.session.commit()
+        if (
+            'units' in note_fact_updates
+            or 'lead_category' in note_fact_updates
+            or 'units' in import_signal_updates
+            or 'lead_category' in import_signal_updates
+        ):
+            try:
+                from app.services.lead_refresh import refresh_lead_scoring
+                refresh_lead_scoring(lead.id)
+            except Exception as score_exc:
+                logging.getLogger(__name__).warning(
+                    'refresh_lead_scoring after note facts heal failed lead=%s: %s',
+                    lead.id,
+                    score_exc,
+                )
 
     # Interaction table is frozen for Command Center — HubSpot activity history
     # lives on LeadTimelineEntry via HubSpotTimelineImportService. Do not UNION
@@ -1099,6 +1121,11 @@ def get_command_center(lead_id: int):
         'lot_size': lead.lot_size,
         'units': lead.units,
         'units_allowed': lead.units_allowed,
+        'note_property_facts': (
+            lead.note_property_facts
+            if isinstance(getattr(lead, 'note_property_facts', None), dict)
+            else None
+        ),
         'zoning': lead.zoning,
         'tax_bill_2021': lead.tax_bill_2021,
         'assessed_value': lead.assessed_value,

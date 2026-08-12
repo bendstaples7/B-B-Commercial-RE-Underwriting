@@ -1,0 +1,27 @@
+---
+description: Required data rewrites ship with Deploy — never leave Ben to run SQL or backfill scripts
+alwaysApply: true
+---
+
+# No Manual Prod Data Ops for Ben
+
+Ben never runs SQL, backfills, or prod repair scripts. The agent owns diagnosis and execution.
+
+## When a PR changes product behavior that depends on existing rows
+
+If merge + Deploy would leave the product wrong until old rows are rewritten:
+
+1. **Ship the rewrite with the PR** — prefer an idempotent Alembic data migration (or other step Deploy already runs).
+2. **Do not** leave rollout as “after merge, run `script.py --apply`” for Ben or any human checklist.
+3. Optional dry-run / `--apply` scripts are fine for agent use and local verification — they are **not** a substitute for auto-applied prod data migration when correctness depends on it.
+
+## Agent ownership
+
+- Probe and mutate prod yourself (SSH / scripts / migrations) when the plan or incident requires it.
+- Never end with “run this query” or “run this backfill on the VPS.”
+- Destructive or high-blast `--apply` on prod still needs Ben’s explicit OK in chat — then **you** run it.
+
+## Pairs with
+
+- [`run-commands-myself`](run-commands-myself.mdc) — never hand shell steps to Ben
+- [`run-migrations-myself`](run-migrations-myself.mdc) — schema upgrades are agent-run
