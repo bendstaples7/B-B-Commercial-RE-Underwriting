@@ -98,6 +98,29 @@ describe('mailerHistory', () => {
     expect(resolved.rows[0].label).toBe('Standard, Bessy Tam')
   })
 
+  it('rebuilds label when string creative has whitespace before dict quote', () => {
+    const api = {
+      count: 1,
+      last_sent_at: '2025-01-01',
+      rows: [
+        {
+          id: 'mail-0',
+          sent_at: '2025-01-01',
+          label: 'Standard, { "label": "Bessy Tam" }',
+          creative: 'Bessy Tam',
+          template_name: 'Standard',
+          campaign_id: 1,
+          olc_order_id: null,
+          address_feedback: null,
+          cancelled: false,
+          source: 'olc' as const,
+        },
+      ],
+    }
+    const resolved = resolveMailerHistorySummary(api, null)
+    expect(resolved.rows[0].label).toBe('Standard, Bessy Tam')
+  })
+
   it('parseMailerSentAt handles ISO and US dates', () => {
     expect(parseMailerSentAt('2024-06-01T00:00:00Z')).not.toBeNull()
     expect(parseMailerSentAt('6/21/2024')?.getMonth()).toBe(5)

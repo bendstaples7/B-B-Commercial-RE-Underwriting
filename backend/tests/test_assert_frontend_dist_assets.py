@@ -55,6 +55,13 @@ def test_find_lazy_chunks_importing_index(tmp_path: Path):
     (assets / "Dashboard-y.js").write_text(
         'import("./index-dead.js");export default 1', encoding="utf-8"
     )
+    (assets / "SideEffect-z.js").write_text(
+        'import"./index-dead.js";export default 1', encoding="utf-8"
+    )
     (assets / "OkPage-z.js").write_text("export default 1", encoding="utf-8")
     offenders = af.find_lazy_chunks_importing_index(assets)
-    assert offenders == ["Dashboard-y.js", "UnifiedLeadCommandCenter-x.js"]
+    assert offenders == [
+        "Dashboard-y.js",
+        "SideEffect-z.js",
+        "UnifiedLeadCommandCenter-x.js",
+    ]

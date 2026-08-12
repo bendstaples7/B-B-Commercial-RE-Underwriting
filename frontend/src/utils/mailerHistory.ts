@@ -191,7 +191,7 @@ export function resolveMailerHistorySummary(
           row.creative != null && typeof row.creative !== 'string'
         const labelLooksLikeDict =
           typeof row.label === 'string'
-          && (row.label.includes("{'") || row.label.includes('{"'))
+          && /(?:^|,\s*)\{\s*['"]/.test(row.label)
         const preferRebuilt =
           (creativeWasNonString || labelLooksLikeDict) && Boolean(labelFromParts)
         return {

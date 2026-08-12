@@ -15,7 +15,7 @@
  */
 import { createServer } from 'node:http'
 import { readFileSync, existsSync, statSync } from 'node:fs'
-import { join, extname, resolve, dirname } from 'node:path'
+import { join, extname, resolve, dirname, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
@@ -62,7 +62,7 @@ function makeToken() {
 }
 
 function ccPayload(leadId) {
-  const path = resolve(REPO_ROOT, 'artifacts/cc643.json')
+  const path = resolve(REPO_ROOT, `artifacts/cc${leadId}.json`)
   if (existsSync(path)) {
     try {
       return JSON.parse(readFileSync(path, 'utf8'))
@@ -105,6 +105,7 @@ function ccPayload(leadId) {
 
 function startServer(dir, payload) {
   const root = resolve(dir)
+  const rootPrefix = root.endsWith(sep) ? root : root + sep
   const leadId = Number(payload.id) || 643
   const server = createServer((req, res) => {
     const urlPath = decodeURIComponent((req.url || '/').split('?')[0])
@@ -136,8 +137,13 @@ function startServer(dir, payload) {
       }
       return json({ ok: true })
     }
-    let filePath = join(root, urlPath === '/' ? 'index.html' : urlPath)
-    if (!existsSync(filePath) || statSync(filePath).isDirectory()) {
+    const rel = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '')
+    let filePath = resolve(root, rel)
+    if (
+      (filePath !== root && !filePath.startsWith(rootPrefix))
+      || !existsSync(filePath)
+      || statSync(filePath).isDirectory()
+    ) {
       filePath = join(root, 'index.html')
     }
     try {

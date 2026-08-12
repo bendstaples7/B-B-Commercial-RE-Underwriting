@@ -1008,7 +1008,6 @@ class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, ErrorBoundar
                 color="inherit"
                 size="small"
                 onClick={() => {
-                  this.setState({ error: null })
                   window.location.href = this.props.recoveryHref
                 }}
               >
@@ -1031,7 +1030,6 @@ class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, ErrorBoundar
             component={Link}
             to={this.props.recoveryHref}
             variant="outlined"
-            onClick={() => this.setState({ error: null })}
           >
             {this.props.recoveryLabel}
           </Button>

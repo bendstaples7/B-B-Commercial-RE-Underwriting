@@ -169,6 +169,7 @@ from pathlib import Path
 helper_path = Path(os.environ['HELPER_PY'])
 spec = importlib.util.spec_from_file_location('lead_cc_mount_health', helper_path)
 mod = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = mod
 spec.loader.exec_module(mod)
 window = float(os.environ.get('WINDOW_HOURS', '24'))
 with open(sys.argv[1], encoding='utf-8', errors='replace') as fh:

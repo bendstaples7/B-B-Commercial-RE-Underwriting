@@ -49,9 +49,9 @@ SHARED_CHUNK_PREFIXES = (
     "useQueueSelection-",
 )
 
-# Static `from"./index-` / `from'./index-` and dynamic `import("./index-…)`.
+# Static from"./index-, side-effect import"./index-, and dynamic import("./index-).
 INDEX_IMPORT_RE = re.compile(
-    r"""from\s*["']\./index-|import\s*\(\s*["']\./index-"""
+    r"""(?:from|import)\s*["']\./index-|import\s*\(\s*["']\./index-"""
 )
 
 
