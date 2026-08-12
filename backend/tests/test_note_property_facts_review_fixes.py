@@ -75,33 +75,6 @@ def test_note_property_migration_pages_lead_ids(monkeypatch):
     assert fake_session.commits == 2
 
 
-def test_note_fact_scoring_refresh_callers_commit_after_success():
-    backend_dir = Path(__file__).resolve().parent.parent
-    callers = [
-        (
-            backend_dir / "app/services/hubspot_activity_converter_service.py",
-            "refresh_lead_scoring after note facts failed",
-            "db.session.commit()",
-        ),
-        (
-            backend_dir / "app/controllers/command_center_controller.py",
-            "refresh_lead_scoring after note facts heal failed",
-            "_db.session.commit()",
-        ),
-    ]
-
-    for path, warning_text, commit_call in callers:
-        source = path.read_text(encoding="utf-8")
-        window_start = source.index(warning_text) - 300
-        window = source[window_start: source.index(warning_text) + len(warning_text)]
-
-        refresh_at = window.index("refresh_lead_scoring(lead.id)")
-        commit_at = window.index(commit_call)
-        except_at = window.index("except Exception as score_exc")
-
-        assert refresh_at < commit_at < except_at
-
-
 def test_note_fact_score_refresh_includes_property_type_updates():
     backend_dir = Path(__file__).resolve().parent.parent
     callers = [

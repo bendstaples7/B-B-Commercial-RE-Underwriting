@@ -943,8 +943,8 @@ class HubSpotActivityConverterService:
                     or 'property_type' in updated
                 ):
                     try:
+                        # refresh_lead_scoring persists score/action changes itself.
                         refresh_lead_scoring(lead.id)
-                        db.session.commit()
                     except Exception as score_exc:
                         logger.warning(
                             "refresh_lead_scoring after note facts failed lead=%s: %s",
