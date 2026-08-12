@@ -231,9 +231,25 @@ class LeadTaskService:
                 field='title',
             )
 
+        task_type = data.get('task_type', 'custom')
+        # Real call workflow stops the quarterly mail rematch loop.
+        from app.services.mail_task_lifecycle_service import (
+            cancel_mail_rematch_tasks,
+            is_mail_follow_up_title,
+        )
+        if (
+            task_type == 'call_owner_today'
+            and not is_mail_follow_up_title(title)
+        ):
+            cancel_mail_rematch_tasks(
+                lead_id,
+                actor=actor,
+                reason='call_workflow_started',
+            )
+
         task = LeadTask(
             lead_id=lead_id,
-            task_type=data.get('task_type', 'custom'),
+            task_type=task_type,
             title=title,
             status='open',
             due_date=data.get('due_date'),
@@ -254,7 +270,7 @@ class LeadTaskService:
             status='open',
             source='manual',
             lead_id=lead_id,
-            task_type=data.get('task_type', 'custom'),
+            task_type=task_type,
             due_date=datetime.combine(data['due_date'], datetime.min.time()) if data.get('due_date') else None,
         )
         db.session.add(mirror_task)

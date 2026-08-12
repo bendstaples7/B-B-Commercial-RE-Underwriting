@@ -65,7 +65,12 @@ def _format_lead_score(value) -> str | None:
         return None
 
 
-def _cancel_open_lead_tasks(lead_id: int) -> set[str]:
+def _cancel_open_lead_tasks(
+    lead_id: int,
+    *,
+    actor: str = 'system',
+    reason: str = 'status_cancelled',
+) -> set[str]:
     """Cancel open LeadTask rows; return HubSpot IDs for post-commit CRM sync."""
     hs_ids = {
         str(task.hubspot_task_id)
@@ -76,6 +81,8 @@ def _cancel_open_lead_tasks(lead_id: int) -> set[str]:
         ).all()
         if task.hubspot_task_id
     }
+    from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
+    cancel_mail_rematch_tasks(lead_id, actor=actor, reason=reason)
     LeadTask.query.filter_by(lead_id=lead_id, status='open').update(
         {'status': 'cancelled'},
     )
@@ -1331,7 +1338,11 @@ def update_status(lead_id: int):
     cancelled_open_task_hs_ids: set[str] = set()
     if new_status in ('do_not_contact', 'suppressed', 'deprioritize'):
         lead.recommended_action = None
-        cancelled_open_task_hs_ids = _cancel_open_lead_tasks(lead_id)
+        cancelled_open_task_hs_ids = _cancel_open_lead_tasks(
+            lead_id,
+            actor=str(actor_raw),
+            reason=f'status_{new_status}',
+        )
 
     db.session.add(lead)
 
@@ -1859,7 +1870,11 @@ def do_not_contact(lead_id: int):
     old_status = lead.lead_status
     lead.lead_status = 'do_not_contact'
     lead.recommended_action = None
-    cancelled_hs_ids = _cancel_open_lead_tasks(lead_id)
+    cancelled_hs_ids = _cancel_open_lead_tasks(
+        lead_id,
+        actor=str(actor),
+        reason='status_do_not_contact',
+    )
 
     entry = LeadTimelineEntry(
         lead_id=lead_id,
@@ -1914,7 +1929,11 @@ def park_lead(lead_id: int):
     if reactivation_date:
         lead.follow_up_date = reactivation_date
 
-    cancelled_hs_ids = _cancel_open_lead_tasks(lead_id)
+    cancelled_hs_ids = _cancel_open_lead_tasks(
+        lead_id,
+        actor=str(actor),
+        reason='status_deprioritize',
+    )
 
     entry = LeadTimelineEntry(
         lead_id=lead_id,
@@ -2056,7 +2075,11 @@ def suppress_lead(lead_id: int):
     old_status = lead.lead_status
     lead.lead_status = 'suppressed'
     lead.recommended_action = None
-    cancelled_hs_ids = _cancel_open_lead_tasks(lead_id)
+    cancelled_hs_ids = _cancel_open_lead_tasks(
+        lead_id,
+        actor=str(actor),
+        reason='status_suppressed',
+    )
 
     entry = LeadTimelineEntry(
         lead_id=lead_id,

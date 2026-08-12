@@ -1,13 +1,12 @@
 """Bulk Action API endpoints for the Actionable Lead Command Center."""
 import logging
 from functools import wraps
-from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request, g
 from marshmallow import ValidationError
 
 from app import db
-from app.models import Lead, LeadTask, LeadTimelineEntry
+from app.models import Lead
 from app.schemas import BulkActionRequestSchema, BulkActionResultSchema
 from app.api_utils import require_auth
 from app.services.lead_status_service import apply_lead_status_change
@@ -61,21 +60,13 @@ def bulk_suppress():
             if lead is None or not _user_can_access_lead(lead):
                 failures += 1
                 continue
-            old_status = lead.lead_status
-            lead.lead_status = 'suppressed'
-            lead.recommended_action = None
-            entry = LeadTimelineEntry(
-                lead_id=lead_id,
-                event_type='status_changed',
-                occurred_at=datetime.now(timezone.utc),
-                source='manual',
+            apply_lead_status_change(
+                lead,
+                'suppressed',
+                reason='Bulk suppress',
                 actor=actor,
-                summary="Lead suppressed (bulk action).",
-                event_metadata={'previous_status': old_status, 'new_status': 'suppressed'},
+                recompute_action=False,
             )
-            db.session.add(lead)
-            db.session.add(entry)
-            db.session.commit()
             successes += 1
         except Exception:
             db.session.rollback()
@@ -133,22 +124,13 @@ def bulk_do_not_contact():
             if lead is None or not _user_can_access_lead(lead):
                 failures += 1
                 continue
-            old_status = lead.lead_status
-            lead.lead_status = 'do_not_contact'
-            lead.recommended_action = None
-            LeadTask.query.filter_by(lead_id=lead_id, status='open').update({'status': 'cancelled'})
-            entry = LeadTimelineEntry(
-                lead_id=lead_id,
-                event_type='status_changed',
-                occurred_at=datetime.now(timezone.utc),
-                source='manual',
+            apply_lead_status_change(
+                lead,
+                'do_not_contact',
+                reason='Bulk do not contact',
                 actor=actor,
-                summary="Lead marked Do Not Contact (bulk action).",
-                event_metadata={'previous_status': old_status, 'new_status': 'do_not_contact'},
+                recompute_action=False,
             )
-            db.session.add(lead)
-            db.session.add(entry)
-            db.session.commit()
             successes += 1
         except Exception:
             db.session.rollback()
