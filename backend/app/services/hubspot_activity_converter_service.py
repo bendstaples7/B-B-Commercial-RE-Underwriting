@@ -940,6 +940,7 @@ class HubSpotActivityConverterService:
                 if 'units' in updated or 'lead_category' in updated:
                     try:
                         refresh_lead_scoring(lead.id)
+                        db.session.commit()
                     except Exception as score_exc:
                         logger.warning(
                             "refresh_lead_scoring after note facts failed lead=%s: %s",

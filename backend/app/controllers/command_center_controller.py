@@ -784,6 +784,7 @@ def get_command_center(lead_id: int):
             try:
                 from app.services.lead_refresh import refresh_lead_scoring
                 refresh_lead_scoring(lead.id)
+                _db.session.commit()
             except Exception as score_exc:
                 logging.getLogger(__name__).warning(
                     'refresh_lead_scoring after note facts heal failed lead=%s: %s',
