@@ -1186,8 +1186,19 @@ def _select_rematch_mirrors(
         # Linked mirror unusable — fall through to unique title match.
 
     titles = {title for title in candidate_titles if title}
+    protected_mirror_ids = {
+        row.mirror_task_id
+        for row in LeadTask.query.filter(
+            LeadTask.lead_id == lead_id,
+            LeadTask.id != task.id,
+            LeadTask.mirror_task_id.isnot(None),
+        ).all()
+        if row.mirror_task_id is not None
+    }
     candidates: list[Task] = []
     for mirror in _open_mirror_tasks_for_lead(lead_id):
+        if mirror.id in protected_mirror_ids:
+            continue
         if mirror.title in titles:
             candidates.append(mirror)
             continue
