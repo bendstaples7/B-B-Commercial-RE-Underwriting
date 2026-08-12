@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from datetime import timedelta
 from pathlib import Path
 
 _backend_dir = Path(__file__).resolve().parent.parent
@@ -34,12 +33,13 @@ from app import create_app, db
 from app.models import Lead, LeadTask
 from app.services.last_mailed_service import get_last_mailed_at_by_lead_ids
 from app.services.mail_task_lifecycle_service import (
-    MAIL_REMATCH_OFFSET_DAYS,
     MAIL_REMATCH_TASK_TYPE,
     TERMINAL_MAIL_STOP_STATUSES,
     cancel_mail_rematch_tasks,
     convert_legacy_mail_follow_up_to_rematch,
+    count_open_mail_rematch_tasks,
     is_mail_follow_up_task,
+    mail_rematch_due_date,
     refresh_leads_after_mail_task_changes,
 )
 
@@ -129,8 +129,10 @@ def main() -> None:
                     if n:
                         affected_leads.append(lead.id)
                 else:
-                    cancelled += 1
-                    affected_leads.append(lead.id)
+                    n = count_open_mail_rematch_tasks(lead.id)
+                    cancelled += n
+                    if n:
+                        affected_leads.append(lead.id)
                 logger.info(
                     'Lead %s task %s: %s rematch (status=%s)',
                     lead.id,
@@ -147,11 +149,7 @@ def main() -> None:
                 continue
 
             last_sent = last_mailed.get(lead.id)
-            due_preview = (
-                last_sent.date() + timedelta(days=MAIL_REMATCH_OFFSET_DAYS)
-                if last_sent is not None
-                else task.due_date
-            )
+            due_preview = mail_rematch_due_date(last_sent, task.due_date)
             if last_sent is None and task.due_date is None:
                 skipped += 1
                 logger.warning(
@@ -172,11 +170,8 @@ def main() -> None:
                     last_sent_at=last_sent,
                     actor='backfill_mail_rematch_cadence',
                 )
-                converted += 1
-                affected_leads.append(lead.id)
-            else:
-                converted += 1
-                affected_leads.append(lead.id)
+            converted += 1
+            affected_leads.append(lead.id)
 
             logger.info(
                 'Lead %s task %s: %s → add_to_mail_batch due %s (last_sent=%s)',
@@ -194,7 +189,13 @@ def main() -> None:
             )
 
         if args.apply:
-            db.session.commit()
+            try:
+                db.session.commit()
+            except Exception as exc:
+                db.session.rollback()
+                logger.exception('Failed to apply mail rematch backfill')
+                print(f'Apply failed: {exc}', file=sys.stderr, flush=True)
+                raise SystemExit(1) from exc
             unique_leads = sorted(set(affected_leads))
             refresh_leads_after_mail_task_changes(unique_leads)
             logger.info(

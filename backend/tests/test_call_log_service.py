@@ -335,6 +335,39 @@ def test_log_call_voicemail_keeps_mail_rematch(app):
         assert updated.status == 'open'
 
 
+def test_log_call_inbound_voicemail_cancels_mail_rematch(app):
+    """Inbound contact cancels rematch even when the call reaches voicemail."""
+    from app import db
+    from app.models import LeadTask
+    from datetime import date, timedelta
+
+    with app.app_context():
+        lead = _make_lead(app, '15 Inbound Rematch Cancel St')
+        rematch = LeadTask(
+            lead_id=lead.id,
+            task_type='add_to_mail_batch',
+            title='Add to next mailer — 15 Inbound Rematch Cancel St',
+            status='open',
+            due_date=date.today() + timedelta(days=60),
+            created_by='test',
+        )
+        db.session.add(rematch)
+        db.session.commit()
+
+        svc = CallLogService()
+        with patch(_REFRESH_PATCH):
+            svc.log_call(
+                lead.id,
+                outcome='voicemail',
+                duration_minutes=None,
+                notes=None,
+                direction='inbound',
+            )
+
+        updated = LeadTask.query.get(rematch.id)
+        assert updated.status == 'cancelled'
+
+
 def test_log_call_completes_call_task_and_creates_follow_up(app):
     """complete_task_id + follow_up complete the call task and create a due task."""
     from app.models import LeadTask

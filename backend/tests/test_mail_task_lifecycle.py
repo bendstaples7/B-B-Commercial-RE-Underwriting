@@ -1807,21 +1807,39 @@ class TestScheduleMailFollowUpTask:
     def test_convert_legacy_follow_up_to_rematch(self, app):
         with app.app_context():
             from app import db
+            from app.models import Task
             from app.services.mail_task_lifecycle_service import (
                 convert_legacy_mail_follow_up_to_rematch,
             )
 
             lead = _make_lead(app, '6d Convert Rematch St')
             sent_at = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)
+            legacy_due = sent_at.date() + timedelta(days=7)
             legacy = LeadTask(
                 lead_id=lead.id,
                 task_type='call_owner_today',
                 title='Follow up after mailer — 6d Convert Rematch St',
                 status='open',
-                due_date=sent_at.date() + timedelta(days=7),
+                due_date=legacy_due,
                 created_by='test',
             )
-            db.session.add(legacy)
+            legacy_mirror = Task(
+                lead_id=lead.id,
+                task_type='call_owner_today',
+                title='Follow up after mailer — 6d Convert Rematch St',
+                status='open',
+                source='manual',
+                due_date=datetime.combine(legacy_due, datetime.min.time()),
+            )
+            unrelated_mirror = Task(
+                lead_id=lead.id,
+                task_type='call_owner_today',
+                title='Call owner — 6d Convert Rematch St',
+                status='open',
+                source='manual',
+                due_date=datetime.combine(legacy_due, datetime.min.time()),
+            )
+            db.session.add_all([legacy, legacy_mirror, unrelated_mirror])
             db.session.commit()
 
             convert_legacy_mail_follow_up_to_rematch(
@@ -1832,6 +1850,20 @@ class TestScheduleMailFollowUpTask:
             assert refreshed.task_type == 'add_to_mail_batch'
             assert 'Add to next mailer' in refreshed.title
             assert refreshed.due_date == sent_at.date() + timedelta(days=90)
+            converted_mirror = Task.query.get(legacy_mirror.id)
+            assert converted_mirror.task_type == 'add_to_mail_batch'
+            assert 'Add to next mailer' in converted_mirror.title
+            assert converted_mirror.due_date == datetime.combine(
+                sent_at.date() + timedelta(days=90),
+                datetime.min.time(),
+            )
+            unchanged_mirror = Task.query.get(unrelated_mirror.id)
+            assert unchanged_mirror.task_type == 'call_owner_today'
+            assert unchanged_mirror.title == 'Call owner — 6d Convert Rematch St'
+            assert unchanged_mirror.due_date == datetime.combine(
+                legacy_due,
+                datetime.min.time(),
+            )
 
 
 class TestEnqueueCreatesPendingMailFollowUp:

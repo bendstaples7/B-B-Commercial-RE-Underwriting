@@ -1135,6 +1135,27 @@ def is_mail_follow_up_task(task: LeadTask) -> bool:
     return is_mail_follow_up_title(task.title)
 
 
+def mail_rematch_due_date(
+    last_sent_at: datetime | None,
+    fallback: date | None,
+    *,
+    offset_days: int = MAIL_REMATCH_OFFSET_DAYS,
+) -> date | None:
+    """Return the canonical quarterly rematch due date for a mail send."""
+    if last_sent_at is not None:
+        return last_sent_at.date() + timedelta(days=offset_days)
+    return fallback
+
+
+def count_open_mail_rematch_tasks(lead_id: int) -> int:
+    """Count all open rematch tasks for a lead, including already-converted rows."""
+    return sum(
+        1
+        for task in LeadTask.query.filter_by(lead_id=lead_id, status='open').all()
+        if is_mail_follow_up_task(task)
+    )
+
+
 def find_open_mail_follow_up_task(lead_id: int) -> LeadTask | None:
     """Open post-mailer rematch task for a lead, if any."""
     for task in LeadTask.query.filter_by(lead_id=lead_id, status='open').all():
@@ -1333,10 +1354,10 @@ def convert_legacy_mail_follow_up_to_rematch(
     now = datetime.now(timezone.utc)
     old_title = task.title
     new_title = _mail_follow_up_title(lead)
-    due_date = (
-        last_sent_at.date() + timedelta(days=offset_days)
-        if last_sent_at is not None
-        else task.due_date
+    due_date = mail_rematch_due_date(
+        last_sent_at,
+        task.due_date,
+        offset_days=offset_days,
     )
     task.task_type = MAIL_REMATCH_TASK_TYPE
     task.title = new_title
