@@ -2028,6 +2028,43 @@ class TestDoNotContact:
             assert task1.status == 'cancelled'
             assert task2.status == 'cancelled'
 
+    def test_dnc_cancels_rematch_mirror_task(self, client, app):
+        """DNC cancels rematch LeadTask rows and their mirrored Task rows."""
+        with app.app_context():
+            lead = _make_lead(app, '28c DNC Rematch St', lead_status='mailing_no_contact_made')
+            rematch = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 28c DNC Rematch St',
+                status='open',
+                due_date=date.today() + timedelta(days=30),
+                created_by='test',
+            )
+            mirror = Task(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title=rematch.title,
+                status='open',
+                source='manual',
+                due_date=datetime.combine(rematch.due_date, datetime.min.time()),
+            )
+            db.session.add_all([rematch, mirror])
+            db.session.flush()
+            rematch.mirror_task_id = mirror.id
+            db.session.add(rematch)
+            db.session.commit()
+
+            response = client.post(
+                f'/api/leads/{lead.id}/do-not-contact',
+                data=json.dumps({}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 200
+            assert db.session.get(LeadTask, rematch.id).status == 'cancelled'
+            assert db.session.get(Task, mirror.id).status == 'cancelled'
+
     def test_dnc_syncs_hubspot_backed_cancelled_tasks(self, client, app, monkeypatch):
         """DNC cancels HubSpot-backed tasks and syncs CRM completions."""
         with app.app_context():
@@ -2172,6 +2209,47 @@ class TestParkLead:
             db.session.refresh(task)
             assert task.status == 'cancelled'
             assert synced == [['hs-suppress-1']]
+
+    def test_suppress_cancels_rematch_mirror_task(self, client, app):
+        """Suppress cancels rematch LeadTask rows and their mirrored Task rows."""
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '32e Suppress Rematch St',
+                lead_status='mailing_no_contact_made',
+            )
+            rematch = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 32e Suppress Rematch St',
+                status='open',
+                due_date=date.today() + timedelta(days=30),
+                created_by='test',
+            )
+            mirror = Task(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title=rematch.title,
+                status='open',
+                source='manual',
+                due_date=datetime.combine(rematch.due_date, datetime.min.time()),
+            )
+            db.session.add_all([rematch, mirror])
+            db.session.flush()
+            rematch.mirror_task_id = mirror.id
+            db.session.add(rematch)
+            db.session.commit()
+
+            response = client.post(
+                f'/api/leads/{lead.id}/suppress',
+                data=json.dumps({}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 200
+            assert db.session.get(LeadTask, rematch.id).status == 'cancelled'
+            assert db.session.get(Task, mirror.id).status == 'cancelled'
 
     def test_park_with_future_reactivation_date_accepted(self, client, app):
         """POST /api/leads/<id>/park with a future reactivation_date returns 200."""

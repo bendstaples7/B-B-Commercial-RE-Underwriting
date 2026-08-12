@@ -58,10 +58,10 @@ def _is_recent_sale_defer_task(
     Call / follow-up chores are completed (not snoozed) via
     :func:`complete_obsolete_outreach_during_recent_sale_hold`.
     """
+    if (task_type or '').strip() == MAIL_REMATCH_TASK_TYPE:
+        return True
     if is_mail_follow_up_title(title):
         return False
-    if (task_type or '').strip() == 'add_to_mail_batch':
-        return True
     return (
         lead.recommended_contact_method == 'direct_mail'
         and is_superseded_by_mail_task(task_type, title)
@@ -77,7 +77,7 @@ def _is_obsolete_outreach_during_recent_sale_hold(
     ttype = (task_type or 'custom').strip()
     if ttype == 'skip_trace_owner':
         return False
-    if ttype == 'add_to_mail_batch':
+    if ttype == MAIL_REMATCH_TASK_TYPE:
         return False
     if is_mail_follow_up_title(title):
         return False
@@ -1156,6 +1156,89 @@ def count_open_mail_rematch_tasks(lead_id: int) -> int:
     )
 
 
+def _open_mirror_tasks_for_lead(lead_id: int) -> list[Task]:
+    return Task.query.filter(
+        Task.lead_id == lead_id,
+        Task.status.in_(['open', 'overdue']),
+    ).all()
+
+
+def _select_rematch_mirrors(
+    task: LeadTask,
+    lead_id: int,
+    candidate_titles: set[str | None],
+    *,
+    allow_pending_title_match: bool = False,
+) -> list[Task]:
+    """Select mirror rows safely: linked first, otherwise one unique title match."""
+    if task.mirror_task_id:
+        mirror = db.session.get(Task, task.mirror_task_id)
+        if (
+            mirror is not None
+            and mirror.lead_id == lead_id
+            and mirror.status in ('open', 'overdue')
+        ):
+            return [mirror]
+        return []
+
+    titles = {title for title in candidate_titles if title}
+    candidates: list[Task] = []
+    for mirror in _open_mirror_tasks_for_lead(lead_id):
+        if mirror.title in titles:
+            candidates.append(mirror)
+            continue
+        if (
+            allow_pending_title_match
+            and mirror.due_date is None
+            and is_mail_follow_up_title(mirror.title)
+        ):
+            candidates.append(mirror)
+    return candidates if len(candidates) == 1 else []
+
+
+def _sync_rematch_mirror(
+    mirror: Task,
+    *,
+    title: str,
+    due_date: date | None,
+    now: datetime,
+) -> None:
+    mirror.task_type = MAIL_REMATCH_TASK_TYPE
+    mirror.title = title
+    mirror.due_date = (
+        datetime.combine(due_date, datetime.min.time()) if due_date else None
+    )
+    if (
+        mirror.status == 'overdue'
+        and due_date is not None
+        and due_date > date.today()
+    ):
+        mirror.status = 'open'
+    mirror.updated_at = now
+    db.session.add(mirror)
+
+
+def _create_rematch_mirror(
+    task: LeadTask,
+    *,
+    title: str,
+    due_date: date | None,
+) -> Task:
+    mirror = Task(
+        title=title,
+        status='open',
+        source='manual',
+        lead_id=task.lead_id,
+        task_type=MAIL_REMATCH_TASK_TYPE,
+        due_date=datetime.combine(due_date, datetime.min.time()) if due_date else None,
+    )
+    db.session.add(mirror)
+    db.session.flush()
+    task.mirror_task_id = mirror.id
+    db.session.add(task)
+    return mirror
+
+
 def find_open_mail_follow_up_task(lead_id: int) -> LeadTask | None:
     """Open post-mailer rematch task for a lead, if any."""
     for task in LeadTask.query.filter_by(lead_id=lead_id, status='open').all():
@@ -1267,16 +1350,7 @@ def create_pending_mail_follow_up_task(
     db.session.add(task)
     db.session.flush()
 
-    db.session.add(
-        Task(
-            title=title,
-            status='open',
-            source='manual',
-            lead_id=lead.id,
-            task_type=MAIL_REMATCH_TASK_TYPE,
-            due_date=None,
-        ),
-    )
+    _create_rematch_mirror(task, title=title, due_date=None)
     db.session.add(
         LeadTimelineEntry(
             lead_id=lead.id,
@@ -1349,14 +1423,23 @@ def convert_legacy_mail_follow_up_to_rematch(
     """Convert a legacy call follow-up-after-mailer task to quarterly rematch.
 
     Due date = last_sent_at.date() + offset_days when last_sent_at is known;
-    otherwise keeps the existing due_date (may be None).
+    pending pre-send tasks without a send timestamp keep ``due_date=None``.
+    Dated tasks require a send timestamp so old seven-day dates are not reused.
     """
+    if task.hubspot_task_id:
+        raise ValueError(
+            'HubSpot-backed mail follow-up tasks must be excluded from backfill',
+        )
+    if last_sent_at is None and task.due_date is not None:
+        raise ValueError(
+            'last_sent_at is required to convert a dated mail follow-up task',
+        )
     now = datetime.now(timezone.utc)
     old_title = task.title
     new_title = _mail_follow_up_title(lead)
     due_date = mail_rematch_due_date(
         last_sent_at,
-        task.due_date,
+        None,
         offset_days=offset_days,
     )
     task.task_type = MAIL_REMATCH_TASK_TYPE
@@ -1364,27 +1447,17 @@ def convert_legacy_mail_follow_up_to_rematch(
     task.due_date = due_date
     db.session.add(task)
 
-    for mirror in Task.query.filter(
-        Task.lead_id == lead.id,
-        Task.status.in_(['open', 'overdue']),
-    ).all():
-        mirror_matches = (
-            mirror.title == old_title
-            or is_mail_follow_up_title(mirror.title)
-            or (
-                mirror.task_type == 'call_owner_today'
-                and FOLLOW_UP_AFTER_MAIL_TITLE_RE.search(mirror.title or '')
-            )
+    for mirror in _select_rematch_mirrors(
+        task,
+        lead.id,
+        {old_title, new_title},
+    ):
+        _sync_rematch_mirror(
+            mirror,
+            title=new_title,
+            due_date=due_date,
+            now=now,
         )
-        if not mirror_matches:
-            continue
-        mirror.task_type = MAIL_REMATCH_TASK_TYPE
-        mirror.title = new_title
-        mirror.due_date = (
-            datetime.combine(due_date, datetime.min.time()) if due_date else None
-        )
-        mirror.updated_at = now
-        db.session.add(mirror)
 
     db.session.add(
         LeadTimelineEntry(
@@ -1442,25 +1515,18 @@ def schedule_mail_follow_up_task(
         existing.title = title
         existing.task_type = MAIL_REMATCH_TASK_TYPE
         db.session.add(existing)
-        for mirror in Task.query.filter(
-            Task.lead_id == lead.id,
-            Task.status.in_(['open', 'overdue']),
-        ).all():
-            mirror_matches = (
-                mirror.title == old_title
-                or mirror.title == title
-                or (
-                    mirror.due_date is None
-                    and FOLLOW_UP_AFTER_MAIL_TITLE_RE.search(mirror.title or '')
-                )
+        for mirror in _select_rematch_mirrors(
+            existing,
+            lead.id,
+            {old_title, title},
+            allow_pending_title_match=True,
+        ):
+            _sync_rematch_mirror(
+                mirror,
+                title=title,
+                due_date=due_date,
+                now=now,
             )
-            if not mirror_matches:
-                continue
-            mirror.due_date = datetime.combine(due_date, datetime.min.time())
-            mirror.title = title
-            mirror.task_type = MAIL_REMATCH_TASK_TYPE
-            mirror.updated_at = now
-            db.session.add(mirror)
         db.session.add(
             LeadTimelineEntry(
                 lead_id=lead.id,
@@ -1495,16 +1561,7 @@ def schedule_mail_follow_up_task(
     db.session.add(task)
     db.session.flush()
 
-    db.session.add(
-        Task(
-            title=title,
-            status='open',
-            source='manual',
-            lead_id=lead.id,
-            task_type=MAIL_REMATCH_TASK_TYPE,
-            due_date=datetime.combine(due_date, datetime.min.time()),
-        ),
-    )
+    _create_rematch_mirror(task, title=title, due_date=due_date)
     db.session.add(
         LeadTimelineEntry(
             lead_id=lead.id,

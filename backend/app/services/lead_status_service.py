@@ -38,9 +38,21 @@ def apply_lead_status_change(
 
     if new_status == 'do_not_contact':
         lead.recommended_action = None
+        from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
+        cancel_mail_rematch_tasks(
+            lead.id,
+            actor=actor,
+            reason='status_do_not_contact',
+        )
         LeadTask.query.filter_by(lead_id=lead.id, status='open').update({'status': 'cancelled'})
     elif new_status == 'suppressed':
         lead.recommended_action = None
+        from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
+        cancel_mail_rematch_tasks(
+            lead.id,
+            actor=actor,
+            reason='status_suppressed',
+        )
         LeadTask.query.filter_by(lead_id=lead.id, status='open').update({'status': 'cancelled'})
 
     if reason:

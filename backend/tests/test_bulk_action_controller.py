@@ -6,10 +6,12 @@ Covers:
   34.5 — Bulk recomputation of 1,000 leads without error
 """
 import json
+from datetime import date, datetime, timedelta
+
 import pytest
 
 from app import db
-from app.models import Lead, LeadTask, LeadTimelineEntry
+from app.models import Lead, LeadTask, LeadTimelineEntry, Task
 from app.services.action_engine_service import ActionEngineService
 
 
@@ -159,6 +161,43 @@ class TestBulkSuppress:
                     lead_id=lead.id, event_type='status_changed'
                 ).first()
                 assert entry is not None
+
+    def test_bulk_suppress_cancels_rematch_mirrors(self, client, app):
+        """Bulk suppress cancels rematch LeadTask and mirror Task rows."""
+        with app.app_context():
+            lead = _make_lead(app, '1 Bulk Suppress Rematch St')
+            rematch = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 1 Bulk Suppress Rematch St',
+                status='open',
+                due_date=date.today() + timedelta(days=30),
+                created_by='test',
+            )
+            mirror = Task(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title=rematch.title,
+                status='open',
+                source='manual',
+                due_date=datetime.combine(rematch.due_date, datetime.min.time()),
+            )
+            db.session.add_all([rematch, mirror])
+            db.session.flush()
+            rematch.mirror_task_id = mirror.id
+            db.session.add(rematch)
+            db.session.commit()
+
+            response = client.post(
+                '/api/leads/bulk/suppress',
+                data=json.dumps({'lead_ids': [lead.id]}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 200
+            assert db.session.get(LeadTask, rematch.id).status == 'cancelled'
+            assert db.session.get(Task, mirror.id).status == 'cancelled'
 
     def test_bulk_suppress_empty_list_returns_zero_counts(self, client, app):
         """Bulk suppress with empty lead_ids returns 400 (schema requires min 1 ID)."""
@@ -322,6 +361,43 @@ class TestBulkDoNotContact:
             for task in tasks:
                 db.session.refresh(task)
                 assert task.status == 'cancelled'
+
+    def test_bulk_dnc_cancels_rematch_mirrors(self, client, app):
+        """Bulk DNC cancels rematch LeadTask and mirror Task rows."""
+        with app.app_context():
+            lead = _make_lead(app, '1 Bulk DNC Rematch St')
+            rematch = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 1 Bulk DNC Rematch St',
+                status='open',
+                due_date=date.today() + timedelta(days=30),
+                created_by='test',
+            )
+            mirror = Task(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title=rematch.title,
+                status='open',
+                source='manual',
+                due_date=datetime.combine(rematch.due_date, datetime.min.time()),
+            )
+            db.session.add_all([rematch, mirror])
+            db.session.flush()
+            rematch.mirror_task_id = mirror.id
+            db.session.add(rematch)
+            db.session.commit()
+
+            response = client.post(
+                '/api/leads/bulk/do-not-contact',
+                data=json.dumps({'lead_ids': [lead.id]}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 200
+            assert db.session.get(LeadTask, rematch.id).status == 'cancelled'
+            assert db.session.get(Task, mirror.id).status == 'cancelled'
 
     def test_bulk_dnc_returns_correct_success_count(self, client, app):
         """Response contains correct successes count."""

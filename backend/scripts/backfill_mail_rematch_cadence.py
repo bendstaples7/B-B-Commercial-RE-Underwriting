@@ -51,6 +51,7 @@ def _find_open_legacy_or_call_rematch_tasks(limit: int | None) -> list[LeadTask]
         LeadTask.query
         .filter(
             LeadTask.status == 'open',
+            LeadTask.hubspot_task_id.is_(None),
             or_(
                 LeadTask.title.ilike('%follow up after mail%'),
                 LeadTask.title.ilike('%add to next mailer%'),
