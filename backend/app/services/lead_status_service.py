@@ -29,7 +29,11 @@ def _cancel_tasks_for_terminal_status(
             hubspot_task_ids.add(str(task.hubspot_task_id))
         if is_mail_follow_up_task(task) and task.mirror_task_id:
             mirror = db.session.get(Task, task.mirror_task_id)
-            if mirror is not None and mirror.hubspot_task_id:
+            if (
+                mirror is not None
+                and mirror.lead_id == lead_id
+                and mirror.hubspot_task_id
+            ):
                 hubspot_task_ids.add(str(mirror.hubspot_task_id))
     from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
     cancel_mail_rematch_tasks(

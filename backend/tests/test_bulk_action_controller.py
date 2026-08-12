@@ -324,6 +324,53 @@ class TestBulkSuppress:
             assert db.session.get(Task, mirror.id).status == 'cancelled'
             assert synced == [['hs-bulk-rematch-mirror-1']]
 
+    def test_bulk_suppress_does_not_sync_cross_lead_mirror_hubspot_id(
+        self, client, app, monkeypatch,
+    ):
+        with app.app_context():
+            lead = _make_lead(app, '1 Bulk Suppress Cross Mirror St')
+            other = _make_lead(app, '2 Bulk Suppress Cross Mirror St')
+            other_mirror = Task(
+                lead_id=other.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — other lead',
+                status='open',
+                source='manual',
+                hubspot_task_id='hs-other-lead-mirror',
+            )
+            db.session.add(other_mirror)
+            db.session.flush()
+            rematch = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 1 Bulk Suppress Cross Mirror St',
+                status='open',
+                due_date=date.today() + timedelta(days=30),
+                mirror_task_id=other_mirror.id,
+                created_by='test',
+            )
+            db.session.add(rematch)
+            db.session.commit()
+            synced: list[list[str]] = []
+
+            def _capture(ids):
+                synced.append(list(ids))
+
+            monkeypatch.setattr(
+                'app.services.hubspot_task_completion_service.sync_pending_hubspot_completions',
+                _capture,
+            )
+            response = client.post(
+                '/api/leads/bulk/suppress',
+                data=json.dumps({'lead_ids': [lead.id]}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 200
+            assert db.session.get(LeadTask, rematch.id).status == 'cancelled'
+            assert synced == []
+
     def test_bulk_suppress_empty_list_returns_zero_counts(self, client, app):
         """Bulk suppress with empty lead_ids returns 400 (schema requires min 1 ID)."""
         with app.app_context():
