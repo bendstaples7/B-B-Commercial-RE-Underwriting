@@ -1965,6 +1965,65 @@ class TestScheduleMailFollowUpTask:
             )
             assert task.mirror_task_id == orphan.id
 
+    def test_convert_does_not_steal_mirror_linked_to_other_rematch(self, app):
+        """Stale-link repair must not claim another open LeadTask's mirror."""
+        with app.app_context():
+            from app import db
+            from app.models.task import Task
+            from app.services.mail_task_lifecycle_service import (
+                convert_legacy_mail_follow_up_to_rematch,
+            )
+
+            lead = _make_lead(app, '6i Shared Mirror Guard St')
+            sent_at = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)
+            rematch_due = sent_at.date() + timedelta(days=90)
+
+            owner = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 6i Shared Mirror Guard St',
+                status='open',
+                due_date=rematch_due,
+                created_by='test',
+            )
+            owner_mirror = Task(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 6i Shared Mirror Guard St',
+                status='open',
+                source='manual',
+                due_date=datetime.combine(rematch_due, datetime.min.time()),
+            )
+            orphan = LeadTask(
+                lead_id=lead.id,
+                task_type='call_owner_today',
+                title='Follow up after mailer — 6i Shared Mirror Guard St',
+                status='open',
+                due_date=sent_at.date() + timedelta(days=7),
+                created_by='test',
+                mirror_task_id=999999,
+            )
+            db.session.add_all([owner, owner_mirror, orphan])
+            db.session.flush()
+            owner.mirror_task_id = owner_mirror.id
+            db.session.add(owner)
+            db.session.commit()
+
+            convert_legacy_mail_follow_up_to_rematch(
+                orphan, lead, last_sent_at=sent_at, actor='test',
+            )
+            db.session.commit()
+
+            refreshed = LeadTask.query.get(orphan.id)
+            assert refreshed.task_type == 'add_to_mail_batch'
+            assert refreshed.due_date == rematch_due
+            assert refreshed.mirror_task_id != owner_mirror.id
+            assert refreshed.mirror_task_id is None
+            assert LeadTask.query.get(owner.id).mirror_task_id == owner_mirror.id
+            assert Task.query.get(owner_mirror.id).title == (
+                'Add to next mailer — 6i Shared Mirror Guard St'
+            )
+
     def test_cancel_rematch_keeps_duplicate_title_mirror_when_linked(self, app):
         """Cancel uses linked mirror only; duplicate rematch-titled rows stay open."""
         with app.app_context():
@@ -2149,7 +2208,7 @@ class TestScheduleMailFollowUpTask:
             )
             db.session.commit()
 
-            assert db.session.get(LeadTask, stale.id).mirror_task_id == completed_stale_mirror.id
+            assert db.session.get(LeadTask, stale.id).mirror_task_id is None
             assert db.session.get(Task, protected_mirror.id).task_type == 'call_owner_today'
             assert db.session.get(Task, protected_mirror.id).status == 'open'
 

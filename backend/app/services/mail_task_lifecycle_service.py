@@ -1174,6 +1174,8 @@ def _select_rematch_mirrors(
 
     If ``mirror_task_id`` points at a missing or non-open Task, fall through to
     the unique title-match scan so a remaining open mirror is not left stale.
+    Title-match candidates already claimed by another LeadTask are skipped so
+    two rematch rows never share one mirror.
     """
     if task.mirror_task_id:
         mirror = db.session.get(Task, task.mirror_task_id)
@@ -1476,6 +1478,19 @@ def convert_legacy_mail_follow_up_to_rematch(
         if task.mirror_task_id != mirror.id:
             task.mirror_task_id = mirror.id
             db.session.add(task)
+    else:
+        # No usable mirror selected — drop a stale/missing link rather than keep
+        # pointing at another task's mirror or a dead Task id.
+        if task.mirror_task_id is not None:
+            linked = db.session.get(Task, task.mirror_task_id)
+            linked_usable = (
+                linked is not None
+                and linked.lead_id == lead.id
+                and linked.status in ('open', 'overdue')
+            )
+            if not linked_usable:
+                task.mirror_task_id = None
+                db.session.add(task)
 
     db.session.add(
         LeadTimelineEntry(
@@ -1548,6 +1563,17 @@ def schedule_mail_follow_up_task(
             if existing.mirror_task_id != mirror.id:
                 existing.mirror_task_id = mirror.id
                 db.session.add(existing)
+        else:
+            if existing.mirror_task_id is not None:
+                linked = db.session.get(Task, existing.mirror_task_id)
+                linked_usable = (
+                    linked is not None
+                    and linked.lead_id == lead.id
+                    and linked.status in ('open', 'overdue')
+                )
+                if not linked_usable:
+                    existing.mirror_task_id = None
+                    db.session.add(existing)
         db.session.add(
             LeadTimelineEntry(
                 lead_id=lead.id,
