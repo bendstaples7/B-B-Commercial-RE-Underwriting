@@ -100,3 +100,30 @@ def test_note_fact_scoring_refresh_callers_commit_after_success():
         except_at = window.index("except Exception as score_exc")
 
         assert refresh_at < commit_at < except_at
+
+
+def test_note_fact_score_refresh_includes_property_type_updates():
+    backend_dir = Path(__file__).resolve().parent.parent
+    callers = [
+        backend_dir / "app/services/hubspot_activity_converter_service.py",
+        backend_dir / "app/controllers/command_center_controller.py",
+    ]
+
+    for path in callers:
+        source = path.read_text(encoding="utf-8")
+        refresh_at = source.index("refresh_lead_scoring(lead.id)")
+        condition = source[source.rfind("if (", 0, refresh_at):refresh_at]
+        assert "'property_type' in updated" in condition or "'property_type' in note_fact_updates" in condition
+
+
+def test_command_center_rebuilds_action_snapshot_after_note_fact_heal():
+    backend_dir = Path(__file__).resolve().parent.parent
+    source = (backend_dir / "app/controllers/command_center_controller.py").read_text(
+        encoding="utf-8",
+    )
+
+    heal_at = source.index("apply_note_facts_from_timeline(lead)")
+    recompute_at = source.index("_build_recommended_action_snapshot(lead)", heal_at)
+    payload_at = source.index("'recommended_action': {", recompute_at)
+
+    assert heal_at < recompute_at < payload_at

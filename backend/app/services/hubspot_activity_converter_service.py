@@ -937,7 +937,11 @@ class HubSpotActivityConverterService:
                     continue
                 db.session.add(lead)
                 db.session.commit()
-                if 'units' in updated or 'lead_category' in updated:
+                if (
+                    'units' in updated
+                    or 'lead_category' in updated
+                    or 'property_type' in updated
+                ):
                     try:
                         refresh_lead_scoring(lead.id)
                         db.session.commit()

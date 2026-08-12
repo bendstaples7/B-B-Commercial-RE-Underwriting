@@ -6,7 +6,10 @@ import { ThemeProvider, createTheme } from '@mui/material'
 import { PropertySidebar } from '@/components/lead-detail/PropertySidebar'
 import type { CommandCenterPayload } from '@/types'
 
-function renderSidebar(payload: Partial<CommandCenterPayload>) {
+function renderSidebar(
+  payload: Partial<CommandCenterPayload>,
+  variant: 'sidebar' | 'inline' = 'sidebar',
+) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const theme = createTheme()
   const data = {
@@ -33,7 +36,7 @@ function renderSidebar(payload: Partial<CommandCenterPayload>) {
     <MemoryRouter>
       <QueryClientProvider client={qc}>
         <ThemeProvider theme={theme}>
-          <PropertySidebar commandCenterData={data} />
+          <PropertySidebar commandCenterData={data} variant={variant} />
         </ThemeProvider>
       </QueryClientProvider>
     </MemoryRouter>,
@@ -46,5 +49,15 @@ describe('PropertySidebar note + assessor beds', () => {
     expect(screen.getByTestId('sidebar-beds-baths-dual')).toBeInTheDocument()
     expect(screen.getByText(/Notes: 4×2 bd \+ 2×3 bd/)).toBeInTheDocument()
     expect(screen.getByText(/Assessor: 6 bd \/ 6 ba/)).toBeInTheDocument()
+  })
+
+  it('renders the dual value inside labeled content for inline layout', () => {
+    renderSidebar({}, 'inline')
+
+    const row = screen.getByTestId('sidebar-beds-baths')
+    const dual = screen.getByTestId('sidebar-beds-baths-dual')
+
+    expect(row).toContainElement(dual)
+    expect(row.querySelector('p [data-testid="sidebar-beds-baths-dual"]')).toBeNull()
   })
 })

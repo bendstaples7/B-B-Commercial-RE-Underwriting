@@ -27,6 +27,13 @@ class TestParseUnitsFromNoteText:
     def test_units_colon_still_works(self):
         assert parse_units_from_note_text('Units: 8 walkup') == 8
 
+    def test_mix_rows_do_not_become_whole_building_units(self):
+        text = '4 units are 2 beds and 2 units are 3 beds'
+        assert parse_units_from_note_text(text) is None
+        facts = parse_note_property_facts(text, source='hubspot_note')
+        assert facts is not None
+        assert facts['units'] == 6
+
     def test_missing(self):
         assert parse_units_from_note_text('Called owner, no answer') is None
 
@@ -139,3 +146,74 @@ class TestApplyToLead:
         assert facts is not None
         assert facts['units'] == 6
         assert len(facts['unit_mix']) == 2
+
+    def test_timeline_heal_applies_one_chosen_fact_source(self, monkeypatch):
+        from app.models import lead_timeline_entry as timeline_entry_module
+        from app.services.helpers.note_property_facts import apply_note_facts_from_timeline
+
+        class FakeColumn:
+            def __eq__(self, _other):
+                return True
+
+            def is_(self, _other):
+                return True
+
+            def in_(self, _other):
+                return True
+
+            def desc(self):
+                return True
+
+        class FakeQuery:
+            def filter(self, *_args):
+                return self
+
+            def order_by(self, *_args):
+                return self
+
+            def all(self):
+                return [
+                    SimpleNamespace(
+                        event_type='hubspot_note',
+                        event_metadata={'body': '6 unit property'},
+                        summary='',
+                        hubspot_activity_id='newer',
+                    ),
+                    SimpleNamespace(
+                        event_type='hubspot_note',
+                        event_metadata={
+                            'body': '12 unit property 8 units are 1 beds and 4 units are 2 beds',
+                        },
+                        summary='',
+                        hubspot_activity_id='older',
+                    ),
+                ]
+
+        class FakeLeadTimelineEntry:
+            lead_id = FakeColumn()
+            is_deleted = FakeColumn()
+            event_type = FakeColumn()
+            occurred_at = FakeColumn()
+            query = FakeQuery()
+
+        lead = SimpleNamespace(
+            id=4490,
+            units=None,
+            bedrooms=None,
+            bathrooms=None,
+            lead_category='residential',
+            property_type=None,
+            note_property_facts=None,
+        )
+        monkeypatch.setattr(
+            timeline_entry_module,
+            'LeadTimelineEntry',
+            FakeLeadTimelineEntry,
+        )
+
+        updated = apply_note_facts_from_timeline(lead)
+
+        assert 'units' in updated
+        assert lead.units == 12
+        assert lead.note_property_facts['units'] == 12
+        assert lead.note_property_facts['hubspot_activity_id'] == 'older'
