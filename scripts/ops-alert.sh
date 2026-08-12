@@ -111,6 +111,9 @@ print(json.dumps({"text": text}))
 
     if [[ -z "${ALERT_METHOD:-}" || "${ALERT_METHOD:-}" == "none" ]]; then
         _ops_alert_log "ALERT_METHOD unset/none — logged only: $subject"
+    elif [[ "${ALERT_METHOD}" != "email" && "${ALERT_METHOD}" != "webhook" && "${ALERT_METHOD}" != "both" ]]; then
+        delivery_failed=1
+        _ops_alert_log "ALERT DELIVERY FAILED: unsupported ALERT_METHOD=${ALERT_METHOD}"
     fi
 
     OPS_ALERT_DELIVERY_FAILED="$delivery_failed"
