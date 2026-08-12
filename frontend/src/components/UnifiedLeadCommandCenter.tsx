@@ -1947,10 +1947,25 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     )
   }
 
+  // RQ success-gap: settled with neither data nor error must not reach `!` accesses
+  // (that throw blanks the lead route — no ErrorBoundary on /leads/:id historically).
+  if (!commandCenterData) {
+    return (
+      <Box sx={{ p: 3 }}>
+        <Alert severity="error" sx={{ mb: 2 }}>
+          Lead data is unavailable. Refresh the page or go back to Properties.
+        </Alert>
+        <Button component={RouterLink} to="/properties" variant="outlined">
+          Back to Properties
+        </Button>
+      </Box>
+    )
+  }
+
   // Main layout
-  const outreachContact = resolveOutreachContactFromCommandCenter(commandCenterData!)
-  const recommendedActionValue = commandCenterData!.recommended_action?.value ?? null
-  const contactMethod = commandCenterData!.recommended_action?.recommended_contact_method ?? null
+  const outreachContact = resolveOutreachContactFromCommandCenter(commandCenterData)
+  const recommendedActionValue = commandCenterData.recommended_action?.value ?? null
+  const contactMethod = commandCenterData.recommended_action?.recommended_contact_method ?? null
   const placement = outreachContactPlacement(openTasks, outreachContact, recommendedActionValue, {
     // Key Contact card mounts on both lg+ rail and below-lg main stack.
     keyContactCardVisible: true,
@@ -1960,14 +1975,14 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       ? (contactMethod as OutreachContact['channel'])
       : null
   const recommendedActionWithContact = {
-    ...commandCenterData!.recommended_action,
+    ...commandCenterData.recommended_action,
     outreach_contact: outreachContact,
   }
   const primaryOwnerName = primaryOwnerDisplayName(
-    commandCenterData!.contacts,
-    commandCenterData!.owner_first_name,
-    commandCenterData!.owner_last_name,
-    commandCenterData!.organizations,
+    commandCenterData.contacts,
+    commandCenterData.owner_first_name,
+    commandCenterData.owner_last_name,
+    commandCenterData.organizations,
   )
 
   return (
@@ -2012,11 +2027,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }}
           data-testid="cc-header-stack"
         >
-          <WorkQueueMembershipStrip commandCenterData={commandCenterData!} />
+          <WorkQueueMembershipStrip commandCenterData={commandCenterData} />
 
           <PropertyOverviewHeader
             leadId={leadId}
-            commandCenterData={commandCenterData!}
+            commandCenterData={commandCenterData}
             scoreRecord={scoreData?.latest}
             onStatusChanged={handleStatusChanged}
             onViewFullBreakdown={handleViewScoreBreakdown}
@@ -2056,16 +2071,16 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             <Paper sx={ccCardSx} data-testid="lead-action-section">
               <RecommendedActionPanel
                 recommendedAction={recommendedActionWithContact}
-                leadStatus={commandCenterData!.lead_status}
+                leadStatus={commandCenterData.lead_status}
                 openTasks={openTasks}
-                mailQueueStatus={commandCenterData!.mail_queue_status ?? null}
-                isMailable={commandCenterData!.is_mailable ?? false}
-                mailEligible={commandCenterData!.mail_eligible}
-                mailIneligibleReason={commandCenterData!.mail_ineligible_reason}
-                mailEligibleDate={commandCenterData!.mail_eligible_date}
-                ownerMailingReadiness={commandCenterData!.owner_mailing_readiness ?? null}
+                mailQueueStatus={commandCenterData.mail_queue_status ?? null}
+                isMailable={commandCenterData.is_mailable ?? false}
+                mailEligible={commandCenterData.mail_eligible}
+                mailIneligibleReason={commandCenterData.mail_ineligible_reason}
+                mailEligibleDate={commandCenterData.mail_eligible_date}
+                ownerMailingReadiness={commandCenterData.owner_mailing_readiness ?? null}
                 contactsLikelyPriorOwner={Boolean(
-                  commandCenterData!.contacts_likely_prior_owner,
+                  commandCenterData.contacts_likely_prior_owner,
                 )}
                 onApplyParsedMailing={async () => {
                   await commandCenterService.applyParsedOwnerMailing(leadId)
@@ -2074,8 +2089,8 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 showOutreachContact={placement === 'recommended_action'}
                 embedded
                 showActionCenterTiles
-                entityResearch={commandCenterData!.entity_research ?? null}
-                needsEntityResearch={Boolean(commandCenterData!.needs_entity_research)}
+                entityResearch={commandCenterData.entity_research ?? null}
+                needsEntityResearch={Boolean(commandCenterData.needs_entity_research)}
                 onRefreshEntityResearch={async () => {
                   await entityResolutionApi.resolve(leadId, { action: 'resolve', async: false })
                   await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
@@ -2117,8 +2132,8 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 outreachContact={outreachContact}
                 showOutreachContactOnPrimaryTask={placement === 'primary_task'}
                 missingOutreachChannel={missingOutreachChannel}
-                mailQueueStatus={commandCenterData!.mail_queue_status ?? null}
-                upNextToMail={Boolean(commandCenterData!.up_next_to_mail)}
+                mailQueueStatus={commandCenterData.mail_queue_status ?? null}
+                upNextToMail={Boolean(commandCenterData.up_next_to_mail)}
                 embedded
                 onTasksChanged={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
                 onAfterTaskCompleted={fromQueue ? () => {
@@ -2134,15 +2149,15 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               <>
                 <KeyContactCard
                   name={primaryOwnerName}
-                  commandCenterData={commandCenterData!}
+                  commandCenterData={commandCenterData}
                 />
                 <PropertyKpiCard
-                  commandCenterData={commandCenterData!}
+                  commandCenterData={commandCenterData}
                   propertyDetail={leadData}
                 />
                 <PropertySidebar
                   variant="inline"
-                  commandCenterData={commandCenterData!}
+                  commandCenterData={commandCenterData}
                   onViewSaleHistory={handleViewSaleHistory}
                   hideContactSection
                   collapseSecondary
@@ -2152,20 +2167,20 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
 
             <BuildingOwnershipSection
               leadId={leadId}
-              commandCenterData={commandCenterData!}
+              commandCenterData={commandCenterData}
             />
 
             <LeadBriefingPanel
                 leadId={leadId}
-                initialBriefing={commandCenterData!.quick_briefing ?? null}
+                initialBriefing={commandCenterData.quick_briefing ?? null}
               />
 
             {!isLgUp && (
               <ActivityPanel
                 ref={activityRef}
                 leadId={leadId}
-                initialEntries={commandCenterData!.timeline.entries}
-                initialTotal={commandCenterData!.timeline.total}
+                initialEntries={commandCenterData.timeline.entries}
+                initialTotal={commandCenterData.timeline.total}
                 highlightEntryId={highlightEntryId}
                 variant="feed"
                 embedded
@@ -2177,7 +2192,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 <LeadDetailTabPanel
                   leadId={leadId}
                   leadData={leadData}
-                  commandCenterData={commandCenterData!}
+                  commandCenterData={commandCenterData}
                   scoreData={scoreData}
                   scoreLoading={scoreLoading}
                 />
@@ -2202,24 +2217,24 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               <>
                 <KeyContactCard
                   name={primaryOwnerName}
-                  commandCenterData={commandCenterData!}
+                  commandCenterData={commandCenterData}
                   sticky
                 />
                 <PropertyKpiCard
-                  commandCenterData={commandCenterData!}
+                  commandCenterData={commandCenterData}
                   propertyDetail={leadData}
                 />
                 <ActivityPanel
                   ref={activityRef}
                   leadId={leadId}
-                  initialEntries={commandCenterData!.timeline.entries}
-                  initialTotal={commandCenterData!.timeline.total}
+                  initialEntries={commandCenterData.timeline.entries}
+                  initialTotal={commandCenterData.timeline.total}
                   highlightEntryId={highlightEntryId}
                   variant="feed"
                   embedded
                 />
                 <PropertySidebar
-                  commandCenterData={commandCenterData!}
+                  commandCenterData={commandCenterData}
                   onViewSaleHistory={handleViewSaleHistory}
                   hideContactSection
                   collapseSecondary

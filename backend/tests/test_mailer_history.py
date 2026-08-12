@@ -36,6 +36,26 @@ def test_olc_dict_entries():
     assert rows[0]['campaign_id'] == 12
 
 
+def test_creative_preset_dict_becomes_string_label():
+    rows = normalize_mailer_history([
+        {
+            'sent_at': '2024-06-01T00:00:00Z',
+            'template_name': 'Standard',
+            'creative': {
+                'label': 'Bessy Tam',
+                'sender_display_name': 'Bessy Tam',
+                'first_name': 'Bessy',
+                'last_name': 'Tam',
+            },
+            'campaign_id': 2,
+        },
+    ])
+    assert len(rows) == 1
+    assert rows[0]['creative'] == 'Bessy Tam'
+    assert rows[0]['label'] == 'Standard, Bessy Tam'
+    assert '{' not in rows[0]['label']
+
+
 def test_cancelled_and_feedback():
     rows = normalize_mailer_history([
         {'address_feedback': 'RTS', 'cancelled': True},

@@ -415,7 +415,34 @@ def main() -> int:
         errors.append(
             "install-backup-cron.sh must install celery-liveness-check.sh cron"
         )
-
+    if "check-lead-cc-mount-health.sh" not in install_cron:
+        errors.append(
+            "install-backup-cron.sh must install check-lead-cc-mount-health.sh cron"
+        )
+    if "lead-cc-mount-health-managed" not in install_cron:
+        errors.append(
+            "install-backup-cron.sh must use lead-cc-mount-health-managed marker"
+        )
+    deploy_yml_text = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
+    if "check-lead-cc-mount-health.sh" not in deploy_yml_text:
+        errors.append(
+            "deploy.yml must scp check-lead-cc-mount-health.sh to the VPS"
+        )
+    if "lead_cc_mount_health.py" not in deploy_yml_text:
+        errors.append("deploy.yml must scp lead_cc_mount_health.py to the VPS")
+    # Executable + readable perms must ship with the files (cron otherwise fails).
+    if not re.search(
+        r"chmod 750[^\n]*check-lead-cc-mount-health\.sh", deploy_yml_text
+    ):
+        errors.append(
+            "deploy.yml chmod 750 line must include check-lead-cc-mount-health.sh"
+        )
+    if not re.search(
+        r"chmod 644[^\n]*lead_cc_mount_health\.py", deploy_yml_text
+    ):
+        errors.append(
+            "deploy.yml chmod 644 line must include lead_cc_mount_health.py"
+        )
     # 6c. Ops health soft-fails only async ensure (exit 2), not hard infra failures
     ops_health_yml = _read(REPO_ROOT / ".github" / "workflows" / "ops-health.yml")
     if "SOFT_ASYNC_ENSURE_FAILURE" not in ops_health_yml:

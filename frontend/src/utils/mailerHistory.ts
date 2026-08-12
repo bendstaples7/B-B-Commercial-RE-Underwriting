@@ -57,13 +57,36 @@ export function parseMailerSentAt(value: unknown): Date | null {
   return null
 }
 
+/** Coerce API creative (string | preset dict | null) to a display string. */
+export function creativeDisplayLabel(creative: unknown): string | null {
+  if (creative == null) return null
+  if (typeof creative === 'string') {
+    const trimmed = creative.trim()
+    return trimmed || null
+  }
+  if (typeof creative === 'object' && !Array.isArray(creative)) {
+    const obj = creative as Record<string, unknown>
+    for (const key of ['sender_display_name', 'label', 'olc_template_name'] as const) {
+      const v = obj[key]
+      if (typeof v === 'string' && v.trim()) return v.trim()
+    }
+    const name = [obj.first_name, obj.last_name]
+      .filter((p): p is string => typeof p === 'string' && Boolean(p.trim()))
+      .join(' ')
+      .trim()
+    return name || null
+  }
+  const text = String(creative).trim()
+  return text || null
+}
+
 function normalizeOne(entry: unknown, idx: number): MailerHistoryRow | null {
   if (entry == null || entry === '') return null
 
   if (typeof entry === 'object' && !Array.isArray(entry)) {
     const obj = entry as Record<string, unknown>
     const templateName = obj.template_name != null ? String(obj.template_name) : null
-    const creative = obj.creative != null ? String(obj.creative) : null
+    const creative = creativeDisplayLabel(obj.creative)
     const labelParts = [templateName, creative].filter(Boolean)
     let label = labelParts.length ? labelParts.join(', ') : null
     if (!label && obj.olc_order_id) label = `OLC order ${obj.olc_order_id}`
@@ -157,7 +180,28 @@ export function resolveMailerHistorySummary(
   raw: unknown,
 ): MailerHistorySummary {
   if (summary && typeof summary.count === 'number' && Array.isArray(summary.rows)) {
-    return summary
+    // API rows may still carry dict `creative` — coerce so React never gets an object child.
+    return {
+      ...summary,
+      rows: summary.rows.map((row, idx) => {
+        const creative = creativeDisplayLabel(row.creative)
+        const templateName = row.template_name
+        const labelFromParts = [templateName, creative].filter(Boolean).join(', ')
+        const creativeWasNonString =
+          row.creative != null && typeof row.creative !== 'string'
+        const labelLooksLikeDict =
+          typeof row.label === 'string'
+          && (row.label.includes("{'") || row.label.includes('{"'))
+        const preferRebuilt =
+          (creativeWasNonString || labelLooksLikeDict) && Boolean(labelFromParts)
+        return {
+          ...row,
+          id: row.id || `mail-${idx}`,
+          creative,
+          label: preferRebuilt ? labelFromParts : (row.label || labelFromParts || 'Mailer'),
+        }
+      }),
+    }
   }
   return mailerHistorySummary(raw)
 }

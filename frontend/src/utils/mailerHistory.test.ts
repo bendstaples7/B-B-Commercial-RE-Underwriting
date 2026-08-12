@@ -45,6 +45,59 @@ describe('mailerHistory', () => {
     expect(resolved.rows[0].label).toBe('From API')
   })
 
+  it('coerces dict creative on API summary rows to a string label', () => {
+    const api = {
+      count: 1,
+      last_sent_at: '2025-01-01',
+      rows: [
+        {
+          id: 'mail-0',
+          sent_at: '2025-01-01',
+          label: "Standard, {'id': 'x', 'label': 'Bessy Tam'}",
+          creative: {
+            label: 'Bessy Tam',
+            sender_display_name: 'Bessy Tam',
+            first_name: 'Bessy',
+            last_name: 'Tam',
+          } as unknown as string | null,
+          template_name: 'Standard',
+          campaign_id: 1,
+          olc_order_id: null,
+          address_feedback: null,
+          cancelled: false,
+          source: 'olc' as const,
+        },
+      ],
+    }
+    const resolved = resolveMailerHistorySummary(api, null)
+    expect(typeof resolved.rows[0].creative).toBe('string')
+    expect(resolved.rows[0].creative).toBe('Bessy Tam')
+    expect(resolved.rows[0].label).toBe('Standard, Bessy Tam')
+  })
+
+  it('rebuilds label when creative is an object even if label looks fine', () => {
+    const api = {
+      count: 1,
+      last_sent_at: '2025-01-01',
+      rows: [
+        {
+          id: 'mail-0',
+          sent_at: '2025-01-01',
+          label: 'Stale label',
+          creative: { label: 'Bessy Tam' } as unknown as string | null,
+          template_name: 'Standard',
+          campaign_id: 1,
+          olc_order_id: null,
+          address_feedback: null,
+          cancelled: false,
+          source: 'olc' as const,
+        },
+      ],
+    }
+    const resolved = resolveMailerHistorySummary(api, null)
+    expect(resolved.rows[0].label).toBe('Standard, Bessy Tam')
+  })
+
   it('parseMailerSentAt handles ISO and US dates', () => {
     expect(parseMailerSentAt('2024-06-01T00:00:00Z')).not.toBeNull()
     expect(parseMailerSentAt('6/21/2024')?.getMonth()).toBe(5)

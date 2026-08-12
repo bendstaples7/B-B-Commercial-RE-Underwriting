@@ -37,7 +37,40 @@ export default defineConfig(({ command, mode }) => {
             // "Cannot read properties of undefined (reading 'createContext')"
             // when vendor evaluates before the React binding is initialized.
             // Put React into vendor with other deps; only split large isolates.
-            if (!id.includes('node_modules')) return
+            if (!id.includes('node_modules')) {
+              // Keep shared HTTP/API + snackbar out of the entry chunk so lazy
+              // routes (UnifiedLeadCommandCenter) never `import` from `index-*.js`
+              // (circular entry↔lazy graph that blanks /leads/:id in prod).
+              // Incomplete by nature — scripts/assert_frontend_dist_assets.py is
+              // the hard regression gate for any leftover lazy→index import.
+              const norm = id.replace(/\\/g, '/')
+              if (
+                norm.includes('/services/httpClient')
+                || norm.includes('/services/api.ts')
+                || norm.includes('/services/api.js')
+                || norm.includes('/services/leadApi')
+                || norm.includes('/services/entityResolutionApi')
+                || norm.includes('/services/openLetterApi')
+                || norm.includes('/services/schemas')
+                // Runtime enums/constants from @/types must not live in the entry
+                // chunk (lazy routes import them → lazy↔entry cycle).
+                || norm.includes('/src/types/')
+                || norm.endsWith('/src/types/index.ts')
+                || norm.endsWith('/src/types/index.js')
+                || norm.endsWith('/src/types.ts')
+              ) {
+                return 'api'
+              }
+              // Contexts, snackbar, and shared display utils outside entry.
+              if (
+                norm.includes('/context/')
+                || norm.includes('/components/AppSnackbar')
+                || norm.includes('/utils/searchResultDisplay')
+              ) {
+                return 'ui-shared'
+              }
+              return
+            }
             if (
               id.includes('node_modules/react-dom')
               || id.includes('node_modules/react/')
