@@ -113,6 +113,7 @@ def main() -> None:
         cancelled = 0
         skipped = 0
         affected_leads: list[int] = []
+        terminal_cancel_previewed_leads: set[int] = set()
 
         for task in tasks:
             lead = Lead.query.get(task.lead_id)
@@ -133,9 +134,14 @@ def main() -> None:
                     if n:
                         affected_leads.append(lead.id)
                 else:
-                    n = count_open_mail_rematch_tasks(lead.id)
+                    n = (
+                        0
+                        if lead.id in terminal_cancel_previewed_leads
+                        else count_open_mail_rematch_tasks(lead.id)
+                    )
                     cancelled += n
                     if n:
+                        terminal_cancel_previewed_leads.add(lead.id)
                         affected_leads.append(lead.id)
                 logger.info(
                     'Lead %s task %s: %s rematch (status=%s)',

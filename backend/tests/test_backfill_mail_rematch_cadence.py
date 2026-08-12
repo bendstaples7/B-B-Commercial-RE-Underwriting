@@ -124,3 +124,32 @@ def test_dry_run_skips_conversion_without_last_sent(app, monkeypatch, capsys):
     output = capsys.readouterr().out
     assert 'skip (no send)' in output
     assert 'Dry-run: would convert=0 would cancel=0 skipped=1' in output
+
+
+def test_dry_run_counts_terminal_cancellation_once_per_lead(
+    app, monkeypatch, capsys,
+):
+    """Dry-run terminal totals match apply when several candidates share a lead."""
+    import scripts.backfill_mail_rematch_cadence as script
+
+    with app.app_context():
+        lead = _make_lead('3 Terminal Count St', lead_status='suppressed')
+        _make_task(
+            lead,
+            task_type='call_owner_today',
+            title='Follow up after mailer - first terminal',
+        )
+        _make_task(
+            lead,
+            task_type='call_owner_today',
+            title='Follow up after mailer - second terminal',
+        )
+        db.session.commit()
+
+    monkeypatch.setattr(script, 'create_app', lambda: app)
+    monkeypatch.setattr(sys, 'argv', ['backfill_mail_rematch_cadence.py'])
+
+    script.main()
+
+    output = capsys.readouterr().out
+    assert 'Dry-run: would convert=0 would cancel=2 skipped=0' in output
