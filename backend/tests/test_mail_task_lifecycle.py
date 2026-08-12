@@ -14,6 +14,7 @@ from app.services.mail_campaign_service import MailCampaignService
 from app.services.mail_queue_service import MailQueueService
 from app.services.mail_task_lifecycle_service import (
     MAIL_FOLLOW_UP_OFFSET_DAYS,
+    MAIL_REMATCH_OFFSET_DAYS,
     adjust_earliest_task_for_recent_sale,
     complete_mail_prep_tasks,
     complete_tasks_superseded_by_mail,
@@ -1751,7 +1752,7 @@ class TestScheduleMailFollowUpTask:
 
             assert task is not None
             assert task.task_type == 'add_to_mail_batch'
-            assert task.due_date == sent_at.date() + timedelta(days=MAIL_FOLLOW_UP_OFFSET_DAYS)
+            assert task.due_date == sent_at.date() + timedelta(days=MAIL_REMATCH_OFFSET_DAYS)
             assert 'Add to next mailer' in task.title
             assert task.mirror_task_id is not None
 
@@ -1776,7 +1777,7 @@ class TestScheduleMailFollowUpTask:
 
             assert task is not None
             assert task.id == pending.id
-            assert task.due_date == sent_at.date() + timedelta(days=MAIL_FOLLOW_UP_OFFSET_DAYS)
+            assert task.due_date == sent_at.date() + timedelta(days=MAIL_REMATCH_OFFSET_DAYS)
             assert task.mirror_task_id == pending.mirror_task_id
 
     def test_returns_existing_when_follow_up_already_dated(self, app):
@@ -1958,7 +1959,7 @@ class TestScheduleMailFollowUpTask:
 
             assert task is not None
             assert task.id == pending.id
-            assert task.due_date == sent_at.date() + timedelta(days=90)
+            assert task.due_date == sent_at.date() + timedelta(days=MAIL_REMATCH_OFFSET_DAYS)
             synced = Task.query.get(orphan.id)
             assert synced.due_date == datetime.combine(
                 task.due_date, datetime.min.time(),

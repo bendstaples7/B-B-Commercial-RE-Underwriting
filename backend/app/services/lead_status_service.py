@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry
+
+logger = logging.getLogger(__name__)
 
 
 def _cancel_tasks_for_terminal_status(
@@ -12,7 +15,16 @@ def _cancel_tasks_for_terminal_status(
     *,
     actor: str,
     status: str,
-) -> None:
+) -> set[str]:
+    hubspot_task_ids = {
+        str(task.hubspot_task_id)
+        for task in LeadTask.query.filter(
+            LeadTask.lead_id == lead_id,
+            LeadTask.status == 'open',
+            LeadTask.hubspot_task_id.isnot(None),
+        ).all()
+        if task.hubspot_task_id
+    }
     from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
     cancel_mail_rematch_tasks(
         lead_id,
@@ -22,6 +34,24 @@ def _cancel_tasks_for_terminal_status(
     LeadTask.query.filter_by(lead_id=lead_id, status='open').update(
         {'status': 'cancelled'},
     )
+    return hubspot_task_ids
+
+
+def _sync_cancelled_hubspot_tasks(hubspot_task_ids: set[str]) -> None:
+    """Best-effort post-commit CRM sync for locally cancelled tasks."""
+    if not hubspot_task_ids:
+        return
+    try:
+        from app.services.hubspot_task_completion_service import (
+            sync_pending_hubspot_completions,
+        )
+        sync_pending_hubspot_completions(sorted(hubspot_task_ids))
+    except Exception as exc:  # noqa: BLE001 - CRM mirror must not fail status changes
+        logger.warning(
+            'HubSpot completion sync failed after terminal status change: %s',
+            exc,
+            exc_info=True,
+        )
 
 
 def apply_lead_status_change(
@@ -39,13 +69,14 @@ def apply_lead_status_change(
         # rematch mirrors when the lead is already in that terminal status.
         if new_status in ('do_not_contact', 'suppressed'):
             lead.recommended_action = None
-            _cancel_tasks_for_terminal_status(
+            cancelled_hubspot_ids = _cancel_tasks_for_terminal_status(
                 lead.id,
                 actor=actor,
                 status=new_status,
             )
             db.session.add(lead)
             db.session.commit()
+            _sync_cancelled_hubspot_tasks(cancelled_hubspot_ids)
             return
         # Do not force needs_skip_trace mid recent-sale hold.
         if new_status == 'skip_trace' and not lead.needs_skip_trace:
@@ -67,18 +98,20 @@ def apply_lead_status_change(
 
     if new_status == 'do_not_contact':
         lead.recommended_action = None
-        _cancel_tasks_for_terminal_status(
+        cancelled_hubspot_ids = _cancel_tasks_for_terminal_status(
             lead.id,
             actor=actor,
             status='do_not_contact',
         )
     elif new_status == 'suppressed':
         lead.recommended_action = None
-        _cancel_tasks_for_terminal_status(
+        cancelled_hubspot_ids = _cancel_tasks_for_terminal_status(
             lead.id,
             actor=actor,
             status='suppressed',
         )
+    else:
+        cancelled_hubspot_ids: set[str] = set()
 
     if reason:
         summary = f"Status changed from '{old_status}' to '{new_status}'. {reason}"
@@ -101,6 +134,7 @@ def apply_lead_status_change(
     db.session.add(lead)
     db.session.add(entry)
     db.session.commit()
+    _sync_cancelled_hubspot_tasks(cancelled_hubspot_ids)
 
     if recompute_action and new_status not in ('do_not_contact', 'suppressed'):
         from app.services.lead_refresh import refresh_lead_scoring

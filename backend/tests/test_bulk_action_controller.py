@@ -46,13 +46,21 @@ def _make_lead(app, street, **kwargs):
     return lead
 
 
-def _make_task(app, lead_id, status='open', task_type='custom', title='Test task'):
+def _make_task(
+    app,
+    lead_id,
+    status='open',
+    task_type='custom',
+    title='Test task',
+    **kwargs,
+):
     task = LeadTask(
         lead_id=lead_id,
         task_type=task_type,
         title=title,
         status=status,
         created_by='test',
+        **kwargs,
     )
     db.session.add(task)
     db.session.commit()
@@ -241,6 +249,32 @@ class TestBulkSuppress:
             assert body['successes'] == 1
             assert db.session.get(LeadTask, rematch.id).status == 'cancelled'
             assert db.session.get(Task, mirror.id).status == 'cancelled'
+
+    def test_bulk_suppress_syncs_hubspot_backed_cancelled_tasks(
+        self, client, app, monkeypatch,
+    ):
+        with app.app_context():
+            lead = _make_lead(app, '1 Bulk Suppress Hs St')
+            task = _make_task(app, lead.id, hubspot_task_id='hs-bulk-suppress-1')
+            synced: list[list[str]] = []
+
+            def _capture(ids):
+                synced.append(list(ids))
+
+            monkeypatch.setattr(
+                'app.services.hubspot_task_completion_service.sync_pending_hubspot_completions',
+                _capture,
+            )
+            response = client.post(
+                '/api/leads/bulk/suppress',
+                data=json.dumps({'lead_ids': [lead.id]}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 200
+            assert db.session.get(LeadTask, task.id).status == 'cancelled'
+            assert synced == [['hs-bulk-suppress-1']]
 
     def test_bulk_suppress_empty_list_returns_zero_counts(self, client, app):
         """Bulk suppress with empty lead_ids returns 400 (schema requires min 1 ID)."""
@@ -482,6 +516,32 @@ class TestBulkDoNotContact:
             assert response.status_code == 200
             assert db.session.get(LeadTask, rematch.id).status == 'cancelled'
             assert db.session.get(Task, mirror.id).status == 'cancelled'
+
+    def test_bulk_dnc_syncs_hubspot_backed_cancelled_tasks(
+        self, client, app, monkeypatch,
+    ):
+        with app.app_context():
+            lead = _make_lead(app, '1 Bulk DNC Hs St')
+            task = _make_task(app, lead.id, hubspot_task_id='hs-bulk-dnc-1')
+            synced: list[list[str]] = []
+
+            def _capture(ids):
+                synced.append(list(ids))
+
+            monkeypatch.setattr(
+                'app.services.hubspot_task_completion_service.sync_pending_hubspot_completions',
+                _capture,
+            )
+            response = client.post(
+                '/api/leads/bulk/do-not-contact',
+                data=json.dumps({'lead_ids': [lead.id]}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 200
+            assert db.session.get(LeadTask, task.id).status == 'cancelled'
+            assert synced == [['hs-bulk-dnc-1']]
 
     def test_bulk_dnc_returns_correct_success_count(self, client, app):
         """Response contains correct successes count."""
