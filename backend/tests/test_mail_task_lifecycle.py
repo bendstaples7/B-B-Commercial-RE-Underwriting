@@ -1947,6 +1947,59 @@ class TestScheduleMailFollowUpTask:
                     actor='test',
                 )
 
+    def test_convert_legacy_follow_up_falls_back_when_link_is_stale(self, app):
+        with app.app_context():
+            from app import db
+            from app.models import Task
+            from app.services.mail_task_lifecycle_service import (
+                convert_legacy_mail_follow_up_to_rematch,
+            )
+
+            lead = _make_lead(app, '6g Convert Stale Mirror St')
+            sent_at = datetime.now(timezone.utc)
+            legacy_due = sent_at.date() + timedelta(days=7)
+            legacy = LeadTask(
+                lead_id=lead.id,
+                task_type='call_owner_today',
+                title='Follow up after mailer — 6g Convert Stale Mirror St',
+                status='open',
+                due_date=legacy_due,
+                created_by='test',
+            )
+            completed_link = Task(
+                lead_id=lead.id,
+                task_type='call_owner_today',
+                title='Follow up after mailer — completed link',
+                status='completed',
+                source='manual',
+                due_date=datetime.combine(legacy_due, datetime.min.time()),
+            )
+            mirror = Task(
+                lead_id=lead.id,
+                task_type='call_owner_today',
+                title='Follow up after mailer — 6g Convert Stale Mirror St',
+                status='open',
+                source='manual',
+                due_date=datetime.combine(legacy_due, datetime.min.time()),
+            )
+            db.session.add_all([legacy, completed_link, mirror])
+            db.session.flush()
+            legacy.mirror_task_id = completed_link.id
+            db.session.add(legacy)
+            db.session.commit()
+
+            convert_legacy_mail_follow_up_to_rematch(
+                legacy,
+                lead,
+                last_sent_at=sent_at,
+                actor='test',
+            )
+            db.session.commit()
+
+            refreshed_mirror = db.session.get(Task, mirror.id)
+            assert refreshed_mirror.task_type == 'add_to_mail_batch'
+            assert 'Add to next mailer' in refreshed_mirror.title
+
     def test_convert_legacy_follow_up_rejects_hubspot_backed_task(self, app):
         with app.app_context():
             from app.services.mail_task_lifecycle_service import (

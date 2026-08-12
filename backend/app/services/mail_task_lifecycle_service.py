@@ -1179,7 +1179,6 @@ def _select_rematch_mirrors(
             and mirror.status in ('open', 'overdue')
         ):
             return [mirror]
-        return []
 
     titles = {title for title in candidate_titles if title}
     candidates: list[Task] = []
@@ -1292,16 +1291,12 @@ def _cancel_open_rematch_task(
     task.status = 'cancelled'
     task.completed_at = now
     db.session.add(task)
-    for mirror in Task.query.filter(
-        Task.lead_id == task.lead_id,
-        Task.status.in_(['open', 'overdue']),
-    ).all():
-        mirror_matches = (
-            mirror.title == task.title
-            or is_mail_follow_up_title(mirror.title)
-        )
-        if not mirror_matches:
-            continue
+    for mirror in _select_rematch_mirrors(
+        task,
+        task.lead_id,
+        {task.title},
+        allow_pending_title_match=True,
+    ):
         mirror.status = 'cancelled'
         mirror.updated_at = now
         db.session.add(mirror)

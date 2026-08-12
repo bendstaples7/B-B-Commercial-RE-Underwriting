@@ -199,6 +199,47 @@ class TestBulkSuppress:
             assert db.session.get(LeadTask, rematch.id).status == 'cancelled'
             assert db.session.get(Task, mirror.id).status == 'cancelled'
 
+    def test_bulk_suppress_cleans_up_already_suppressed_rematch(self, client, app):
+        """Bulk suppress is idempotent cleanup for already-suppressed leads."""
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '1 Bulk Suppress Existing Rematch St',
+                lead_status='suppressed',
+            )
+            rematch = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 1 Bulk Suppress Existing Rematch St',
+                status='open',
+                due_date=date.today() + timedelta(days=30),
+                created_by='test',
+            )
+            mirror = Task(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title=rematch.title,
+                status='open',
+                source='manual',
+                due_date=datetime.combine(rematch.due_date, datetime.min.time()),
+            )
+            db.session.add_all([rematch, mirror])
+            db.session.flush()
+            rematch.mirror_task_id = mirror.id
+            db.session.add(rematch)
+            db.session.commit()
+
+            response = client.post(
+                '/api/leads/bulk/suppress',
+                data=json.dumps({'lead_ids': [lead.id]}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 200
+            assert db.session.get(LeadTask, rematch.id).status == 'cancelled'
+            assert db.session.get(Task, mirror.id).status == 'cancelled'
+
     def test_bulk_suppress_empty_list_returns_zero_counts(self, client, app):
         """Bulk suppress with empty lead_ids returns 400 (schema requires min 1 ID)."""
         with app.app_context():
@@ -370,6 +411,47 @@ class TestBulkDoNotContact:
                 lead_id=lead.id,
                 task_type='add_to_mail_batch',
                 title='Add to next mailer — 1 Bulk DNC Rematch St',
+                status='open',
+                due_date=date.today() + timedelta(days=30),
+                created_by='test',
+            )
+            mirror = Task(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title=rematch.title,
+                status='open',
+                source='manual',
+                due_date=datetime.combine(rematch.due_date, datetime.min.time()),
+            )
+            db.session.add_all([rematch, mirror])
+            db.session.flush()
+            rematch.mirror_task_id = mirror.id
+            db.session.add(rematch)
+            db.session.commit()
+
+            response = client.post(
+                '/api/leads/bulk/do-not-contact',
+                data=json.dumps({'lead_ids': [lead.id]}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 200
+            assert db.session.get(LeadTask, rematch.id).status == 'cancelled'
+            assert db.session.get(Task, mirror.id).status == 'cancelled'
+
+    def test_bulk_dnc_cleans_up_already_dnc_rematch(self, client, app):
+        """Bulk DNC is idempotent cleanup for already-DNC leads."""
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '1 Bulk Existing DNC Rematch St',
+                lead_status='do_not_contact',
+            )
+            rematch = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to next mailer — 1 Bulk Existing DNC Rematch St',
                 status='open',
                 due_date=date.today() + timedelta(days=30),
                 created_by='test',

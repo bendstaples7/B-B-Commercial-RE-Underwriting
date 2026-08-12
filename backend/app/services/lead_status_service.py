@@ -7,6 +7,23 @@ from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry
 
 
+def _cancel_tasks_for_terminal_status(
+    lead_id: int,
+    *,
+    actor: str,
+    status: str,
+) -> None:
+    from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
+    cancel_mail_rematch_tasks(
+        lead_id,
+        actor=actor,
+        reason=f'status_{status}',
+    )
+    LeadTask.query.filter_by(lead_id=lead_id, status='open').update(
+        {'status': 'cancelled'},
+    )
+
+
 def apply_lead_status_change(
     lead: Lead,
     new_status: str,
@@ -18,6 +35,16 @@ def apply_lead_status_change(
     """Update lead status with DNC/suppress side effects and timeline entry."""
     old_status = lead.lead_status
     if new_status == old_status:
+        if new_status in ('do_not_contact', 'suppressed'):
+            lead.recommended_action = None
+            _cancel_tasks_for_terminal_status(
+                lead.id,
+                actor=actor,
+                status=new_status,
+            )
+            db.session.add(lead)
+            db.session.commit()
+            return
         # Do not force needs_skip_trace mid recent-sale hold.
         if new_status == 'skip_trace' and not lead.needs_skip_trace:
             from app.services.skip_trace_enqueue import SkipTraceEnqueue
@@ -38,22 +65,18 @@ def apply_lead_status_change(
 
     if new_status == 'do_not_contact':
         lead.recommended_action = None
-        from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
-        cancel_mail_rematch_tasks(
+        _cancel_tasks_for_terminal_status(
             lead.id,
             actor=actor,
-            reason='status_do_not_contact',
+            status='do_not_contact',
         )
-        LeadTask.query.filter_by(lead_id=lead.id, status='open').update({'status': 'cancelled'})
     elif new_status == 'suppressed':
         lead.recommended_action = None
-        from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
-        cancel_mail_rematch_tasks(
+        _cancel_tasks_for_terminal_status(
             lead.id,
             actor=actor,
-            reason='status_suppressed',
+            status='suppressed',
         )
-        LeadTask.query.filter_by(lead_id=lead.id, status='open').update({'status': 'cancelled'})
 
     if reason:
         summary = f"Status changed from '{old_status}' to '{new_status}'. {reason}"

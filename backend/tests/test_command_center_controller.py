@@ -2048,7 +2048,15 @@ class TestDoNotContact:
                 source='manual',
                 due_date=datetime.combine(rematch.due_date, datetime.min.time()),
             )
-            db.session.add_all([rematch, mirror])
+            duplicate_mirror = Task(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title=rematch.title,
+                status='open',
+                source='manual',
+                due_date=datetime.combine(rematch.due_date, datetime.min.time()),
+            )
+            db.session.add_all([rematch, mirror, duplicate_mirror])
             db.session.flush()
             rematch.mirror_task_id = mirror.id
             db.session.add(rematch)
@@ -2064,6 +2072,7 @@ class TestDoNotContact:
             assert response.status_code == 200
             assert db.session.get(LeadTask, rematch.id).status == 'cancelled'
             assert db.session.get(Task, mirror.id).status == 'cancelled'
+            assert db.session.get(Task, duplicate_mirror.id).status == 'open'
 
     def test_dnc_syncs_hubspot_backed_cancelled_tasks(self, client, app, monkeypatch):
         """DNC cancels HubSpot-backed tasks and syncs CRM completions."""
