@@ -6,6 +6,10 @@
 #
 # Optional env:
 #   ALERT_SUBJECT_PREFIX  — default "[Ops Alert]"
+#
+# After send_alert returns, OPS_ALERT_DELIVERY_FAILED is 0 on success / 1 on
+# delivery failure. send_alert itself always exits 0 so callers under
+# `set -euo pipefail` are not aborted (historical contract).
 # =============================================================================
 
 send_alert() {
@@ -68,5 +72,6 @@ print(json.dumps({"text": text}))
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT_METHOD unset/none — logged only: $subject" >> "$log_target"
     fi
 
-    return "$delivery_failed"
+    OPS_ALERT_DELIVERY_FAILED="$delivery_failed"
+    return 0
 }

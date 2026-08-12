@@ -53,8 +53,13 @@ _send_ops_alert() {
     if [[ -f "${OPS_ALERT_LIB}" ]]; then
         # shellcheck source=ops-alert.sh
         source "${OPS_ALERT_LIB}"
+        OPS_ALERT_DELIVERY_FAILED=0
         send_alert "$subject" "$body"
-        return $?
+        # send_alert always returns 0 (set -e safe); status is in OPS_ALERT_DELIVERY_FAILED.
+        if [[ "${OPS_ALERT_DELIVERY_FAILED:-0}" -ne 0 ]]; then
+            return 1
+        fi
+        return 0
     fi
     log "ALERT (no ops-alert.sh): $subject — $body"
     return 0

@@ -231,13 +231,14 @@ async function main() {
       // Collected below via landmark checks.
     }
 
+    const leadIdForApi = String(Number(payload.id) || Number(args.lead) || 643)
     const rootKids = await page.$eval('#root', (el) => el.childElementCount).catch(() => 0)
     const ccHits = apiHits.filter((u) => {
       try {
         const path = new URL(u).pathname
-        return path === `/api/leads/${args.lead}/command-center`
+        return path === `/api/leads/${leadIdForApi}/command-center`
       } catch {
-        return u.includes(`/api/leads/${args.lead}/command-center`)
+        return u.includes(`/api/leads/${leadIdForApi}/command-center`)
       }
     })
     const loadingCount = await page.locator('[aria-label="Loading lead"]').count()
