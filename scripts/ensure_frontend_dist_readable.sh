@@ -17,6 +17,11 @@ set -euo pipefail
 
 DIST="frontend/dist"
 HTTP_BASE=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ASSET_REFS_SCRIPT="/home/deploy/spa_asset_refs.py"
+if [ ! -f "$ASSET_REFS_SCRIPT" ]; then
+    ASSET_REFS_SCRIPT="$SCRIPT_DIR/spa_asset_refs.py"
+fi
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -85,38 +90,7 @@ ASSET_REFS=()
 while IFS= read -r ref; do
     [ -n "$ref" ] || continue
     ASSET_REFS+=("$ref")
-done < <(python3 - "$DIST/index.html" <<'PY'
-import sys
-from html.parser import HTMLParser
-
-
-class AssetParser(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.refs = set()
-
-    def handle_starttag(self, tag, attrs):
-        if tag not in {"script", "link"}:
-            return
-        attr_name = "src" if tag == "script" else "href"
-        values = dict(attrs)
-        value = values.get(attr_name)
-        if not value:
-            return
-        ref = value.split("?", 1)[0].split("#", 1)[0]
-        if ref.startswith("assets/"):
-            ref = f"/{ref}"
-        if ref.startswith("/assets/"):
-            self.refs.add(ref)
-
-
-parser = AssetParser()
-with open(sys.argv[1], encoding="utf-8") as fh:
-    parser.feed(fh.read())
-for ref in sorted(parser.refs):
-    print(ref)
-PY
-)
+done < <(python3 "$ASSET_REFS_SCRIPT" "$DIST/index.html")
 
 if [ "${#ASSET_REFS[@]}" -eq 0 ]; then
     echo "FAILED: no /assets/ refs in $DIST/index.html"
@@ -149,11 +123,17 @@ if [ -n "$HTTP_BASE" ]; then
     base="${HTTP_BASE%/}"
     host_header=""
     if ls /etc/nginx/sites-enabled/* >/dev/null 2>&1; then
-        host_header=$(grep -h -m1 -E '^\s*server_name\s+' /etc/nginx/sites-enabled/* 2>/dev/null \
-            | awk '{print $2}' | tr -d ';' | head -1 || true)
-        case "$host_header" in
-            ""|_|localhost|*\**) host_header="" ;;
-        esac
+        host_header=$(awk '
+            /^[[:space:]]*server_name[[:space:]]+/ {
+                for (i = 2; i <= NF; i++) {
+                    gsub(/;/, "", $i)
+                    if ($i != "" && $i != "_" && $i != "localhost" && $i !~ /\*/) {
+                        print $i
+                        exit
+                    }
+                }
+            }
+        ' /etc/nginx/sites-enabled/* 2>/dev/null || true)
     fi
     for ref in "${ASSET_REFS[@]}"; do
         url="${base}${ref}"

@@ -106,6 +106,28 @@ def test_import_note_updates_note_property_facts(app):
         assert lead.property_type == 'Commercial'
 
 
+def test_import_email_does_not_update_note_property_facts(app):
+    """Only raw NOTE/CALL HubSpot activities can update note-derived facts."""
+    from app import db
+
+    with app.app_context():
+        lead = _make_lead(app, '1c HubSpot Email Units St')
+        lead.units = None
+        lead.lead_category = 'residential'
+        db.session.commit()
+
+        svc = HubSpotTimelineImportService()
+        count = svc.import_activities_for_lead(lead.id, [
+            _make_activity('hs-email-units', 'EMAIL', 'Email mentions a 6 unit property.')
+        ])
+
+        assert count == 1
+        db.session.refresh(lead)
+        assert lead.note_property_facts is None
+        assert lead.units is None
+        assert lead.lead_category == 'residential'
+
+
 def test_import_maps_call_type_to_hubspot_call_event(app):
     """CALL activity type maps to event_type='hubspot_call'."""
     from app.models import LeadTimelineEntry

@@ -149,7 +149,7 @@ def _spa_boot_client_ip() -> str:
         if p.strip()
     )
     if remote_addr in trusted_proxies:
-        forwarded = (request.headers.get('X-Forwarded-For') or '').split(',', 1)[0].strip()
+        forwarded = (request.headers.get('X-Real-IP') or '').strip()
         if forwarded:
             return forwarded
     return remote_addr or 'unknown'

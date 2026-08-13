@@ -295,7 +295,7 @@ class HubSpotTimelineImportService:
                     ),
                     activity_id,
                 ))
-            if event_type in ('hubspot_note', 'hubspot_call') and plain_body:
+            if activity_type in ('NOTE', 'CALL') and plain_body:
                 pending_note_property_facts.append((plain_body, event_type, activity_id, occurred_at))
 
         if pending_call_confidence:

@@ -21,10 +21,31 @@ if [ ! -d "$BACKUP_DIR" ]; then
     exit 2
 fi
 
-if ! rm -rf "$DIST_DIR" || ! cp -r "$BACKUP_DIR" "$DIST_DIR" 2>/dev/null; then
+DIST_PARENT="$(dirname "$DIST_DIR")"
+DIST_BASENAME="$(basename "$DIST_DIR")"
+TMP_DIST="${DIST_PARENT}/.${DIST_BASENAME}.restore.$$"
+OLD_DIST="${DIST_PARENT}/.${DIST_BASENAME}.old.$$"
+rm -rf "$TMP_DIST" 2>/dev/null || true
+rm -rf "$OLD_DIST" 2>/dev/null || true
+if ! cp -r "$BACKUP_DIR" "$TMP_DIST" 2>/dev/null; then
+    rm -rf "$TMP_DIST" 2>/dev/null || true
     echo "ROLLBACK WARNING: frontend dist restore failed"
     exit 1
 fi
+if [ -e "$DIST_DIR" ] && ! mv "$DIST_DIR" "$OLD_DIST"; then
+    rm -rf "$TMP_DIST" 2>/dev/null || true
+    echo "ROLLBACK WARNING: frontend dist old-tree move failed"
+    exit 1
+fi
+if ! mv "$TMP_DIST" "$DIST_DIR"; then
+    if [ -e "$OLD_DIST" ]; then
+        mv "$OLD_DIST" "$DIST_DIR" 2>/dev/null || true
+    fi
+    rm -rf "$TMP_DIST" 2>/dev/null || true
+    echo "ROLLBACK WARNING: frontend dist swap failed"
+    exit 1
+fi
+rm -rf "$OLD_DIST" 2>/dev/null || true
 
 ENSURE_SCRIPT=/home/deploy/ensure_frontend_dist_readable.sh
 if [ ! -f "$ENSURE_SCRIPT" ]; then
@@ -51,6 +72,9 @@ if [ -f "$FP_SCRIPT" ]; then
         echo "ROLLBACK WARNING: spa-dist.fingerprint update failed"
         exit 1
     }
+else
+    echo "ROLLBACK WARNING: spa-dist-fingerprint.sh not found"
+    exit 1
 fi
 
 echo "Frontend dist backup restored."

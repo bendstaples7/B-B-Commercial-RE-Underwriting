@@ -6,6 +6,7 @@ import logging
 import os
 import subprocess
 import time
+import uuid
 from datetime import datetime, timedelta
 from typing import Any, Optional
 from urllib.parse import urlsplit, urlunsplit
@@ -24,6 +25,7 @@ ALERT_COOLDOWN_SECS = 15 * 60
 EVENT_RETENTION_DAYS = 14
 REDIS_ALERT_KEY = 'spa:boot_failure:last_alert'
 FILE_ALERT_STATE = '/home/deploy/logs/spa-boot-failure.last_alert'
+_alert_reservation: dict[str, str] | None = None
 
 
 def _clip(value: Any, max_len: int) -> Optional[str]:
@@ -127,13 +129,25 @@ def _redis_client():
         return None
 
 
+def _state_timestamp(raw: str) -> int | None:
+    token = (raw or '').split(':', 1)[0].strip()
+    if not token.isdigit():
+        return None
+    return int(token)
+
+
 def should_send_alert() -> bool:
     """Return True once per ALERT_COOLDOWN_SECS (Redis preferred, file fallback)."""
+    global _alert_reservation
+    _alert_reservation = None
+    token = uuid.uuid4().hex
     r = _redis_client()
     if r is not None:
         try:
             # SET NX EX — first caller in window wins.
-            ok = r.set(REDIS_ALERT_KEY, str(int(time.time())), nx=True, ex=ALERT_COOLDOWN_SECS)
+            ok = r.set(REDIS_ALERT_KEY, token, nx=True, ex=ALERT_COOLDOWN_SECS)
+            if ok:
+                _alert_reservation = {'backend': 'redis', 'token': token}
             return bool(ok)
         except Exception as exc:
             logger.warning('spa boot alert redis debounce failed: %s', exc)
@@ -161,13 +175,15 @@ def should_send_alert() -> bool:
                 raw = fh.read().strip()
         except FileNotFoundError:
             raw = ''
-        if raw.isdigit() and now - int(raw) < ALERT_COOLDOWN_SECS:
+        last = _state_timestamp(raw)
+        if last is not None and now - last < ALERT_COOLDOWN_SECS:
             return False
 
         tmp = f'{FILE_ALERT_STATE}.{now}.{os.getpid()}.tmp'
         with open(tmp, 'w', encoding='utf-8') as fh:
-            fh.write(str(now))
+            fh.write(f'{now}:{token}')
         os.replace(tmp, FILE_ALERT_STATE)
+        _alert_reservation = {'backend': 'file', 'token': token}
         return True
     except Exception as exc:
         logger.warning('spa boot alert file debounce failed: %s', exc)
@@ -186,18 +202,28 @@ def should_send_alert() -> bool:
 
 def clear_alert_debounce() -> None:
     """Best-effort rollback when alert delivery failed after reserving cooldown."""
-    r = _redis_client()
-    if r is not None:
+    reservation = _alert_reservation or {}
+    backend = reservation.get('backend')
+    token = reservation.get('token')
+    if backend == 'redis' and token:
+        r = _redis_client()
+        if r is None:
+            return
         try:
-            r.delete(REDIS_ALERT_KEY)
+            if r.get(REDIS_ALERT_KEY) == token.encode('utf-8'):
+                r.delete(REDIS_ALERT_KEY)
         except Exception as exc:
             logger.warning('spa boot alert redis debounce clear failed: %s', exc)
-    try:
-        os.unlink(FILE_ALERT_STATE)
-    except FileNotFoundError:
-        pass
-    except Exception as exc:
-        logger.warning('spa boot alert file debounce clear failed: %s', exc)
+    elif backend == 'file' and token:
+        try:
+            with open(FILE_ALERT_STATE, 'r', encoding='utf-8') as fh:
+                raw = fh.read().strip()
+            if raw.endswith(f':{token}'):
+                os.unlink(FILE_ALERT_STATE)
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            logger.warning('spa boot alert file debounce clear failed: %s', exc)
 
 
 def send_ops_alert_sync(event_id: int, href: Optional[str], reason: Optional[str]) -> None:

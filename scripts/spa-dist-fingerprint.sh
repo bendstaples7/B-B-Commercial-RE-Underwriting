@@ -17,6 +17,11 @@ CMD="${1:?usage: compute|write DIST [OUTFILE]}"
 DIST="${2:?DIST required}"
 OUTFILE="${3:-/home/deploy/spa-dist.fingerprint}"
 APP_DIR="${APP_DIR:-/home/deploy/app}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ASSET_REFS_SCRIPT="/home/deploy/spa_asset_refs.py"
+if [ ! -f "$ASSET_REFS_SCRIPT" ]; then
+    ASSET_REFS_SCRIPT="$SCRIPT_DIR/spa_asset_refs.py"
+fi
 
 if [ ! -f "$DIST/index.html" ]; then
     echo "FAILED: missing $DIST/index.html" >&2
@@ -38,37 +43,7 @@ _hash_file() {
 }
 
 asset_refs() {
-    python3 - "$DIST/index.html" <<'PY'
-import sys
-from html.parser import HTMLParser
-
-
-class AssetParser(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.refs = set()
-
-    def handle_starttag(self, tag, attrs):
-        if tag not in {"script", "link"}:
-            return
-        attr_name = "src" if tag == "script" else "href"
-        values = dict(attrs)
-        value = values.get(attr_name)
-        if not value:
-            return
-        ref = value.split("?", 1)[0].split("#", 1)[0]
-        if ref.startswith("assets/"):
-            ref = f"/{ref}"
-        if ref.startswith("/assets/"):
-            self.refs.add(ref)
-
-
-parser = AssetParser()
-with open(sys.argv[1], encoding="utf-8") as fh:
-    parser.feed(fh.read())
-for ref in sorted(parser.refs):
-    print(ref)
-PY
+    python3 "$ASSET_REFS_SCRIPT" "$DIST/index.html"
 }
 
 compute_fp() {
