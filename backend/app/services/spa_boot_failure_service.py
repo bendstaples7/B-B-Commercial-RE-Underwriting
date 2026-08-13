@@ -265,9 +265,16 @@ fi
 
 
 def enqueue_or_alert(event: SpaBootFailureEvent) -> None:
+    """Enqueue Celery alert without importing celery_worker (avoids SystemExit)."""
     try:
-        from celery_worker import alert_spa_boot_failure
-        alert_spa_boot_failure.delay(event.id, event.href, event.reason)
-    except (Exception, SystemExit) as exc:
+        from celery import current_app as celery_app  # noqa: PLC0415
+        celery_app.send_task(
+            'ops.alert_spa_boot_failure',
+            args=[event.id, event.href, event.reason],
+        )
+    except SystemExit as exc:
+        logger.warning('spa boot celery dispatch SystemExit, alerting sync: %s', exc)
+        send_ops_alert_sync(event.id, event.href, event.reason)
+    except Exception as exc:
         logger.warning('spa boot celery enqueue failed, alerting sync: %s', exc)
         send_ops_alert_sync(event.id, event.href, event.reason)

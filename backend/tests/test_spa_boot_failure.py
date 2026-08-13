@@ -1,8 +1,7 @@
 """Tests for SPA boot-failure beacon (blank SPA phone-home)."""
 from __future__ import annotations
 
-import builtins
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -86,16 +85,12 @@ def test_should_send_alert_debounce_file(tmp_path, monkeypatch):
     assert svc.should_send_alert() is False
 
 
-def test_enqueue_or_alert_catches_celery_worker_system_exit(app):
+def test_enqueue_or_alert_falls_back_when_celery_dispatch_fails(app):
     event = SpaBootFailureEvent(id=123, href='https://example.test/', reason='boot_watchdog')
-    real_import = builtins.__import__
+    fake_app = MagicMock()
+    fake_app.send_task.side_effect = SystemExit('missing REDIS_URL')
 
-    def fake_import(name, *args, **kwargs):
-        if name == 'celery_worker':
-            raise SystemExit('missing REDIS_URL')
-        return real_import(name, *args, **kwargs)
-
-    with patch('builtins.__import__', side_effect=fake_import):
+    with patch('celery.current_app', fake_app):
         with patch.object(svc, 'send_ops_alert_sync') as send_sync:
             svc.enqueue_or_alert(event)
             send_sync.assert_called_once_with(event.id, event.href, event.reason)

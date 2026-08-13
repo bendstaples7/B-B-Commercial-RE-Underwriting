@@ -73,6 +73,8 @@ rollback() {
         echo "ROLLBACK WARNING: restore_frontend_dist_backup.sh not found"
         ROLLBACK_FAILED=1
     fi
+    # Always clear soft-lock so canary can heal/alert even when restore failed.
+    rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
     sudo -n systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
     sudo -n systemctl restart celery 2>/dev/null || true
     sudo -n systemctl restart celery-beat 2>/dev/null || true
