@@ -136,6 +136,35 @@ def version():
     return jsonify({'sha': resolve_deploy_sha()}), 200
 
 
+@api_bp.route('/spa-boot-failure', methods=['POST'])
+@limiter.limit('10 per minute')
+def spa_boot_failure():
+    """Public blank-SPA beacon from the index.html boot watchdog.
+
+    Anonymous clients allowed (app may never mount). Rate-limited per IP.
+    Persists a minimal event and debounces ops alerts (~15 min).
+    """
+    from flask import request
+    from app.services import spa_boot_failure_service as svc
+
+    raw = request.get_data(cache=True, as_text=False) or b''
+    if len(raw) > svc.MAX_BODY_BYTES:
+        return jsonify({'success': False, 'error': 'payload too large'}), 413
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    raw_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    if isinstance(raw_ip, str) and ',' in raw_ip:
+        raw_ip = raw_ip.split(',', 1)[0].strip()
+    event = svc.record_event(
+        payload=payload if isinstance(payload, dict) else {},
+        ip=raw_ip,
+        user_agent_header=request.headers.get('User-Agent'),
+    )
+    svc.enqueue_or_alert(event)
+    return jsonify({'success': True, 'id': event.id}), 202
+
+
 @api_bp.route('/health/runtime', methods=['GET'])
 def health_runtime():
     """Lightweight process-identity probe for the frontend restart guard.

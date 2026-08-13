@@ -71,7 +71,16 @@ rollback() {
         if [ -d frontend/dist ]; then
             ensure_frontend_dist_readable frontend/dist \
                 || { echo "ROLLBACK WARNING: frontend dist perms fix failed"; ROLLBACK_FAILED=1; }
+            FP_SCRIPT=/home/deploy/spa-dist-fingerprint.sh
+            if [ ! -f "$FP_SCRIPT" ]; then
+                FP_SCRIPT="$APP_DIR/scripts/spa-dist-fingerprint.sh"
+            fi
+            if [ -f "$FP_SCRIPT" ]; then
+                APP_DIR="$APP_DIR" bash "$FP_SCRIPT" write frontend/dist /home/deploy/spa-dist.fingerprint \
+                    || { echo "ROLLBACK WARNING: spa-dist.fingerprint update failed"; ROLLBACK_FAILED=1; }
+            fi
         fi
+        rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
     else
         echo "ROLLBACK WARNING: no frontend-dist-backup found — frontend may be at $TARGET_SHA while backend rolls back to $PREVIOUS_SHA"
         ROLLBACK_FAILED=1
@@ -172,6 +181,8 @@ dump_memory_diagnostics() {
 
 cleanup_deploy_exit() {
     restore_celery_if_stopped_for_prep
+    # Clear SPA swap marker even on failure so canary can heal/alert.
+    rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 }
 # EXIT covers normal exit, explicit exit, and default signal termination (TERM/HUP/INT).
 trap cleanup_deploy_exit EXIT
@@ -318,12 +329,27 @@ if [ -d "frontend/dist" ]; then
 fi
 
 # Install new dist
+touch /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 rm -rf frontend/dist
 mv /home/deploy/frontend-dist frontend/dist
 echo "    Frontend dist installed from CI runner build"
 # Fail closed if assets/ is mode 0700 (nginx www-data cannot traverse → blank SPA).
 ensure_frontend_dist_readable frontend/dist \
     || { echo "FAILED: frontend dist not readable by nginx"; exit 1; }
+# Blessed fingerprint for spa-uptime-canary soft drift detection.
+FP_SCRIPT=/home/deploy/spa-dist-fingerprint.sh
+if [ ! -f "$FP_SCRIPT" ]; then
+    FP_SCRIPT="$APP_DIR/scripts/spa-dist-fingerprint.sh"
+fi
+if [ -f "$FP_SCRIPT" ]; then
+    APP_DIR="$APP_DIR" bash "$FP_SCRIPT" write frontend/dist /home/deploy/spa-dist.fingerprint \
+        || { echo "FAILED: could not write spa-dist.fingerprint"; exit 1; }
+    echo "    spa-dist.fingerprint updated"
+else
+    echo "FAILED: spa-dist-fingerprint.sh not found"
+    exit 1
+fi
+rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 
 echo "==> (4) Run database migrations"
 cd backend

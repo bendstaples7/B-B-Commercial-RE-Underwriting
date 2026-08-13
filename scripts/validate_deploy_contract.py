@@ -298,6 +298,10 @@ def main() -> int:
             errors.append(
                 "frontend/index.html must include spa-boot-failure watchdog"
             )
+        if "/api/spa-boot-failure" not in index_html:
+            errors.append(
+                "frontend/index.html boot watchdog must POST /api/spa-boot-failure"
+            )
     vite_cfg_path = REPO_ROOT / "frontend" / "vite.config.ts"
     if not vite_cfg_path.exists():
         errors.append("Missing expected file: frontend/vite.config.ts")
@@ -351,6 +355,15 @@ def main() -> int:
     if "--http-base" not in deploy_text:
         errors.append(
             "deploy.sh must HTTP-smoke SPA assets via ensure_frontend_dist_readable --http-base"
+        )
+    if "SPA_DEPLOY_IN_PROGRESS" not in deploy_text:
+        errors.append(
+            "deploy.sh must set SPA_DEPLOY_IN_PROGRESS around frontend dist swap "
+            "(spa-uptime-canary skip window)"
+        )
+    if "spa-dist.fingerprint" not in deploy_text:
+        errors.append(
+            "deploy.sh must write /home/deploy/spa-dist.fingerprint after dist install"
         )
 
     # 6b. Celery liveness cron + shared ops-alert + installer
@@ -453,7 +466,54 @@ def main() -> int:
             "install-backup-cron.sh must redirect lead CC mount health "
             "to lead-cc-mount-health.log"
         )
+    if "SPA_CANARY_MARKER=\"spa-uptime-canary-managed\"" not in install_cron:
+        errors.append(
+            "install-backup-cron.sh must define SPA_CANARY_MARKER=spa-uptime-canary-managed"
+        )
+    if not re.search(
+        r'echo\s+"\*/5 \* \* \* \* /home/deploy/spa-uptime-canary\.sh ',
+        install_cron,
+    ):
+        errors.append(
+            "install-backup-cron.sh must install */5 spa-uptime-canary.sh cron"
+        )
+    spa_canary = REPO_ROOT / "scripts" / "spa-uptime-canary.sh"
+    if not spa_canary.exists():
+        errors.append("Missing expected script: scripts/spa-uptime-canary.sh")
+    else:
+        spa_canary_text = _read(spa_canary)
+        if "ensure_frontend_dist_readable" not in spa_canary_text:
+            errors.append("spa-uptime-canary.sh must call ensure_frontend_dist_readable")
+        if "SPA_DEPLOY_IN_PROGRESS" not in spa_canary_text:
+            errors.append("spa-uptime-canary.sh must honor SPA_DEPLOY_IN_PROGRESS")
+        if "ops-alert.sh" not in spa_canary_text:
+            errors.append("spa-uptime-canary.sh must source ops-alert.sh")
+    spa_fp = REPO_ROOT / "scripts" / "spa-dist-fingerprint.sh"
+    if not spa_fp.exists():
+        errors.append("Missing expected script: scripts/spa-dist-fingerprint.sh")
     deploy_yml_text = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
+    if not re.search(
+        r"scp\s+[^\n]*scripts/spa-uptime-canary\.sh\s+[^\n]+:/home/deploy/spa-uptime-canary\.sh",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/spa-uptime-canary.sh "
+            "to /home/deploy/spa-uptime-canary.sh"
+        )
+    if not re.search(
+        r"scp\s+[^\n]*scripts/spa-dist-fingerprint\.sh\s+[^\n]+:/home/deploy/spa-dist-fingerprint\.sh",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/spa-dist-fingerprint.sh "
+            "to /home/deploy/spa-dist-fingerprint.sh"
+        )
+    if not re.search(
+        r"chmod 750[^\n]*spa-uptime-canary\.sh", deploy_yml_text
+    ):
+        errors.append(
+            "deploy.yml chmod 750 line must include spa-uptime-canary.sh"
+        )
     if not re.search(
         r"scp\s+[^\n]*scripts/check-lead-cc-mount-health\.sh\s+[^\n]+:/home/deploy/check-lead-cc-mount-health\.sh",
         deploy_yml_text,

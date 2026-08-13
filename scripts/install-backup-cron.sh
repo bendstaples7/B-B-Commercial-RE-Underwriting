@@ -11,9 +11,11 @@ set -euo pipefail
 MARKER="backup-system-managed"
 CELERY_MARKER="celery-liveness-managed"
 LEAD_CC_MARKER="lead-cc-mount-health-managed"
+SPA_CANARY_MARKER="spa-uptime-canary-managed"
 LOG_REDIRECT=">> /home/deploy/logs/backup.log 2>&1"
 CELERY_LOG_REDIRECT=">> /home/deploy/logs/celery-liveness.log 2>&1"
 LEAD_CC_LOG_REDIRECT=">> /home/deploy/logs/lead-cc-mount-health.log 2>&1"
+SPA_CANARY_LOG_REDIRECT=">> /home/deploy/logs/spa-uptime-canary.log 2>&1"
 
 CURRENT="$(crontab -l 2>/dev/null || true)"
 
@@ -21,11 +23,13 @@ CURRENT="$(crontab -l 2>/dev/null || true)"
 FILTERED="$(printf '%s\n' "$CURRENT" | grep -v "$MARKER" \
     | grep -v "$CELERY_MARKER" \
     | grep -v "$LEAD_CC_MARKER" \
+    | grep -v "$SPA_CANARY_MARKER" \
     | grep -v '/home/deploy/backup\.sh' \
     | grep -v '/home/deploy/pg-basebackup\.sh' \
     | grep -v '/home/deploy/daily-summary\.sh' \
     | grep -v '/home/deploy/celery-liveness-check\.sh' \
     | grep -v '/home/deploy/check-lead-cc-mount-health\.sh' \
+    | grep -v '/home/deploy/spa-uptime-canary\.sh' \
     | grep -v '^MAILTO=' \
     | grep -v '^[[:space:]]*$' || true)"
 
@@ -45,10 +49,12 @@ TMP="$(mktemp)"
     echo "*/5 * * * * /home/deploy/celery-liveness-check.sh $CELERY_LOG_REDIRECT # $CELERY_MARKER"
     echo "# $LEAD_CC_MARKER"
     echo "15 * * * * /home/deploy/check-lead-cc-mount-health.sh $LEAD_CC_LOG_REDIRECT # $LEAD_CC_MARKER"
+    echo "# $SPA_CANARY_MARKER"
+    echo "*/5 * * * * /home/deploy/spa-uptime-canary.sh $SPA_CANARY_LOG_REDIRECT # $SPA_CANARY_MARKER"
 } > "$TMP"
 
 crontab "$TMP"
 rm -f "$TMP"
 
-echo "install-backup-cron.sh: installed 5 backup + 1 celery-liveness + 1 lead-cc-mount-health cron entries"
-crontab -l | grep -E "$MARKER|$CELERY_MARKER|$LEAD_CC_MARKER" || true
+echo "install-backup-cron.sh: installed backup + celery-liveness + lead-cc-mount-health + spa-uptime-canary cron entries"
+crontab -l | grep -E "$MARKER|$CELERY_MARKER|$LEAD_CC_MARKER|$SPA_CANARY_MARKER" || true

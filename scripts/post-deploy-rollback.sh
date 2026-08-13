@@ -68,6 +68,15 @@ if [ -d "/home/deploy/frontend-dist-backup" ]; then
                 ROLLBACK_FAILED=1
             }
         fi
+        FP_SCRIPT=/home/deploy/spa-dist-fingerprint.sh
+        if [ ! -f "$FP_SCRIPT" ]; then
+            FP_SCRIPT="$APP_DIR/scripts/spa-dist-fingerprint.sh"
+        fi
+        if [ -f "$FP_SCRIPT" ]; then
+            APP_DIR="$APP_DIR" bash "$FP_SCRIPT" write frontend/dist /home/deploy/spa-dist.fingerprint \
+                || { echo "ROLLBACK WARNING: spa-dist.fingerprint update failed"; ROLLBACK_FAILED=1; }
+        fi
+        rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
     fi
 else
     echo "ROLLBACK WARNING: no frontend-dist-backup found — frontend may mismatch backend"
