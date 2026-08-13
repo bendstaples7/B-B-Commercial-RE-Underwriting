@@ -25,7 +25,6 @@ ALERT_COOLDOWN_SECS = 15 * 60
 EVENT_RETENTION_DAYS = 14
 REDIS_ALERT_KEY = 'spa:boot_failure:last_alert'
 FILE_ALERT_STATE = '/home/deploy/logs/spa-boot-failure.last_alert'
-_alert_reservation: dict[str, str] | None = None
 
 
 def _clip(value: Any, max_len: int) -> Optional[str]:
@@ -136,10 +135,16 @@ def _state_timestamp(raw: str) -> int | None:
     return int(token)
 
 
-def should_send_alert() -> bool:
-    """Return True once per ALERT_COOLDOWN_SECS (Redis preferred, file fallback)."""
-    global _alert_reservation
-    _alert_reservation = None
+def _clear_redis_reservation(client: Any, token: str) -> None:
+    try:
+        if client.get(REDIS_ALERT_KEY) == token.encode('utf-8'):
+            client.delete(REDIS_ALERT_KEY)
+    except Exception as exc:
+        logger.warning('spa boot alert redis debounce clear failed: %s', exc)
+
+
+def reserve_alert() -> dict[str, str] | None:
+    """Claim one alert slot per cooldown window (Redis preferred, file fallback)."""
     token = uuid.uuid4().hex
     r = _redis_client()
     if r is not None:
@@ -147,10 +152,11 @@ def should_send_alert() -> bool:
             # SET NX EX — first caller in window wins.
             ok = r.set(REDIS_ALERT_KEY, token, nx=True, ex=ALERT_COOLDOWN_SECS)
             if ok:
-                _alert_reservation = {'backend': 'redis', 'token': token}
-            return bool(ok)
+                return {'backend': 'redis', 'token': token}
+            return None
         except Exception as exc:
             logger.warning('spa boot alert redis debounce failed: %s', exc)
+            _clear_redis_reservation(r, token)
 
     lock_path = f'{FILE_ALERT_STATE}.lock'
     lock_fd: int | None = None
@@ -165,9 +171,9 @@ def should_send_alert() -> bool:
                     os.unlink(lock_path)
                     lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 else:
-                    return False
+                    return None
             except Exception:
-                return False
+                return None
 
         raw = ''
         try:
@@ -177,17 +183,16 @@ def should_send_alert() -> bool:
             raw = ''
         last = _state_timestamp(raw)
         if last is not None and now - last < ALERT_COOLDOWN_SECS:
-            return False
+            return None
 
         tmp = f'{FILE_ALERT_STATE}.{now}.{os.getpid()}.tmp'
         with open(tmp, 'w', encoding='utf-8') as fh:
             fh.write(f'{now}:{token}')
         os.replace(tmp, FILE_ALERT_STATE)
-        _alert_reservation = {'backend': 'file', 'token': token}
-        return True
+        return {'backend': 'file', 'token': token}
     except Exception as exc:
         logger.warning('spa boot alert file debounce failed: %s', exc)
-        return True
+        return {'backend': 'none', 'token': token}
     finally:
         if lock_fd is not None:
             try:
@@ -200,20 +205,21 @@ def should_send_alert() -> bool:
                 pass
 
 
-def clear_alert_debounce() -> None:
+def should_send_alert() -> bool:
+    """Return True once per ALERT_COOLDOWN_SECS (Redis preferred, file fallback)."""
+    return reserve_alert() is not None
+
+
+def clear_alert_debounce(reservation: dict[str, str] | None) -> None:
     """Best-effort rollback when alert delivery failed after reserving cooldown."""
-    reservation = _alert_reservation or {}
+    reservation = reservation or {}
     backend = reservation.get('backend')
     token = reservation.get('token')
     if backend == 'redis' and token:
         r = _redis_client()
         if r is None:
             return
-        try:
-            if r.get(REDIS_ALERT_KEY) == token.encode('utf-8'):
-                r.delete(REDIS_ALERT_KEY)
-        except Exception as exc:
-            logger.warning('spa boot alert redis debounce clear failed: %s', exc)
+        _clear_redis_reservation(r, token)
     elif backend == 'file' and token:
         try:
             with open(FILE_ALERT_STATE, 'r', encoding='utf-8') as fh:
@@ -227,7 +233,8 @@ def clear_alert_debounce() -> None:
 
 
 def send_ops_alert_sync(event_id: int, href: Optional[str], reason: Optional[str]) -> None:
-    if not should_send_alert():
+    reservation = reserve_alert()
+    if reservation is None:
         logger.info('spa boot failure alert suppressed (cooldown) event_id=%s', event_id)
         return
 
@@ -243,7 +250,7 @@ def send_ops_alert_sync(event_id: int, href: Optional[str], reason: Optional[str
     backup_conf = '/home/deploy/backup.conf'
     if not os.path.isfile(ops_alert):
         logger.warning('spa boot alert: %s missing — %s', ops_alert, body.replace('\n', ' | '))
-        clear_alert_debounce()
+        clear_alert_debounce(reservation)
         return
     script = '''
 set -euo pipefail
@@ -284,10 +291,10 @@ fi
                 result.returncode,
                 (result.stderr or '').strip()[:500],
             )
-            clear_alert_debounce()
+            clear_alert_debounce(reservation)
     except Exception as exc:
         logger.warning('spa boot alert subprocess failed: %s', exc)
-        clear_alert_debounce()
+        clear_alert_debounce(reservation)
 
 
 def enqueue_or_alert(event: SpaBootFailureEvent) -> None:

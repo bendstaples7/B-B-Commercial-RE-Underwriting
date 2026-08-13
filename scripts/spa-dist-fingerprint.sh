@@ -42,10 +42,6 @@ _hash_file() {
     fi
 }
 
-asset_refs() {
-    python3 "$ASSET_REFS_SCRIPT" "$DIST/index.html"
-}
-
 compute_fp() {
     {
         printf 'index.html %s\n' "$(_hash_file "$DIST/index.html")"
@@ -58,7 +54,7 @@ compute_fp() {
             else
                 printf 'MISSING %s\n' "$ref"
             fi
-        done < <(asset_refs)
+        done < <(python3 "$ASSET_REFS_SCRIPT" "$DIST/index.html")
         printf 'DEPLOY_SHA=%s\n' "$DEPLOY_SHA"
     } | {
         if command -v sha256sum >/dev/null 2>&1; then

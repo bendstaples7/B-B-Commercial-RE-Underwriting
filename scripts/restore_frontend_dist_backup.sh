@@ -32,32 +32,18 @@ if ! cp -r "$BACKUP_DIR" "$TMP_DIST" 2>/dev/null; then
     echo "ROLLBACK WARNING: frontend dist restore failed"
     exit 1
 fi
-if [ -e "$DIST_DIR" ] && ! mv "$DIST_DIR" "$OLD_DIST"; then
-    rm -rf "$TMP_DIST" 2>/dev/null || true
-    echo "ROLLBACK WARNING: frontend dist old-tree move failed"
-    exit 1
-fi
-if ! mv "$TMP_DIST" "$DIST_DIR"; then
-    if [ -e "$OLD_DIST" ]; then
-        mv "$OLD_DIST" "$DIST_DIR" 2>/dev/null || true
-    fi
-    rm -rf "$TMP_DIST" 2>/dev/null || true
-    echo "ROLLBACK WARNING: frontend dist swap failed"
-    exit 1
-fi
-rm -rf "$OLD_DIST" 2>/dev/null || true
 
 ENSURE_SCRIPT=/home/deploy/ensure_frontend_dist_readable.sh
 if [ ! -f "$ENSURE_SCRIPT" ]; then
     ENSURE_SCRIPT="$APP_DIR/scripts/ensure_frontend_dist_readable.sh"
 fi
 if [ -f "$ENSURE_SCRIPT" ]; then
-    bash "$ENSURE_SCRIPT" "$DIST_DIR" || {
+    bash "$ENSURE_SCRIPT" "$TMP_DIST" || {
         echo "ROLLBACK WARNING: frontend dist perms fix failed"
         exit 1
     }
 else
-    chmod -R a+rX "$DIST_DIR" 2>/dev/null || {
+    chmod -R a+rX "$TMP_DIST" 2>/dev/null || {
         echo "ROLLBACK WARNING: frontend dist chmod failed"
         exit 1
     }
@@ -67,8 +53,10 @@ FP_SCRIPT=/home/deploy/spa-dist-fingerprint.sh
 if [ ! -f "$FP_SCRIPT" ]; then
     FP_SCRIPT="$APP_DIR/scripts/spa-dist-fingerprint.sh"
 fi
+FP_TMP="${FINGERPRINT_FILE}.$$.$RANDOM.tmp"
 if [ -f "$FP_SCRIPT" ]; then
-    APP_DIR="$APP_DIR" bash "$FP_SCRIPT" write "$DIST_DIR" "$FINGERPRINT_FILE" || {
+    APP_DIR="$APP_DIR" bash "$FP_SCRIPT" write "$TMP_DIST" "$FP_TMP" || {
+        rm -f "$FP_TMP" 2>/dev/null || true
         echo "ROLLBACK WARNING: spa-dist.fingerprint update failed"
         exit 1
     }
@@ -76,5 +64,30 @@ else
     echo "ROLLBACK WARNING: spa-dist-fingerprint.sh not found"
     exit 1
 fi
+if [ -e "$DIST_DIR" ] && ! mv "$DIST_DIR" "$OLD_DIST"; then
+    rm -rf "$TMP_DIST" 2>/dev/null || true
+    rm -f "$FP_TMP" 2>/dev/null || true
+    echo "ROLLBACK WARNING: frontend dist old-tree move failed"
+    exit 1
+fi
+if ! mv "$TMP_DIST" "$DIST_DIR"; then
+    if [ -e "$OLD_DIST" ]; then
+        mv "$OLD_DIST" "$DIST_DIR" 2>/dev/null || true
+    fi
+    rm -rf "$TMP_DIST" 2>/dev/null || true
+    rm -f "$FP_TMP" 2>/dev/null || true
+    echo "ROLLBACK WARNING: frontend dist swap failed"
+    exit 1
+fi
+if ! mv -f "$FP_TMP" "$FINGERPRINT_FILE"; then
+    if [ -e "$OLD_DIST" ]; then
+        rm -rf "$DIST_DIR" 2>/dev/null || true
+        mv "$OLD_DIST" "$DIST_DIR" 2>/dev/null || true
+    fi
+    rm -f "$FP_TMP" 2>/dev/null || true
+    echo "ROLLBACK WARNING: spa-dist.fingerprint swap failed"
+    exit 1
+fi
+rm -rf "$OLD_DIST" 2>/dev/null || true
 
 echo "Frontend dist backup restored."

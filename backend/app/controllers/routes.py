@@ -137,7 +137,7 @@ def version():
 
 
 def _spa_boot_client_ip() -> str:
-    """Trust X-Forwarded-For only from the local/reverse proxy hop."""
+    """Trust X-Real-IP only from the local/reverse proxy hop."""
     from flask import request
     import os
 
