@@ -66,14 +66,22 @@
           document.body.appendChild(el);
           try {
             var assetHints = [];
+            var safeHref = '';
+            try {
+              safeHref = String(window.location.origin || '') + String(window.location.pathname || '');
+            } catch (hrefErr) {
+              safeHref = String(window.location.href || '').split('?')[0].split('#')[0];
+            }
             if (window.performance && typeof performance.getEntriesByType === 'function') {
               var entries = performance.getEntriesByType('resource') || [];
               for (var i = 0; i < entries.length; i++) {
                 var e = entries[i];
                 var name = (e && e.name) || '';
                 if (name.indexOf('/assets/') === -1) continue;
-                // transferSize 0 + duration 0 often means blocked/failed fetch.
-                if (e.transferSize === 0 && e.decodedBodySize === 0) {
+                // HTTP errors and zero-byte resources are the common blank-SPA asset classes.
+                if (e.responseStatus >= 400) {
+                  assetHints.push({ name: name, status: String(e.responseStatus) });
+                } else if (e.transferSize === 0 && e.decodedBodySize === 0) {
                   assetHints.push({ name: name, status: 'empty' });
                 }
               }
@@ -83,7 +91,7 @@
               headers: { 'Content-Type': 'application/json' },
               keepalive: true,
               body: JSON.stringify({
-                href: String(window.location.href || ''),
+                href: safeHref,
                 reason: 'boot_watchdog',
                 ua: String(navigator.userAgent || ''),
                 assetHints: assetHints.slice(0, 20),

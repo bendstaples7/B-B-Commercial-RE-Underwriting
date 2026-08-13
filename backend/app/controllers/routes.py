@@ -136,8 +136,27 @@ def version():
     return jsonify({'sha': resolve_deploy_sha()}), 200
 
 
+def _spa_boot_client_ip() -> str:
+    """Trust X-Forwarded-For only from the local/reverse proxy hop."""
+    from flask import request
+    import os
+
+    remote_addr = (request.remote_addr or '').strip()
+    trusted_proxies = {'127.0.0.1', '::1', 'localhost'}
+    trusted_proxies.update(
+        p.strip()
+        for p in os.environ.get('TRUSTED_PROXY_IPS', '').split(',')
+        if p.strip()
+    )
+    if remote_addr in trusted_proxies:
+        forwarded = (request.headers.get('X-Forwarded-For') or '').split(',', 1)[0].strip()
+        if forwarded:
+            return forwarded
+    return remote_addr or 'unknown'
+
+
 @api_bp.route('/spa-boot-failure', methods=['POST'])
-@limiter.limit('10 per minute')
+@limiter.limit('10 per minute', key_func=_spa_boot_client_ip)
 def spa_boot_failure():
     """Public blank-SPA beacon from the index.html boot watchdog.
 
@@ -153,12 +172,9 @@ def spa_boot_failure():
     payload = request.get_json(silent=True)
     if payload is None:
         payload = {}
-    raw_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
-    if isinstance(raw_ip, str) and ',' in raw_ip:
-        raw_ip = raw_ip.split(',', 1)[0].strip()
     event = svc.record_event(
         payload=payload if isinstance(payload, dict) else {},
-        ip=raw_ip,
+        ip=_spa_boot_client_ip(),
         user_agent_header=request.headers.get('User-Agent'),
     )
     svc.enqueue_or_alert(event)

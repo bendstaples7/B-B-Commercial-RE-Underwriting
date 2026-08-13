@@ -47,7 +47,7 @@ fi
 
 # ── Rollback function — called automatically on any failure ──────────────────
 rollback() {
-    local exit_code=$?
+    local exit_code="${1:-$?}"
     cd "$APP_DIR"  # Always reset to APP_DIR regardless of where the failure occurred
     if [ "$PREVIOUS_SHA" = "unknown" ] || [ "$PREVIOUS_SHA" = "$TARGET_SHA" ]; then
         echo "ERROR: Deploy failed (exit $exit_code). No rollback possible."
@@ -97,7 +97,7 @@ rollback() {
     fi
     exit $exit_code
 }
-trap rollback ERR
+trap 'rollback $?' ERR
 
 # Celery is stopped before the memory guard to free worker RSS on the 2GB VPS.
 # Durable marker + EXIT trap restore Celery if deploy exits before step 7
@@ -335,7 +335,7 @@ mv /home/deploy/frontend-dist frontend/dist
 echo "    Frontend dist installed from CI runner build"
 # Fail closed if assets/ is mode 0700 (nginx www-data cannot traverse → blank SPA).
 ensure_frontend_dist_readable frontend/dist \
-    || { echo "FAILED: frontend dist not readable by nginx"; exit 1; }
+    || { echo "FAILED: frontend dist not readable by nginx"; rollback 1; }
 # Blessed fingerprint for spa-uptime-canary soft drift detection.
 FP_SCRIPT=/home/deploy/spa-dist-fingerprint.sh
 if [ ! -f "$FP_SCRIPT" ]; then
@@ -343,11 +343,11 @@ if [ ! -f "$FP_SCRIPT" ]; then
 fi
 if [ -f "$FP_SCRIPT" ]; then
     APP_DIR="$APP_DIR" bash "$FP_SCRIPT" write frontend/dist /home/deploy/spa-dist.fingerprint \
-        || { echo "FAILED: could not write spa-dist.fingerprint"; exit 1; }
+        || { echo "FAILED: could not write spa-dist.fingerprint"; rollback 1; }
     echo "    spa-dist.fingerprint updated"
 else
     echo "FAILED: spa-dist-fingerprint.sh not found"
-    exit 1
+    rollback 1
 fi
 rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 
@@ -437,7 +437,7 @@ fi
 
 echo "==> (6a) Verify nginx can HTTP-serve SPA assets (blank-SPA class)"
 ensure_frontend_dist_readable frontend/dist --http-base http://127.0.0.1 \
-    || { echo "FAILED: nginx asset HTTP smoke failed"; exit 1; }
+    || { echo "FAILED: nginx asset HTTP smoke failed"; rollback 1; }
 
 echo "==> (6b) Mail batch stale task cleanup"
 cd backend

@@ -394,6 +394,8 @@ def create_app(config_name='development'):
     # Disable rate limiting in tests so performance tests can create many resources
     if config_name == 'testing':
         app.config['RATELIMIT_ENABLED'] = False
+    else:
+        app.config.setdefault('RATELIMIT_STORAGE_URI', app.config['REDIS_URL'])
 
     # Workflow thresholds — lower in development/testing so the full pipeline
     # can be exercised without needing a full set of real comparable sales.

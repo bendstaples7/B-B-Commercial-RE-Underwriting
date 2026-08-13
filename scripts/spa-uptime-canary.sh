@@ -51,7 +51,13 @@ fi
 
 mkdir -p "$(dirname "$LOG_FILE_DEFAULT")" 2>/dev/null || true
 log() {
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "$LOG_FILE_DEFAULT" 2>/dev/null || echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"
+    local line
+    line="[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"
+    if [[ -t 1 ]]; then
+        echo "$line" | tee -a "$LOG_FILE_DEFAULT" 2>/dev/null || echo "$line"
+    else
+        echo "$line"
+    fi
 }
 
 _send_ops_alert() {
@@ -67,6 +73,7 @@ _send_ops_alert() {
         # shellcheck source=ops-alert.sh
         source "${OPS_ALERT_LIB}"
         send_alert "$subject" "$body"
+        [[ "${OPS_ALERT_DELIVERY_FAILED:-0}" != "1" ]]
     else
         log "ALERT (no ops-alert.sh): $subject — $body"
     fi
@@ -86,8 +93,43 @@ maybe_alert() {
             return 0
         fi
     fi
-    _send_ops_alert "$subject" "$body"
-    echo "$now_epoch" > "$state_file" 2>/dev/null || true
+    if _send_ops_alert "$subject" "$body"; then
+        tmp="${state_file}.$$.$RANDOM.tmp"
+        if ! printf '%s\n' "$now_epoch" > "$tmp" || ! mv -f "$tmp" "$state_file"; then
+            rm -f "$tmp" 2>/dev/null || true
+        fi
+    else
+        log "alert delivery failed; cooldown not updated: $subject"
+    fi
+    return 0
+}
+
+bad_spa_perm_summary() {
+    local first_bad
+    local dist_mode dist_other
+    dist_mode="$(stat -c '%a' "$DIST" 2>/dev/null || echo "")"
+    if [[ -n "$dist_mode" ]]; then
+        dist_other=$((10#$dist_mode % 10))
+        if [[ $((dist_other & 1)) -ne 1 ]]; then
+            printf 'dist root lacks other+x: %s' "$dist_mode"
+            return 0
+        fi
+    fi
+    if [[ ! -x "$DIST" ]]; then
+        printf 'dist root is not traversable by deploy user: %s' "${dist_mode:-unknown}"
+        return 0
+    fi
+    first_bad="$(find "$DIST" -type d ! -perm -0001 -print -quit 2>/dev/null || true)"
+    if [[ -n "$first_bad" ]]; then
+        printf 'directory lacks other+x: %s mode %s' "$first_bad" "$(stat -c '%a' "$first_bad" 2>/dev/null || echo unknown)"
+        return 0
+    fi
+    first_bad="$(find "$DIST" -type f ! -perm -0004 -print -quit 2>/dev/null || true)"
+    if [[ -n "$first_bad" ]]; then
+        printf 'file lacks other+r: %s mode %s' "$first_bad" "$(stat -c '%a' "$first_bad" 2>/dev/null || echo unknown)"
+        return 0
+    fi
+    return 1
 }
 
 # Skip while Deploy owns the frontend swap window.
@@ -114,18 +156,11 @@ if [[ ! -f "${ENSURE_SCRIPT}" ]]; then
     exit 1
 fi
 
-assets_dir="$DIST/assets"
-perms_before=""
-if [[ -d "$assets_dir" ]]; then
-    perms_before="$(stat -c '%a' "$assets_dir" 2>/dev/null || echo "")"
-fi
 need_heal=0
-if [[ -n "$perms_before" ]]; then
-    other=$((10#$perms_before % 10))
-    if [[ $((other & 1)) -ne 1 ]]; then
-        need_heal=1
-        log "assets/ mode ${perms_before} lacks other+x — will heal"
-    fi
+perm_issue_before=""
+if perm_issue_before="$(bad_spa_perm_summary)"; then
+    need_heal=1
+    log "${perm_issue_before} — will heal"
 fi
 
 cd "$APP_DIR"
@@ -148,10 +183,12 @@ fi
 
 # Heal succeeded after bad perms — still yell so silent 0700 rewrites are visible.
 if [[ "$need_heal" -eq 1 ]]; then
-    perms_after="$(stat -c '%a' "$assets_dir" 2>/dev/null || echo unknown)"
+    perm_issue_after="$(bad_spa_perm_summary || true)"
     maybe_alert "$ALERT_STATE_HEALED" \
         "SPA asset perms auto-healed" \
-        "spa-uptime-canary healed $assets_dir from mode ${perms_before} to ${perms_after} on $(hostname).
+        "spa-uptime-canary healed frontend/dist permissions on $(hostname).
+before=${perm_issue_before}
+after=${perm_issue_after:-healthy}
 Something wrote frontend/dist with nginx-inaccessible permissions (blank SPA class)."
 fi
 
@@ -173,7 +210,10 @@ DEPLOY_SHA=$(tr -d '[:space:]' < "$APP_DIR/DEPLOY_SHA" 2>/dev/null || echo unkno
 Blessed path: Deploy (or refresh fingerprint after intentional emergency copy)."
     elif [[ -n "$current_fp" && -z "$stored_fp" ]]; then
         # First run after upgrade — seed fingerprint without alerting.
-        printf '%s\n' "$current_fp" > "$FINGERPRINT_FILE" 2>/dev/null || true
+        tmp="${FINGERPRINT_FILE}.$$.$RANDOM.tmp"
+        if ! printf '%s\n' "$current_fp" > "$tmp" || ! mv -f "$tmp" "$FINGERPRINT_FILE"; then
+            rm -f "$tmp" 2>/dev/null || true
+        fi
         log "seeded fingerprint file (first canary run)"
     fi
 else

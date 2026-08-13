@@ -211,6 +211,7 @@ class HubSpotTimelineImportService:
         # Apply call confidence after the loop, sorted by occurred_at (list order
         # from HubSpot is not guaranteed chronological).
         pending_call_confidence: list[tuple[datetime, object, object | None, str]] = []
+        pending_note_property_facts: list[tuple[str, str, str]] = []
 
         for activity in hubspot_activities:
             activity_id = str(activity.get('id', ''))
@@ -294,6 +295,8 @@ class HubSpotTimelineImportService:
                     ),
                     activity_id,
                 ))
+            if event_type in ('hubspot_note', 'hubspot_call') and plain_body:
+                pending_note_property_facts.append((plain_body, event_type, activity_id))
 
         if pending_call_confidence:
             from app.services.phone_confidence_service import PhoneConfidenceService
@@ -309,6 +312,24 @@ class HubSpotTimelineImportService:
                 except Exception as exc:
                     logger.warning(
                         'HubSpot call confidence update failed for lead %s activity %s: %s',
+                        lead_id,
+                        activity_id,
+                        exc,
+                    )
+
+        if pending_note_property_facts:
+            from app.services.helpers.note_property_facts import apply_note_property_facts_to_lead
+            for body, event_type, activity_id in pending_note_property_facts:
+                try:
+                    apply_note_property_facts_to_lead(
+                        lead,
+                        body,
+                        source=event_type,
+                        hubspot_activity_id=activity_id,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        'HubSpot note property facts update failed for lead %s activity %s: %s',
                         lead_id,
                         activity_id,
                         exc,

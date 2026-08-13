@@ -8,6 +8,7 @@ import subprocess
 import time
 from datetime import datetime, timedelta
 from typing import Any, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from app import db
 from app.models.spa_boot_failure_event import SpaBootFailureEvent
@@ -32,6 +33,19 @@ def _clip(value: Any, max_len: int) -> Optional[str]:
     if not text:
         return None
     return text[:max_len]
+
+
+def sanitize_href(value: Any) -> Optional[str]:
+    """Keep URL path context without persisting query strings or fragments."""
+    text = _clip(value, MAX_HREF_LEN)
+    if text is None:
+        return None
+    try:
+        parts = urlsplit(text)
+        sanitized = urlunsplit((parts.scheme, parts.netloc, parts.path, '', ''))
+    except ValueError:
+        sanitized = text.split('?', 1)[0].split('#', 1)[0]
+    return _clip(sanitized, MAX_HREF_LEN)
 
 
 def hash_ip(ip: Optional[str]) -> Optional[str]:
@@ -66,7 +80,7 @@ def normalize_payload(raw: Any) -> dict:
                 'status': item.get('status'),
             })
     return {
-        'href': _clip(raw.get('href'), MAX_HREF_LEN),
+        'href': sanitize_href(raw.get('href')),
         'reason': _clip(raw.get('reason'), MAX_REASON_LEN) or 'boot_watchdog',
         'user_agent': _clip(raw.get('ua') or raw.get('user_agent'), MAX_UA_LEN),
         'asset_hints': clean_hints or None,
@@ -125,29 +139,66 @@ def should_send_alert() -> bool:
         except Exception as exc:
             logger.warning('spa boot alert redis debounce failed: %s', exc)
 
+    lock_path = f'{FILE_ALERT_STATE}.lock'
+    lock_fd: int | None = None
     try:
         os.makedirs(os.path.dirname(FILE_ALERT_STATE), exist_ok=True)
         now = int(time.time())
-        # Atomic create-only: if file exists and is fresh, suppress.
         try:
-            fd = os.open(FILE_ALERT_STATE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
-                fh.write(str(now))
-            return True
+            lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
+            try:
+                if now - int(os.path.getmtime(lock_path)) > 30:
+                    os.unlink(lock_path)
+                    lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                else:
+                    return False
+            except Exception:
+                return False
+
+        raw = ''
+        try:
             with open(FILE_ALERT_STATE, 'r', encoding='utf-8') as fh:
                 raw = fh.read().strip()
-            if raw.isdigit() and now - int(raw) < ALERT_COOLDOWN_SECS:
-                return False
-            # Stale lock file — rewrite.
-            tmp = f'{FILE_ALERT_STATE}.{now}.tmp'
-            with open(tmp, 'w', encoding='utf-8') as fh:
-                fh.write(str(now))
-            os.replace(tmp, FILE_ALERT_STATE)
-            return True
+        except FileNotFoundError:
+            raw = ''
+        if raw.isdigit() and now - int(raw) < ALERT_COOLDOWN_SECS:
+            return False
+
+        tmp = f'{FILE_ALERT_STATE}.{now}.{os.getpid()}.tmp'
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            fh.write(str(now))
+        os.replace(tmp, FILE_ALERT_STATE)
+        return True
     except Exception as exc:
         logger.warning('spa boot alert file debounce failed: %s', exc)
         return True
+    finally:
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                pass
+
+
+def clear_alert_debounce() -> None:
+    """Best-effort rollback when alert delivery failed after reserving cooldown."""
+    r = _redis_client()
+    if r is not None:
+        try:
+            r.delete(REDIS_ALERT_KEY)
+        except Exception as exc:
+            logger.warning('spa boot alert redis debounce clear failed: %s', exc)
+    try:
+        os.unlink(FILE_ALERT_STATE)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        logger.warning('spa boot alert file debounce clear failed: %s', exc)
 
 
 def send_ops_alert_sync(event_id: int, href: Optional[str], reason: Optional[str]) -> None:
@@ -167,6 +218,7 @@ def send_ops_alert_sync(event_id: int, href: Optional[str], reason: Optional[str
     backup_conf = '/home/deploy/backup.conf'
     if not os.path.isfile(ops_alert):
         logger.warning('spa boot alert: %s missing — %s', ops_alert, body.replace('\n', ' | '))
+        clear_alert_debounce()
         return
     script = '''
 set -euo pipefail
@@ -181,6 +233,9 @@ ALERT_SUBJECT_PREFIX="[Ops Alert]"
 # shellcheck source=/dev/null
 source "$BB_OPS_ALERT"
 send_alert "$BB_ALERT_SUBJECT" "$BB_ALERT_BODY"
+if [ "${OPS_ALERT_DELIVERY_FAILED:-0}" = "1" ]; then
+  exit 1
+fi
 '''
     env = os.environ.copy()
     env['BB_BACKUP_CONF'] = backup_conf
@@ -188,7 +243,7 @@ send_alert "$BB_ALERT_SUBJECT" "$BB_ALERT_BODY"
     env['BB_ALERT_SUBJECT'] = subject
     env['BB_ALERT_BODY'] = body
     try:
-        subprocess.run(
+        result = subprocess.run(
             ['bash', '-c', script],
             check=False,
             timeout=20,
@@ -196,14 +251,24 @@ send_alert "$BB_ALERT_SUBJECT" "$BB_ALERT_BODY"
             text=True,
             env=env,
         )
+        if result.returncode != 0 or 'OPS_ALERT_DELIVERY_FAILED=1' in (
+            (result.stdout or '') + (result.stderr or '')
+        ):
+            logger.warning(
+                'spa boot alert delivery failed rc=%s stderr=%s',
+                result.returncode,
+                (result.stderr or '').strip()[:500],
+            )
+            clear_alert_debounce()
     except Exception as exc:
         logger.warning('spa boot alert subprocess failed: %s', exc)
+        clear_alert_debounce()
 
 
 def enqueue_or_alert(event: SpaBootFailureEvent) -> None:
     try:
         from celery_worker import alert_spa_boot_failure
         alert_spa_boot_failure.delay(event.id, event.href, event.reason)
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         logger.warning('spa boot celery enqueue failed, alerting sync: %s', exc)
         send_ops_alert_sync(event.id, event.href, event.reason)

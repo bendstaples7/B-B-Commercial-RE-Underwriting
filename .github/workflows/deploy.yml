@@ -332,9 +332,10 @@ jobs:
           # This catches DB connectivity issues (wrong user, missing .pgpass, etc.) before the deploy starts.
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "/home/deploy/backup.sh --check" \
             || { echo "ERROR: backup.sh --check failed — PostgreSQL connectivity issue. Check /home/deploy/logs/backup.log on VPS."; exit 1; }
-          # umask 077 above hardens secret JSON locally; reset before packing
-          # frontend/dist so scp cannot ship assets/ as mode 0700 (nginx 404 / blank SPA).
+          # umask 077 above hardens secret JSON locally; normalize the already-built
+          # frontend/dist tree before scp so assets cannot ship as mode 0700.
           umask 022
+          chmod -R a+rX frontend/dist
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "rm -rf /home/deploy/frontend-dist"
           scp -i ~/.ssh/id_deploy -r frontend/dist $VPS_USER@$VPS_HOST:/home/deploy/frontend-dist
           scp -i ~/.ssh/id_deploy changed_paths.txt $VPS_USER@$VPS_HOST:/home/deploy/changed_paths.txt

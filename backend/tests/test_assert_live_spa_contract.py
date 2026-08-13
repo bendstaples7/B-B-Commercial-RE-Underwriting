@@ -40,3 +40,11 @@ def test_asset_urls_from_html_requires_assets_path():
     mod = _load()
     html = '<script src="/static/app.js"></script>'
     assert mod.asset_urls_from_html(html, "https://example.test/") == []
+
+
+def test_asset_urls_from_html_resolves_relative_to_index_url():
+    mod = _load()
+    html = '<script type="module" src="assets/index-abc.js"></script>'
+    assert mod.asset_urls_from_html(html, "https://example.test/app/index.html") == [
+        "https://example.test/app/assets/index-abc.js"
+    ]

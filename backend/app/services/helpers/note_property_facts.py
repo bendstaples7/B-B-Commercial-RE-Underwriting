@@ -117,29 +117,6 @@ def parse_note_property_facts(
     }
 
 
-def format_unit_mix_label(unit_mix: list[dict[str, Any]] | None) -> str | None:
-    """Human label like ``4×2 bd + 2×3 bd``."""
-    if not unit_mix:
-        return None
-    parts: list[str] = []
-    for row in unit_mix:
-        try:
-            count = int(row.get('units'))
-            beds = row.get('beds')
-        except (TypeError, ValueError):
-            continue
-        if beds is None:
-            continue
-        piece = f'{count}×{beds} bd'
-        baths = row.get('baths')
-        if baths is not None:
-            piece = f'{piece} / {baths} ba'
-        parts.append(piece)
-    if not parts:
-        return None
-    return ' + '.join(parts)
-
-
 def _units_blank(current: Any) -> bool:
     if current is None:
         return True
@@ -159,6 +136,12 @@ def _facts_richer(candidate: dict[str, Any], existing: dict[str, Any] | None) ->
         return True
     if len(cand_mix) < len(exist_mix):
         return False
+    cand_detail = _unit_mix_detail_score(cand_mix)
+    exist_detail = _unit_mix_detail_score(exist_mix)
+    if cand_detail > exist_detail:
+        return True
+    if cand_detail < exist_detail:
+        return False
     cand_u = candidate.get('units')
     exist_u = existing.get('units')
     try:
@@ -173,6 +156,18 @@ def _facts_richer(candidate: dict[str, Any], existing: dict[str, Any] | None) ->
         return True
     # Same or weaker — keep existing (idempotent migrations)
     return False
+
+
+def _unit_mix_detail_score(unit_mix: list[dict[str, Any]]) -> int:
+    """Count populated mix fields so baths/details can win ties by row count."""
+    score = 0
+    for row in unit_mix:
+        if not isinstance(row, dict):
+            continue
+        for key in ('units', 'beds', 'baths'):
+            if row.get(key) is not None:
+                score += 1
+    return score
 
 
 def apply_note_property_facts_to_lead(

@@ -31,25 +31,59 @@ fi
 _hash_file() {
     local f="$1"
     if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$f"
+        sha256sum "$f" | awk '{print $1}'
     else
-        shasum -a 256 "$f"
+        shasum -a 256 "$f" | awk '{print $1}'
     fi
+}
+
+asset_refs() {
+    python3 - "$DIST/index.html" <<'PY'
+import sys
+from html.parser import HTMLParser
+
+
+class AssetParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.refs = set()
+
+    def handle_starttag(self, tag, attrs):
+        if tag not in {"script", "link"}:
+            return
+        attr_name = "src" if tag == "script" else "href"
+        values = dict(attrs)
+        value = values.get(attr_name)
+        if not value:
+            return
+        ref = value.split("?", 1)[0].split("#", 1)[0]
+        if ref.startswith("assets/"):
+            ref = f"/{ref}"
+        if ref.startswith("/assets/"):
+            self.refs.add(ref)
+
+
+parser = AssetParser()
+with open(sys.argv[1], encoding="utf-8") as fh:
+    parser.feed(fh.read())
+for ref in sorted(parser.refs):
+    print(ref)
+PY
 }
 
 compute_fp() {
     {
-        _hash_file "$DIST/index.html"
+        printf 'index.html %s\n' "$(_hash_file "$DIST/index.html")"
         while IFS= read -r ref; do
             [ -n "$ref" ] || continue
             rel="${ref#/}"
             path="$DIST/$rel"
             if [ -f "$path" ]; then
-                _hash_file "$path"
+                printf '%s %s\n' "$rel" "$(_hash_file "$path")"
             else
                 printf 'MISSING %s\n' "$ref"
             fi
-        done < <(grep -oE '/assets/[^"[:space:]]+' "$DIST/index.html" | sort -u || true)
+        done < <(asset_refs)
         printf 'DEPLOY_SHA=%s\n' "$DEPLOY_SHA"
     } | {
         if command -v sha256sum >/dev/null 2>&1; then
@@ -66,7 +100,12 @@ case "$CMD" in
         ;;
     write)
         fp="$(compute_fp)"
-        printf '%s\n' "$fp" > "$OUTFILE"
+        tmp="${OUTFILE}.$$.$RANDOM.tmp"
+        if ! printf '%s\n' "$fp" > "$tmp" || ! mv -f "$tmp" "$OUTFILE"; then
+            rm -f "$tmp" 2>/dev/null || true
+            echo "FAILED: could not atomically write $OUTFILE" >&2
+            exit 1
+        fi
         printf '%s\n' "$fp"
         ;;
     *)

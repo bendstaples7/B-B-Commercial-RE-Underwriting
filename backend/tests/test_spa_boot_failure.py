@@ -1,6 +1,7 @@
 """Tests for SPA boot-failure beacon (blank SPA phone-home)."""
 from __future__ import annotations
 
+import builtins
 from unittest.mock import patch
 
 import pytest
@@ -16,12 +17,12 @@ def client(app):
 
 def test_normalize_payload_clips_and_defaults():
     data = svc.normalize_payload({
-        'href': 'x' * 2000,
+        'href': 'https://example.test/oauth/callback?code=secret#token',
         'reason': None,
         'ua': 'Mozilla/5.0',
         'assetHints': [{'name': '/assets/index.js', 'status': 'empty'}] * 30,
     })
-    assert len(data['href']) == svc.MAX_HREF_LEN
+    assert data['href'] == 'https://example.test/oauth/callback'
     assert data['reason'] == 'boot_watchdog'
     assert data['user_agent'] == 'Mozilla/5.0'
     assert len(data['asset_hints']) == svc.MAX_HINTS
@@ -41,7 +42,7 @@ def test_spa_boot_failure_anonymous_accepted(client, app):
             resp = client.post(
                 '/api/spa-boot-failure',
                 json={
-                    'href': 'https://example.test/login',
+                    'href': 'https://example.test/login?code=secret#token',
                     'reason': 'boot_watchdog',
                     'ua': 'pytest',
                     'assetHints': ['/assets/index-abc.js'],
@@ -76,3 +77,18 @@ def test_should_send_alert_debounce_file(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, '_redis_client', lambda: None)
     assert svc.should_send_alert() is True
     assert svc.should_send_alert() is False
+
+
+def test_enqueue_or_alert_catches_celery_worker_system_exit(app):
+    event = SpaBootFailureEvent(id=123, href='https://example.test/', reason='boot_watchdog')
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == 'celery_worker':
+            raise SystemExit('missing REDIS_URL')
+        return real_import(name, *args, **kwargs)
+
+    with patch('builtins.__import__', side_effect=fake_import):
+        with patch.object(svc, 'send_ops_alert_sync') as send_sync:
+            svc.enqueue_or_alert(event)
+            send_sync.assert_called_once_with(event.id, event.href, event.reason)

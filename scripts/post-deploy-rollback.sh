@@ -76,12 +76,12 @@ if [ -d "/home/deploy/frontend-dist-backup" ]; then
             APP_DIR="$APP_DIR" bash "$FP_SCRIPT" write frontend/dist /home/deploy/spa-dist.fingerprint \
                 || { echo "ROLLBACK WARNING: spa-dist.fingerprint update failed"; ROLLBACK_FAILED=1; }
         fi
-        rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
     fi
 else
     echo "ROLLBACK WARNING: no frontend-dist-backup found — frontend may mismatch backend"
     ROLLBACK_FAILED=1
 fi
+rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 
 sudo -n systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
 sudo -n systemctl restart celery 2>/dev/null || true

@@ -14,7 +14,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -75,15 +75,36 @@ def asset_urls_from_html(html: str, base_url: str) -> list[str]:
     return out
 
 
-def fetch_status(url: str, timeout: float) -> int:
-    """Return HTTP status; map transport failures to 0."""
-    try:
-        status, _body, _charset = _fetch_once(url, timeout)
+def fetch_status(url: str, timeout: float, *, attempts: int = 3) -> int:
+    """Return HTTP status; retry transport and 5xx failures before giving up."""
+    last_status = 0
+    for attempt in range(max(1, attempts)):
+        try:
+            status, _body, _charset = _fetch_once(url, timeout)
+        except urllib.error.HTTPError as exc:
+            status = int(exc.code)
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            status = 0
+            if attempt < attempts - 1:
+                delay = 2 * (attempt + 1)
+                print(
+                    f"WARN: asset fetch {url} attempt {attempt + 1}/{attempts} failed "
+                    f"({exc}); retrying in {delay}s..."
+                )
+                time.sleep(delay)
+                continue
+        last_status = status
+        if status == 0 or status >= 500:
+            if attempt < attempts - 1:
+                delay = 2 * (attempt + 1)
+                print(
+                    f"WARN: asset fetch {url} attempt {attempt + 1}/{attempts} "
+                    f"returned HTTP {status}; retrying in {delay}s..."
+                )
+                time.sleep(delay)
+                continue
         return status
-    except urllib.error.HTTPError as exc:
-        return int(exc.code)
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
-        return 0
+    return last_status
 
 
 def main() -> int:
@@ -101,9 +122,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    parsed = urlparse(args.url)
-    origin = f"{parsed.scheme}://{parsed.netloc}"
-    url = args.url.rstrip("/") + "/"
+    url = args.url if args.url.endswith(("/", ".html")) else args.url.rstrip("/") + "/"
     try:
         html = fetch_html(url, timeout=args.timeout)
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
@@ -126,7 +145,7 @@ def main() -> int:
     if args.skip_assets:
         return 0
 
-    asset_urls = asset_urls_from_html(html, origin + "/")
+    asset_urls = asset_urls_from_html(html, url)
     if not asset_urls:
         print(f"ERROR: no /assets/ hrefs found in {url}")
         return 1

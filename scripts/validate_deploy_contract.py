@@ -275,9 +275,13 @@ def main() -> int:
         errors.append("Missing expected script: scripts/assert_live_spa_contract.py")
     else:
         live_spa_text = _read(live_spa)
-        if "asset_urls_from_html" not in live_spa_text or "HTTP 200" not in live_spa_text:
+        if (
+            "asset_urls_from_html" not in live_spa_text
+            or "fetch_status(asset_url" not in live_spa_text
+            or "status != 200" not in live_spa_text
+        ):
             errors.append(
-                "assert_live_spa_contract.py must HTTP-check /assets/ hrefs "
+                "assert_live_spa_contract.py must fetch /assets/ hrefs and reject non-200 "
                 "(blank SPA when assets/ is mode 0700)"
             )
     ensure_dist = REPO_ROOT / "scripts" / "ensure_frontend_dist_readable.sh"
@@ -298,7 +302,11 @@ def main() -> int:
             errors.append(
                 "frontend/index.html must include spa-boot-failure watchdog"
             )
-        if "/api/spa-boot-failure" not in index_html:
+        if not re.search(
+            r"fetch\(\s*['\"]/api/spa-boot-failure['\"]\s*,[\s\S]{0,500}?"
+            r"method\s*:\s*['\"]POST['\"]",
+            index_html,
+        ):
             errors.append(
                 "frontend/index.html boot watchdog must POST /api/spa-boot-failure"
             )
