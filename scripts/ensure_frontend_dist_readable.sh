@@ -151,6 +151,9 @@ if [ -n "$HTTP_BASE" ]; then
     if ls /etc/nginx/sites-enabled/* >/dev/null 2>&1; then
         host_header=$(grep -h -m1 -E '^\s*server_name\s+' /etc/nginx/sites-enabled/* 2>/dev/null \
             | awk '{print $2}' | tr -d ';' | head -1 || true)
+        case "$host_header" in
+            ""|_|localhost|*\**) host_header="" ;;
+        esac
     fi
     for ref in "${ASSET_REFS[@]}"; do
         url="${base}${ref}"

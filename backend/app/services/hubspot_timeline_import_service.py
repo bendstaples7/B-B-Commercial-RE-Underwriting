@@ -211,7 +211,7 @@ class HubSpotTimelineImportService:
         # Apply call confidence after the loop, sorted by occurred_at (list order
         # from HubSpot is not guaranteed chronological).
         pending_call_confidence: list[tuple[datetime, object, object | None, str]] = []
-        pending_note_property_facts: list[tuple[str, str, str]] = []
+        pending_note_property_facts: list[tuple[str, str, str, datetime]] = []
 
         for activity in hubspot_activities:
             activity_id = str(activity.get('id', ''))
@@ -296,7 +296,7 @@ class HubSpotTimelineImportService:
                     activity_id,
                 ))
             if event_type in ('hubspot_note', 'hubspot_call') and plain_body:
-                pending_note_property_facts.append((plain_body, event_type, activity_id))
+                pending_note_property_facts.append((plain_body, event_type, activity_id, occurred_at))
 
         if pending_call_confidence:
             from app.services.phone_confidence_service import PhoneConfidenceService
@@ -319,13 +319,14 @@ class HubSpotTimelineImportService:
 
         if pending_note_property_facts:
             from app.services.helpers.note_property_facts import apply_note_property_facts_to_lead
-            for body, event_type, activity_id in pending_note_property_facts:
+            for body, event_type, activity_id, occurred_at in pending_note_property_facts:
                 try:
                     apply_note_property_facts_to_lead(
                         lead,
                         body,
                         source=event_type,
                         hubspot_activity_id=activity_id,
+                        source_occurred_at=occurred_at,
                     )
                 except Exception as exc:
                     logger.warning(

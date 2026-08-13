@@ -36,6 +36,13 @@ def test_hash_ip_stable(monkeypatch):
     assert a != svc.hash_ip('5.6.7.8')
 
 
+def test_hash_ip_without_salt_omits_hash(monkeypatch):
+    monkeypatch.delenv('SPA_BOOT_FAILURE_IP_SALT', raising=False)
+    monkeypatch.delenv('SECRET_KEY', raising=False)
+    monkeypatch.delenv('FLASK_SECRET_KEY', raising=False)
+    assert svc.hash_ip('1.2.3.4') is None
+
+
 def test_spa_boot_failure_anonymous_accepted(client, app):
     with app.app_context():
         with patch.object(svc, 'enqueue_or_alert') as enqueue:

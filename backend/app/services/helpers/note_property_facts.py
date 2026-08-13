@@ -94,6 +94,7 @@ def parse_note_property_facts(
     *,
     source: str = 'hubspot_note',
     hubspot_activity_id: str | None = None,
+    source_occurred_at: datetime | str | None = None,
 ) -> dict[str, Any] | None:
     """Return a facts dict when units and/or unit_mix can be extracted."""
     units = parse_units_from_note_text(text)
@@ -112,6 +113,7 @@ def parse_note_property_facts(
         'unit_mix': unit_mix,
         'source': source,
         'hubspot_activity_id': hubspot_activity_id,
+        'source_occurred_at': _isoformat_source_time(source_occurred_at),
         'excerpt': excerpt,
         'extracted_at': datetime.now(timezone.utc).isoformat(),
     }
@@ -154,6 +156,14 @@ def _facts_richer(candidate: dict[str, Any], existing: dict[str, Any] | None) ->
         exist_n = 0
     if cand_n > exist_n:
         return True
+    if cand_n < exist_n:
+        return False
+    cand_time = _source_time(candidate)
+    exist_time = _source_time(existing)
+    if cand_time and exist_time:
+        return cand_time > exist_time
+    if cand_time and not exist_time:
+        return True
     # Same or weaker — keep existing (idempotent migrations)
     return False
 
@@ -170,12 +180,39 @@ def _unit_mix_detail_score(unit_mix: list[dict[str, Any]]) -> int:
     return score
 
 
+def _isoformat_source_time(value: datetime | str | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    text = str(value).strip()
+    return text or None
+
+
+def _source_time(facts: dict[str, Any] | None) -> datetime | None:
+    if not isinstance(facts, dict):
+        return None
+    raw = facts.get('source_occurred_at')
+    if not raw:
+        return None
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def apply_note_property_facts_to_lead(
     lead: Any,
     text: str | None,
     *,
     source: str = 'hubspot_note',
     hubspot_activity_id: str | None = None,
+    source_occurred_at: datetime | str | None = None,
 ) -> list[str]:
     """Apply parsed note facts to a lead. Never touches bedrooms/bathrooms.
 
@@ -188,6 +225,7 @@ def apply_note_property_facts_to_lead(
         text,
         source=source,
         hubspot_activity_id=hubspot_activity_id,
+        source_occurred_at=source_occurred_at,
     )
     if facts is None:
         return []
@@ -300,6 +338,7 @@ def apply_note_facts_from_timeline(lead: Any) -> list[str]:
             body,
             source=source,
             hubspot_activity_id=getattr(entry, 'hubspot_activity_id', None),
+            source_occurred_at=getattr(entry, 'occurred_at', None),
         )
         if facts is not None and _facts_richer(facts, best_facts):
             best_facts = facts

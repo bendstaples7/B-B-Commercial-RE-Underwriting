@@ -166,6 +166,8 @@ def spa_boot_failure():
     from flask import request
     from app.services import spa_boot_failure_service as svc
 
+    if request.content_length is not None and request.content_length > svc.MAX_BODY_BYTES:
+        return jsonify({'success': False, 'error': 'payload too large'}), 413
     raw = request.get_data(cache=True, as_text=False) or b''
     if len(raw) > svc.MAX_BODY_BYTES:
         return jsonify({'success': False, 'error': 'payload too large'}), 413

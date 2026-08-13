@@ -58,9 +58,8 @@ def hash_ip(ip: Optional[str]) -> Optional[str]:
         or ''
     )
     if not salt:
-        # Still hash so we never store raw IPs; log once-ish via debug.
-        logger.debug('SPA boot IP salt unset — using process-local fallback')
-        salt = 'bb-spa-boot-unset'
+        logger.error('SPA boot IP salt unset — omitting IP hash')
+        return None
     return hashlib.sha256(f'{salt}:{ip}'.encode('utf-8')).hexdigest()
 
 
