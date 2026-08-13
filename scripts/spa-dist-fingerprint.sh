@@ -7,7 +7,8 @@
 #   bash spa-dist-fingerprint.sh compute <DIST_DIR>
 #   bash spa-dist-fingerprint.sh write <DIST_DIR> [OUTFILE]
 #
-# Fingerprint covers index.html bytes + ordered /assets/ hrefs from HTML + DEPLOY_SHA.
+# Fingerprint covers index.html bytes + content hashes of referenced /assets/*
+# files + DEPLOY_SHA (detects same-name asset overwrites).
 # =============================================================================
 
 set -euo pipefail
@@ -27,19 +28,36 @@ if [ -f "$APP_DIR/DEPLOY_SHA" ]; then
     DEPLOY_SHA="$(tr -d '[:space:]' < "$APP_DIR/DEPLOY_SHA" || echo unknown)"
 fi
 
+_hash_file() {
+    local f="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$f"
+    else
+        shasum -a 256 "$f"
+    fi
+}
+
 compute_fp() {
     {
-        sha256sum "$DIST/index.html" 2>/dev/null || shasum -a 256 "$DIST/index.html"
-        grep -oE '/assets/[^"[:space:]]+' "$DIST/index.html" | sort -u || true
+        _hash_file "$DIST/index.html"
+        while IFS= read -r ref; do
+            [ -n "$ref" ] || continue
+            rel="${ref#/}"
+            path="$DIST/$rel"
+            if [ -f "$path" ]; then
+                _hash_file "$path"
+            else
+                printf 'MISSING %s\n' "$ref"
+            fi
+        done < <(grep -oE '/assets/[^"[:space:]]+' "$DIST/index.html" | sort -u || true)
         printf 'DEPLOY_SHA=%s\n' "$DEPLOY_SHA"
-    } | sha256sum 2>/dev/null | awk '{print $1}' \
-      || {
-        {
-            shasum -a 256 "$DIST/index.html"
-            grep -oE '/assets/[^"[:space:]]+' "$DIST/index.html" | sort -u || true
-            printf 'DEPLOY_SHA=%s\n' "$DEPLOY_SHA"
-        } | shasum -a 256 | awk '{print $1}'
-      }
+    } | {
+        if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum | awk '{print $1}'
+        else
+            shasum -a 256 | awk '{print $1}'
+        fi
+    }
 }
 
 case "$CMD" in

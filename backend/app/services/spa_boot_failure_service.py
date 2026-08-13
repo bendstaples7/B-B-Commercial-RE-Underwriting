@@ -6,7 +6,7 @@ import logging
 import os
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from app import db
@@ -20,6 +20,7 @@ MAX_REASON_LEN = 128
 MAX_UA_LEN = 512
 MAX_HINTS = 20
 ALERT_COOLDOWN_SECS = 15 * 60
+EVENT_RETENTION_DAYS = 14
 REDIS_ALERT_KEY = 'spa:boot_failure:last_alert'
 FILE_ALERT_STATE = '/home/deploy/logs/spa-boot-failure.last_alert'
 
@@ -36,7 +37,16 @@ def _clip(value: Any, max_len: int) -> Optional[str]:
 def hash_ip(ip: Optional[str]) -> Optional[str]:
     if not ip:
         return None
-    salt = os.environ.get('SPA_BOOT_FAILURE_IP_SALT', 'bb-spa-boot')
+    salt = (
+        os.environ.get('SPA_BOOT_FAILURE_IP_SALT')
+        or os.environ.get('SECRET_KEY')
+        or os.environ.get('FLASK_SECRET_KEY')
+        or ''
+    )
+    if not salt:
+        # Still hash so we never store raw IPs; log once-ish via debug.
+        logger.debug('SPA boot IP salt unset — using process-local fallback')
+        salt = 'bb-spa-boot-unset'
     return hashlib.sha256(f'{salt}:{ip}'.encode('utf-8')).hexdigest()
 
 
@@ -63,6 +73,19 @@ def normalize_payload(raw: Any) -> dict:
     }
 
 
+def _prune_old_events() -> None:
+    """Best-effort retention so anonymous beacons cannot grow unbounded."""
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=EVENT_RETENTION_DAYS)
+        (
+            SpaBootFailureEvent.query
+            .filter(SpaBootFailureEvent.created_at < cutoff)
+            .delete(synchronize_session=False)
+        )
+    except Exception as exc:
+        logger.warning('spa boot event prune failed: %s', exc)
+
+
 def record_event(*, payload: dict, ip: Optional[str], user_agent_header: Optional[str]) -> SpaBootFailureEvent:
     data = normalize_payload(payload)
     ua = data.get('user_agent') or _clip(user_agent_header, MAX_UA_LEN)
@@ -75,6 +98,7 @@ def record_event(*, payload: dict, ip: Optional[str], user_agent_header: Optiona
         asset_hints=data.get('asset_hints'),
     )
     db.session.add(event)
+    _prune_old_events()
     db.session.commit()
     return event
 
@@ -104,14 +128,23 @@ def should_send_alert() -> bool:
     try:
         os.makedirs(os.path.dirname(FILE_ALERT_STATE), exist_ok=True)
         now = int(time.time())
-        if os.path.isfile(FILE_ALERT_STATE):
+        # Atomic create-only: if file exists and is fresh, suppress.
+        try:
+            fd = os.open(FILE_ALERT_STATE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+                fh.write(str(now))
+            return True
+        except FileExistsError:
             with open(FILE_ALERT_STATE, 'r', encoding='utf-8') as fh:
                 raw = fh.read().strip()
             if raw.isdigit() and now - int(raw) < ALERT_COOLDOWN_SECS:
                 return False
-        with open(FILE_ALERT_STATE, 'w', encoding='utf-8') as fh:
-            fh.write(str(now))
-        return True
+            # Stale lock file — rewrite.
+            tmp = f'{FILE_ALERT_STATE}.{now}.tmp'
+            with open(tmp, 'w', encoding='utf-8') as fh:
+                fh.write(str(now))
+            os.replace(tmp, FILE_ALERT_STATE)
+            return True
     except Exception as exc:
         logger.warning('spa boot alert file debounce failed: %s', exc)
         return True

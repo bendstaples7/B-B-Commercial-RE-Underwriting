@@ -27,7 +27,8 @@ def test_normalize_payload_clips_and_defaults():
     assert len(data['asset_hints']) == svc.MAX_HINTS
 
 
-def test_hash_ip_stable():
+def test_hash_ip_stable(monkeypatch):
+    monkeypatch.setenv('SPA_BOOT_FAILURE_IP_SALT', 'test-salt')
     a = svc.hash_ip('1.2.3.4')
     b = svc.hash_ip('1.2.3.4')
     assert a == b
@@ -58,10 +59,15 @@ def test_spa_boot_failure_anonymous_accepted(client, app):
 
 
 def test_spa_boot_failure_rejects_huge_body(client):
-    huge = {'href': 'x' * (svc.MAX_BODY_BYTES + 100)}
-    resp = client.post('/api/spa-boot-failure', json=huge)
-    # Flask may reject before our check depending on JSON size; accept 413 or 400.
-    assert resp.status_code in (413, 400, 202)
+    # Raw JSON body must exceed MAX_BODY_BYTES before parsing.
+    raw = b'{"href":"' + (b'x' * (svc.MAX_BODY_BYTES + 64)) + b'"}'
+    assert len(raw) > svc.MAX_BODY_BYTES
+    resp = client.post(
+        '/api/spa-boot-failure',
+        data=raw,
+        content_type='application/json',
+    )
+    assert resp.status_code == 413
 
 
 def test_should_send_alert_debounce_file(tmp_path, monkeypatch):
