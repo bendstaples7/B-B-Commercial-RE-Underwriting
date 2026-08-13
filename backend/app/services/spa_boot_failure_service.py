@@ -157,6 +157,7 @@ def reserve_alert() -> dict[str, str] | None:
         except Exception as exc:
             logger.warning('spa boot alert redis debounce failed: %s', exc)
             _clear_redis_reservation(r, token)
+            return None
 
     lock_path = f'{FILE_ALERT_STATE}.lock'
     lock_fd: int | None = None

@@ -24,9 +24,7 @@ fi
 DIST_PARENT="$(dirname "$DIST_DIR")"
 DIST_BASENAME="$(basename "$DIST_DIR")"
 TMP_DIST="${DIST_PARENT}/.${DIST_BASENAME}.restore.$$"
-OLD_DIST="${DIST_PARENT}/.${DIST_BASENAME}.old.$$"
 rm -rf "$TMP_DIST" 2>/dev/null || true
-rm -rf "$OLD_DIST" 2>/dev/null || true
 if ! cp -r "$BACKUP_DIR" "$TMP_DIST" 2>/dev/null; then
     rm -rf "$TMP_DIST" 2>/dev/null || true
     echo "ROLLBACK WARNING: frontend dist restore failed"
@@ -64,30 +62,37 @@ else
     echo "ROLLBACK WARNING: spa-dist-fingerprint.sh not found"
     exit 1
 fi
-if [ -e "$DIST_DIR" ] && ! mv "$DIST_DIR" "$OLD_DIST"; then
+if ! python3 - "$TMP_DIST" "$DIST_DIR" <<'PY'
+import os
+import shutil
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+os.makedirs(dst, exist_ok=True)
+
+for root, dirs, files in os.walk(dst, topdown=False):
+    rel = os.path.relpath(root, dst)
+    src_root = src if rel == "." else os.path.join(src, rel)
+    for name in files:
+        if not os.path.exists(os.path.join(src_root, name)):
+            os.unlink(os.path.join(root, name))
+    for name in dirs:
+        if not os.path.exists(os.path.join(src_root, name)):
+            shutil.rmtree(os.path.join(root, name))
+
+shutil.copytree(src, dst, dirs_exist_ok=True)
+PY
+then
     rm -rf "$TMP_DIST" 2>/dev/null || true
     rm -f "$FP_TMP" 2>/dev/null || true
-    echo "ROLLBACK WARNING: frontend dist old-tree move failed"
-    exit 1
-fi
-if ! mv "$TMP_DIST" "$DIST_DIR"; then
-    if [ -e "$OLD_DIST" ]; then
-        mv "$OLD_DIST" "$DIST_DIR" 2>/dev/null || true
-    fi
-    rm -rf "$TMP_DIST" 2>/dev/null || true
-    rm -f "$FP_TMP" 2>/dev/null || true
-    echo "ROLLBACK WARNING: frontend dist swap failed"
+    echo "ROLLBACK WARNING: frontend dist sync failed"
     exit 1
 fi
 if ! mv -f "$FP_TMP" "$FINGERPRINT_FILE"; then
-    if [ -e "$OLD_DIST" ]; then
-        rm -rf "$DIST_DIR" 2>/dev/null || true
-        mv "$OLD_DIST" "$DIST_DIR" 2>/dev/null || true
-    fi
     rm -f "$FP_TMP" 2>/dev/null || true
     echo "ROLLBACK WARNING: spa-dist.fingerprint swap failed"
     exit 1
 fi
-rm -rf "$OLD_DIST" 2>/dev/null || true
+rm -rf "$TMP_DIST" 2>/dev/null || true
 
 echo "Frontend dist backup restored."
