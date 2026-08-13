@@ -74,6 +74,10 @@ _KNOWN_REVISIONS = frozenset({
     'mail_omit_20260727',
     # Assessor AKA situs when tax street differs from marketing street
     'aka_situs_20260729',
+    # Note-derived property facts JSONB + timeline backfill
+    'note_pf_20260812',
+    # SPA boot-failure beacon events (blank SPA phone-home)
+    'spa_boot_20260813',
     's0t1u2v3w4x5', 't0u1v2w3x4y5', 'u1v2w3x4y5z6',
     'v1w2x3y4z5a6', 'w2x3y4z5a6b7', 'x3y4z5a6b7c8',
     'y4z5a6b7c8d9', 'z5a6b7c8d9e0',

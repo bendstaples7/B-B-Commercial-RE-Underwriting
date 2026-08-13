@@ -1535,6 +1535,13 @@ def sync_due_open_letter_campaign_analytics(limit: int = 25) -> dict:
     return sync_due_mail_campaign_analytics(limit=limit)
 
 
+@celery.task(name='ops.alert_spa_boot_failure')
+def alert_spa_boot_failure(event_id: int, href: str = None, reason: str = None):
+    """Debounced ops alert for SPA boot-failure beacons."""
+    from app.services.spa_boot_failure_service import send_ops_alert_sync
+    send_ops_alert_sync(event_id, href, reason)
+
+
 # ---------------------------------------------------------------------------
 # HubSpot Webhook Processing Tasks
 # ---------------------------------------------------------------------------

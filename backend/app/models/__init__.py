@@ -122,6 +122,7 @@ from app.models.lead_crm_flags_view import LeadCRMFlagsView
 
 # HubSpot webhook sync models
 from app.models.hubspot_webhook_log import HubSpotWebhookLog
+from app.models.spa_boot_failure_event import SpaBootFailureEvent
 from app.models.hubspot_sync_run import HubSpotSyncRun
 from app.models.hubspot_platform_write import HubSpotPlatformWrite
 
@@ -238,6 +239,7 @@ __all__ = [
     'LeadCRMFlagsView',
     # HubSpot webhook sync
     'HubSpotWebhookLog',
+    'SpaBootFailureEvent',
     'HubSpotSyncRun',
     'HubSpotPlatformWrite',
     # Open Letter Connect

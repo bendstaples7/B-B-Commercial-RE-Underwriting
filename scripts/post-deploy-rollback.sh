@@ -46,16 +46,18 @@ git checkout "$PREVIOUS_SHA" 2>/dev/null || { echo "ROLLBACK WARNING: git checko
 echo "$PREVIOUS_SHA" > "$APP_DIR/DEPLOY_SHA" 2>/dev/null || { echo "ROLLBACK WARNING: could not write DEPLOY_SHA"; ROLLBACK_FAILED=1; }
 pip install --user -r backend/requirements.txt -q 2>/dev/null || { echo "ROLLBACK WARNING: pip install failed"; ROLLBACK_FAILED=1; }
 
-if [ -d "/home/deploy/frontend-dist-backup" ]; then
-    if ! rm -rf frontend/dist || \
-       ! cp -r /home/deploy/frontend-dist-backup frontend/dist 2>/dev/null; then
-        echo "ROLLBACK WARNING: frontend dist restore failed"
-        ROLLBACK_FAILED=1
-    fi
+RESTORE_DIST_SCRIPT=/home/deploy/restore_frontend_dist_backup.sh
+if [ ! -f "$RESTORE_DIST_SCRIPT" ]; then
+    RESTORE_DIST_SCRIPT="$APP_DIR/scripts/restore_frontend_dist_backup.sh"
+fi
+if [ -f "$RESTORE_DIST_SCRIPT" ]; then
+    APP_DIR="$APP_DIR" bash "$RESTORE_DIST_SCRIPT" \
+        || { echo "ROLLBACK WARNING: frontend dist backup restore helper failed"; ROLLBACK_FAILED=1; }
 else
-    echo "ROLLBACK WARNING: no frontend-dist-backup found — frontend may mismatch backend"
+    echo "ROLLBACK WARNING: restore_frontend_dist_backup.sh not found"
     ROLLBACK_FAILED=1
 fi
+rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 
 sudo -n systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
 sudo -n systemctl restart celery 2>/dev/null || true

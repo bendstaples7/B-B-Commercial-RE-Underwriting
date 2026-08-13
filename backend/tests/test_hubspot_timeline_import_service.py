@@ -73,6 +73,61 @@ def test_import_creates_entries_with_hubspot_source(app):
             assert entry.actor == 'HubSpot'
 
 
+def test_import_note_updates_note_property_facts(app):
+    """New HubSpot notes immediately refresh note-derived unit facts."""
+    from app import db
+
+    with app.app_context():
+        lead = _make_lead(app, '1b HubSpot Units St')
+        lead.units = None
+        lead.lead_category = 'residential'
+        lead.property_type = None
+        db.session.commit()
+
+        svc = HubSpotTimelineImportService()
+        count = svc.import_activities_for_lead(lead.id, [
+            _make_activity(
+                'hs-note-units',
+                'NOTE',
+                '6 unit property. 4 units are 2 beds and 1 baths. '
+                '2 units are 3 beds and 2 baths.',
+            )
+        ])
+
+        assert count == 1
+        db.session.refresh(lead)
+        assert lead.note_property_facts['units'] == 6
+        assert lead.note_property_facts['unit_mix'] == [
+            {'units': 4, 'beds': 2, 'baths': 1},
+            {'units': 2, 'beds': 3, 'baths': 2},
+        ]
+        assert lead.units == 6
+        assert lead.lead_category == 'commercial'
+        assert lead.property_type == 'Commercial'
+
+
+def test_import_email_does_not_update_note_property_facts(app):
+    """Only raw NOTE/CALL HubSpot activities can update note-derived facts."""
+    from app import db
+
+    with app.app_context():
+        lead = _make_lead(app, '1c HubSpot Email Units St')
+        lead.units = None
+        lead.lead_category = 'residential'
+        db.session.commit()
+
+        svc = HubSpotTimelineImportService()
+        count = svc.import_activities_for_lead(lead.id, [
+            _make_activity('hs-email-units', 'EMAIL', 'Email mentions a 6 unit property.')
+        ])
+
+        assert count == 1
+        db.session.refresh(lead)
+        assert lead.note_property_facts is None
+        assert lead.units is None
+        assert lead.lead_category == 'residential'
+
+
 def test_import_maps_call_type_to_hubspot_call_event(app):
     """CALL activity type maps to event_type='hubspot_call'."""
     from app.models import LeadTimelineEntry

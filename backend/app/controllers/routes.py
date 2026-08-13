@@ -136,6 +136,57 @@ def version():
     return jsonify({'sha': resolve_deploy_sha()}), 200
 
 
+def _spa_boot_client_ip() -> str:
+    """Client IP for beacon rate-limit/telemetry.
+
+    Prefer ``X-Real-IP`` when the immediate peer is a trusted proxy (nginx sets
+    it to ``$remote_addr``). Do not trust the first ``X-Forwarded-For`` hop.
+    """
+    from flask import request
+    import os
+
+    remote_addr = (request.remote_addr or '').strip()
+    trusted_proxies = {'127.0.0.1', '::1', 'localhost'}
+    trusted_proxies.update(
+        p.strip()
+        for p in os.environ.get('TRUSTED_PROXY_IPS', '').split(',')
+        if p.strip()
+    )
+    if remote_addr in trusted_proxies:
+        real_ip = (request.headers.get('X-Real-IP') or '').strip()
+        if real_ip:
+            return real_ip
+    return remote_addr or 'unknown'
+
+
+@api_bp.route('/spa-boot-failure', methods=['POST'])
+@limiter.limit('10 per minute', key_func=_spa_boot_client_ip)
+def spa_boot_failure():
+    """Public blank-SPA beacon from the index.html boot watchdog.
+
+    Anonymous clients allowed (app may never mount). Rate-limited per IP.
+    Persists a minimal event and debounces ops alerts (~15 min).
+    """
+    from flask import request
+    from app.services import spa_boot_failure_service as svc
+
+    if request.content_length is not None and request.content_length > svc.MAX_BODY_BYTES:
+        return jsonify({'success': False, 'error': 'payload too large'}), 413
+    raw = request.get_data(cache=True, as_text=False) or b''
+    if len(raw) > svc.MAX_BODY_BYTES:
+        return jsonify({'success': False, 'error': 'payload too large'}), 413
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    event = svc.record_event(
+        payload=payload if isinstance(payload, dict) else {},
+        ip=_spa_boot_client_ip(),
+        user_agent_header=request.headers.get('User-Agent'),
+    )
+    svc.enqueue_or_alert(event)
+    return jsonify({'success': True, 'id': event.id}), 202
+
+
 @api_bp.route('/health/runtime', methods=['GET'])
 def health_runtime():
     """Lightweight process-identity probe for the frontend restart guard.

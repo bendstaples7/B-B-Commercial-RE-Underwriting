@@ -35,6 +35,11 @@ SHELL_SCRIPTS = [
     REPO_ROOT / "scripts" / "ci-ensure-vps-readiness.sh",
     REPO_ROOT / "scripts" / "celery-liveness-check.sh",
     REPO_ROOT / "scripts" / "ops-alert.sh",
+    REPO_ROOT / "scripts" / "ensure_frontend_dist_readable.sh",
+    REPO_ROOT / "scripts" / "spa-dist-fingerprint.sh",
+    REPO_ROOT / "scripts" / "spa-uptime-canary.sh",
+    REPO_ROOT / "scripts" / "post-deploy-rollback.sh",
+    REPO_ROOT / "scripts" / "restore_frontend_dist_backup.sh",
     REPO_ROOT / "scripts" / "vps-setup" / "migrate-async-stack.sh",
     REPO_ROOT / "scripts" / "vps-setup" / "bootstrap-async-stack.sh",
     REPO_ROOT / "scripts" / "vps-setup" / "apply-memory-guard-units.sh",
@@ -273,6 +278,20 @@ def main() -> int:
     live_spa = REPO_ROOT / "scripts" / "assert_live_spa_contract.py"
     if not live_spa.exists():
         errors.append("Missing expected script: scripts/assert_live_spa_contract.py")
+    else:
+        live_spa_text = _read(live_spa)
+        if (
+            "asset_urls_from_html" not in live_spa_text
+            or "fetch_status(asset_url" not in live_spa_text
+            or "status != 200" not in live_spa_text
+        ):
+            errors.append(
+                "assert_live_spa_contract.py must fetch /assets/ hrefs and reject non-200 "
+                "(blank SPA when assets/ is mode 0700)"
+            )
+    ensure_dist = REPO_ROOT / "scripts" / "ensure_frontend_dist_readable.sh"
+    if not ensure_dist.exists():
+        errors.append("Missing expected script: scripts/ensure_frontend_dist_readable.sh")
     drift = REPO_ROOT / "scripts" / "check_main_prod_drift.py"
     if not drift.exists():
         errors.append("Missing expected script: scripts/check_main_prod_drift.py")
@@ -287,6 +306,14 @@ def main() -> int:
         if "spa-boot-failure" not in index_html:
             errors.append(
                 "frontend/index.html must include spa-boot-failure watchdog"
+            )
+        if not re.search(
+            r"fetch\(\s*['\"]/api/spa-boot-failure['\"]\s*,[\s\S]{0,500}?"
+            r"method\s*:\s*['\"]POST['\"]",
+            index_html,
+        ):
+            errors.append(
+                "frontend/index.html boot watchdog must POST /api/spa-boot-failure"
             )
     vite_cfg_path = REPO_ROOT / "frontend" / "vite.config.ts"
     if not vite_cfg_path.exists():
@@ -332,6 +359,24 @@ def main() -> int:
     if re.search(r"trap 'cleanup_deploy_exit; exit \d+' TERM", deploy_text):
         errors.append(
             "deploy.sh should restore celery via EXIT only (remove TERM/INT/HUP traps)"
+        )
+    if "ensure_frontend_dist_readable" not in deploy_text:
+        errors.append(
+            "deploy.sh must call ensure_frontend_dist_readable after installing frontend/dist "
+            "(mode 0700 on assets/ blanks the SPA)"
+        )
+    if "--http-base" not in deploy_text:
+        errors.append(
+            "deploy.sh must HTTP-smoke SPA assets via ensure_frontend_dist_readable --http-base"
+        )
+    if "SPA_DEPLOY_IN_PROGRESS" not in deploy_text:
+        errors.append(
+            "deploy.sh must set SPA_DEPLOY_IN_PROGRESS around frontend dist swap "
+            "(spa-uptime-canary skip window)"
+        )
+    if "spa-dist.fingerprint" not in deploy_text:
+        errors.append(
+            "deploy.sh must write /home/deploy/spa-dist.fingerprint after dist install"
         )
 
     # 6b. Celery liveness cron + shared ops-alert + installer
@@ -434,7 +479,93 @@ def main() -> int:
             "install-backup-cron.sh must redirect lead CC mount health "
             "to lead-cc-mount-health.log"
         )
+    if "SPA_CANARY_MARKER=\"spa-uptime-canary-managed\"" not in install_cron:
+        errors.append(
+            "install-backup-cron.sh must define SPA_CANARY_MARKER=spa-uptime-canary-managed"
+        )
+    if not re.search(
+        r'echo\s+"\*/5 \* \* \* \* /home/deploy/spa-uptime-canary\.sh ',
+        install_cron,
+    ):
+        errors.append(
+            "install-backup-cron.sh must install */5 spa-uptime-canary.sh cron"
+        )
+    spa_canary = REPO_ROOT / "scripts" / "spa-uptime-canary.sh"
+    if not spa_canary.exists():
+        errors.append("Missing expected script: scripts/spa-uptime-canary.sh")
+    else:
+        spa_canary_text = _read(spa_canary)
+        if "ensure_frontend_dist_readable" not in spa_canary_text:
+            errors.append("spa-uptime-canary.sh must call ensure_frontend_dist_readable")
+        if "SPA_DEPLOY_IN_PROGRESS" not in spa_canary_text:
+            errors.append("spa-uptime-canary.sh must honor SPA_DEPLOY_IN_PROGRESS")
+        if "ops-alert.sh" not in spa_canary_text:
+            errors.append("spa-uptime-canary.sh must source ops-alert.sh")
+    spa_fp = REPO_ROOT / "scripts" / "spa-dist-fingerprint.sh"
+    if not spa_fp.exists():
+        errors.append("Missing expected script: scripts/spa-dist-fingerprint.sh")
+    restore_dist = REPO_ROOT / "scripts" / "restore_frontend_dist_backup.sh"
+    if not restore_dist.exists():
+        errors.append("Missing expected script: scripts/restore_frontend_dist_backup.sh")
+    else:
+        restore_text = _read(restore_dist)
+        if "copytree" in restore_text or "dirs_exist_ok" in restore_text:
+            errors.append(
+                "restore_frontend_dist_backup.sh must not mutate the live dist via "
+                "copytree/dirs_exist_ok (stage + atomic mv only)"
+            )
+        if "OLD_DIST" not in restore_text or "mv " not in restore_text:
+            errors.append(
+                "restore_frontend_dist_backup.sh must swap via OLD_DIST/TMP rename"
+            )
+    spa_asset_refs = REPO_ROOT / "scripts" / "spa_asset_refs.py"
+    if not spa_asset_refs.exists():
+        errors.append("Missing expected script: scripts/spa_asset_refs.py")
     deploy_yml_text = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
+    if not re.search(
+        r"scp\s+[^\n]*scripts/spa-uptime-canary\.sh\s+[^\n]+:/home/deploy/spa-uptime-canary\.sh",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/spa-uptime-canary.sh "
+            "to /home/deploy/spa-uptime-canary.sh"
+        )
+    if not re.search(
+        r"scp\s+[^\n]*scripts/spa-dist-fingerprint\.sh\s+[^\n]+:/home/deploy/spa-dist-fingerprint\.sh",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/spa-dist-fingerprint.sh "
+            "to /home/deploy/spa-dist-fingerprint.sh"
+        )
+    if not re.search(
+        r"chmod 750[^\n]*spa-uptime-canary\.sh", deploy_yml_text
+    ):
+        errors.append(
+            "deploy.yml chmod 750 line must include spa-uptime-canary.sh"
+        )
+    if not re.search(
+        r"scp\s+[^\n]*scripts/restore_frontend_dist_backup\.sh\s+[^\n]+:/home/deploy/restore_frontend_dist_backup\.sh",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/restore_frontend_dist_backup.sh "
+            "to /home/deploy/restore_frontend_dist_backup.sh"
+        )
+    if not re.search(
+        r"chmod 750[^\n]*restore_frontend_dist_backup\.sh", deploy_yml_text
+    ):
+        errors.append(
+            "deploy.yml chmod 750 line must include restore_frontend_dist_backup.sh"
+        )
+    if not re.search(
+        r"scp\s+[^\n]*scripts/spa_asset_refs\.py\s+[^\n]+:/home/deploy/spa_asset_refs\.py",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/spa_asset_refs.py "
+            "to /home/deploy/spa_asset_refs.py"
+        )
     if not re.search(
         r"scp\s+[^\n]*scripts/check-lead-cc-mount-health\.sh\s+[^\n]+:/home/deploy/check-lead-cc-mount-health\.sh",
         deploy_yml_text,
@@ -451,6 +582,31 @@ def main() -> int:
             "deploy.yml must scp scripts/lead_cc_mount_health.py "
             "to /home/deploy/lead_cc_mount_health.py"
         )
+    if not re.search(
+        r"chmod 750[^\n]*ensure_frontend_dist_readable\.sh", deploy_yml_text
+    ):
+        errors.append(
+            "deploy.yml chmod 750 line must include ensure_frontend_dist_readable.sh"
+        )
+    if not re.search(
+        r"scp\s+[^\n]*scripts/ensure_frontend_dist_readable\.sh\s+[^\n]+:/home/deploy/ensure_frontend_dist_readable\.sh",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/ensure_frontend_dist_readable.sh "
+            "to /home/deploy/ensure_frontend_dist_readable.sh"
+        )
+    # umask 077 for secret JSON must not apply to frontend/dist scp (mode 0700 blank SPA).
+    scp_dist_idx = deploy_yml_text.find("scp -i ~/.ssh/id_deploy -r frontend/dist")
+    umask_secrets_idx = deploy_yml_text.find("umask 077")
+    umask_reset_idx = deploy_yml_text.find("umask 022")
+    if scp_dist_idx == -1:
+        errors.append("deploy.yml must scp -r frontend/dist to the VPS")
+    elif umask_secrets_idx != -1 and umask_secrets_idx < scp_dist_idx:
+        if umask_reset_idx == -1 or not (umask_secrets_idx < umask_reset_idx < scp_dist_idx):
+            errors.append(
+                "deploy.yml must set umask 022 after umask 077 and before frontend/dist scp"
+            )
     # Executable + readable perms must ship with the files (cron otherwise fails).
     if not re.search(
         r"chmod 750[^\n]*check-lead-cc-mount-health\.sh", deploy_yml_text

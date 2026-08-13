@@ -18,6 +18,20 @@ TARGET_SHA="${1:?TARGET_SHA argument is required}"
 APP_DIR="/home/deploy/app"
 ROLLBACK_LOG="/home/deploy/rollback.log"
 
+# Durable helper (Deploy CI copies to /home/deploy/; survives git checkout rollback).
+ensure_frontend_dist_readable() {
+    local script=""
+    if [ -f /home/deploy/ensure_frontend_dist_readable.sh ]; then
+        script=/home/deploy/ensure_frontend_dist_readable.sh
+    elif [ -f "$APP_DIR/scripts/ensure_frontend_dist_readable.sh" ]; then
+        script="$APP_DIR/scripts/ensure_frontend_dist_readable.sh"
+    else
+        echo "FAILED: ensure_frontend_dist_readable.sh not found"
+        return 1
+    fi
+    bash "$script" "$@"
+}
+
 cd "$APP_DIR"
 
 # ── Capture current SHA for rollback ─────────────────────────────────────────
@@ -33,7 +47,7 @@ fi
 
 # ── Rollback function — called automatically on any failure ──────────────────
 rollback() {
-    local exit_code=$?
+    local exit_code="${1:-$?}"
     cd "$APP_DIR"  # Always reset to APP_DIR regardless of where the failure occurred
     if [ "$PREVIOUS_SHA" = "unknown" ] || [ "$PREVIOUS_SHA" = "$TARGET_SHA" ]; then
         echo "ERROR: Deploy failed (exit $exit_code). No rollback possible."
@@ -47,16 +61,20 @@ rollback() {
     git checkout "$PREVIOUS_SHA" 2>/dev/null || { echo "ROLLBACK WARNING: git checkout $PREVIOUS_SHA failed"; ROLLBACK_FAILED=1; }
     echo "$PREVIOUS_SHA" > "$APP_DIR/DEPLOY_SHA" 2>/dev/null || { echo "ROLLBACK WARNING: could not write DEPLOY_SHA"; ROLLBACK_FAILED=1; }
     pip install --user -r backend/requirements.txt -q 2>/dev/null || { echo "ROLLBACK WARNING: pip install failed"; ROLLBACK_FAILED=1; }
-    # Restore the previous frontend/dist backup to avoid a version mismatch:
-    # without this, backend would be at PREVIOUS_SHA but frontend/dist would
-    # contain the TARGET_SHA build, causing frontend/backend incompatibility.
-    if [ -d "/home/deploy/frontend-dist-backup" ]; then
-        rm -rf frontend/dist
-        cp -r /home/deploy/frontend-dist-backup frontend/dist 2>/dev/null || { echo "ROLLBACK WARNING: frontend dist restore failed"; ROLLBACK_FAILED=1; }
+    # Restore the previous frontend/dist backup to avoid a version mismatch.
+    RESTORE_DIST_SCRIPT=/home/deploy/restore_frontend_dist_backup.sh
+    if [ ! -f "$RESTORE_DIST_SCRIPT" ]; then
+        RESTORE_DIST_SCRIPT="$APP_DIR/scripts/restore_frontend_dist_backup.sh"
+    fi
+    if [ -f "$RESTORE_DIST_SCRIPT" ]; then
+        APP_DIR="$APP_DIR" bash "$RESTORE_DIST_SCRIPT" \
+            || { echo "ROLLBACK WARNING: frontend dist backup restore helper failed"; ROLLBACK_FAILED=1; }
     else
-        echo "ROLLBACK WARNING: no frontend-dist-backup found — frontend may be at $TARGET_SHA while backend rolls back to $PREVIOUS_SHA"
+        echo "ROLLBACK WARNING: restore_frontend_dist_backup.sh not found"
         ROLLBACK_FAILED=1
     fi
+    # Always clear soft-lock so canary can heal/alert even when restore failed.
+    rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
     sudo -n systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
     sudo -n systemctl restart celery 2>/dev/null || true
     sudo -n systemctl restart celery-beat 2>/dev/null || true
@@ -69,7 +87,7 @@ rollback() {
     fi
     exit $exit_code
 }
-trap rollback ERR
+trap 'rollback $?' ERR
 
 # Celery is stopped before the memory guard to free worker RSS on the 2GB VPS.
 # Durable marker + EXIT trap restore Celery if deploy exits before step 7
@@ -153,6 +171,8 @@ dump_memory_diagnostics() {
 
 cleanup_deploy_exit() {
     restore_celery_if_stopped_for_prep
+    # Clear SPA swap marker even on failure so canary can heal/alert.
+    rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 }
 # EXIT covers normal exit, explicit exit, and default signal termination (TERM/HUP/INT).
 trap cleanup_deploy_exit EXIT
@@ -299,9 +319,27 @@ if [ -d "frontend/dist" ]; then
 fi
 
 # Install new dist
+touch /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 rm -rf frontend/dist
 mv /home/deploy/frontend-dist frontend/dist
 echo "    Frontend dist installed from CI runner build"
+# Fail closed if assets/ is mode 0700 (nginx www-data cannot traverse → blank SPA).
+ensure_frontend_dist_readable frontend/dist \
+    || { echo "FAILED: frontend dist not readable by nginx"; rollback 1; }
+# Blessed fingerprint for spa-uptime-canary soft drift detection.
+FP_SCRIPT=/home/deploy/spa-dist-fingerprint.sh
+if [ ! -f "$FP_SCRIPT" ]; then
+    FP_SCRIPT="$APP_DIR/scripts/spa-dist-fingerprint.sh"
+fi
+if [ -f "$FP_SCRIPT" ]; then
+    APP_DIR="$APP_DIR" bash "$FP_SCRIPT" write frontend/dist /home/deploy/spa-dist.fingerprint \
+        || { echo "FAILED: could not write spa-dist.fingerprint"; rollback 1; }
+    echo "    spa-dist.fingerprint updated"
+else
+    echo "FAILED: spa-dist-fingerprint.sh not found"
+    rollback 1
+fi
+rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 
 echo "==> (4) Run database migrations"
 cd backend
@@ -386,6 +424,10 @@ if [ "$GUNICORN_READY" = "0" ]; then
     echo "FAILED: Gunicorn did not become healthy on localhost after ~126s"
     exit 1
 fi
+
+echo "==> (6a) Verify nginx can HTTP-serve SPA assets (blank-SPA class)"
+ensure_frontend_dist_readable frontend/dist --http-base http://127.0.0.1 \
+    || { echo "FAILED: nginx asset HTTP smoke failed"; rollback 1; }
 
 echo "==> (6b) Mail batch stale task cleanup"
 cd backend
