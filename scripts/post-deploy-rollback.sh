@@ -51,6 +51,23 @@ if [ -d "/home/deploy/frontend-dist-backup" ]; then
        ! cp -r /home/deploy/frontend-dist-backup frontend/dist 2>/dev/null; then
         echo "ROLLBACK WARNING: frontend dist restore failed"
         ROLLBACK_FAILED=1
+    else
+        ENSURE_SCRIPT=/home/deploy/ensure_frontend_dist_readable.sh
+        if [ ! -f "$ENSURE_SCRIPT" ]; then
+            ENSURE_SCRIPT="$APP_DIR/scripts/ensure_frontend_dist_readable.sh"
+        fi
+        # nginx (www-data) needs other+rx on assets/; mode 0700 blanks the SPA.
+        if [ -f "$ENSURE_SCRIPT" ]; then
+            if ! bash "$ENSURE_SCRIPT" frontend/dist; then
+                echo "ROLLBACK WARNING: frontend dist perms fix failed"
+                ROLLBACK_FAILED=1
+            fi
+        else
+            chmod -R a+rX frontend/dist 2>/dev/null || {
+                echo "ROLLBACK WARNING: frontend dist chmod failed"
+                ROLLBACK_FAILED=1
+            }
+        fi
     fi
 else
     echo "ROLLBACK WARNING: no frontend-dist-backup found — frontend may mismatch backend"

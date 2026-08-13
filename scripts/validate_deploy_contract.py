@@ -273,6 +273,16 @@ def main() -> int:
     live_spa = REPO_ROOT / "scripts" / "assert_live_spa_contract.py"
     if not live_spa.exists():
         errors.append("Missing expected script: scripts/assert_live_spa_contract.py")
+    else:
+        live_spa_text = _read(live_spa)
+        if "asset_urls_from_html" not in live_spa_text or "HTTP 200" not in live_spa_text:
+            errors.append(
+                "assert_live_spa_contract.py must HTTP-check /assets/ hrefs "
+                "(blank SPA when assets/ is mode 0700)"
+            )
+    ensure_dist = REPO_ROOT / "scripts" / "ensure_frontend_dist_readable.sh"
+    if not ensure_dist.exists():
+        errors.append("Missing expected script: scripts/ensure_frontend_dist_readable.sh")
     drift = REPO_ROOT / "scripts" / "check_main_prod_drift.py"
     if not drift.exists():
         errors.append("Missing expected script: scripts/check_main_prod_drift.py")
@@ -332,6 +342,15 @@ def main() -> int:
     if re.search(r"trap 'cleanup_deploy_exit; exit \d+' TERM", deploy_text):
         errors.append(
             "deploy.sh should restore celery via EXIT only (remove TERM/INT/HUP traps)"
+        )
+    if "ensure_frontend_dist_readable" not in deploy_text:
+        errors.append(
+            "deploy.sh must call ensure_frontend_dist_readable after installing frontend/dist "
+            "(mode 0700 on assets/ blanks the SPA)"
+        )
+    if "--http-base" not in deploy_text:
+        errors.append(
+            "deploy.sh must HTTP-smoke SPA assets via ensure_frontend_dist_readable --http-base"
         )
 
     # 6b. Celery liveness cron + shared ops-alert + installer
@@ -451,6 +470,31 @@ def main() -> int:
             "deploy.yml must scp scripts/lead_cc_mount_health.py "
             "to /home/deploy/lead_cc_mount_health.py"
         )
+    if not re.search(
+        r"chmod 750[^\n]*ensure_frontend_dist_readable\.sh", deploy_yml_text
+    ):
+        errors.append(
+            "deploy.yml chmod 750 line must include ensure_frontend_dist_readable.sh"
+        )
+    if not re.search(
+        r"scp\s+[^\n]*scripts/ensure_frontend_dist_readable\.sh\s+[^\n]+:/home/deploy/ensure_frontend_dist_readable\.sh",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/ensure_frontend_dist_readable.sh "
+            "to /home/deploy/ensure_frontend_dist_readable.sh"
+        )
+    # umask 077 for secret JSON must not apply to frontend/dist scp (mode 0700 blank SPA).
+    scp_dist_idx = deploy_yml_text.find("scp -i ~/.ssh/id_deploy -r frontend/dist")
+    umask_secrets_idx = deploy_yml_text.find("umask 077")
+    umask_reset_idx = deploy_yml_text.find("umask 022")
+    if scp_dist_idx == -1:
+        errors.append("deploy.yml must scp -r frontend/dist to the VPS")
+    elif umask_secrets_idx != -1 and umask_secrets_idx < scp_dist_idx:
+        if umask_reset_idx == -1 or not (umask_secrets_idx < umask_reset_idx < scp_dist_idx):
+            errors.append(
+                "deploy.yml must set umask 022 after umask 077 and before frontend/dist scp"
+            )
     # Executable + readable perms must ship with the files (cron otherwise fails).
     if not re.search(
         r"chmod 750[^\n]*check-lead-cc-mount-health\.sh", deploy_yml_text

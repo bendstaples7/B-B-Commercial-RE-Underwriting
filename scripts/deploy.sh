@@ -18,6 +18,20 @@ TARGET_SHA="${1:?TARGET_SHA argument is required}"
 APP_DIR="/home/deploy/app"
 ROLLBACK_LOG="/home/deploy/rollback.log"
 
+# Durable helper (Deploy CI copies to /home/deploy/; survives git checkout rollback).
+ensure_frontend_dist_readable() {
+    local script=""
+    if [ -f /home/deploy/ensure_frontend_dist_readable.sh ]; then
+        script=/home/deploy/ensure_frontend_dist_readable.sh
+    elif [ -f "$APP_DIR/scripts/ensure_frontend_dist_readable.sh" ]; then
+        script="$APP_DIR/scripts/ensure_frontend_dist_readable.sh"
+    else
+        echo "FAILED: ensure_frontend_dist_readable.sh not found"
+        return 1
+    fi
+    bash "$script" "$@"
+}
+
 cd "$APP_DIR"
 
 # ── Capture current SHA for rollback ─────────────────────────────────────────
@@ -53,6 +67,11 @@ rollback() {
     if [ -d "/home/deploy/frontend-dist-backup" ]; then
         rm -rf frontend/dist
         cp -r /home/deploy/frontend-dist-backup frontend/dist 2>/dev/null || { echo "ROLLBACK WARNING: frontend dist restore failed"; ROLLBACK_FAILED=1; }
+        # nginx (www-data) needs other+rx on assets/; mode 0700 blanks the SPA.
+        if [ -d frontend/dist ]; then
+            ensure_frontend_dist_readable frontend/dist \
+                || { echo "ROLLBACK WARNING: frontend dist perms fix failed"; ROLLBACK_FAILED=1; }
+        fi
     else
         echo "ROLLBACK WARNING: no frontend-dist-backup found — frontend may be at $TARGET_SHA while backend rolls back to $PREVIOUS_SHA"
         ROLLBACK_FAILED=1
@@ -302,6 +321,9 @@ fi
 rm -rf frontend/dist
 mv /home/deploy/frontend-dist frontend/dist
 echo "    Frontend dist installed from CI runner build"
+# Fail closed if assets/ is mode 0700 (nginx www-data cannot traverse → blank SPA).
+ensure_frontend_dist_readable frontend/dist \
+    || { echo "FAILED: frontend dist not readable by nginx"; exit 1; }
 
 echo "==> (4) Run database migrations"
 cd backend
@@ -386,6 +408,10 @@ if [ "$GUNICORN_READY" = "0" ]; then
     echo "FAILED: Gunicorn did not become healthy on localhost after ~126s"
     exit 1
 fi
+
+echo "==> (6a) Verify nginx can HTTP-serve SPA assets (blank-SPA class)"
+ensure_frontend_dist_readable frontend/dist --http-base http://127.0.0.1 \
+    || { echo "FAILED: nginx asset HTTP smoke failed"; exit 1; }
 
 echo "==> (6b) Mail batch stale task cleanup"
 cd backend

@@ -252,6 +252,7 @@ jobs:
           # Copy deploy script and shared checks
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
           scp -i ~/.ssh/id_deploy scripts/post-deploy-rollback.sh $VPS_USER@$VPS_HOST:/home/deploy/post-deploy-rollback.sh
+          scp -i ~/.ssh/id_deploy scripts/ensure_frontend_dist_readable.sh $VPS_USER@$VPS_HOST:/home/deploy/ensure_frontend_dist_readable.sh
           scp -i ~/.ssh/id_deploy scripts/deploy-async-stack-checks.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy-async-stack-checks.sh
           scp -i ~/.ssh/id_deploy scripts/run-vps-readiness-check.sh $VPS_USER@$VPS_HOST:/home/deploy/run-vps-readiness-check.sh
           # Copy backup scripts and library (idempotent — safe to overwrite on every deploy)
@@ -278,7 +279,7 @@ jobs:
           scp -i ~/.ssh/id_deploy backup_lib.py $VPS_USER@$VPS_HOST:/home/deploy/backup_lib.py
           # Set correct permissions on backup scripts
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
-            "chmod 750 /home/deploy/backup.sh /home/deploy/backup_remote_transfer.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh /home/deploy/install-backup-cron.sh /home/deploy/celery-liveness-check.sh /home/deploy/check-lead-cc-mount-health.sh /home/deploy/ops-alert.sh /home/deploy/verify-backup-health.sh /home/deploy/restore-drill.sh /home/deploy/post-deploy-rollback.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py /home/deploy/backup_health_check.py /home/deploy/lead_cc_mount_health.py /home/deploy/setup-b2-rclone.py /home/deploy/setup-cloudflare-rclone.py /home/deploy/configure_backup_remotes.py /home/deploy/inject-remote-backup.py"
+            "chmod 750 /home/deploy/backup.sh /home/deploy/backup_remote_transfer.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh /home/deploy/install-backup-cron.sh /home/deploy/celery-liveness-check.sh /home/deploy/check-lead-cc-mount-health.sh /home/deploy/ops-alert.sh /home/deploy/verify-backup-health.sh /home/deploy/restore-drill.sh /home/deploy/post-deploy-rollback.sh /home/deploy/ensure_frontend_dist_readable.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py /home/deploy/backup_health_check.py /home/deploy/lead_cc_mount_health.py /home/deploy/setup-b2-rclone.py /home/deploy/setup-cloudflare-rclone.py /home/deploy/configure_backup_remotes.py /home/deploy/inject-remote-backup.py"
           # Create a stub backup.conf if none exists so backup.sh can run without blocking the deploy.
           # The stub has empty remote/alert credentials — backup will skip remote transfer and alerting
           # but will still run pg_dump and write a local manifest entry.
@@ -329,6 +330,9 @@ jobs:
           # This catches DB connectivity issues (wrong user, missing .pgpass, etc.) before the deploy starts.
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "/home/deploy/backup.sh --check" \
             || { echo "ERROR: backup.sh --check failed — PostgreSQL connectivity issue. Check /home/deploy/logs/backup.log on VPS."; exit 1; }
+          # umask 077 above hardens secret JSON locally; reset before packing
+          # frontend/dist so scp cannot ship assets/ as mode 0700 (nginx 404 / blank SPA).
+          umask 022
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "rm -rf /home/deploy/frontend-dist"
           scp -i ~/.ssh/id_deploy -r frontend/dist $VPS_USER@$VPS_HOST:/home/deploy/frontend-dist
           scp -i ~/.ssh/id_deploy changed_paths.txt $VPS_USER@$VPS_HOST:/home/deploy/changed_paths.txt
