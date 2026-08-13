@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Restore /home/deploy/frontend-dist-backup and refresh SPA perms/fingerprint.
+#
+# Stages a complete tree under a sibling temp path, validates it, then swaps
+# into DIST_DIR with rename(2). Never mutates the live tree entry-by-entry.
 
 set -euo pipefail
 
@@ -9,10 +12,28 @@ DIST_DIR="${2:-frontend/dist}"
 FINGERPRINT_FILE="${3:-/home/deploy/spa-dist.fingerprint}"
 DEPLOY_MARKER="${SPA_DEPLOY_IN_PROGRESS:-/home/deploy/SPA_DEPLOY_IN_PROGRESS}"
 
+DIST_PARENT="$(dirname "$DIST_DIR")"
+DIST_BASENAME="$(basename "$DIST_DIR")"
+TMP_DIST="${DIST_PARENT}/.${DIST_BASENAME}.restore.$$"
+OLD_DIST="${DIST_PARENT}/.${DIST_BASENAME}.old.$$"
+FP_TMP=""
+
+cleanup_temps() {
+    rm -rf "$TMP_DIST" 2>/dev/null || true
+    if [ -n "$FP_TMP" ]; then
+        rm -f "$FP_TMP" 2>/dev/null || true
+    fi
+}
+
 clear_marker() {
     rm -f "$DEPLOY_MARKER" 2>/dev/null || true
 }
-trap clear_marker EXIT
+
+on_exit() {
+    cleanup_temps
+    clear_marker
+}
+trap on_exit EXIT
 
 cd "$APP_DIR"
 
@@ -21,13 +42,9 @@ if [ ! -d "$BACKUP_DIR" ]; then
     exit 2
 fi
 
-DIST_PARENT="$(dirname "$DIST_DIR")"
-DIST_BASENAME="$(basename "$DIST_DIR")"
-TMP_DIST="${DIST_PARENT}/.${DIST_BASENAME}.restore.$$"
-rm -rf "$TMP_DIST" 2>/dev/null || true
-if ! cp -r "$BACKUP_DIR" "$TMP_DIST" 2>/dev/null; then
-    rm -rf "$TMP_DIST" 2>/dev/null || true
-    echo "ROLLBACK WARNING: frontend dist restore failed"
+rm -rf "$TMP_DIST" "$OLD_DIST" 2>/dev/null || true
+if ! cp -a "$BACKUP_DIR" "$TMP_DIST" 2>/dev/null; then
+    echo "ROLLBACK WARNING: frontend dist restore failed (copy)"
     exit 1
 fi
 
@@ -51,48 +68,50 @@ FP_SCRIPT=/home/deploy/spa-dist-fingerprint.sh
 if [ ! -f "$FP_SCRIPT" ]; then
     FP_SCRIPT="$APP_DIR/scripts/spa-dist-fingerprint.sh"
 fi
-FP_TMP="${FINGERPRINT_FILE}.$$.$RANDOM.tmp"
-if [ -f "$FP_SCRIPT" ]; then
-    APP_DIR="$APP_DIR" bash "$FP_SCRIPT" write "$TMP_DIST" "$FP_TMP" || {
-        rm -f "$FP_TMP" 2>/dev/null || true
-        echo "ROLLBACK WARNING: spa-dist.fingerprint update failed"
-        exit 1
-    }
-else
+if [ ! -f "$FP_SCRIPT" ]; then
     echo "ROLLBACK WARNING: spa-dist-fingerprint.sh not found"
     exit 1
 fi
-if ! python3 - "$TMP_DIST" "$DIST_DIR" <<'PY'
-import os
-import shutil
-import sys
 
-src, dst = sys.argv[1], sys.argv[2]
-os.makedirs(dst, exist_ok=True)
+FP_TMP="${FINGERPRINT_FILE}.$$.$RANDOM.tmp"
+APP_DIR="$APP_DIR" bash "$FP_SCRIPT" write "$TMP_DIST" "$FP_TMP" || {
+    echo "ROLLBACK WARNING: spa-dist.fingerprint update failed"
+    exit 1
+}
 
-for root, dirs, files in os.walk(dst, topdown=False):
-    rel = os.path.relpath(root, dst)
-    src_root = src if rel == "." else os.path.join(src, rel)
-    for name in files:
-        if not os.path.exists(os.path.join(src_root, name)):
-            os.unlink(os.path.join(root, name))
-    for name in dirs:
-        if not os.path.exists(os.path.join(src_root, name)):
-            shutil.rmtree(os.path.join(root, name))
-
-shutil.copytree(src, dst, dirs_exist_ok=True)
-PY
-then
-    rm -rf "$TMP_DIST" 2>/dev/null || true
-    rm -f "$FP_TMP" 2>/dev/null || true
-    echo "ROLLBACK WARNING: frontend dist sync failed"
+# Atomic publish: move live tree aside, then move validated tree into place.
+had_old=0
+if [ -e "$DIST_DIR" ]; then
+    if ! mv "$DIST_DIR" "$OLD_DIST"; then
+        echo "ROLLBACK WARNING: frontend dist old-tree move failed"
+        exit 1
+    fi
+    had_old=1
+fi
+if ! mv "$TMP_DIST" "$DIST_DIR"; then
+    if [ "$had_old" -eq 1 ]; then
+        mv "$OLD_DIST" "$DIST_DIR" 2>/dev/null || true
+    fi
+    echo "ROLLBACK WARNING: frontend dist activate failed"
     exit 1
 fi
+# TMP is now the live DIST_DIR — do not delete it in EXIT cleanup.
+TMP_DIST=""
+
 if ! mv -f "$FP_TMP" "$FINGERPRINT_FILE"; then
-    rm -f "$FP_TMP" 2>/dev/null || true
+    # Prefer putting the previous tree back over leaving a new tree with stale FP.
+    if [ "$had_old" -eq 1 ] && [ -d "$OLD_DIST" ]; then
+        rm -rf "$DIST_DIR" 2>/dev/null || true
+        mv "$OLD_DIST" "$DIST_DIR" 2>/dev/null || true
+    elif [ "$had_old" -eq 0 ]; then
+        # No prior tree — remove the new one so we do not leave FP/dist mismatch.
+        rm -rf "$DIST_DIR" 2>/dev/null || true
+    fi
     echo "ROLLBACK WARNING: spa-dist.fingerprint swap failed"
     exit 1
 fi
-rm -rf "$TMP_DIST" 2>/dev/null || true
+FP_TMP=""
+
+rm -rf "$OLD_DIST" 2>/dev/null || true
 
 echo "Frontend dist backup restored."

@@ -153,11 +153,15 @@ def reserve_alert() -> dict[str, str] | None:
             ok = r.set(REDIS_ALERT_KEY, token, nx=True, ex=ALERT_COOLDOWN_SECS)
             if ok:
                 return {'backend': 'redis', 'token': token}
+            # Redis healthy and another caller holds the window — do not file-fallback.
             return None
         except Exception as exc:
+            # Redis configured but unavailable — fall through to file reservation.
             logger.warning('spa boot alert redis debounce failed: %s', exc)
-            _clear_redis_reservation(r, token)
-            return None
+            try:
+                _clear_redis_reservation(r, token)
+            except Exception:
+                pass
 
     lock_path = f'{FILE_ALERT_STATE}.lock'
     lock_fd: int | None = None

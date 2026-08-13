@@ -137,7 +137,11 @@ def version():
 
 
 def _spa_boot_client_ip() -> str:
-    """Trust X-Real-IP only from the local/reverse proxy hop."""
+    """Client IP for beacon rate-limit/telemetry.
+
+    Prefer ``X-Real-IP`` when the immediate peer is a trusted proxy (nginx sets
+    it to ``$remote_addr``). Do not trust the first ``X-Forwarded-For`` hop.
+    """
     from flask import request
     import os
 
@@ -149,9 +153,9 @@ def _spa_boot_client_ip() -> str:
         if p.strip()
     )
     if remote_addr in trusted_proxies:
-        forwarded = (request.headers.get('X-Real-IP') or '').strip()
-        if forwarded:
-            return forwarded
+        real_ip = (request.headers.get('X-Real-IP') or '').strip()
+        if real_ip:
+            return real_ip
     return remote_addr or 'unknown'
 
 

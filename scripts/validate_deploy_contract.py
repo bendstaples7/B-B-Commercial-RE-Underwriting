@@ -507,6 +507,17 @@ def main() -> int:
     restore_dist = REPO_ROOT / "scripts" / "restore_frontend_dist_backup.sh"
     if not restore_dist.exists():
         errors.append("Missing expected script: scripts/restore_frontend_dist_backup.sh")
+    else:
+        restore_text = _read(restore_dist)
+        if "copytree" in restore_text or "dirs_exist_ok" in restore_text:
+            errors.append(
+                "restore_frontend_dist_backup.sh must not mutate the live dist via "
+                "copytree/dirs_exist_ok (stage + atomic mv only)"
+            )
+        if "OLD_DIST" not in restore_text or "mv " not in restore_text:
+            errors.append(
+                "restore_frontend_dist_backup.sh must swap via OLD_DIST/TMP rename"
+            )
     spa_asset_refs = REPO_ROOT / "scripts" / "spa_asset_refs.py"
     if not spa_asset_refs.exists():
         errors.append("Missing expected script: scripts/spa_asset_refs.py")

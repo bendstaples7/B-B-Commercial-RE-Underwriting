@@ -85,6 +85,18 @@ def test_should_send_alert_debounce_file(tmp_path, monkeypatch):
     assert svc.should_send_alert() is False
 
 
+def test_reserve_alert_falls_through_to_file_when_redis_errors(tmp_path, monkeypatch):
+    state = tmp_path / 'last_alert'
+    monkeypatch.setattr(svc, 'FILE_ALERT_STATE', str(state))
+    broken = MagicMock()
+    broken.set.side_effect = OSError('redis down')
+    monkeypatch.setattr(svc, '_redis_client', lambda: broken)
+    reservation = svc.reserve_alert()
+    assert reservation is not None
+    assert reservation['backend'] == 'file'
+    assert state.is_file()
+
+
 def test_enqueue_or_alert_falls_back_when_celery_dispatch_fails(app):
     event = SpaBootFailureEvent(id=123, href='https://example.test/', reason='boot_watchdog')
     fake_app = MagicMock()
