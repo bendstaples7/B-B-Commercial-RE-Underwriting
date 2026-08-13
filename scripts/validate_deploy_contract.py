@@ -499,6 +499,9 @@ def main() -> int:
     spa_fp = REPO_ROOT / "scripts" / "spa-dist-fingerprint.sh"
     if not spa_fp.exists():
         errors.append("Missing expected script: scripts/spa-dist-fingerprint.sh")
+    restore_dist = REPO_ROOT / "scripts" / "restore_frontend_dist_backup.sh"
+    if not restore_dist.exists():
+        errors.append("Missing expected script: scripts/restore_frontend_dist_backup.sh")
     deploy_yml_text = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
     if not re.search(
         r"scp\s+[^\n]*scripts/spa-uptime-canary\.sh\s+[^\n]+:/home/deploy/spa-uptime-canary\.sh",
@@ -521,6 +524,20 @@ def main() -> int:
     ):
         errors.append(
             "deploy.yml chmod 750 line must include spa-uptime-canary.sh"
+        )
+    if not re.search(
+        r"scp\s+[^\n]*scripts/restore_frontend_dist_backup\.sh\s+[^\n]+:/home/deploy/restore_frontend_dist_backup\.sh",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/restore_frontend_dist_backup.sh "
+            "to /home/deploy/restore_frontend_dist_backup.sh"
+        )
+    if not re.search(
+        r"chmod 750[^\n]*restore_frontend_dist_backup\.sh", deploy_yml_text
+    ):
+        errors.append(
+            "deploy.yml chmod 750 line must include restore_frontend_dist_backup.sh"
         )
     if not re.search(
         r"scp\s+[^\n]*scripts/check-lead-cc-mount-health\.sh\s+[^\n]+:/home/deploy/check-lead-cc-mount-health\.sh",
