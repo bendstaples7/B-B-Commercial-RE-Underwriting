@@ -60,14 +60,13 @@ def fetch_html(url: str, timeout: float, *, attempts: int = 3) -> str:
 
 def asset_urls_from_html(html: str, base_url: str) -> list[str]:
     """Absolute URLs for /assets/ script and link hrefs in index HTML."""
-    base = base_url if base_url.endswith("/") else base_url + "/"
     out: list[str] = []
     seen: set[str] = set()
     for href in ASSET_HREF_RE.findall(html):
         path = href.split("?", 1)[0]
         if "/assets/" not in path and not path.startswith("assets/"):
             continue
-        abs_url = urljoin(base, path)
+        abs_url = urljoin(base_url, path)
         if abs_url in seen:
             continue
         seen.add(abs_url)
