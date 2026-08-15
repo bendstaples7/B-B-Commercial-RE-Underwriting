@@ -2367,6 +2367,15 @@ export interface CommandCenterPayload {
   assessor_class?: string | null;
   units?: number | null;
   units_allowed?: number | null;
+  /** Note/call parsed units + per-unit bed mix (assessor beds/baths stay on lead fields). */
+  note_property_facts?: {
+    units?: number | null;
+    unit_mix?: Array<{ units: number; beds: number; baths?: number }>;
+    source?: string;
+    hubspot_activity_id?: string | null;
+    excerpt?: string;
+    extracted_at?: string;
+  } | null;
 }
 
 export interface BuildingOwnershipAnalyzeResult {

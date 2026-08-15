@@ -608,18 +608,24 @@ def get_command_center(lead_id: int):
             pass
         lead = Lead.query.get(lead_id)
 
-    # Display next step + "why" from one live decision so label/explanation
-    # cannot disagree with a stale persisted recommended_action column.
-    decision_action, winning_rule, winning_signals = _get_action_decision(lead)
-    ra = decision_action if decision_action is not None else lead.recommended_action
-    contact_method = winning_signals.get('recommended_contact_method')
-    if contact_method is None and ra == lead.recommended_action:
-        contact_method = lead.recommended_contact_method
-    ra_display = get_recommended_action_display(
-        ra,
-        contact_method,
-        lead=lead,
-        winning_rule=winning_rule,
+    def _build_recommended_action_snapshot(current_lead):
+        # Display next step + "why" from one live decision so label/explanation
+        # cannot disagree with a stale persisted recommended_action column.
+        decision_action, winning_rule, winning_signals = _get_action_decision(current_lead)
+        ra = decision_action if decision_action is not None else current_lead.recommended_action
+        contact_method = winning_signals.get('recommended_contact_method')
+        if contact_method is None and ra == current_lead.recommended_action:
+            contact_method = current_lead.recommended_contact_method
+        ra_display = get_recommended_action_display(
+            ra,
+            contact_method,
+            lead=current_lead,
+            winning_rule=winning_rule,
+        )
+        return ra, contact_method, ra_display, winning_rule, winning_signals
+
+    ra, contact_method, ra_display, winning_rule, winning_signals = (
+        _build_recommended_action_snapshot(lead)
     )
     open_tasks = _lead_task_service.list_open(lead_id)
     timeline_entries, timeline_total = _lead_timeline_service.get_page(lead_id, page=1, per_page=25)
@@ -763,11 +769,47 @@ def get_command_center(lead_id: int):
     # Historic CRM/sheet signals: CoStar → commercial; ``Units: N`` in description.
     # Never overwrites authoritative GIS/assessor values already on the lead.
     from app.services.helpers.import_signal_fills import apply_import_signal_fills
+    from app.services.helpers.note_property_facts import (
+        apply_note_facts_from_timeline,
+        note_property_facts_needs_timeline_heal,
+    )
 
     import_signal_updates = apply_import_signal_fills(lead)
-    if import_signal_updates:
+    note_fact_updates: list[str] = []
+    if note_property_facts_needs_timeline_heal(getattr(lead, 'note_property_facts', None)):
+        note_fact_updates = apply_note_facts_from_timeline(lead)
+    if import_signal_updates or note_fact_updates:
         _db.session.add(lead)
         _db.session.commit()
+        if (
+            'units' in note_fact_updates
+            or 'lead_category' in note_fact_updates
+            or 'property_type' in note_fact_updates
+            or 'units' in import_signal_updates
+            or 'lead_category' in import_signal_updates
+            or 'property_type' in import_signal_updates
+        ):
+            try:
+                from app.services.lead_refresh import refresh_lead_scoring
+                # refresh_lead_scoring persists score/action changes itself.
+                refresh_lead_scoring(lead.id)
+            except Exception as score_exc:
+                logging.getLogger(__name__).warning(
+                    'refresh_lead_scoring after note facts heal failed lead=%s: %s',
+                    lead.id,
+                    score_exc,
+                )
+        lead = Lead.query.get(lead_id) or lead
+        data_quality_breakdown = build_data_quality_breakdown(lead)
+        data_completeness_score = data_quality_breakdown['total']
+        ra, contact_method, ra_display, winning_rule, winning_signals = (
+            _build_recommended_action_snapshot(lead)
+        )
+        # Scoring may create due call tasks / timeline rows — refresh snapshots.
+        open_tasks = _lead_task_service.list_open(lead_id)
+        timeline_entries, timeline_total = _lead_timeline_service.get_page(
+            lead_id, page=1, per_page=25,
+        )
 
     # Interaction table is frozen for Command Center — HubSpot activity history
     # lives on LeadTimelineEntry via HubSpotTimelineImportService. Do not UNION
@@ -1099,6 +1141,11 @@ def get_command_center(lead_id: int):
         'lot_size': lead.lot_size,
         'units': lead.units,
         'units_allowed': lead.units_allowed,
+        'note_property_facts': (
+            lead.note_property_facts
+            if isinstance(getattr(lead, 'note_property_facts', None), dict)
+            else None
+        ),
         'zoning': lead.zoning,
         'tax_bill_2021': lead.tax_bill_2021,
         'assessed_value': lead.assessed_value,

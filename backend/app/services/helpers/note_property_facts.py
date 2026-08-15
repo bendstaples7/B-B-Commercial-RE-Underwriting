@@ -13,8 +13,9 @@ from typing import Any, Optional
 from app.services.helpers.import_signal_fills import parse_units_from_deal_description
 
 # "6 unit property", "6-unit", "6 units", "12 unit building"
+# Skip only unit-mix phrasing ("N units are 2 beds"), not status ("N units are occupied").
 _UNITS_IN_PROSE_RE = re.compile(
-    r'\b(\d{1,4})\s*-?\s*units?\b(?!\s+are\b)'
+    r'\b(\d{1,4})\s*-?\s*units?\b(?!\s+are\s+\d+(?:\.\d+)?\s+beds?(?:rooms?)?\b)'
     r'(?:\s+(?:property|bldg|building|apt|apartment|multi[\s-]?family))?',
     re.IGNORECASE,
 )

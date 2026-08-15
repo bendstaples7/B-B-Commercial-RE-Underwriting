@@ -17,6 +17,7 @@ import {
   formatPropertyTypeLabel,
 } from '@/utils/formatters'
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
+import { formatNoteUnitMixLabel } from '@/utils/notePropertyFacts'
 
 const EM_DASH = '—'
 
@@ -215,6 +216,14 @@ export function PropertyOverviewQuickStats({
     commandCenterData.property_type ?? null,
   )
   const categoryLabel = formatLeadCategoryLabel(commandCenterData.lead_category ?? null)
+  const noteUnitsHint =
+    commandCenterData.note_property_facts?.units != null
+      ? `Units from notes${
+          commandCenterData.note_property_facts.unit_mix?.length
+            ? ` (${formatNoteUnitMixLabel(commandCenterData.note_property_facts.unit_mix)})`
+            : ''
+        }`
+      : undefined
 
   const cells: {
     id: string
@@ -242,6 +251,7 @@ export function PropertyOverviewQuickStats({
       // User lock 1B: Units may wrap — never nowrap into Category / condo.
       value: unitsDetails ?? EM_DASH,
       allowWrap: true,
+      tooltip: noteUnitsHint,
     },
     {
       id: 'category',
