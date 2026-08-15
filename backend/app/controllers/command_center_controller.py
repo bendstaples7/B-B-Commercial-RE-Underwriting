@@ -1901,12 +1901,20 @@ def log_call(lead_id: int):
 
 
 @command_center_bp.route('/<int:lead_id>/unanswered-mail-nudge/keep-calling', methods=['POST'])
+@require_auth
 @handle_errors
 def unanswered_mail_nudge_keep_calling(lead_id: int):
     """Dismiss the unanswered→mail nudge (Keep calling)."""
     from app.services.unanswered_mail_nudge_service import dismiss_unanswered_mail_nudge
 
-    actor = (request.get_json() or {}).get('actor') or getattr(g, 'user_id', 'anonymous')
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return denied
+
+    actor = getattr(g, 'user_id', None) or 'anonymous'
     lead = dismiss_unanswered_mail_nudge(lead_id, actor=str(actor))
     return jsonify({
         'lead_id': lead.id,
@@ -1916,6 +1924,7 @@ def unanswered_mail_nudge_keep_calling(lead_id: int):
 
 
 @command_center_bp.route('/<int:lead_id>/unanswered-mail-nudge/switch-to-mail', methods=['POST'])
+@require_auth
 @handle_errors
 def unanswered_mail_nudge_switch_to_mail(lead_id: int):
     """User-confirmed convert to Direct Mail after unanswered streak."""
@@ -1924,7 +1933,18 @@ def unanswered_mail_nudge_switch_to_mail(lead_id: int):
         unanswered_mail_nudge_owed,
     )
 
-    actor = (request.get_json() or {}).get('actor') or getattr(g, 'user_id', 'anonymous')
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return denied
+    if not unanswered_mail_nudge_owed(lead):
+        return jsonify({
+            'error': 'Unanswered mail nudge is not owed for this lead',
+        }), 409
+
+    actor = getattr(g, 'user_id', None) or 'anonymous'
     lead = switch_to_direct_mail_from_nudge(lead_id, actor=str(actor))
     return jsonify({
         'lead_id': lead.id,

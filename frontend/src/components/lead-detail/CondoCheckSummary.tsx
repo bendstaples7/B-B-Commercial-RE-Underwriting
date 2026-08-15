@@ -32,8 +32,7 @@ const RULE_LABELS: Record<string, string> = {
   rule_4_single_pin_owner: 'Single PIN / owner',
   rule_4b_commercial_few_pins: 'Few PINs — whole building',
   rule_5_multiple_pins_single_owner: 'Multiple PINs — single owner',
-  rule_5_mixed_signals: 'Mixed signals',
-  rule_6_partial_data: 'Partial data',
+  rule_6_multiple_pins_owners_no_indicators: 'Multiple PINs / owners — no indicators',
   rule_7_missing_data: 'Missing PINs / data',
   rule_8_default_fallback: 'Needs review',
 }

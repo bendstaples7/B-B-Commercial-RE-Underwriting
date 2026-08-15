@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import datetime, timezone
 
 _SCRIPT_BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND_DIR = _SCRIPT_BACKEND if os.path.isdir(os.path.join(_SCRIPT_BACKEND, 'app')) else os.getcwd()
@@ -62,6 +63,23 @@ def heal_same_person_owners(
         if wanted.startswith('1') and len(wanted) == 11:
             wanted = wanted[1:]
 
+        def _digits_for(contact: Contact) -> set[str]:
+            out: set[str] = set()
+            for p in ContactPhone.query.filter_by(contact_id=contact.id).all():
+                d = phone_digits(p.value)
+                if d.startswith('1') and len(d) == 11:
+                    d = d[1:]
+                if d:
+                    out.add(d)
+            return out
+
+        def _identity_match(a: Contact, b: Contact) -> bool:
+            if same_person_name_alias(
+                a.first_name, a.last_name, b.first_name, b.last_name,
+            ):
+                return True
+            return bool(_digits_for(a) & _digits_for(b))
+
         scored: list[tuple[int, Contact, PropertyContact]] = []
         for contact, link in rows:
             phones = ContactPhone.query.filter_by(contact_id=contact.id).all()
@@ -85,7 +103,32 @@ def heal_same_person_owners(
             scored.append((score, contact, link))
 
         scored.sort(key=lambda t: (-t[0], t[1].id))
-        keep_score, keep_contact, keep_link = scored[0]
+
+        if wanted:
+            keep_score, keep_contact, keep_link = scored[0]
+            if keep_score < 1000:
+                print(
+                    'No contact owns --keep-phone-digits; refusing to pick by '
+                    'activity score alone'
+                )
+                return {'kept': None, 'demoted': []}
+        else:
+            # Without an explicit phone, only heal a verified same-person cluster.
+            cluster = [scored[0]]
+            seed = scored[0][1]
+            for item in scored[1:]:
+                if _identity_match(seed, item[1]):
+                    cluster.append(item)
+            if len(cluster) < 2:
+                print(
+                    'No verified same-person cluster (name alias or shared phone); '
+                    'no-op without --keep-phone-digits'
+                )
+                return {'kept': None, 'demoted': []}
+            cluster.sort(key=lambda t: (-t[0], t[1].id))
+            keep_score, keep_contact, keep_link = cluster[0]
+            scored = cluster
+
         print(
             f'Keep contact {keep_contact.id} '
             f'{keep_contact.first_name!r} {keep_contact.last_name!r} '
@@ -94,30 +137,17 @@ def heal_same_person_owners(
 
         demote: list[tuple[Contact, PropertyContact]] = []
         for score, contact, link in scored[1:]:
-            keep_digits = {
-                phone_digits(p.value)
-                for p in ContactPhone.query.filter_by(contact_id=keep_contact.id).all()
-                if phone_digits(p.value)
-            }
-            contact_digits = {
-                phone_digits(p.value)
-                for p in ContactPhone.query.filter_by(contact_id=contact.id).all()
-                if phone_digits(p.value)
-            }
-            shared_phone = bool(keep_digits & contact_digits)
-            if (
-                same_person_name_alias(
-                    keep_contact.first_name, keep_contact.last_name,
-                    contact.first_name, contact.last_name,
-                )
-                or score >= 50
-                or shared_phone
-            ):
-                demote.append((contact, link))
+            if not _identity_match(keep_contact, contact):
                 print(
-                    f'  demote candidate {contact.id} '
+                    f'  skip non-identity contact {contact.id} '
                     f'{contact.first_name!r} {contact.last_name!r} score={score}'
                 )
+                continue
+            demote.append((contact, link))
+            print(
+                f'  demote candidate {contact.id} '
+                f'{contact.first_name!r} {contact.last_name!r} score={score}'
+            )
 
         if not apply:
             print('Dry-run only — pass --apply to write')
@@ -127,11 +157,13 @@ def heal_same_person_owners(
             }
 
         svc = ContactService()
+        now = datetime.now(timezone.utc)
         for contact, link in demote:
             svc._migrate_outreach_phones_to_contact(contact.id, keep_contact.id)
             if link.role == 'owner':
                 link.role = 'former_owner'
                 link.is_primary = False
+                link.superseded_at = now
 
         PropertyContact.query.filter_by(property_id=lead_id, is_primary=True).update(
             {'is_primary': False},

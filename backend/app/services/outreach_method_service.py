@@ -70,7 +70,7 @@ def evaluate_contact_method(
         if is_recently_sold(lead):
             return None
 
-    if getattr(lead, 'prefer_direct_mail', False) and is_owner_mailable_lead(lead):
+    if getattr(lead, 'prefer_direct_mail', False) is True and is_owner_mailable_lead(lead):
         return 'direct_mail'
 
     category = getattr(lead, 'lead_category', 'residential') or 'residential'

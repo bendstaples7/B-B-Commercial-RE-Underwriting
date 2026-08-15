@@ -72,7 +72,7 @@ def test_switch_sets_prefer_mail_without_writing_recommended_action(app):
         ) as supersede, patch(
             'app.services.unanswered_mail_nudge_service.refresh_lead_scoring',
         ) as refresh:
-            supersede.return_value = None
+            supersede.return_value = (0, [])
             refresh.return_value = None
             out = switch_to_direct_mail_from_nudge(lead_id, actor='test')
 

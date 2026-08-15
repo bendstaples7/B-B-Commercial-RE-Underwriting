@@ -18,7 +18,7 @@ def unanswered_mail_nudge_owed(lead: Lead) -> bool:
         return False
     if not getattr(lead, 'has_phone', False):
         return False
-    if getattr(lead, 'prefer_direct_mail', False):
+    if getattr(lead, 'prefer_direct_mail', False) is True:
         return False
     dismissed = getattr(lead, 'unanswered_mail_nudge_dismissed_count', None)
     if dismissed is not None and int(dismissed) >= unanswered:
@@ -60,12 +60,16 @@ def switch_to_direct_mail_from_nudge(lead_id: int, *, actor: str = 'anonymous') 
     lead = db.session.get(Lead, lead_id)
     if lead is None:
         raise ValueError(f'Lead {lead_id} not found')
+    if not unanswered_mail_nudge_owed(lead):
+        raise ValueError(f'Unanswered mail nudge is not owed for lead {lead_id}')
 
     unanswered = int(lead.unanswered_call_count or 0)
     lead.unanswered_mail_nudge_dismissed_count = unanswered
     lead.prefer_direct_mail = True
 
-    complete_tasks_superseded_by_mail(lead_id, actor=actor, commit=False)
+    _completed, hubspot_ids = complete_tasks_superseded_by_mail(
+        lead_id, actor=actor, commit=False,
+    )
 
     db.session.add(
         LeadTimelineEntry(
@@ -83,6 +87,11 @@ def switch_to_direct_mail_from_nudge(lead_id: int, *, actor: str = 'anonymous') 
         ),
     )
     db.session.commit()
+    if hubspot_ids:
+        from app.services.hubspot_task_completion_service import (
+            sync_pending_hubspot_completions,
+        )
+        sync_pending_hubspot_completions(hubspot_ids)
     refresh_lead_scoring(lead_id)
     db.session.refresh(lead)
     return lead

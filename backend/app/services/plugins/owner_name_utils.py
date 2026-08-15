@@ -233,7 +233,20 @@ def same_person_name_alias(
         is_marketing_or_listing_noise_last(last_b)
         or is_generic_owner_name(display_b)
     )
-    return noise_a or noise_b
+    # Require marketing noise on at least one side. When the other side still
+    # has a real surname, do not alias on first-token alone (needs phone / etc.).
+    if not noise_a and not noise_b:
+        return False
+    if noise_a and noise_b:
+        return True
+    clean_first, clean_last = (first_b, last_b) if noise_a else (first_a, last_a)
+    if not (clean_last or '').strip():
+        return True
+    if is_marketing_or_listing_noise_last(clean_last):
+        return True
+    if is_generic_owner_name(contact_display_name(clean_first, clean_last)):
+        return True
+    return False
 
 
 def is_property_management_name(cleaned: str) -> bool:

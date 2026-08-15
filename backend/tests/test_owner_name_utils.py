@@ -163,6 +163,12 @@ class TestSamePersonNameAlias:
             'Bob', 'Old Town Square Cbre',
         )
 
+    def test_real_surname_not_aliased_to_noise_alone(self):
+        assert not same_person_name_alias(
+            'Sam', 'Foster',
+            'Sam', 'For Sale By Owner',
+        )
+
 
 class TestApplyOwnerNameFields:
     def test_entity_sets_ownership_type(self):

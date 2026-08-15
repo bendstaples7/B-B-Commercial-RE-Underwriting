@@ -605,10 +605,26 @@ class ContactService:
         from_contact_id: int,
         to_contact_id: int,
     ) -> int:
-        """Move dialed / high-signal phones from one contact onto another (dedupe digits)."""
+        """Move dialed / high-signal phones from one contact onto another (dedupe digits).
+
+        When the source contact still has other active property links, clone
+        phone rows onto the destination instead of reassigning (shared contact).
+        """
         if from_contact_id == to_contact_id:
             return 0
         from app.models.contact_phone import ContactPhone
+
+        # If the source contact still has other active (non-former) property links,
+        # clone phones onto the destination instead of reassigning shared rows.
+        other_active_links = (
+            PropertyContact.query.filter(PropertyContact.contact_id == from_contact_id)
+            .filter(
+                (PropertyContact.role.is_(None))
+                | (PropertyContact.role != 'former_owner')
+            )
+            .count()
+        )
+        clone_instead = other_active_links > 1
 
         winner_phones = {
             phone_digits(p.value): p
@@ -640,16 +656,37 @@ class ContactService:
                     or phone.last_called_at > existing.last_called_at
                 ):
                     existing.last_called_at = phone.last_called_at
-                    if phone.last_outcome:
-                        existing.last_outcome = phone.last_outcome
+                if phone.last_outcome and (
+                    not existing.last_outcome
+                    or (
+                        phone.last_called_at
+                        and (
+                            not existing.last_called_at
+                            or phone.last_called_at >= existing.last_called_at
+                        )
+                    )
+                ):
+                    existing.last_outcome = phone.last_outcome
                 if not (existing.notes or '').strip() and (phone.notes or '').strip():
                     existing.notes = phone.notes
-                if has_signal:
+                if has_signal and not clone_instead:
                     db.session.delete(phone)
                 continue
-            if not has_signal:
-                # Still move any phone when archiving so the dial list stays complete.
-                pass
+            if clone_instead:
+                clone = ContactPhone(
+                    contact_id=to_contact_id,
+                    value=phone.value,
+                    label=phone.label,
+                    notes=phone.notes,
+                    source=phone.source,
+                    confidence_score=phone.confidence_score,
+                    last_called_at=phone.last_called_at,
+                    last_outcome=phone.last_outcome,
+                )
+                db.session.add(clone)
+                winner_phones[digits] = clone
+                moved += 1
+                continue
             phone.contact_id = to_contact_id
             winner_phones[digits] = phone
             moved += 1
@@ -880,14 +917,21 @@ class ContactService:
                         or 'hubspot primary' in (p.notes or '').lower()
                     )
                 }
+                c_first_token = (contact.first_name or '').strip().lower().split()[:1]
+                in_first_token = (first_name or '').strip().lower().split()[:1]
+                first_token_match = bool(
+                    c_first_token and c_first_token == in_first_token
+                )
+                name_ok = first_token_match or owner_names_equivalent(
+                    contact.first_name, contact.last_name, first_name, last_name,
+                )
                 if wanted_phones:
-                    phone_hit = bool(contact_digits & wanted_phones)
+                    # Shared phone alone is not identity — require a name gate.
+                    phone_hit = bool(contact_digits & wanted_phones) and name_ok
                 elif outreach_digits:
                     # GIS rename often arrives with no phones — keep the dialed
                     # / HubSpot-primary owner when first names still match.
-                    c_first_token = (contact.first_name or '').strip().lower().split()[:1]
-                    in_first_token = (first_name or '').strip().lower().split()[:1]
-                    phone_hit = bool(c_first_token and c_first_token == in_first_token)
+                    phone_hit = name_ok
             if not exact and not fuzzy and not alias and not phone_hit:
                 continue
             if link.role not in ('owner', 'former_owner'):

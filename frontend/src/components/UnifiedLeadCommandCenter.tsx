@@ -1259,12 +1259,25 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const [mailNudgePending, setMailNudgePending] = useState(false)
   const [mailNudgeError, setMailNudgeError] = useState<string | null>(null)
   const mailNudgeSessionDismissRef = useRef(false)
+  const mailNudgeDismissedAtCountRef = useRef<number | null>(null)
 
   useEffect(() => {
     mailNudgeSessionDismissRef.current = false
+    mailNudgeDismissedAtCountRef.current = null
     setMailNudgeOpen(false)
     setMailNudgeError(null)
   }, [leadId])
+
+  useEffect(() => {
+    const unanswered = commandCenterData?.unanswered_call_count
+    if (
+      typeof unanswered === 'number'
+      && mailNudgeDismissedAtCountRef.current != null
+      && unanswered > mailNudgeDismissedAtCountRef.current
+    ) {
+      mailNudgeSessionDismissRef.current = false
+    }
+  }, [commandCenterData?.unanswered_call_count])
 
   useEffect(() => {
     if (!commandCenterData?.unanswered_mail_nudge_owed) return
@@ -1273,23 +1286,29 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     setMailNudgeOpen(true)
   }, [
     commandCenterData?.unanswered_mail_nudge_owed,
+    commandCenterData?.unanswered_call_count,
     activityModal,
     dncDialogOpen,
     suppressDialogOpen,
   ])
 
-  const dismissMailNudgeLocal = useCallback(() => {
+  const dismissMailNudgeLocal = useCallback((opts?: { persistCount?: boolean }) => {
     mailNudgeSessionDismissRef.current = true
+    if (opts?.persistCount) {
+      const unanswered = commandCenterData?.unanswered_call_count
+      mailNudgeDismissedAtCountRef.current =
+        typeof unanswered === 'number' ? unanswered : mailNudgeDismissedAtCountRef.current
+    }
     setMailNudgeOpen(false)
     setMailNudgeError(null)
-  }, [])
+  }, [commandCenterData?.unanswered_call_count])
 
   const handleMailNudgeKeepCalling = useCallback(async () => {
     setMailNudgePending(true)
     setMailNudgeError(null)
     try {
       await commandCenterService.unansweredMailNudgeKeepCalling(leadId)
-      dismissMailNudgeLocal()
+      dismissMailNudgeLocal({ persistCount: true })
       await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     } catch (err) {
       setMailNudgeError(err instanceof Error ? err.message : 'Could not save. Try again.')
@@ -2373,7 +2392,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
 
       <Dialog
         open={mailNudgeOpen}
-        onClose={mailNudgePending ? undefined : () => { void handleMailNudgeKeepCalling() }}
+        onClose={mailNudgePending ? undefined : () => { dismissMailNudgeLocal() }}
         aria-labelledby="unanswered-mail-nudge-title"
         data-testid="unanswered-mail-nudge-dialog"
       >

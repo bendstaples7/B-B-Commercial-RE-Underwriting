@@ -68,6 +68,7 @@ def make_lead(
     lead.suppression_flag = False
     lead.lead_category = lead_category
     lead.unanswered_call_count = unanswered_call_count
+    lead.prefer_direct_mail = False
     lead.mailing_address = '123 Owner Mail St'
     lead.mailing_city = 'Chicago'
     lead.mailing_state = 'IL'
@@ -401,17 +402,19 @@ def test_priority_7_is_warm_residential_early_stage_returns_call_ready():
     assert result == 'call_ready'
 
 
-def test_commercial_three_unanswered_calls_returns_mail_ready():
+def test_commercial_three_unanswered_calls_keeps_call_ready_for_nudge():
+    """Commercial unanswered streak keeps phone; mail flip is user-confirmed."""
     lead = make_lead(
         lead_category='commercial',
         unanswered_call_count=3,
         lead_score=70.0,
         data_completeness_score=60.0,
     )
+    lead.prefer_direct_mail = False
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
          patch.object(LeadScoringEngine, '_has_recent_email', return_value=False):
         result = ActionEngineService.compute_recommended_action(lead)
-    assert result == 'mail_ready'
+    assert result == 'call_ready'
 
 
 # ---------------------------------------------------------------------------
