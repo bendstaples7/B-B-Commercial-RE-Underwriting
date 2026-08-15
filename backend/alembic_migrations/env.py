@@ -78,6 +78,8 @@ _KNOWN_REVISIONS = frozenset({
     'note_pf_20260812',
     # SPA boot-failure beacon events (blank SPA phone-home)
     'spa_boot_20260813',
+    # Unanswered-mail nudge dismiss + sticky prefer_direct_mail
+    'mail_nudge_20260814',
     's0t1u2v3w4x5', 't0u1v2w3x4y5', 'u1v2w3x4y5z6',
     'v1w2x3y4z5a6', 'w2x3y4z5a6b7', 'x3y4z5a6b7c8',
     'y4z5a6b7c8d9', 'z5a6b7c8d9e0',

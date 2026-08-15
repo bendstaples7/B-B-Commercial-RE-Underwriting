@@ -501,3 +501,143 @@ class TestOrderedContactsPayload:
             payload = service.get_ordered_contacts_payload(prop.id)
             assert payload[0]['phones'][0]['confidence_score'] == 90
             assert payload[0]['phones'][0]['notes'] == 'CONFIRMED'
+
+
+class TestSamePersonOwnerConsolidate:
+    def test_upsert_keeps_outreach_sam_over_brokerage_rename(self, app):
+        """GIS-style rename Sam FSBO → Sam CBRE reuses outreach contact + phone."""
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property('4490 Same Person St')
+            outreach = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'For Sale By Owner',
+                'phones': [{'value': '(773) 271-5525', 'label': 'mobile'}],
+            })
+            service.link_contact_to_property(
+                prop.id, outreach.id, role='owner', is_primary=True,
+            )
+            phone = ContactPhone.query.filter_by(contact_id=outreach.id).first()
+            phone.confidence_score = 85
+            phone.notes = 'HubSpot primary'
+            db.session.commit()
+
+            contact, link = service._upsert_named_owner(
+                prop.id,
+                'Sam',
+                'Old Town Square Cbre',
+                is_primary=True,
+                phone_digit_list=['7732715525'],
+            )
+            db.session.commit()
+
+            assert contact.id == outreach.id
+            assert contact.first_name == 'Sam'
+            assert contact.last_name == 'For Sale By Owner'
+            assert link.role == 'owner'
+            assert link.is_primary is True
+            owners = PropertyContact.query.filter_by(
+                property_id=prop.id, role='owner',
+            ).all()
+            assert len(owners) == 1
+            assert owners[0].contact_id == outreach.id
+
+    def test_unlink_duplicate_merges_phone_linked_same_person(self, app):
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property('4490 Dup Sam St')
+            kept = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'For Sale By Owner',
+                'phones': [{'value': '7732715525', 'label': 'mobile'}],
+            })
+            dup = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'Old Town Square Cbre',
+                'phones': [{'value': '3125559999', 'label': 'mobile'}],
+            })
+            service.link_contact_to_property(
+                prop.id, kept.id, role='owner', is_primary=True,
+            )
+            service.link_contact_to_property(
+                prop.id, dup.id, role='owner', is_primary=False,
+            )
+            db.session.commit()
+
+            service.unlink_duplicate_person_owners(prop.id)
+            db.session.commit()
+
+            owners = PropertyContact.query.filter_by(
+                property_id=prop.id, role='owner',
+            ).all()
+            assert len(owners) == 1
+            assert owners[0].contact_id == kept.id
+            kept_phones = {
+                p.value for p in ContactPhone.query.filter_by(contact_id=kept.id).all()
+            }
+            assert any('773' in v or '2715525' in v.replace('-', '') for v in kept_phones)
+            assert any('312' in v or '5559999' in v.replace('-', '') for v in kept_phones)
+
+    def test_unlink_merges_on_shared_phone_same_first_name(self, app):
+        """Shared dialed digits + same first token collapses without marketing alias."""
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property('4490 Shared Phone St')
+            kept = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'Alpha',
+                'phones': [{'value': '7732715525', 'label': 'mobile'}],
+            })
+            dup = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'Beta',
+                'phones': [{'value': '(773) 271-5525', 'label': 'mobile'}],
+            })
+            service.link_contact_to_property(
+                prop.id, kept.id, role='owner', is_primary=True,
+            )
+            service.link_contact_to_property(
+                prop.id, dup.id, role='owner', is_primary=False,
+            )
+            db.session.commit()
+
+            removed = service.unlink_duplicate_person_owners(prop.id)
+            db.session.commit()
+
+            assert removed == 1
+            owners = PropertyContact.query.filter_by(
+                property_id=prop.id, role='owner',
+            ).all()
+            assert len(owners) == 1
+            assert owners[0].contact_id == kept.id
+
+    def test_upsert_keeps_dialed_owner_when_incoming_has_no_phones(self, app):
+        with app.app_context():
+            from datetime import datetime, timezone
+
+            service = ContactService()
+            prop = _make_property('4490 Dialed Keep St')
+            outreach = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'Prior',
+                'phones': [{'value': '7732715525', 'label': 'mobile'}],
+            })
+            service.link_contact_to_property(
+                prop.id, outreach.id, role='owner', is_primary=True,
+            )
+            phone = ContactPhone.query.filter_by(contact_id=outreach.id).first()
+            phone.last_called_at = datetime.now(timezone.utc)
+            phone.confidence_score = 85
+            db.session.commit()
+
+            contact, link = service._upsert_named_owner(
+                prop.id,
+                'Sam',
+                'Newname',
+                is_primary=True,
+                phone_digit_list=None,
+            )
+            db.session.commit()
+
+            assert contact.id == outreach.id
+            assert link.role == 'owner'

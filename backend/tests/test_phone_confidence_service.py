@@ -514,3 +514,59 @@ def test_hubspot_primary_resync_preserves_wrong_number(app):
         phone = ContactPhone.query.filter_by(contact_id=contact.id).first()
         assert phone.confidence_score == 5
         assert phone.last_outcome == 'wrong_number'
+
+
+def test_build_phones_payload_includes_former_owner_dialed_phone(app):
+    """Safety net: archived same-person owner with dial history still surfaces."""
+    from datetime import datetime, timezone
+
+    from app.models.contact import Contact
+    from app.models.contact_phone import ContactPhone
+    from app.models.lead import Lead
+    from app.models.property_contact import PropertyContact
+    from app import db
+
+    with app.app_context():
+        lead = Lead(property_street='Former Dial St', lead_score=40.0)
+        db.session.add(lead)
+        db.session.flush()
+
+        former = Contact(first_name='Sam', last_name='For Sale By Owner', role='owner')
+        primary = Contact(first_name='Sam', last_name='Old Town Square Cbre', role='owner')
+        db.session.add_all([former, primary])
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=lead.id,
+            contact_id=former.id,
+            role='former_owner',
+            is_primary=False,
+        ))
+        db.session.add(PropertyContact(
+            property_id=lead.id,
+            contact_id=primary.id,
+            role='owner',
+            is_primary=True,
+        ))
+        db.session.add(ContactPhone(
+            contact_id=former.id,
+            value='(773) 271-5525',
+            label='mobile',
+            confidence_score=85,
+            last_called_at=datetime.now(timezone.utc),
+            last_outcome='no_answer',
+            notes='HubSpot primary',
+        ))
+        db.session.add(ContactPhone(
+            contact_id=primary.id,
+            value='(312) 555-0100',
+            label='mobile',
+            confidence_score=None,
+        ))
+        db.session.commit()
+
+        payload = PhoneConfidenceService.build_phones_payload(lead.id, lead)
+        digits = {
+            PhoneConfidenceService.normalize_phone(p['value']) for p in payload
+        }
+        assert '7732715525' in digits
+        assert '3125550100' in digits

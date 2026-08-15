@@ -3,12 +3,15 @@ from app.services.plugins.owner_name_utils import (
     apply_owner_name_fields,
     expand_owner_name_parts,
     is_address_like_name,
+    is_cleaner_person_display_name,
     is_definite_institutional_name,
     is_entity_name,
     is_generic_owner_name,
     is_institutional_name,
+    is_marketing_or_listing_noise_last,
     is_matchable_person_name,
     owner_names_equivalent,
+    same_person_name_alias,
 )
 
 
@@ -142,6 +145,29 @@ class TestAddressLikeName:
     def test_llc_not_address_even_with_digits(self):
         assert is_entity_name("123 Main Street LLC")
         assert not is_address_like_name("123 Main Street LLC")
+
+
+class TestSamePersonNameAlias:
+    def test_sam_fsbo_matches_sam_cbre(self):
+        assert same_person_name_alias(
+            'Sam', 'For Sale By Owner',
+            'Sam', 'Old Town Square Cbre',
+        )
+        assert is_marketing_or_listing_noise_last('Old Town Square Cbre')
+        assert is_marketing_or_listing_noise_last('For Sale By Owner')
+        assert not is_cleaner_person_display_name('Sam', 'Old Town Square Cbre')
+
+    def test_different_first_names_not_alias(self):
+        assert not same_person_name_alias(
+            'Sam', 'For Sale By Owner',
+            'Bob', 'Old Town Square Cbre',
+        )
+
+    def test_real_surname_not_aliased_to_noise_alone(self):
+        assert not same_person_name_alias(
+            'Sam', 'Foster',
+            'Sam', 'For Sale By Owner',
+        )
 
 
 class TestApplyOwnerNameFields:

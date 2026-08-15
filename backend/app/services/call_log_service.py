@@ -263,6 +263,9 @@ class CallLogService:
 
         if outcome == 'answered':
             lead.last_contact_date = date.today()
+            lead.prefer_direct_mail = False
+            lead.unanswered_call_count = 0
+            lead.unanswered_mail_nudge_dismissed_count = None
         elif outcome in ('voicemail', 'no_answer'):
             lead.unanswered_call_count = (lead.unanswered_call_count or 0) + 1
 

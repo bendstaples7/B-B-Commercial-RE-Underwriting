@@ -1364,6 +1364,15 @@ export const commandCenterService = {
     }).then(r => r.data),
   doNotContact: (leadId: number): Promise<unknown> =>
     api.post(`/leads/${leadId}/do-not-contact`).then(r => r.data),
+  unansweredMailNudgeKeepCalling: (leadId: number): Promise<unknown> =>
+    api.post(`/leads/${leadId}/unanswered-mail-nudge/keep-calling`).then(r => r.data),
+  unansweredMailNudgeSwitchToMail: (leadId: number): Promise<{
+    lead_id: number
+    recommended_action?: string | null
+    recommended_contact_method?: string | null
+    prefer_direct_mail?: boolean
+  }> =>
+    api.post(`/leads/${leadId}/unanswered-mail-nudge/switch-to-mail`).then(r => r.data),
   park: (leadId: number, reactivationDate?: string): Promise<unknown> =>
     api.post(`/leads/${leadId}/park`, { reactivation_date: reactivationDate ?? null }).then(r => r.data),
   mergeInto: (

@@ -1643,28 +1643,74 @@ def ensure_due_today_call_task(
     actor: str = 'system',
     title: str | None = None,
 ) -> LeadTask | None:
-    """Create a due-today call task when urgency has no dated open work.
+    """Create or bump a due-today call task when urgency has no fresh open work.
 
-    Skips when mail work is in flight (queued batch or pending mail rematch),
-    when any open rematch task exists (dated or not), or when an open task
-    already has a due date. Rematch cancellation for real call workflows is
-    handled in ``LeadTaskService.create`` and ``CallLogService.log_call``.
+    Skips when mail work is in flight (queued batch or pending mail rematch)
+    or when any open rematch task exists. If an open call-completable task is
+    overdue, bumps its due_date to today instead of leaving stale due work.
     """
     lead_id = lead.id
     if lead_has_mail_work_in_flight(lead_id):
         return None
     if find_open_mail_follow_up_task(lead_id):
         return None
-    has_dated = LeadTask.query.filter(
-        LeadTask.lead_id == lead_id,
-        LeadTask.status == 'open',
-        LeadTask.due_date.isnot(None),
-    ).first()
-    if has_dated is not None:
-        return None
 
     now = datetime.now(timezone.utc)
     today = date.today()
+
+    open_tasks = LeadTask.query.filter(
+        LeadTask.lead_id == lead_id,
+        LeadTask.status == 'open',
+    ).all()
+
+    # CRM mirrors can stay status=overdue after due was bumped to today.
+    for task in open_tasks:
+        if not task.mirror_task_id:
+            continue
+        if not is_call_completable_task(task.task_type, task.title):
+            continue
+        mirror = Task.query.get(task.mirror_task_id)
+        if mirror is None or mirror.status != 'overdue':
+            continue
+        if task.due_date is not None and task.due_date >= today:
+            mirror.status = 'open'
+            mirror.due_date = datetime.combine(today, datetime.min.time())
+
+    overdue_call = next(
+        (
+            t for t in open_tasks
+            if t.due_date is not None
+            and t.due_date < today
+            and is_call_completable_task(t.task_type, t.title)
+        ),
+        None,
+    )
+    if overdue_call is not None:
+        overdue_call.due_date = today
+        mirror = None
+        if overdue_call.mirror_task_id:
+            mirror = Task.query.get(overdue_call.mirror_task_id)
+        if mirror is None:
+            mirror = (
+                Task.query
+                .filter(
+                    Task.lead_id == lead_id,
+                    Task.title == overdue_call.title,
+                    Task.status.in_(('open', 'overdue')),
+                )
+                .order_by(Task.id.desc())
+                .first()
+            )
+        if mirror is not None:
+            mirror.due_date = datetime.combine(today, datetime.min.time())
+            if mirror.status == 'overdue':
+                mirror.status = 'open'
+        return overdue_call
+
+    has_dated = next((t for t in open_tasks if t.due_date is not None), None)
+    if has_dated is not None:
+        return None
+
     street = (lead.property_street or '').strip()
     task_title = title or (
         f'Call owner — {street}' if street else f'Call owner — lead {lead_id}'

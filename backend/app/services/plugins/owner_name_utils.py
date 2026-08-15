@@ -69,6 +69,21 @@ _GENERIC_OWNER_PHRASES = (
     "NO OWNER",
 )
 
+# Assessor / HubSpot / brokerage junk that still carries a real first name
+# (e.g. "Sam" / "Old Town Square Cbre") — not a true ownership change.
+_MARKETING_NOISE_LAST_TOKENS = frozenset({
+    "CBRE", "REALTY", "REALTOR", "REALTORS", "BROKER", "BROKERS",
+    "BROKERAGE", "ASSOCIATES", "PROPERTIES", "PROPERTY", "GROUP",
+    "SQUARE", "TOWN", "MANAGEMENT", "MGMT", "SIGN", "LISTING",
+})
+_MARKETING_NOISE_LAST_PHRASES = (
+    "FOR SALE BY OWNER",
+    "FOR RENT",
+    "FOR LEASE",
+    "OLD TOWN",
+    "FOR SALE",
+)
+
 
 def _normalize_token(token: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", token.upper())
@@ -146,6 +161,92 @@ def is_generic_owner_name(name: str | None) -> bool:
     if len(tokens) == 1 and tokens & _GENERIC_OWNER_SOLE_TOKENS:
         return True
     return bool(tokens & _GENERIC_OWNER_TOKENS)
+
+
+def is_marketing_or_listing_noise_last(last_name: str | None) -> bool:
+    """True when a 'last name' looks like brokerage / listing marketing junk."""
+    cleaned = re.sub(r"\s+", " ", (last_name or "").strip())
+    if not cleaned:
+        return False
+    if is_generic_owner_name(cleaned):
+        return True
+    upper = cleaned.upper()
+    if any(phrase in upper for phrase in _MARKETING_NOISE_LAST_PHRASES):
+        return True
+    tokens = {_normalize_token(t) for t in upper.split()}
+    tokens.discard("")
+    return bool(tokens & _MARKETING_NOISE_LAST_TOKENS)
+
+
+def is_cleaner_person_display_name(
+    first_name: str | None,
+    last_name: str | None,
+) -> bool:
+    """True when the name is a real person label worth overwriting outreach identity."""
+    if not is_matchable_person_name(first_name, last_name):
+        return False
+    return not is_marketing_or_listing_noise_last(last_name)
+
+
+def same_person_name_alias(
+    first_a: str | None,
+    last_a: str | None,
+    first_b: str | None,
+    last_b: str | None,
+) -> bool:
+    """True when two labels are the same person under marketing/listing rename.
+
+    Unlike ``owner_names_equivalent``, allows FSBO / brokerage junk last names
+    and generic listing displays as long as the person first-token matches.
+    """
+    if owner_names_equivalent(first_a, last_a, first_b, last_b):
+        return True
+    display_a = contact_display_name(first_a, last_a)
+    display_b = contact_display_name(first_b, last_b)
+    if not display_a or not display_b:
+        return False
+    if is_entity_name(display_a) or is_entity_name(display_b):
+        return False
+    if is_institutional_name(display_a) or is_institutional_name(display_b):
+        return False
+    if is_address_like_name(display_a) or is_address_like_name(display_b):
+        return False
+
+    tok_a = None
+    tok_b = None
+    for fa, la in _owner_name_variants(first_a, last_a):
+        tok_a, _ = _first_token_and_last(fa, la)
+        if tok_a:
+            break
+    for fb, lb in _owner_name_variants(first_b, last_b):
+        tok_b, _ = _first_token_and_last(fb, lb)
+        if tok_b:
+            break
+    if not tok_a or not tok_b or tok_a != tok_b:
+        return False
+
+    noise_a = (
+        is_marketing_or_listing_noise_last(last_a)
+        or is_generic_owner_name(display_a)
+    )
+    noise_b = (
+        is_marketing_or_listing_noise_last(last_b)
+        or is_generic_owner_name(display_b)
+    )
+    # Require marketing noise on at least one side. When the other side still
+    # has a real surname, do not alias on first-token alone (needs phone / etc.).
+    if not noise_a and not noise_b:
+        return False
+    if noise_a and noise_b:
+        return True
+    clean_first, clean_last = (first_b, last_b) if noise_a else (first_a, last_a)
+    if not (clean_last or '').strip():
+        return True
+    if is_marketing_or_listing_noise_last(clean_last):
+        return True
+    if is_generic_owner_name(contact_display_name(clean_first, clean_last)):
+        return True
+    return False
 
 
 def is_property_management_name(cleaned: str) -> bool:

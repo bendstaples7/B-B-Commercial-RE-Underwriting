@@ -1255,6 +1255,83 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const [dncDialogOpen, setDncDialogOpen] = useState(false)
   const [dncPending, setDncPending] = useState(false)
   const [dncError, setDncError] = useState<string | null>(null)
+  const [mailNudgeOpen, setMailNudgeOpen] = useState(false)
+  const [mailNudgePending, setMailNudgePending] = useState(false)
+  const [mailNudgeError, setMailNudgeError] = useState<string | null>(null)
+  const mailNudgeSessionDismissRef = useRef(false)
+  const mailNudgeDismissedAtCountRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    mailNudgeSessionDismissRef.current = false
+    mailNudgeDismissedAtCountRef.current = null
+    setMailNudgeOpen(false)
+    setMailNudgeError(null)
+  }, [leadId])
+
+  useEffect(() => {
+    const unanswered = commandCenterData?.unanswered_call_count
+    if (
+      typeof unanswered === 'number'
+      && mailNudgeDismissedAtCountRef.current != null
+      && unanswered > mailNudgeDismissedAtCountRef.current
+    ) {
+      mailNudgeSessionDismissRef.current = false
+    }
+  }, [commandCenterData?.unanswered_call_count])
+
+  useEffect(() => {
+    if (!commandCenterData?.unanswered_mail_nudge_owed) return
+    if (activityModal != null || dncDialogOpen || suppressDialogOpen) return
+    if (mailNudgeSessionDismissRef.current) return
+    setMailNudgeOpen(true)
+  }, [
+    commandCenterData?.unanswered_mail_nudge_owed,
+    commandCenterData?.unanswered_call_count,
+    activityModal,
+    dncDialogOpen,
+    suppressDialogOpen,
+  ])
+
+  const dismissMailNudgeLocal = useCallback((opts?: { persistCount?: boolean }) => {
+    mailNudgeSessionDismissRef.current = true
+    if (opts?.persistCount) {
+      const unanswered = commandCenterData?.unanswered_call_count
+      mailNudgeDismissedAtCountRef.current =
+        typeof unanswered === 'number' ? unanswered : mailNudgeDismissedAtCountRef.current
+    }
+    setMailNudgeOpen(false)
+    setMailNudgeError(null)
+  }, [commandCenterData?.unanswered_call_count])
+
+  const handleMailNudgeKeepCalling = useCallback(async () => {
+    setMailNudgePending(true)
+    setMailNudgeError(null)
+    try {
+      await commandCenterService.unansweredMailNudgeKeepCalling(leadId)
+      dismissMailNudgeLocal({ persistCount: true })
+      await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+    } catch (err) {
+      setMailNudgeError(err instanceof Error ? err.message : 'Could not save. Try again.')
+    } finally {
+      setMailNudgePending(false)
+    }
+  }, [dismissMailNudgeLocal, leadId, queryClient])
+
+  const handleMailNudgeSwitchToMail = useCallback(async () => {
+    setMailNudgePending(true)
+    setMailNudgeError(null)
+    try {
+      await commandCenterService.unansweredMailNudgeSwitchToMail(leadId)
+      dismissMailNudgeLocal()
+      setActivitySnackbar({ open: true, message: 'Switched to Direct Mail' })
+      await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+      await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+    } catch (err) {
+      setMailNudgeError(err instanceof Error ? err.message : 'Could not switch. Try again.')
+    } finally {
+      setMailNudgePending(false)
+    }
+  }, [dismissMailNudgeLocal, leadId, queryClient])
 
   type QueueFlashSnackbar = {
     message: string
@@ -2309,6 +2386,45 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             }}
           >
             {dncPending ? 'Updating…' : 'Mark DNC'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={mailNudgeOpen}
+        onClose={mailNudgePending ? undefined : () => { dismissMailNudgeLocal() }}
+        aria-labelledby="unanswered-mail-nudge-title"
+        data-testid="unanswered-mail-nudge-dialog"
+      >
+        <DialogTitle id="unanswered-mail-nudge-title">
+          Try Direct Mail instead?
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            You&apos;ve called 3 times with no answer. Switch this lead to Direct Mail, or keep calling?
+          </DialogContentText>
+          {mailNudgeError && (
+            <DialogContentText color="error" sx={{ mt: 1 }} data-testid="unanswered-mail-nudge-error">
+              {mailNudgeError}
+            </DialogContentText>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => { void handleMailNudgeSwitchToMail() }}
+            disabled={mailNudgePending}
+            data-testid="unanswered-mail-nudge-switch"
+          >
+            Switch to Direct Mail
+          </Button>
+          <Button
+            variant="contained"
+            autoFocus
+            onClick={() => { void handleMailNudgeKeepCalling() }}
+            disabled={mailNudgePending}
+            data-testid="unanswered-mail-nudge-keep-calling"
+          >
+            {mailNudgePending ? 'Saving…' : 'Keep calling'}
           </Button>
         </DialogActions>
       </Dialog>
