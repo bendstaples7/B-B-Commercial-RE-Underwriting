@@ -805,6 +805,11 @@ def get_command_center(lead_id: int):
         ra, contact_method, ra_display, winning_rule, winning_signals = (
             _build_recommended_action_snapshot(lead)
         )
+        # Scoring may create due call tasks / timeline rows — refresh snapshots.
+        open_tasks = _lead_task_service.list_open(lead_id)
+        timeline_entries, timeline_total = _lead_timeline_service.get_page(
+            lead_id, page=1, per_page=25,
+        )
 
     # Interaction table is frozen for Command Center — HubSpot activity history
     # lives on LeadTimelineEntry via HubSpotTimelineImportService. Do not UNION

@@ -78,15 +78,31 @@ def test_note_property_migration_pages_lead_ids(monkeypatch):
 def test_note_fact_score_refresh_includes_property_type_updates():
     backend_dir = Path(__file__).resolve().parent.parent
     callers = [
-        backend_dir / "app/services/hubspot_activity_converter_service.py",
-        backend_dir / "app/controllers/command_center_controller.py",
+        (
+            backend_dir / "app/services/hubspot_activity_converter_service.py",
+            "refresh_lead_scoring(score_lead_id)",
+        ),
+        (
+            backend_dir / "app/controllers/command_center_controller.py",
+            "refresh_lead_scoring(lead.id)",
+        ),
     ]
 
-    for path in callers:
+    for path, refresh_call in callers:
         source = path.read_text(encoding="utf-8")
-        refresh_at = source.index("refresh_lead_scoring(lead.id)")
-        condition = source[source.rfind("if (", 0, refresh_at):refresh_at]
-        assert "'property_type' in updated" in condition or "'property_type' in note_fact_updates" in condition
+        refresh_at = source.index(refresh_call)
+        window_start = max(0, refresh_at - 900)
+        window = source[window_start: refresh_at + 220]
+        assert "property_type" in window
+        assert "except Exception as score_exc" in window
+        commit_marker = (
+            "db.session.commit()"
+            if path.name == "hubspot_activity_converter_service.py"
+            else "_db.session.commit()"
+        )
+        commit_at = source.rfind(commit_marker, 0, refresh_at)
+        assert commit_at != -1
+        assert commit_at < refresh_at
 
 
 def test_command_center_rebuilds_action_snapshot_after_note_fact_heal():
@@ -97,6 +113,13 @@ def test_command_center_rebuilds_action_snapshot_after_note_fact_heal():
 
     heal_at = source.index("apply_note_facts_from_timeline(lead)")
     recompute_at = source.index("_build_recommended_action_snapshot(lead)", heal_at)
+    tasks_refresh_at = source.index("_lead_task_service.list_open(lead_id)", heal_at)
+    timeline_refresh_at = source.index(
+        "_lead_timeline_service.get_page(",
+        heal_at,
+    )
     payload_at = source.index("'recommended_action': {", recompute_at)
 
     assert heal_at < recompute_at < payload_at
+    assert heal_at < tasks_refresh_at < payload_at
+    assert heal_at < timeline_refresh_at < payload_at

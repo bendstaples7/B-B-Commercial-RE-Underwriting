@@ -3,7 +3,6 @@ from types import SimpleNamespace
 
 from app.services.helpers.note_property_facts import (
     apply_note_property_facts_to_lead,
-    format_unit_mix_label,
     parse_note_property_facts,
     parse_unit_mix_from_note_text,
     parse_units_from_note_text,
@@ -34,6 +33,10 @@ class TestParseUnitsFromNoteText:
         assert facts is not None
         assert facts['units'] == 6
 
+    def test_status_are_clause_still_counts_building_units(self):
+        assert parse_units_from_note_text('6 units are occupied') == 6
+        assert parse_units_from_note_text('8 units are available for lease') == 8
+
     def test_missing(self):
         assert parse_units_from_note_text('Called owner, no answer') is None
 
@@ -45,11 +48,6 @@ class TestParseUnitMix:
             {'units': 4, 'beds': 2},
             {'units': 2, 'beds': 3},
         ]
-
-    def test_format_label(self):
-        assert format_unit_mix_label(
-            [{'units': 4, 'beds': 2}, {'units': 2, 'beds': 3}]
-        ) == '4×2 bd + 2×3 bd'
 
 
 class TestApplyToLead:
@@ -217,3 +215,59 @@ class TestApplyToLead:
         assert lead.units == 12
         assert lead.note_property_facts['units'] == 12
         assert lead.note_property_facts['hubspot_activity_id'] == 'older'
+
+
+class TestRicherFactsPreferDetailAndRecency:
+    """Main (#154) richer-mix / source_occurred_at tie-breakers."""
+
+    def test_richer_unit_mix_with_baths_replaces_same_row_count(self):
+        lead = SimpleNamespace(
+            units=None,
+            lead_category='residential',
+            property_type=None,
+            note_property_facts=None,
+        )
+
+        apply_note_property_facts_to_lead(
+            lead,
+            '6 unit property. 4 units are 2 beds. 2 units are 3 beds.',
+            hubspot_activity_id='note-1',
+        )
+        apply_note_property_facts_to_lead(
+            lead,
+            '6 unit property. 4 units are 2 beds and 1 baths. 2 units are 3 beds and 2 baths.',
+            hubspot_activity_id='note-2',
+        )
+
+        assert lead.note_property_facts['hubspot_activity_id'] == 'note-2'
+        assert lead.note_property_facts['unit_mix'] == [
+            {'units': 4, 'beds': 2, 'baths': 1},
+            {'units': 2, 'beds': 3, 'baths': 2},
+        ]
+
+    def test_newer_source_time_replaces_equal_shape_unit_mix(self):
+        lead = SimpleNamespace(
+            units=None,
+            lead_category='residential',
+            property_type=None,
+            note_property_facts=None,
+        )
+
+        apply_note_property_facts_to_lead(
+            lead,
+            '6 unit property. 4 units are 2 beds and 1 baths. 2 units are 3 beds and 2 baths.',
+            hubspot_activity_id='note-older',
+            source_occurred_at='2026-01-01T00:00:00+00:00',
+        )
+        apply_note_property_facts_to_lead(
+            lead,
+            '6 unit property. 4 units are 1 beds and 1 baths. 2 units are 4 beds and 2 baths.',
+            hubspot_activity_id='note-newer',
+            source_occurred_at='2026-01-02T00:00:00+00:00',
+        )
+
+        assert lead.note_property_facts['hubspot_activity_id'] == 'note-newer'
+        assert lead.note_property_facts['unit_mix'] == [
+            {'units': 4, 'beds': 1, 'baths': 1},
+            {'units': 2, 'beds': 4, 'baths': 2},
+        ]
