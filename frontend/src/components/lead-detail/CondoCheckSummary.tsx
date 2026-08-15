@@ -25,13 +25,17 @@ import {
 const GAUGE_SIZE = 56
 
 const RULE_LABELS: Record<string, string> = {
+  rule_1_unit_number: 'Unit number',
+  rule_2_condo_language: 'Condo language',
+  rule_3_multiple_pins_owners: 'Multiple PINs / owners',
+  rule_3b_commercial_multi_pin_cluster: 'Commercial multi-PIN cluster',
+  rule_4_single_pin_owner: 'Single PIN / owner',
+  rule_4b_commercial_few_pins: 'Few PINs — whole building',
+  rule_5_multiple_pins_single_owner: 'Multiple PINs — single owner',
+  rule_5_mixed_signals: 'Mixed signals',
+  rule_6_partial_data: 'Partial data',
   rule_7_missing_data: 'Missing PINs / data',
-  rule_1_single_pin: 'Single PIN',
-  rule_2_multi_pin: 'Multiple PINs',
-  rule_3_condo_language: 'Condo language',
-  rule_4_unit_numbers: 'Unit numbers',
-  rule_5_owner_count: 'Owner count',
-  rule_6_mixed_signals: 'Mixed signals',
+  rule_8_default_fallback: 'Needs review',
 }
 
 export function humanizeCondoDriver(rule: string): string {
@@ -39,7 +43,7 @@ export function humanizeCondoDriver(rule: string): string {
   if (!key) return ''
   if (RULE_LABELS[key]) return RULE_LABELS[key]
   return key
-    .replace(/^rule_\d+_/, '')
+    .replace(/^rule_\d+[a-z]?_/, '')
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase())
 }
@@ -57,7 +61,10 @@ function iconForDriver(label: string): ReactElement {
   if (lower.includes('missing') || lower.includes('incomplete')) {
     return <WarningAmberIcon sx={{ fontSize: 12 }} />
   }
-  if (lower.includes('condo')) {
+  if (lower.includes('whole building') || lower.includes('single pin')) {
+    return <CheckCircleOutlineIcon sx={{ fontSize: 12 }} />
+  }
+  if (lower.includes('condo') && !lower.includes('not')) {
     return <ApartmentIcon sx={{ fontSize: 12 }} />
   }
   if (lower.includes('not') || lower.includes('clear')) {
@@ -241,7 +248,13 @@ export function CondoCheckSummary({
             }}
             data-testid={`${testIdStem}-drivers`}
           >
-            {drivers.slice(0, 2).map((driver) => (
+            {drivers.slice(0, 2).map((driver) => {
+              const notCondos = lines.verdict === 'Not condos'
+              const chipBg = notCondos
+                ? 'rgba(34, 197, 94, 0.12)'
+                : 'rgba(245, 158, 11, 0.12)'
+              const chipFg = notCondos ? '#15803D' : '#B45309'
+              return (
               <Chip
                 key={driver}
                 size="small"
@@ -256,14 +269,14 @@ export function CondoCheckSummary({
                   minHeight: 24,
                   justifyContent: 'flex-start',
                   borderRadius: 0.75,
-                  bgcolor: 'rgba(245, 158, 11, 0.12)',
-                  color: '#B45309',
+                  bgcolor: chipBg,
+                  color: chipFg,
                   fontWeight: 600,
                   fontSize: '0.65rem',
                   py: 0.35,
                   overflow: 'visible',
                   '& .MuiChip-icon': {
-                    color: '#B45309',
+                    color: chipFg,
                     ml: 0.35,
                     mr: -0.15,
                     flexShrink: 0,
@@ -278,7 +291,8 @@ export function CondoCheckSummary({
                   },
                 }}
               />
-            ))}
+              )
+            })}
           </Box>
         )}
       </Box>

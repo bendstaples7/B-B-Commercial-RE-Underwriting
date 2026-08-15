@@ -26,6 +26,16 @@ function basePayload(overrides: Partial<CommandCenterPayload> = {}): CommandCent
 describe('humanizeCondoDriver', () => {
   it('maps known rules to short labels', () => {
     expect(humanizeCondoDriver('rule_7_missing_data')).toBe('Missing PINs / data')
+    expect(humanizeCondoDriver('rule_4b_commercial_few_pins')).toBe(
+      'Few PINs — whole building',
+    )
+    expect(humanizeCondoDriver('rule_5_multiple_pins_single_owner')).toBe(
+      'Multiple PINs — single owner',
+    )
+  })
+
+  it('strips letter-suffixed rule ids without leaving Rule 4b junk', () => {
+    expect(humanizeCondoDriver('rule_4b_unknown_driver')).toBe('Unknown Driver')
   })
 })
 

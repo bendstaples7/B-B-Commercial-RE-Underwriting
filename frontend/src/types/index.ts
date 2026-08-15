@@ -2045,6 +2045,8 @@ export interface QueueRow {
   suggested_winner_id?: number | null;
   duplicate_confidence?: 'clear' | 'ambiguous' | string | null;
   unanswered_call_count: number;
+  unanswered_mail_nudge_owed?: boolean;
+  prefer_direct_mail?: boolean;
   is_warm: boolean;
   last_mailed_at?: string | null;
   last_sale_at?: string | null;
@@ -2276,6 +2278,9 @@ export interface CommandCenterPayload {
   date_added_to_hubspot?: string | null;
   recommended_action: RecommendedActionMeta;
   open_tasks: LeadTask[];
+  /** True when unanswered streak ≥3 and user has not Keep-calling / Switch yet. */
+  unanswered_mail_nudge_owed?: boolean;
+  prefer_direct_mail?: boolean;
   up_next_to_mail?: boolean | null;
   mail_queue_status?: 'queued' | 'sent_recently' | null;
   /** True when CC GET scheduled (or force-rechecked) building ownership / condo analysis. */

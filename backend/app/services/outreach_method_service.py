@@ -70,6 +70,9 @@ def evaluate_contact_method(
         if is_recently_sold(lead):
             return None
 
+    if getattr(lead, 'prefer_direct_mail', False) and is_owner_mailable_lead(lead):
+        return 'direct_mail'
+
     category = getattr(lead, 'lead_category', 'residential') or 'residential'
     if category == 'commercial':
         return _commercial_contact_method(lead, has_phone=has_phone)
@@ -82,8 +85,9 @@ def evaluate_contact_method(
 
 
 def _commercial_contact_method(lead: Lead, *, has_phone: bool) -> str | None:
-    unanswered = getattr(lead, 'unanswered_call_count', 0) or 0
-    if has_phone and unanswered < 3:
+    # Keep recommending phone while a viable number exists. Unanswered streaks
+    # surface a user nudge to switch to mail — do not auto-flip the channel.
+    if has_phone:
         return 'phone'
     return 'direct_mail' if is_owner_mailable_lead(lead) else None
 

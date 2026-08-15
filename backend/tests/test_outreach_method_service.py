@@ -21,6 +21,7 @@ def _lead(**kwargs):
     lead.is_warm = kwargs.get('is_warm', False)
     lead.follow_up_overdue = kwargs.get('follow_up_overdue', False)
     lead.unanswered_call_count = kwargs.get('unanswered_call_count', 0)
+    lead.prefer_direct_mail = kwargs.get('prefer_direct_mail', False)
     lead.mailing_address = kwargs.get('mailing_address', '123 Owner Mail St')
     lead.mailing_city = kwargs.get('mailing_city', 'Chicago')
     lead.mailing_state = kwargs.get('mailing_state', 'IL')
@@ -125,11 +126,22 @@ def test_commercial_no_phone_falls_back_to_mail():
     assert method == 'direct_mail'
 
 
-def test_commercial_many_unanswered_falls_back_to_mail():
+def test_commercial_many_unanswered_keeps_phone_for_nudge():
+    """Do not auto-flip to mail — unanswered streak uses a user nudge."""
     lead = _lead(lead_category='commercial', unanswered_call_count=3)
     method = evaluate_contact_method(
         lead, 'ready_for_outreach',
         has_phone=True, has_email=True, recent_email=False,
+    )
+    assert method == 'phone'
+
+
+def test_prefer_direct_mail_sticky_after_nudge_switch():
+    lead = _lead(lead_category='commercial', unanswered_call_count=3)
+    lead.prefer_direct_mail = True
+    method = evaluate_contact_method(
+        lead, 'follow_up_now',
+        has_phone=True, has_email=False, recent_email=False,
     )
     assert method == 'direct_mail'
 

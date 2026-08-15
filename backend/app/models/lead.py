@@ -160,6 +160,11 @@ class Property(db.Model):
     data_completeness_score = db.Column(db.Float, nullable=False, default=0.0)
     last_contact_date = db.Column(db.Date, nullable=True)
     unanswered_call_count = db.Column(db.Integer, nullable=False, default=0)
+    # When user clicks Keep calling on the unanswered→mail nudge, store the
+    # unanswered_call_count at dismiss so we re-prompt only after another miss.
+    unanswered_mail_nudge_dismissed_count = db.Column(db.Integer, nullable=True)
+    # User chose Switch to Direct Mail on the unanswered nudge — sticky until answered.
+    prefer_direct_mail = db.Column(db.Boolean, nullable=False, default=False)
     hubspot_deal_stage = db.Column(db.String(100), nullable=True)  # read-only HubSpot mirror; pipeline status is lead_status
     last_hubspot_sync_at = db.Column(db.DateTime, nullable=True)
     follow_up_date = db.Column(db.Date, nullable=True)

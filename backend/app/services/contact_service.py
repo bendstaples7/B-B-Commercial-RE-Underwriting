@@ -600,6 +600,61 @@ class ContactService:
         link.role = 'owner'
         link.superseded_at = None
 
+    def _migrate_outreach_phones_to_contact(
+        self,
+        from_contact_id: int,
+        to_contact_id: int,
+    ) -> int:
+        """Move dialed / high-signal phones from one contact onto another (dedupe digits)."""
+        if from_contact_id == to_contact_id:
+            return 0
+        from app.models.contact_phone import ContactPhone
+
+        winner_phones = {
+            phone_digits(p.value): p
+            for p in ContactPhone.query.filter_by(contact_id=to_contact_id).all()
+            if phone_digits(p.value)
+        }
+        moved = 0
+        for phone in list(
+            ContactPhone.query.filter_by(contact_id=from_contact_id).all()
+        ):
+            has_signal = bool(
+                phone.last_called_at
+                or phone.last_outcome
+                or (phone.confidence_score is not None and phone.confidence_score >= 10)
+                or ('hubspot primary' in (phone.notes or '').lower())
+            )
+            digits = phone_digits(phone.value)
+            if not digits:
+                continue
+            if digits in winner_phones:
+                existing = winner_phones[digits]
+                # Prefer richer metadata on the kept contact.
+                w_conf = existing.confidence_score
+                l_conf = phone.confidence_score
+                if l_conf is not None and (w_conf is None or l_conf > w_conf):
+                    existing.confidence_score = l_conf
+                if phone.last_called_at and (
+                    not existing.last_called_at
+                    or phone.last_called_at > existing.last_called_at
+                ):
+                    existing.last_called_at = phone.last_called_at
+                    if phone.last_outcome:
+                        existing.last_outcome = phone.last_outcome
+                if not (existing.notes or '').strip() and (phone.notes or '').strip():
+                    existing.notes = phone.notes
+                if has_signal:
+                    db.session.delete(phone)
+                continue
+            if not has_signal:
+                # Still move any phone when archiving so the dial list stays complete.
+                pass
+            phone.contact_id = to_contact_id
+            winner_phones[digits] = phone
+            moved += 1
+        return moved
+
     def _archive_unmatched_owners(
         self,
         property_id: int,
@@ -609,7 +664,8 @@ class ContactService:
     ) -> int:
         """Re-role owner links not in *kept_contact_ids* to former_owner.
 
-        Snapshots once when any owners will be archived. No-op when nothing
+        Snapshots once when any owners will be archived. Migrates outreach-signal
+        phones onto a kept primary owner before archiving. No-op when nothing
         unmatched exists (avoids snapshot spam on idempotent upserts).
         """
         from datetime import datetime, timezone
@@ -635,11 +691,35 @@ class ContactService:
         if lead is not None:
             capture_owner_snapshot(lead, reason=REASON_CONTACT_REPLACED, commit=False)
 
+        target_id = None
+        if kept_contact_ids:
+            primary = (
+                PropertyContact.query
+                .filter(
+                    PropertyContact.property_id == property_id,
+                    PropertyContact.contact_id.in_(kept_contact_ids),
+                    PropertyContact.role == 'owner',
+                    PropertyContact.is_primary.is_(True),
+                )
+                .first()
+            )
+            if primary is not None:
+                target_id = primary.contact_id
+            else:
+                target_id = next(iter(kept_contact_ids), None)
+
         now = datetime.now(timezone.utc)
+        migrated = False
         for link in unmatched:
+            if target_id is not None:
+                if self._migrate_outreach_phones_to_contact(link.contact_id, target_id):
+                    migrated = True
             link.role = 'former_owner'
             link.is_primary = False
             link.superseded_at = now
+        if migrated and target_id is not None:
+            from app.services.phone_confidence_service import PhoneConfidenceService
+            PhoneConfidenceService.recompute_for_lead(property_id)
         return len(unmatched)
 
     @staticmethod
@@ -753,10 +833,16 @@ class ContactService:
         phone_digit_list: list[str] | None = None,
         emails: list[str] | None = None,
     ) -> tuple[Contact, PropertyContact]:
-        from app.services.plugins.owner_name_utils import owner_names_equivalent
+        from app.services.plugins.owner_name_utils import (
+            is_cleaner_person_display_name,
+            is_marketing_or_listing_noise_last,
+            owner_names_equivalent,
+            same_person_name_alias,
+        )
 
         first_norm = (first_name or '').strip().lower()
         last_norm = (last_name or '').strip().lower()
+        wanted_phones = {d for d in (phone_digit_list or []) if d}
 
         existing_rows = (
             db.session.query(Contact, PropertyContact)
@@ -771,17 +857,65 @@ class ContactService:
             fuzzy = (not exact) and owner_names_equivalent(
                 contact.first_name, contact.last_name, first_name, last_name,
             )
-            if not exact and not fuzzy:
+            alias = (not exact and not fuzzy) and same_person_name_alias(
+                contact.first_name, contact.last_name, first_name, last_name,
+            )
+            phone_hit = False
+            if not exact and not fuzzy and not alias:
+                phones = list(contact.phones or [])
+                contact_digits = {
+                    phone_digits(p.value) for p in phones if phone_digits(p.value)
+                }
+                outreach_digits = {
+                    phone_digits(p.value)
+                    for p in phones
+                    if phone_digits(p.value)
+                    and (
+                        p.last_called_at
+                        or p.last_outcome
+                        or (
+                            p.confidence_score is not None
+                            and p.confidence_score >= 10
+                        )
+                        or 'hubspot primary' in (p.notes or '').lower()
+                    )
+                }
+                if wanted_phones:
+                    phone_hit = bool(contact_digits & wanted_phones)
+                elif outreach_digits:
+                    # GIS rename often arrives with no phones — keep the dialed
+                    # / HubSpot-primary owner when first names still match.
+                    c_first_token = (contact.first_name or '').strip().lower().split()[:1]
+                    in_first_token = (first_name or '').strip().lower().split()[:1]
+                    phone_hit = bool(c_first_token and c_first_token == in_first_token)
+            if not exact and not fuzzy and not alias and not phone_hit:
                 continue
             if link.role not in ('owner', 'former_owner'):
                 continue
-            # Prefer the more complete first name (e.g. JOSEPH A over Joseph)
-            if (first_name or '').strip() and len((first_name or '').strip()) > len(
-                (contact.first_name or '').strip()
+            # Display-name policy: keep outreach identity; never overwrite with
+            # brokerage / listing junk (Sam For Sale By Owner > Sam Old Town CBRE).
+            incoming_cleaner = is_cleaner_person_display_name(first_name, last_name)
+            existing_cleaner = is_cleaner_person_display_name(
+                contact.first_name, contact.last_name,
+            )
+            if incoming_cleaner and (
+                not existing_cleaner
+                or (
+                    (first_name or '').strip()
+                    and len((first_name or '').strip()) > len(
+                        (contact.first_name or '').strip()
+                    )
+                )
             ):
-                contact.first_name = first_name
-            if (last_name or '').strip() and not (contact.last_name or '').strip():
-                contact.last_name = last_name
+                if (first_name or '').strip():
+                    contact.first_name = first_name
+                if (last_name or '').strip() and not is_marketing_or_listing_noise_last(
+                    last_name,
+                ):
+                    contact.last_name = last_name
+            elif not (contact.last_name or '').strip() and (last_name or '').strip():
+                if not is_marketing_or_listing_noise_last(last_name):
+                    contact.last_name = last_name
             if link.role == 'former_owner':
                 self._reactivate_owner_link(link, property_id, is_primary=is_primary)
             elif is_primary:
@@ -1384,12 +1518,14 @@ class ContactService:
         """Unlink redundant person owner contacts that fuzzy-match a kept row.
 
         Prefers the primary link, then the more complete name, then lowest id.
+        Merges phones onto the kept contact before removing the duplicate link.
         Returns number of PropertyContact rows removed.
         """
         from app.services.plugins.owner_name_utils import (
             is_address_like_contact,
             is_entity_contact,
             owner_names_equivalent,
+            same_person_name_alias,
         )
 
         rows = (
@@ -1405,9 +1541,21 @@ class ContactService:
             if not is_entity_contact(c.first_name, c.last_name)
             and not is_address_like_contact(c.first_name, c.last_name)
         ]
+        def _digits_for(c: Contact) -> set[str]:
+            return {
+                phone_digits(p.value)
+                for p in (c.phones or [])
+                if phone_digits(p.value)
+            }
+
+        def _first_token(c: Contact) -> str:
+            parts = (c.first_name or '').strip().lower().split()
+            return parts[0] if parts else ''
+
         removed = 0
         kept: list[tuple[Contact, PropertyContact]] = []
         for contact, link in people:
+            contact_digits = _digits_for(contact)
             match_idx = next(
                 (
                     i
@@ -1415,6 +1563,15 @@ class ContactService:
                     if owner_names_equivalent(
                         kept_c.first_name, kept_c.last_name,
                         contact.first_name, contact.last_name,
+                    )
+                    or same_person_name_alias(
+                        kept_c.first_name, kept_c.last_name,
+                        contact.first_name, contact.last_name,
+                    )
+                    or (
+                        bool(contact_digits & _digits_for(kept_c))
+                        and _first_token(contact)
+                        and _first_token(contact) == _first_token(kept_c)
                     )
                 ),
                 None,
@@ -1439,14 +1596,18 @@ class ContactService:
                 prefer_new = True
 
             if prefer_new:
+                self._migrate_outreach_phones_to_contact(kept_c.id, contact.id)
                 db.session.delete(kept_link)
                 kept[match_idx] = (contact, link)
             else:
+                self._migrate_outreach_phones_to_contact(contact.id, kept_c.id)
                 db.session.delete(link)
             removed += 1
 
         if removed:
             db.session.flush()
+            from app.services.phone_confidence_service import PhoneConfidenceService
+            PhoneConfidenceService.recompute_for_lead(property_id)
         return removed
 
     def _attach_flat_phones_emails(

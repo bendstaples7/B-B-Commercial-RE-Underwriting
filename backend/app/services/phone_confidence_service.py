@@ -725,7 +725,12 @@ class PhoneConfidenceService:
 
     @classmethod
     def build_phones_payload(cls, lead_id: int, lead: Lead) -> list[dict]:
-        """Merge relational contact_phones and flat lead columns into structured phones."""
+        """Merge relational contact_phones and flat lead columns into structured phones.
+
+        Active-owner phones are included. Former-owner phones with dial history,
+        viable confidence, or HubSpot-primary notes are included as a safety net
+        when GIS archived the contacted person under a same-person rename.
+        """
         relational_rows = db.session.execute(
             text("""
                 SELECT cp.id, cp.value, cp.label, cp.notes, cp.confidence_score,
@@ -733,7 +738,14 @@ class PhoneConfidenceService:
                 FROM contact_phones cp
                 JOIN property_contacts pc ON pc.contact_id = cp.contact_id
                 WHERE pc.property_id = :lead_id
-                  AND (pc.role IS NULL OR pc.role <> 'former_owner')
+                  AND (
+                    pc.role IS NULL
+                    OR pc.role <> 'former_owner'
+                    OR cp.last_called_at IS NOT NULL
+                    OR cp.last_outcome IS NOT NULL
+                    OR COALESCE(cp.confidence_score, 0) >= 10
+                    OR LOWER(COALESCE(cp.notes, '')) LIKE '%hubspot primary%'
+                  )
                 ORDER BY cp.id
             """),
             {'lead_id': lead_id},
