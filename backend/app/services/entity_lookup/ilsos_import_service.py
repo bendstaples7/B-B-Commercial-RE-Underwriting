@@ -134,30 +134,60 @@ def _slim_master_by_file_number(records: Iterable[dict]) -> dict[str, dict]:
 
 def _agent_change_key(rec: dict, order: int) -> tuple[str, int]:
     raw = (rec.get("agent_change_date") or "").strip()
+    if len(raw) == 10 and raw[4] == "-" and raw[7] == "-":
+        yyyymmdd = f"{raw[0:4]}{raw[5:7]}{raw[8:10]}"
+        if yyyymmdd.isdigit():
+            return yyyymmdd, order
     yyyymmdd = raw if len(raw) == 8 and raw.isdigit() else ""
     return yyyymmdd, order
 
 
-def _latest_agent_by_file_number(records: Iterable[dict]) -> dict[str, dict]:
-    keyed: dict[str, tuple[tuple[str, int], dict]] = {}
+def _winning_agent_keys(
+    records: Iterable[dict],
+    entity_keys: set[str] | None = None,
+) -> dict[str, tuple[str, int]]:
+    """Compact latest-agent index: file_number -> (change_date, input_order)."""
+    keyed: dict[str, tuple[str, int]] = {}
     duplicates = 0
     for order, rec in enumerate(records):
         file_number = (rec.get("file_number") or "").strip()[:8]
         if not file_number:
             continue
+        if entity_keys is not None and file_number not in entity_keys:
+            continue
         incoming_key = _agent_change_key(rec, order)
         current = keyed.get(file_number)
         if current is not None:
             duplicates += 1
-            if incoming_key < current[0]:
+            if incoming_key < current:
                 continue
-        keyed[file_number] = (incoming_key, rec)
+        keyed[file_number] = incoming_key
     if duplicates:
         logger.warning(
             "IL SOS agent import saw %d duplicate file_number rows; kept latest",
             duplicates,
         )
-    return {file_number: rec for file_number, (_key, rec) in keyed.items()}
+    return keyed
+
+
+def _iter_winning_agent_recs(
+    records: Iterable[dict],
+    winner_keys: dict[str, tuple[str, int]],
+) -> Iterable[dict]:
+    for order, rec in enumerate(records):
+        file_number = (rec.get("file_number") or "").strip()[:8]
+        if winner_keys.get(file_number) == _agent_change_key(rec, order):
+            yield rec
+
+
+def _latest_agent_by_file_number(records: Iterable[dict]) -> dict[str, dict]:
+    recs = list(records)
+    winner_keys = _winning_agent_keys(recs)
+    return {
+        (rec.get("file_number") or "").strip()[:8]: rec
+        for rec in _iter_winning_agent_recs(recs, winner_keys)
+        if (rec.get("file_number") or "").strip()[:8]
+    }
 
 
 
@@ -280,13 +310,13 @@ class IlSosBulkImportService:
                 db.session.flush()
 
             agent_count = 0
-            latest_agent_recs = _latest_agent_by_file_number(agent_recs)
+            winner_keys = _winning_agent_keys(agent_recs, entity_keys)
+            agent_recs_again = self._iter_agent_records(cache_dir, source)
 
             def iter_agents():
                 nonlocal agent_count
-                for fn, rec in latest_agent_recs.items():
-                    if fn not in entity_keys:
-                        continue
+                for rec in _iter_winning_agent_recs(agent_recs_again, winner_keys):
+                    fn = (rec.get("file_number") or "").strip()[:8]
                     agent_name = (rec.get("agent_name") or "").strip()
                     if not agent_name:
                         continue
@@ -400,6 +430,14 @@ class IlSosBulkImportService:
             agent_recs,
             "ilsos_transparency_act_github_csv",
         )
+
+    def _iter_agent_records(self, cache_dir: Path, source: str) -> Iterable[dict]:
+        """Re-open the agent dump so latest-agent selection can stream twice."""
+        if source == "ilsos_transparency_act_github_csv":
+            dest = cache_dir / "llc_github.zip"
+            return _iter_csv_from_zip(dest, "llcallagt.csv")
+        path = cache_dir / FILES["agent"]
+        return iter_records(read_zip_text(path), AGENT_SCHEMA)
 
 
 def latest_successful_import() -> Optional[IlSosImportRun]:

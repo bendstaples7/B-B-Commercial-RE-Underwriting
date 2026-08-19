@@ -395,6 +395,25 @@ def test_latest_agent_keeps_newest_change_date():
     assert latest["55667788"]["agent_name"] == "LAST INPUT AGENT"
 
 
+def test_latest_agent_keeps_iso_change_date_over_yyyymmdd():
+    from app.services.entity_lookup.ilsos_import_service import _latest_agent_by_file_number
+
+    latest = _latest_agent_by_file_number([
+        {
+            "file_number": "11223344",
+            "agent_name": "OLD AGENT",
+            "agent_change_date": "20240101",
+        },
+        {
+            "file_number": "11223344",
+            "agent_name": "NEW AGENT",
+            "agent_change_date": "2024-06-01",
+        },
+    ])
+
+    assert latest["11223344"]["agent_name"] == "NEW AGENT"
+
+
 def test_ilsos_weekly_beat_is_registered():
     from celery_worker import celery
 

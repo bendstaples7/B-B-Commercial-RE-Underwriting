@@ -1096,6 +1096,27 @@ class ContactService:
             .filter(PropertyContact.property_id == property_id)
             .all()
         )
+        outreach_first_tokens: dict[str, int] = {}
+        for contact, link in existing_rows:
+            if link.role not in ('owner', 'former_owner'):
+                continue
+            tok = ((contact.first_name or '').strip().lower().split() or [''])[0]
+            if not tok:
+                continue
+            if any(
+                phone_digits(p.value)
+                and (
+                    p.last_called_at
+                    or p.last_outcome
+                    or (
+                        p.confidence_score is not None
+                        and p.confidence_score >= 10
+                    )
+                    or 'hubspot primary' in (p.notes or '').lower()
+                )
+                for p in (contact.phones or [])
+            ):
+                outreach_first_tokens[tok] = outreach_first_tokens.get(tok, 0) + 1
         matches: list[tuple[int, int, int, int, int, Contact, PropertyContact]] = []
         for contact, link in existing_rows:
             if link.role not in ('owner', 'former_owner'):
@@ -1142,18 +1163,28 @@ class ContactService:
                     # GIS listing-name refreshes can also bring a new dump phone
                     # for the same first-name person; keep the dialed/HubSpot
                     # owner when the incoming last name is listing noise.
+                    unique_outreach = (
+                        bool(c_first_token)
+                        and outreach_first_tokens.get(c_first_token[0], 0) == 1
+                    )
                     phone_hit = (
                         (bool(contact_digits & wanted_phones) and name_ok)
                         or (
                             bool(outreach_digits)
                             and name_ok
                             and is_marketing_or_listing_noise_last(last_name)
+                            and unique_outreach
                         )
                     )
                 elif outreach_digits:
                     # GIS rename often arrives with no phones — keep the dialed
-                    # / HubSpot-primary owner when first names still match.
-                    phone_hit = name_ok
+                    # / HubSpot-primary owner when first names still match and
+                    # that first name is unique among dialed people on the lead.
+                    unique_outreach = (
+                        bool(c_first_token)
+                        and outreach_first_tokens.get(c_first_token[0], 0) == 1
+                    )
+                    phone_hit = name_ok and unique_outreach
             if not exact and not fuzzy and not alias and not phone_hit:
                 continue
             incoming_noise = is_marketing_or_listing_noise_last(last_name)
@@ -2054,20 +2085,32 @@ class ContactService:
             .having(sqlalchemy.func.count(PropertyContact.id) >= 2)
             .all()
         ]
-        healed = 0
+        healed_ids: list[int] = []
         for property_id in property_ids:
             result = self.heal_same_person_owner_cluster(
                 property_id,
                 apply=True,
-                refresh_scoring=refresh_scoring,
+                refresh_scoring=False,
                 bump_call_task=False,
                 commit=False,
             )
             if result.get('healed'):
-                healed += 1
+                healed_ids.append(property_id)
         if commit:
             db.session.commit()
-        return healed
+        if refresh_scoring and healed_ids:
+            from app.services.lead_refresh import refresh_lead_scoring
+
+            for property_id in healed_ids:
+                try:
+                    refresh_lead_scoring(property_id)
+                except Exception:
+                    logger.warning(
+                        'heal_same_person_owners: scoring failed for lead %s',
+                        property_id,
+                        exc_info=True,
+                    )
+        return len(healed_ids)
 
     def _attach_flat_phones_emails(
         self,

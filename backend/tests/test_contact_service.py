@@ -846,6 +846,45 @@ class TestSamePersonOwnerConsolidate:
             }
             assert outreach_digits == {'7732715525', '7734540106'}
 
+    def test_upsert_does_not_keep_wrong_sam_when_two_have_outreach(self, app):
+        """Dump phone + shared first name is not identity when two people were dialed."""
+        with app.app_context():
+            from datetime import datetime, timezone
+
+            service = ContactService()
+            prop = _make_property('4490 Two Sam St')
+            sam_a = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'Alpha',
+                'phones': [{'value': '(773) 271-5525', 'label': 'mobile'}],
+            })
+            sam_b = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'Bravo',
+                'phones': [{'value': '(312) 555-0100', 'label': 'mobile'}],
+            })
+            service.link_contact_to_property(
+                prop.id, sam_a.id, role='owner', is_primary=True,
+            )
+            service.link_contact_to_property(
+                prop.id, sam_b.id, role='owner', is_primary=False,
+            )
+            now = datetime.now(timezone.utc)
+            for contact_id in (sam_a.id, sam_b.id):
+                phone = ContactPhone.query.filter_by(contact_id=contact_id).first()
+                phone.last_called_at = now
+                phone.last_outcome = 'no_answer'
+                phone.confidence_score = 85
+            prop.owner_first_name = 'Sam'
+            prop.owner_last_name = 'Thompson'
+            prop.phone_1 = '(773) 454-0106'
+            db.session.commit()
+
+            results = service.upsert_owners_from_lead(prop, commit=True)
+            kept, _link = results[0]
+            assert kept.id not in {sam_a.id, sam_b.id}
+            assert kept.last_name == 'Thompson'
+
     def test_upsert_from_lead_reactivates_fsbo_when_cbre_already_split(self, app):
         """Existing GIS duplicate must not win on exact junk-name match."""
         with app.app_context():

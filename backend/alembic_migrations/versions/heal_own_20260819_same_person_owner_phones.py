@@ -47,7 +47,7 @@ def upgrade():
     def _run():
         ContactService().heal_same_person_owners_all_leads(
             commit=True,
-            refresh_scoring=False,
+            refresh_scoring=True,
         )
 
     if has_app_context():
