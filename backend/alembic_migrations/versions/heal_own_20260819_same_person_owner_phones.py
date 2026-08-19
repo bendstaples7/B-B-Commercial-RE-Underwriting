@@ -1,7 +1,7 @@
 """Heal same-person owner splits (dialed phone on former_owner).
 
 Revision ID: heal_own_20260819
-Revises: mail_nudge_20260814
+Revises: keep_gis_20260819
 Create Date: 2026-08-19
 
 GIS listing-name refreshes archived the contacted person and left dump numbers
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = 'heal_own_20260819'
-down_revision = 'mail_nudge_20260814'
+down_revision = 'keep_gis_20260819'
 branch_labels = None
 depends_on = None
 

@@ -1,7 +1,7 @@
 """Unpark working leads silently copied to HubSpot Deprioritize.
 
 Revision ID: heal_depri_20260819
-Revises: heal_own_20260819
+Revises: mail_nudge_20260814
 Create Date: 2026-08-19
 """
 import os
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = 'heal_depri_20260819'
-down_revision = 'heal_own_20260819'
+down_revision = 'mail_nudge_20260814'
 branch_labels = None
 depends_on = None
 

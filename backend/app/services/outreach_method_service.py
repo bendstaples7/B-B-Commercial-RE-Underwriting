@@ -409,15 +409,16 @@ def _batch_best_phone_by_lead(leads: list[Lead]) -> dict[int, str]:
         lead_id = getattr(lead, 'id', None)
         if not isinstance(lead_id, int):
             continue
-        if relational.get(lead_id):
-            result[lead_id] = relational[lead_id][0][1]
-            continue
+        candidates = list(relational.get(lead_id, []))
         for slot in range(1, 8):
             raw = getattr(lead, f'phone_{slot}', None)
             digits = re.sub(r'\D', '', str(raw or ''))
             if len(digits) >= 7:
-                result[lead_id] = str(raw).strip()
+                candidates.append((DEFAULT_CONFIDENCE, str(raw).strip()))
                 break
+        if candidates:
+            candidates.sort(key=lambda item: -item[0])
+            result[lead_id] = candidates[0][1]
     return result
 
 

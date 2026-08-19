@@ -131,9 +131,11 @@ class TestOwnerNamesEquivalent:
         from app.services.plugins.owner_name_utils import owner_names_equivalent
         assert not owner_names_equivalent("Joseph", "Kiferbaum", "Jane", "Kiferbaum")
 
-    def test_single_letter_first_expands_to_full(self):
+    def test_single_letter_first_expands_only_to_short_token(self):
         from app.services.plugins.owner_name_utils import owner_names_equivalent
-        assert owner_names_equivalent("G", "Olivier", "Gilberto", "Olivier")
+        assert owner_names_equivalent("J", "Olivier", "Jay", "Olivier")
+        assert not owner_names_equivalent("G", "Olivier", "Gilberto", "Olivier")
+        assert not owner_names_equivalent("J", "Johnson", "James", "Johnson")
 
 
 class TestAddressLikeName:

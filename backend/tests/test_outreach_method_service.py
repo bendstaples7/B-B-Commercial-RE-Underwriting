@@ -398,3 +398,42 @@ def test_resolve_outreach_phone_skips_bad_only_numbers(app):
         db.session.commit()
 
         assert resolve_outreach_contact(lead, 'phone') is None
+
+
+def test_resolve_outreach_phone_prefers_flat_over_low_confidence_relational(app):
+    from app import db
+    from app.models.contact import Contact
+    from app.models.contact_phone import ContactPhone
+    from app.models.lead import Lead
+    from app.models.property_contact import PropertyContact
+
+    with app.app_context():
+        lead = Lead(
+            property_street='Flat Beats Low Confidence St',
+            lead_score=40.0,
+            phone_1='(555) 222-3333',
+            recommended_contact_method='phone',
+        )
+        db.session.add(lead)
+        db.session.flush()
+
+        contact = Contact(first_name='Low', last_name='Confidence', role='owner')
+        db.session.add(contact)
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=lead.id,
+            contact_id=contact.id,
+            role='owner',
+            is_primary=True,
+        ))
+        db.session.add(ContactPhone(
+            contact_id=contact.id,
+            value='(555) 000-1111',
+            label='mobile',
+            confidence_score=25,
+        ))
+        db.session.commit()
+
+        result = resolve_outreach_contact(lead, 'phone')
+        assert result is not None
+        assert result['display'] == '(555) 222-3333'

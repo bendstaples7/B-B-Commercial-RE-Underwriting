@@ -368,9 +368,9 @@ def test_slim_master_keeps_only_join_fields():
 
 
 def test_latest_agent_keeps_newest_change_date():
-    from app.services.entity_lookup.ilsos_import_service import _latest_agent_by_file_number
+    from app.services.entity_lookup.ilsos_import_service import _iter_latest_agent_by_file_number
 
-    latest = _latest_agent_by_file_number([
+    latest = dict(_iter_latest_agent_by_file_number([
         {
             "file_number": "11223344",
             "agent_name": "OLD AGENT",
@@ -389,16 +389,27 @@ def test_latest_agent_keeps_newest_change_date():
             "file_number": "55667788",
             "agent_name": "LAST INPUT AGENT",
         },
-    ])
+        {
+            "file_number": "99001122",
+            "agent_name": "OLD CSV AGENT",
+            "agent_change_date": "2024-01-01",
+        },
+        {
+            "file_number": "99001122",
+            "agent_name": "NEW CSV AGENT",
+            "agent_change_date": "2024-06-01",
+        },
+    ]))
 
     assert latest["11223344"]["agent_name"] == "NEW AGENT"
     assert latest["55667788"]["agent_name"] == "LAST INPUT AGENT"
+    assert latest["99001122"]["agent_name"] == "NEW CSV AGENT"
 
 
 def test_latest_agent_keeps_iso_change_date_over_yyyymmdd():
-    from app.services.entity_lookup.ilsos_import_service import _latest_agent_by_file_number
+    from app.services.entity_lookup.ilsos_import_service import _iter_latest_agent_by_file_number
 
-    latest = _latest_agent_by_file_number([
+    latest = dict(_iter_latest_agent_by_file_number([
         {
             "file_number": "11223344",
             "agent_name": "OLD AGENT",
@@ -409,7 +420,7 @@ def test_latest_agent_keeps_iso_change_date_over_yyyymmdd():
             "agent_name": "NEW AGENT",
             "agent_change_date": "2024-06-01",
         },
-    ])
+    ]))
 
     assert latest["11223344"]["agent_name"] == "NEW AGENT"
 

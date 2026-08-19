@@ -1054,6 +1054,7 @@ class ContactService:
         emails: list[str] | None = None,
     ) -> tuple[Contact, PropertyContact]:
         from app.services.plugins.owner_name_utils import (
+            is_cleaner_person_display_name,
             is_marketing_or_listing_noise_last,
             owner_names_equivalent,
             same_person_name_alias,
@@ -1130,8 +1131,17 @@ class ContactService:
             alias = (not exact and not fuzzy) and same_person_name_alias(
                 contact.first_name, contact.last_name, first_name, last_name,
             )
+            initial_upgrade = (
+                not exact
+                and not fuzzy
+                and not alias
+                and c_last == last_norm
+                and len(c_first) == 1
+                and first_norm.startswith(c_first)
+                and is_cleaner_person_display_name(first_name, last_name)
+            )
             phone_hit = False
-            if not exact and not fuzzy and not alias:
+            if not exact and not fuzzy and not alias and not initial_upgrade:
                 phones = list(contact.phones or [])
                 contact_digits = {
                     phone_digits(p.value) for p in phones if phone_digits(p.value)
@@ -1185,11 +1195,11 @@ class ContactService:
                         and outreach_first_tokens.get(c_first_token[0], 0) == 1
                     )
                     phone_hit = name_ok and unique_outreach
-            if not exact and not fuzzy and not alias and not phone_hit:
+            if not exact and not fuzzy and not alias and not initial_upgrade and not phone_hit:
                 continue
             incoming_noise = is_marketing_or_listing_noise_last(last_name)
             exact_noise = 1 if exact and incoming_noise else 0
-            same_person = 0 if (alias or phone_hit or fuzzy) else 1
+            same_person = 0 if (alias or phone_hit or fuzzy or initial_upgrade) else 1
             role_rank = 0 if link.role == 'owner' else 1
             matches.append((
                 -self._contact_outreach_signal_score(contact),
@@ -2098,7 +2108,7 @@ class ContactService:
                 healed_ids.append(property_id)
         if commit:
             db.session.commit()
-        if refresh_scoring and healed_ids:
+        if commit and refresh_scoring and healed_ids:
             from app.services.lead_refresh import refresh_lead_scoring
 
             for property_id in healed_ids:

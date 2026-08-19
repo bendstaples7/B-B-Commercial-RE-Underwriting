@@ -450,9 +450,9 @@ def owner_names_equivalent(
             if last_norm_a == last_norm_b and tok_a == tok_b:
                 return True
             if last_norm_a == last_norm_b:
-                if len(tok_a) == 1 and tok_b.startswith(tok_a):
+                if len(tok_a) == 1 and len(tok_b) <= 3 and tok_b.startswith(tok_a):
                     return True
-                if len(tok_b) == 1 and tok_a.startswith(tok_b):
+                if len(tok_b) == 1 and len(tok_a) <= 3 and tok_a.startswith(tok_b):
                     return True
     return False
 
