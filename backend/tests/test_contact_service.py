@@ -272,6 +272,34 @@ class TestOwnerNameLock:
             assert kept.id == contact.id
             assert kept.first_name == 'Gilberto'
 
+    def test_upsert_prefers_exact_john_over_initial_j(self, app):
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property('11130 Exact Beats Initial St')
+            initial = service.create_contact({
+                'first_name': 'J',
+                'last_name': 'Smith',
+            })
+            exact = service.create_contact({
+                'first_name': 'John',
+                'last_name': 'Smith',
+            })
+            service.link_contact_to_property(
+                prop.id, initial.id, role='owner', is_primary=True,
+            )
+            service.link_contact_to_property(
+                prop.id, exact.id, role='owner', is_primary=False,
+            )
+            kept, link = service._upsert_named_owner(
+                prop.id,
+                'John',
+                'Smith',
+                is_primary=True,
+            )
+            db.session.commit()
+            assert kept.id == exact.id
+            assert link.is_primary is True
+
     def test_gis_enrichment_skips_locked_owner_names(self, app):
         with app.app_context():
             from app.services.data_source_connector import (

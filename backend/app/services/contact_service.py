@@ -1198,21 +1198,26 @@ class ContactService:
             if not exact and not fuzzy and not alias and not initial_upgrade and not phone_hit:
                 continue
             incoming_noise = is_marketing_or_listing_noise_last(last_name)
-            exact_noise = 1 if exact and incoming_noise else 0
-            same_person = 0 if (alias or phone_hit or fuzzy or initial_upgrade) else 1
+            if exact and not incoming_noise:
+                match_rank = 0
+            elif alias or phone_hit or fuzzy or initial_upgrade:
+                match_rank = 1
+            elif exact:
+                match_rank = 2
+            else:
+                match_rank = 3
             role_rank = 0 if link.role == 'owner' else 1
             matches.append((
                 -self._contact_outreach_signal_score(contact),
-                same_person,
-                exact_noise,
+                match_rank,
                 role_rank,
                 contact.id,
                 contact,
                 link,
             ))
         if matches:
-            matches.sort(key=lambda row: row[:5])
-            _s, _sp, _en, _rr, _cid, contact, link = matches[0]
+            matches.sort(key=lambda row: row[:4])
+            _score, _rank, _role, _cid, contact, link = matches[0]
             return self._apply_kept_named_owner(
                 contact,
                 link,

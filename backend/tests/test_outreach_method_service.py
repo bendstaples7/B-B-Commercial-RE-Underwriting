@@ -362,78 +362,73 @@ def test_resolve_outreach_phone_matches_key_contact_former_owner_hubspot(app):
         )
 
 
-def test_resolve_outreach_phone_skips_bad_only_numbers(app):
+def _db_lead_with_owner_phone(
+    *,
+    street: str,
+    phone_1: str,
+    contact_name: tuple[str, str],
+    contact_phone: str,
+    confidence_score: int,
+    notes: str | None = None,
+):
     from app import db
     from app.models.contact import Contact
     from app.models.contact_phone import ContactPhone
     from app.models.lead import Lead
     from app.models.property_contact import PropertyContact
 
-    with app.app_context():
-        lead = Lead(
-            property_street='Bad Phone Only St',
-            lead_score=40.0,
-            phone_1='123',
-            recommended_contact_method='phone',
-        )
-        db.session.add(lead)
-        db.session.flush()
+    lead = Lead(
+        property_street=street,
+        lead_score=40.0,
+        phone_1=phone_1,
+        recommended_contact_method='phone',
+    )
+    db.session.add(lead)
+    db.session.flush()
+    contact = Contact(
+        first_name=contact_name[0], last_name=contact_name[1], role='owner',
+    )
+    db.session.add(contact)
+    db.session.flush()
+    db.session.add(PropertyContact(
+        property_id=lead.id,
+        contact_id=contact.id,
+        role='owner',
+        is_primary=True,
+    ))
+    db.session.add(ContactPhone(
+        contact_id=contact.id,
+        value=contact_phone,
+        label='mobile',
+        confidence_score=confidence_score,
+        notes=notes,
+    ))
+    db.session.commit()
+    return lead
 
-        contact = Contact(first_name='Bad', last_name='Phone', role='owner')
-        db.session.add(contact)
-        db.session.flush()
-        db.session.add(PropertyContact(
-            property_id=lead.id,
-            contact_id=contact.id,
-            role='owner',
-            is_primary=True,
-        ))
-        db.session.add(ContactPhone(
-            contact_id=contact.id,
-            value='(555) 000-1111',
-            label='mobile',
+
+def test_resolve_outreach_phone_skips_bad_only_numbers(app):
+    with app.app_context():
+        lead = _db_lead_with_owner_phone(
+            street='Bad Phone Only St',
+            phone_1='123',
+            contact_name=('Bad', 'Phone'),
+            contact_phone='(555) 000-1111',
             confidence_score=5,
             notes='wrong number',
-        ))
-        db.session.commit()
-
+        )
         assert resolve_outreach_contact(lead, 'phone') is None
 
 
 def test_resolve_outreach_phone_prefers_flat_over_low_confidence_relational(app):
-    from app import db
-    from app.models.contact import Contact
-    from app.models.contact_phone import ContactPhone
-    from app.models.lead import Lead
-    from app.models.property_contact import PropertyContact
-
     with app.app_context():
-        lead = Lead(
-            property_street='Flat Beats Low Confidence St',
-            lead_score=40.0,
+        lead = _db_lead_with_owner_phone(
+            street='Flat Beats Low Confidence St',
             phone_1='(555) 222-3333',
-            recommended_contact_method='phone',
-        )
-        db.session.add(lead)
-        db.session.flush()
-
-        contact = Contact(first_name='Low', last_name='Confidence', role='owner')
-        db.session.add(contact)
-        db.session.flush()
-        db.session.add(PropertyContact(
-            property_id=lead.id,
-            contact_id=contact.id,
-            role='owner',
-            is_primary=True,
-        ))
-        db.session.add(ContactPhone(
-            contact_id=contact.id,
-            value='(555) 000-1111',
-            label='mobile',
+            contact_name=('Low', 'Confidence'),
+            contact_phone='(555) 000-1111',
             confidence_score=25,
-        ))
-        db.session.commit()
-
+        )
         result = resolve_outreach_contact(lead, 'phone')
         assert result is not None
         assert result['display'] == '(555) 222-3333'
