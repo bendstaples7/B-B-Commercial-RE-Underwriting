@@ -26,7 +26,7 @@ def upgrade():
         SELECT COUNT(*) FROM (
             SELECT property_id
             FROM property_contacts
-            WHERE role IN ('owner', 'former_owner')
+            WHERE role::text IN ('owner', 'former_owner')
             GROUP BY property_id
             HAVING COUNT(*) >= 2
         ) clustered
