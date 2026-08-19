@@ -1118,7 +1118,8 @@ class ContactService:
                 for p in (contact.phones or [])
             ):
                 outreach_first_tokens[tok] = outreach_first_tokens.get(tok, 0) + 1
-        matches: list[tuple[int, int, int, int, Contact, PropertyContact]] = []
+        MatchRow = tuple[int, int, int, int, Contact, PropertyContact]
+        matches: list[MatchRow] = []
         for contact, link in existing_rows:
             if link.role not in ('owner', 'former_owner'):
                 continue
@@ -1198,14 +1199,10 @@ class ContactService:
             if not exact and not fuzzy and not alias and not initial_upgrade and not phone_hit:
                 continue
             incoming_noise = is_marketing_or_listing_noise_last(last_name)
-            if exact and not incoming_noise:
-                match_rank = 0
-            elif alias or phone_hit or fuzzy or initial_upgrade:
-                match_rank = 1
-            elif exact:
-                match_rank = 2
+            if exact:
+                match_rank = 2 if incoming_noise else 0
             else:
-                match_rank = 3
+                match_rank = 1
             role_rank = 0 if link.role == 'owner' else 1
             matches.append((
                 -self._contact_outreach_signal_score(contact),
