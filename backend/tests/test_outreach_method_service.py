@@ -362,13 +362,12 @@ def test_resolve_outreach_phone_matches_key_contact_former_owner_hubspot(app):
         )
 
 
-def _db_lead_with_owner_phone(
+def _lead_with_primary_phone(
     *,
     street: str,
-    phone_1: str,
-    contact_name: tuple[str, str],
+    flat_phone: str | None,
     contact_phone: str,
-    confidence_score: int,
+    confidence_score: int | None,
     notes: str | None = None,
 ):
     from app import db
@@ -380,14 +379,13 @@ def _db_lead_with_owner_phone(
     lead = Lead(
         property_street=street,
         lead_score=40.0,
-        phone_1=phone_1,
+        phone_1=flat_phone,
         recommended_contact_method='phone',
     )
     db.session.add(lead)
     db.session.flush()
-    contact = Contact(
-        first_name=contact_name[0], last_name=contact_name[1], role='owner',
-    )
+
+    contact = Contact(first_name='Owner', last_name='Phone', role='owner')
     db.session.add(contact)
     db.session.flush()
     db.session.add(PropertyContact(
@@ -409,26 +407,26 @@ def _db_lead_with_owner_phone(
 
 def test_resolve_outreach_phone_skips_bad_only_numbers(app):
     with app.app_context():
-        lead = _db_lead_with_owner_phone(
+        lead = _lead_with_primary_phone(
             street='Bad Phone Only St',
-            phone_1='123',
-            contact_name=('Bad', 'Phone'),
+            flat_phone='123',
             contact_phone='(555) 000-1111',
             confidence_score=5,
             notes='wrong number',
         )
+
         assert resolve_outreach_contact(lead, 'phone') is None
 
 
 def test_resolve_outreach_phone_prefers_flat_over_low_confidence_relational(app):
     with app.app_context():
-        lead = _db_lead_with_owner_phone(
+        lead = _lead_with_primary_phone(
             street='Flat Beats Low Confidence St',
-            phone_1='(555) 222-3333',
-            contact_name=('Low', 'Confidence'),
+            flat_phone='(555) 222-3333',
             contact_phone='(555) 000-1111',
             confidence_score=25,
         )
+
         result = resolve_outreach_contact(lead, 'phone')
         assert result is not None
         assert result['display'] == '(555) 222-3333'

@@ -1118,7 +1118,7 @@ class ContactService:
                 for p in (contact.phones or [])
             ):
                 outreach_first_tokens[tok] = outreach_first_tokens.get(tok, 0) + 1
-        matches: list[tuple[int, int, int, int, int, Contact, PropertyContact]] = []
+        matches: list[tuple[int, int, int, int, Contact, PropertyContact]] = []
         for contact, link in existing_rows:
             if link.role not in ('owner', 'former_owner'):
                 continue
