@@ -5,7 +5,6 @@ Revises: name_lock_20260819
 Create Date: 2026-08-19
 """
 from alembic import op
-import sqlalchemy as sa
 
 
 revision = 'keep_gis_20260819'
@@ -15,14 +14,9 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column(
-        'contacts',
-        sa.Column(
-            'keep_on_gis',
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.false(),
-        ),
+    op.execute(
+        "ALTER TABLE contacts "
+        "ADD COLUMN IF NOT EXISTS keep_on_gis BOOLEAN NOT NULL DEFAULT false"
     )
     op.execute(
         "ALTER TYPE timeline_event_type_enum "
@@ -31,4 +25,4 @@ def upgrade():
 
 
 def downgrade():
-    op.drop_column('contacts', 'keep_on_gis')
+    op.execute("ALTER TABLE contacts DROP COLUMN IF EXISTS keep_on_gis")
