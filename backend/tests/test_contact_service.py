@@ -274,11 +274,14 @@ class TestOwnerNameLock:
 
     def test_upsert_prefers_exact_john_over_initial_j(self, app):
         with app.app_context():
+            from datetime import datetime, timezone
+
             service = ContactService()
             prop = _make_property('11130 Exact Beats Initial St')
             initial = service.create_contact({
                 'first_name': 'J',
                 'last_name': 'Smith',
+                'phones': [{'value': '(773) 555-0100', 'label': 'mobile'}],
             })
             exact = service.create_contact({
                 'first_name': 'John',
@@ -290,6 +293,10 @@ class TestOwnerNameLock:
             service.link_contact_to_property(
                 prop.id, exact.id, role='owner', is_primary=False,
             )
+            phone = ContactPhone.query.filter_by(contact_id=initial.id).first()
+            phone.last_called_at = datetime.now(timezone.utc)
+            phone.notes = 'HubSpot primary'
+            db.session.commit()
             kept, link = service._upsert_named_owner(
                 prop.id,
                 'John',

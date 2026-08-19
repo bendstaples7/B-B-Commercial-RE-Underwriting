@@ -1204,9 +1204,12 @@ class ContactService:
             else:
                 match_rank = 1
             role_rank = 0 if link.role == 'owner' else 1
+            # Exact GIS name beats a first-initial guess even if that guess
+            # has call history. Outreach only breaks ties inside a rank so a
+            # dialed person still wins over an exact listing-noise last name.
             matches.append((
-                -self._contact_outreach_signal_score(contact),
                 match_rank,
+                -self._contact_outreach_signal_score(contact),
                 role_rank,
                 contact.id,
                 contact,
@@ -1214,7 +1217,7 @@ class ContactService:
             ))
         if matches:
             matches.sort(key=lambda row: row[:4])
-            _score, _rank, _role, _cid, contact, link = matches[0]
+            _rank, _score, _role, _cid, contact, link = matches[0]
             return self._apply_kept_named_owner(
                 contact,
                 link,
