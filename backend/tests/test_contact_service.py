@@ -704,11 +704,6 @@ class TestSamePersonOwnerConsolidate:
             ).all()
             assert len(owners) == 1
             assert owners[0].contact_id == outreach.id
-            outreach_digits = {
-                ''.join(ch for ch in phone.value if ch.isdigit())
-                for phone in ContactPhone.query.filter_by(contact_id=outreach.id).all()
-            }
-            assert outreach_digits == {'7732715525', '7734540106'}
 
     def test_unlink_duplicate_merges_phone_linked_same_person(self, app):
         with app.app_context():
@@ -845,6 +840,11 @@ class TestSamePersonOwnerConsolidate:
             ).all()
             assert len(owners) == 1
             assert owners[0].contact_id == outreach.id
+            outreach_digits = {
+                ''.join(ch for ch in phone.value if ch.isdigit())
+                for phone in ContactPhone.query.filter_by(contact_id=outreach.id).all()
+            }
+            assert outreach_digits == {'7732715525', '7734540106'}
 
     def test_upsert_from_lead_reactivates_fsbo_when_cbre_already_split(self, app):
         """Existing GIS duplicate must not win on exact junk-name match."""
