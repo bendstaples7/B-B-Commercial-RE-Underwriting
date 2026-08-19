@@ -157,6 +157,7 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['propertyContacts', propertyId] })
+      queryClient.invalidateQueries({ queryKey: ['commandCenter', propertyId] })
       onClose()
     },
     onError: (err: Error) => showError(err.message || 'Failed to create contact.'),
@@ -168,6 +169,7 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
       contactService.updateContact(contact!.id, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['propertyContacts', propertyId] })
+      queryClient.invalidateQueries({ queryKey: ['commandCenter', propertyId] })
       onClose()
     },
     onError: (err: Error) => showError(err.message || 'Failed to update contact.'),

@@ -295,6 +295,8 @@ export function getTimelineEventLabel(entry: LeadTimelineEntry): string {
   if (entry.event_type === 'note_added') return 'Note Added'
   if (entry.event_type === 'mail_sent') return 'Mailer Sent'
   if (entry.event_type === 'mailer_history') return 'Mailer History'
+  if (entry.event_type === 'owner_name_changed') return 'Owner Name Changed'
+  if (entry.event_type === 'contact_kept') return 'Person Kept'
   return formatEventType(entry.event_type)
 }
 

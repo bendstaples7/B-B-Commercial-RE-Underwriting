@@ -28,6 +28,7 @@ from app.services.entity_lookup import (
     EntityLookupProviderNotConfiguredError,
     EntityLookupResult,
     EntityPartyResult,
+    ILSOS_NOT_LOADED_MESSAGE,
 )
 from app.services.entity_lookup.factory import get_entity_lookup_provider
 from app.services.entity_lookup.irs_eo import (
@@ -480,10 +481,7 @@ class EntityResolutionService:
 
         provider = self._get_provider()
         if not provider.is_configured() and not dry_run:
-            raise EntityLookupProviderNotConfiguredError(
-                "Illinois SOS bulk data not loaded. "
-                "Run: python scripts/import_il_sos_llc_bulk.py --apply"
-            )
+            raise EntityLookupProviderNotConfiguredError(ILSOS_NOT_LOADED_MESSAGE)
 
         if dry_run:
             if not provider.is_configured():
@@ -491,10 +489,7 @@ class EntityResolutionService:
                     lead_id=lead_id,
                     status="pending",
                     entity_name=entity_name,
-                    message=(
-                        "Would resolve Illinois LLC after loading free SOS bulk data "
-                        "(python scripts/import_il_sos_llc_bulk.py --apply)"
-                    ),
+                    message=ILSOS_NOT_LOADED_MESSAGE,
                     dry_run=True,
                 )
             result = provider.lookup_llc(entity_name, jurisdiction=SUPPORTED_JURISDICTION)

@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
+import sqlite3
+import tempfile
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Optional
 from urllib.error import URLError
@@ -66,8 +69,15 @@ def download_url(url: str, dest: Path, *, timeout: int = 180) -> Path:
         url,
         headers={"User-Agent": "B-B-RealEstateAnalyzer/1.0 (entity-resolution)"},
     )
+    tmp = dest.with_suffix(dest.suffix + ".part")
     with urlopen(req, timeout=timeout) as resp:  # noqa: S310
-        dest.write_bytes(resp.read())
+        with tmp.open("wb") as out:
+            while True:
+                chunk = resp.read(256 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+    tmp.replace(dest)
     logger.info("Wrote %s (%d bytes)", dest, dest.stat().st_size)
     return dest
 
@@ -110,24 +120,87 @@ def _chunked(items: Iterable, size: int) -> Iterable[list]:
         yield batch
 
 
-def _dict_by_file_number(records: Iterable[dict], label: str) -> dict[str, dict]:
+def _slim_master_by_file_number(records: Iterable[dict]) -> dict[str, dict]:
+    """Keep only columns used when inserting entities (full master rows OOM the VPS)."""
     keyed: dict[str, dict] = {}
-    duplicates = 0
     for rec in records:
         file_number = (rec.get("file_number") or "").strip()
         if not file_number:
             continue
-        if file_number in keyed:
-            duplicates += 1
-            logger.warning(
-                "Duplicate IL SOS %s record for file_number=%s; keeping latest",
-                label,
-                file_number,
-            )
-        keyed[file_number] = rec
-    if duplicates:
-        logger.warning("IL SOS %s import saw %d duplicate file_number rows", label, duplicates)
+        keyed[file_number] = {
+            "status_code": rec.get("status_code") or None,
+            "management_type": rec.get("management_type") or None,
+            "juris_organized": rec.get("juris_organized") or None,
+        }
     return keyed
+
+
+def _normalize_agent_change_date(value: object) -> str:
+    raw = str(value or "").strip()
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) == 8:
+        return digits
+    return ""
+
+
+def _agent_change_key(rec: dict, order: int) -> tuple[str, int]:
+    return _normalize_agent_change_date(rec.get("agent_change_date")), order
+
+
+def _iter_latest_agent_by_file_number(records: Iterable[dict]) -> Iterable[tuple[str, dict]]:
+    """Yield one latest agent row per file number using disk-backed temp storage."""
+    duplicates = 0
+    with tempfile.TemporaryDirectory(prefix="ilsos-agent-dedupe-") as tmpdir:
+        conn = sqlite3.connect(str(Path(tmpdir) / "agents.sqlite3"))
+        try:
+            conn.execute("""
+                CREATE TABLE agents (
+                    file_number TEXT PRIMARY KEY,
+                    sort_date TEXT NOT NULL,
+                    input_order INTEGER NOT NULL,
+                    record_json TEXT NOT NULL
+                )
+            """)
+            for order, rec in enumerate(records):
+                file_number = (rec.get("file_number") or "").strip()[:8]
+                if not file_number:
+                    continue
+                sort_date, input_order = _agent_change_key(rec, order)
+                payload = json.dumps(rec)
+                current = conn.execute(
+                    "SELECT sort_date, input_order FROM agents WHERE file_number = ?",
+                    (file_number,),
+                ).fetchone()
+                if current is not None:
+                    duplicates += 1
+                    if (sort_date, input_order) < (current[0], current[1]):
+                        continue
+                conn.execute(
+                    """
+                    INSERT INTO agents(file_number, sort_date, input_order, record_json)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(file_number) DO UPDATE SET
+                        sort_date = excluded.sort_date,
+                        input_order = excluded.input_order,
+                        record_json = excluded.record_json
+                    """,
+                    (file_number, sort_date, input_order, payload),
+                )
+            conn.commit()
+            if duplicates:
+                logger.warning(
+                    "IL SOS agent import saw %d duplicate file_number rows; kept latest",
+                    duplicates,
+                )
+            cursor = conn.execute(
+                "SELECT file_number, record_json FROM agents ORDER BY file_number"
+            )
+            for file_number, record_json in cursor:
+                yield file_number, json.loads(record_json)
+        finally:
+            conn.close()
+
+
 
 
 class IlSosBulkImportService:
@@ -167,11 +240,12 @@ class IlSosBulkImportService:
                     if len(sample_names) < 5:
                         sample_names.append(rec.get("name"))
                 manager_count = sum(1 for _ in manager_recs)
+                agent_count = sum(1 for _ in agent_recs)
                 counts = {
                     "names": name_count,
                     "masters": len(master_recs),
                     "managers": manager_count,
-                    "agents": len(agent_recs),
+                    "agents": agent_count,
                     "source": source,
                 }
                 logger.info("Parsed IL SOS records: %s", counts)
@@ -250,16 +324,15 @@ class IlSosBulkImportService:
 
             def iter_agents():
                 nonlocal agent_count
-                for fn, rec in agent_recs.items():
-                    key = fn[:8]
-                    if key not in entity_keys:
+                for fn, rec in _iter_latest_agent_by_file_number(agent_recs):
+                    if fn not in entity_keys:
                         continue
                     agent_name = (rec.get("agent_name") or "").strip()
                     if not agent_name:
                         continue
                     agent_count += 1
                     yield IlSosLlcAgent(
-                        file_number=key,
+                        file_number=fn,
                         agent_name=agent_name[:120],
                         agent_street=_clip(rec.get("agent_street"), 60),
                         agent_city=_clip(rec.get("agent_city"), 40),
@@ -275,7 +348,7 @@ class IlSosBulkImportService:
                 "names": name_count,
                 "masters": len(master_recs),
                 "managers": manager_source_count,
-                "agents": len(agent_recs),
+                "agents": agent_count,
                 "source": source,
                 "entities_loaded": entity_count,
                 "managers_loaded": manager_count,
@@ -311,7 +384,7 @@ class IlSosBulkImportService:
         *,
         force_download: bool,
         prefer_github: bool,
-    ) -> tuple[Iterable[dict], dict[str, dict], Iterable[dict], dict[str, dict], str]:
+    ) -> tuple[Iterable[dict], dict[str, dict], Iterable[dict], Iterable[dict], str]:
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         if prefer_github:
@@ -335,39 +408,31 @@ class IlSosBulkImportService:
 
     def _load_official_fixed_width(
         self, cache_dir: Path, *, force_download: bool,
-    ) -> tuple[Iterable[dict], dict[str, dict], Iterable[dict], dict[str, dict], str]:
+    ) -> tuple[Iterable[dict], dict[str, dict], Iterable[dict], Iterable[dict], str]:
         paths = {
             key: download_ilsos_zip(fname, cache_dir, force=force_download)
             for key, fname in FILES.items()
         }
         name_recs = iter_records(read_zip_text(paths["name"]), NAME_SCHEMA)
-        master_recs = _dict_by_file_number(
+        master_recs = _slim_master_by_file_number(
             iter_records(read_zip_text(paths["master"]), MASTER_SCHEMA),
-            "master",
         )
         manager_recs = iter_records(read_zip_text(paths["managers"]), MANAGER_SCHEMA)
-        agent_recs = _dict_by_file_number(
-            iter_records(read_zip_text(paths["agent"]), AGENT_SCHEMA),
-            "agent",
-        )
+        agent_recs = iter_records(read_zip_text(paths["agent"]), AGENT_SCHEMA)
         return name_recs, master_recs, manager_recs, agent_recs, "ilsos_transparency_act"
 
     def _load_github_csv(
         self, cache_dir: Path, *, force_download: bool,
-    ) -> tuple[Iterable[dict], dict[str, dict], Iterable[dict], dict[str, dict], str]:
+    ) -> tuple[Iterable[dict], dict[str, dict], Iterable[dict], Iterable[dict], str]:
         dest = cache_dir / "llc_github.zip"
         if force_download or not dest.exists() or dest.stat().st_size == 0:
             download_url(GITHUB_LLC_ZIP, dest, timeout=300)
         name_recs = _iter_csv_from_zip(dest, "llcallnam.csv")
-        master_recs = _dict_by_file_number(
+        master_recs = _slim_master_by_file_number(
             _iter_csv_from_zip(dest, "llcallmst.csv"),
-            "master",
         )
         manager_recs = _iter_csv_from_zip(dest, "llcallmgr.csv")
-        agent_recs = _dict_by_file_number(
-            _iter_csv_from_zip(dest, "llcallagt.csv"),
-            "agent",
-        )
+        agent_recs = _iter_csv_from_zip(dest, "llcallagt.csv")
         return (
             name_recs,
             master_recs,
@@ -376,7 +441,6 @@ class IlSosBulkImportService:
             "ilsos_transparency_act_github_csv",
         )
 
-
 def latest_successful_import() -> Optional[IlSosImportRun]:
     return (
         IlSosImportRun.query
@@ -384,3 +448,46 @@ def latest_successful_import() -> Optional[IlSosImportRun]:
         .order_by(IlSosImportRun.finished_at.desc())
         .first()
     )
+
+
+ILSOS_BULK_FRESH_DAYS = 6
+
+
+def _naive_utc(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return value.replace(tzinfo=None)
+    return value
+
+
+def ilsos_bulk_is_fresh(*, max_age_days: int = ILSOS_BULK_FRESH_DAYS) -> bool:
+    """True when SOS tables have rows and the last successful import is recent."""
+    if IlSosLlcEntity.query.limit(1).first() is None:
+        return False
+    run = latest_successful_import()
+    if run is None or run.finished_at is None:
+        return False
+    age = datetime.utcnow() - _naive_utc(run.finished_at)
+    return age < timedelta(days=max_age_days)
+
+
+def import_ilsos_bulk_if_stale(
+    cache_dir: Path,
+    *,
+    max_age_days: int = ILSOS_BULK_FRESH_DAYS,
+    force_download: bool = False,
+    prefer_github: bool = False,
+) -> dict:
+    """Skip a full download when a successful import is still fresh."""
+    if ilsos_bulk_is_fresh(max_age_days=max_age_days):
+        run = latest_successful_import()
+        finished = run.finished_at.isoformat() if run and run.finished_at else None
+        logger.info("Skipping IL SOS bulk import — dataset still fresh (%s)", finished)
+        return {"skipped": True, "reason": "fresh", "finished_at": finished}
+    result = IlSosBulkImportService().import_all(
+        cache_dir,
+        dry_run=False,
+        force_download=force_download,
+        prefer_github=prefer_github,
+    )
+    result["skipped"] = False
+    return result

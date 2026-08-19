@@ -51,6 +51,10 @@ class EntityLookupProviderNotConfiguredError(RuntimeError):
     """Raised when the provider is not ready (empty bulk tables or missing API key)."""
 
 
+# Shown to users when ilsos_bulk tables are empty. Keep free of script paths.
+ILSOS_NOT_LOADED_MESSAGE = "Illinois LLC list is not loaded yet"
+
+
 @runtime_checkable
 class EntityLookupProvider(Protocol):
     """Interface for Illinois (and future) entity registry lookups."""

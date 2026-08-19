@@ -341,6 +341,17 @@ class MailQueueService:
                                 lead_id, actor=user_id, commit=False,
                             )
                             create_pending_mail_follow_up_task(lead, actor=user_id)
+                            from app.services.lead_status_service import (
+                                unpark_deprioritize_for_active_work,
+                            )
+                            unparked = unpark_deprioritize_for_active_work(
+                                lead,
+                                actor=user_id,
+                                reason='Queued for direct mail',
+                                source='system',
+                                commit=False,
+                                recompute_action=False,
+                            )
                             # Flush remaining writes before savepoint release so
                             # success accounting only runs if the unit commits.
                             db.session.flush()
@@ -348,6 +359,7 @@ class MailQueueService:
                                 'lead_id': lead_id,
                                 'status': 'queued',
                                 'hubspot_sync': pending_sync,
+                                'unparked': unparked,
                             }
 
                 # Savepoint released successfully — record a single outcome.

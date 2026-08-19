@@ -47,13 +47,35 @@ const contacts: PropertyContact[] = [
 ]
 
 describe('ContactMethodFields', () => {
-  it('filters phone methods to the selected contact', () => {
-    const janeOnly = buildMethodOptions(contacts, 'phone', 1)
-    expect(janeOnly).toHaveLength(1)
-    expect(janeOnly[0].value).toBe('5551234567')
-
-    const allPhones = buildMethodOptions(contacts, 'phone', null)
-    expect(allPhones).toHaveLength(2)
+  it('includes HubSpot-primary digits for the active owner in the phone list', () => {
+    const sam: PropertyContact[] = [
+      {
+        ...contacts[0],
+        first_name: 'Sam',
+        last_name: 'For Sale By Owner',
+        phones: [
+          {
+            id: 88,
+            contact_id: 1,
+            value: '+17732715525',
+            label: 'mobile',
+            notes: 'HubSpot primary',
+            source: 'hubspot_import',
+            confidence_score: 85,
+          },
+          {
+            id: 89,
+            contact_id: 1,
+            value: '(773) 454-0106',
+            label: 'other',
+            confidence_score: 50,
+          },
+        ],
+      },
+    ]
+    const options = buildMethodOptions(sam, 'phone', 1)
+    expect(options.some((o) => o.value.replace(/\D/g, '').endsWith('7732715525'))).toBe(true)
+    expect(options[0].value.replace(/\D/g, '').endsWith('7732715525')).toBe(true)
   })
 
   it('maps call payload with contact and phone', () => {

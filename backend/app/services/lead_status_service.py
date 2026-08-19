@@ -64,13 +64,142 @@ def _sync_cancelled_hubspot_tasks(hubspot_task_ids: set[str]) -> None:
         )
 
 
+def lead_has_active_outreach_work(lead_id: int) -> bool:
+    """True when the lead has queued mail or an open call/follow-up/mail task."""
+    from app.models.mail_queue_item import MailQueueItem
+    from app.utils.call_completable_task import (
+        is_call_completable_task,
+        is_legacy_entity_research_task,
+    )
+
+    queued = MailQueueItem.query.filter_by(lead_id=lead_id, status='queued').first()
+    if queued is not None:
+        return True
+    open_tasks = LeadTask.query.filter_by(lead_id=lead_id, status='open').all()
+    for task in open_tasks:
+        if is_legacy_entity_research_task(task.task_type, task.title):
+            continue
+        if task.task_type == 'add_to_mail_batch':
+            return True
+        if is_call_completable_task(task.task_type, task.title):
+            return True
+    return False
+
+
+def mailing_status_for_unpark(lead_id: int) -> str:
+    """Mailing stage after unparking: contacted if a call/email already happened."""
+    contact_row = (
+        LeadTimelineEntry.query.filter(
+            LeadTimelineEntry.lead_id == lead_id,
+            LeadTimelineEntry.event_type.in_(
+                ('call_logged', 'hubspot_call', 'email_logged'),
+            ),
+            LeadTimelineEntry.is_deleted.is_(False),
+        )
+        .first()
+    )
+    if contact_row is not None:
+        return 'mailing_contacted_no_interest'
+    return 'mailing_no_contact_made'
+
+
+def _has_manual_deprioritize(lead_id: int) -> bool:
+    rows = (
+        LeadTimelineEntry.query.filter(
+            LeadTimelineEntry.lead_id == lead_id,
+            LeadTimelineEntry.event_type == 'status_changed',
+            LeadTimelineEntry.source == 'manual',
+            LeadTimelineEntry.is_deleted.is_(False),
+        )
+        .all()
+    )
+    for row in rows:
+        meta = row.event_metadata or {}
+        if meta.get('new_status') == 'deprioritize':
+            return True
+    return False
+
+
+def unpark_deprioritize_for_active_work(
+    lead: Lead,
+    *,
+    actor: str,
+    reason: str,
+    source: str = 'system',
+    commit: bool = True,
+    recompute_action: bool = True,
+    push_hubspot: bool = False,
+) -> bool:
+    """Move a parked working lead back onto a mailing status. Returns True if changed."""
+    if lead.lead_status != 'deprioritize':
+        return False
+    new_status = mailing_status_for_unpark(lead.id)
+    apply_lead_status_change(
+        lead,
+        new_status,
+        reason=reason,
+        actor=actor,
+        source=source,
+        recompute_action=recompute_action,
+        commit=commit,
+    )
+    if push_hubspot:
+        try:
+            from app.services.hubspot_writeback_service import (
+                HubSpotWriteBackService,
+                hubspot_write_back_enabled,
+            )
+            if hubspot_write_back_enabled():
+                HubSpotWriteBackService().push_deal_stage_for_lead(lead.id, new_status)
+        except Exception as exc:  # noqa: BLE001 — unpark must not fail on CRM
+            logger.warning(
+                'HubSpot stage push failed after unpark lead_id=%s: %s',
+                lead.id, exc, exc_info=True,
+            )
+    return True
+
+
+def heal_working_deprioritize_leads(
+    *,
+    commit: bool = True,
+    push_hubspot: bool = False,
+    recompute_action: bool = True,
+) -> int:
+    """Unpark deprioritize leads that still have follow-up or mail work."""
+    parked = Lead.query.filter_by(lead_status='deprioritize').all()
+    healed = 0
+    for lead in parked:
+        if _has_manual_deprioritize(lead.id):
+            continue
+        if not lead_has_active_outreach_work(lead.id):
+            continue
+        if unpark_deprioritize_for_active_work(
+            lead,
+            actor='System',
+            reason=(
+                'Restored from HubSpot Deprioritize because follow-up or mail '
+                'work is still open'
+            ),
+            source='system',
+            commit=False,
+            recompute_action=recompute_action,
+            push_hubspot=push_hubspot,
+        ):
+            healed += 1
+    if commit:
+        db.session.commit()
+    return healed
+
+
 def apply_lead_status_change(
     lead: Lead,
     new_status: str,
     *,
     reason: str = '',
     actor: str = 'anonymous',
+    source: str = 'manual',
     recompute_action: bool = True,
+    commit: bool = True,
 ) -> None:
     """Update lead status with DNC/suppress side effects and timeline entry."""
     old_status = lead.lead_status
@@ -132,7 +261,7 @@ def apply_lead_status_change(
         lead_id=lead.id,
         event_type='status_changed',
         occurred_at=dt.datetime.now(dt.timezone.utc),
-        source='manual',
+        source=source if source in ('manual', 'system', 'hubspot') else 'system',
         actor=actor,
         summary=summary,
         event_metadata={
@@ -143,8 +272,12 @@ def apply_lead_status_change(
     )
     db.session.add(lead)
     db.session.add(entry)
-    db.session.commit()
-    _sync_cancelled_hubspot_tasks(cancelled_hubspot_ids)
+    if commit:
+        db.session.commit()
+        _sync_cancelled_hubspot_tasks(cancelled_hubspot_ids)
+    elif cancelled_hubspot_ids:
+        # Caller owns the transaction; sync after they commit.
+        pass
 
     if recompute_action and new_status not in ('do_not_contact', 'suppressed'):
         from app.services.lead_refresh import refresh_lead_scoring

@@ -353,80 +353,72 @@ def _collect_flat_emails(lead: Lead) -> list[str]:
 
 
 def _batch_best_phone_by_lead(leads: list[Lead]) -> dict[int, str]:
-    """Best phone per lead_id using one relational query + flat columns."""
-    lead_ids = [lead.id for lead in leads if isinstance(getattr(lead, 'id', None), int)]
-    if not lead_ids:
-        return {}
-
+    """Best viable phone per lead, resolved with one relational query."""
     from sqlalchemy import bindparam, text
 
     from app import db
     from app.services.phone_confidence_service import (
         DEFAULT_CONFIDENCE,
         MIN_VIABLE_CONFIDENCE,
-        PhoneConfidenceService,
     )
 
+    lead_ids = [lead.id for lead in leads if isinstance(getattr(lead, 'id', None), int)]
+    if not lead_ids:
+        return {}
+
     statement = text("""
-            SELECT pc.property_id, cp.value, cp.confidence_score, cp.notes, cp.label, cp.source
-            FROM contact_phones cp
-            JOIN property_contacts pc ON pc.contact_id = cp.contact_id
-            WHERE pc.property_id IN :lead_ids
-              AND (pc.role IS NULL OR pc.role <> 'former_owner')
-        """).bindparams(bindparam('lead_ids', expanding=True))
+        SELECT pc.property_id,
+               cp.value,
+               COALESCE(cp.confidence_score, :default_confidence) AS score,
+               CASE
+                 WHEN LOWER(COALESCE(cp.notes, '')) LIKE '%hubspot primary%' THEN 0
+                 ELSE 1
+               END AS hubspot_rank,
+               cp.id
+        FROM contact_phones cp
+        JOIN property_contacts pc ON pc.contact_id = cp.contact_id
+        WHERE pc.property_id IN :lead_ids
+          AND (
+            pc.role IS NULL
+            OR pc.role <> 'former_owner'
+            OR cp.last_called_at IS NOT NULL
+            OR cp.last_outcome IS NOT NULL
+            OR COALESCE(cp.confidence_score, 0) >= :min_viable_confidence
+            OR LOWER(COALESCE(cp.notes, '')) LIKE '%hubspot primary%'
+          )
+        ORDER BY pc.property_id, score DESC, hubspot_rank ASC, cp.id ASC
+    """).bindparams(bindparam('lead_ids', expanding=True))
     rows = db.session.execute(
         statement,
-        {'lead_ids': lead_ids},
+        {
+            'lead_ids': lead_ids,
+            'default_confidence': DEFAULT_CONFIDENCE,
+            'min_viable_confidence': MIN_VIABLE_CONFIDENCE,
+        },
     ).fetchall()
 
-    # (score, preferred_rank, value) — preferred_rank 0 = HubSpot primary / phone_1
-    candidates: dict[int, list[tuple[int, int, str]]] = defaultdict(list)
-    for property_id, value, confidence, notes, label, source in rows:
-        if not value or not str(value).strip():
+    relational: dict[int, list[tuple[int, str]]] = defaultdict(list)
+    for property_id, value, score, _hubspot_rank, _phone_id in rows:
+        digits = re.sub(r'\D', '', str(value or ''))
+        if len(digits) < 7 or int(score or 0) < MIN_VIABLE_CONFIDENCE:
             continue
-        score = confidence if confidence is not None else DEFAULT_CONFIDENCE
-        notes_l = (notes or '').lower()
-        label_l = (str(label) if label is not None else '').lower()
-        source_l = (str(source) if source is not None else '').lower()
-        is_primary = (
-            'hubspot primary' in notes_l
-            or label_l == 'mobile'
-            or (source_l.startswith('hubspot') and 'hubspot primary' in notes_l)
-        )
-        preferred = 0 if is_primary else 1
-        candidates[property_id].append((score, preferred, str(value).strip()))
+        relational[int(property_id)].append((int(score), str(value).strip()))
 
     result: dict[int, str] = {}
     for lead in leads:
         lead_id = getattr(lead, 'id', None)
         if not isinstance(lead_id, int):
             continue
-        ranked = list(candidates.get(lead_id, []))
+        candidates = list(relational.get(lead_id, []))
         for slot in range(1, 8):
             raw = getattr(lead, f'phone_{slot}', None)
-            if isinstance(raw, str) and raw.strip():
-                # phone_1 is preferred over later flat slots; never sort by digits.
-                preferred = 0 if slot == 1 else 2
-                ranked.append((DEFAULT_CONFIDENCE, preferred, raw.strip()))
-        if not ranked:
-            continue
-        # Dedupe by normalized digits, keeping best score/preferred.
-        by_digits: dict[str, tuple[int, int, str]] = {}
-        for score, preferred, value in ranked:
-            digits = PhoneConfidenceService.normalize_phone(value)
-            if len(digits) < 7:
-                continue
-            existing = by_digits.get(digits)
-            if existing is None or (score, -preferred) > (existing[0], -existing[1]):
-                by_digits[digits] = (score, preferred, value)
-        ranked = list(by_digits.values())
-        ranked.sort(key=lambda item: (-item[0], item[1]))
-        viable = [item for item in ranked if item[0] >= MIN_VIABLE_CONFIDENCE]
-        if viable:
-            result[lead_id] = viable[0][2]
-        elif len(ranked) == 1:
-            result[lead_id] = ranked[0][2]
-        # Multiple numbers all below viable confidence → skip auto-pick.
+            digits = re.sub(r'\D', '', str(raw or ''))
+            if len(digits) >= 7:
+                candidates.append((DEFAULT_CONFIDENCE, str(raw).strip()))
+                break
+        if candidates:
+            candidates.sort(key=lambda item: -item[0])
+            result[lead_id] = candidates[0][1]
     return result
 
 

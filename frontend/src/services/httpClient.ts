@@ -10,6 +10,41 @@ function asApiErrorPayload(value: unknown): ApiErrorPayload {
     : {}
 }
 
+const genericErrorLabels = new Set([
+  'Invalid request',
+  'Validation error',
+  'An error occurred',
+  'Internal server error',
+  'HTTP error',
+  'Provider not configured',
+])
+
+/** Map a backend JSON error body to the sentence shown in the UI. */
+export function userFacingApiErrorMessage(errorData: unknown): string {
+  const payload = asApiErrorPayload(errorData)
+  const errorField = payload.error
+  const detailedMessage =
+    typeof payload.message === 'string'
+      ? payload.message
+      : null
+  return (
+    (errorField != null
+      && typeof errorField === 'object'
+      && typeof errorField.message === 'string'
+      ? errorField.message
+      : null)
+    || (typeof errorField === 'string'
+      && genericErrorLabels.has(errorField)
+      && detailedMessage
+      ? detailedMessage
+      : null)
+    || (typeof errorField === 'string' ? errorField : null)
+    || detailedMessage
+    || 'An error occurred'
+  )
+}
+
+
 // Create axios instance with default config
 const api: AxiosInstance = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
@@ -57,38 +92,7 @@ api.interceptors.response.use(
         return Promise.reject(error)
       }
 
-      // Extract the real message — backend uses several shapes:
-      //   { error: { message: "..." } }  — structured error object
-      //   { error: "..." }               — plain string error (auth endpoints)
-      //   { message: "..." }             — direct message field
-      // Prefer `message` when `error` is a generic label like "Invalid request".
-      const payload = asApiErrorPayload(errorData)
-      const errorField = payload.error
-      const detailedMessage =
-        typeof payload.message === 'string'
-          ? payload.message
-          : null
-      const genericErrorLabels = new Set([
-        'Invalid request',
-        'Validation error',
-        'An error occurred',
-        'Internal server error',
-        'HTTP error',
-      ])
-      const message =
-        (errorField != null
-          && typeof errorField === 'object'
-          && typeof errorField.message === 'string'
-          ? errorField.message
-          : null)
-        || (typeof errorField === 'string'
-          && genericErrorLabels.has(errorField)
-          && detailedMessage
-          ? detailedMessage
-          : null)
-        || (typeof errorField === 'string' ? errorField : null)
-        || detailedMessage
-        || 'An error occurred'
+      const message = userFacingApiErrorMessage(errorData)
 
       console.error(`[API] ${status} ${url}:`, message, errorData)
 

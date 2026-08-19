@@ -80,6 +80,14 @@ _KNOWN_REVISIONS = frozenset({
     'spa_boot_20260813',
     # Unanswered-mail nudge dismiss + sticky prefer_direct_mail
     'mail_nudge_20260814',
+    # Same-person owner split: reactivate dialed contact, merge GIS dump phones
+    'heal_own_20260819',
+    # Unpark HubSpot Deprioritize when follow-up/mail work is still open
+    'heal_depri_20260819',
+    # Manual owner-name lock (GIS must not overwrite typed spelling)
+    'name_lock_20260819',
+    # People you add stay when GIS only lists the primary owner
+    'keep_gis_20260819',
     's0t1u2v3w4x5', 't0u1v2w3x4y5', 'u1v2w3x4y5z6',
     'v1w2x3y4z5a6', 'w2x3y4z5a6b7', 'x3y4z5a6b7c8',
     'y4z5a6b7c8d9', 'z5a6b7c8d9e0',

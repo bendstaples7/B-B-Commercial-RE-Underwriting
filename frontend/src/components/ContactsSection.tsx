@@ -36,7 +36,9 @@ import {
   ownerDisplayEntries,
   personIdentityKey,
   personIdentityKeyFromFullName,
+  splitDisplayName,
 } from '@/utils/propertyContacts'
+import { ContactNameInlineEdit } from '@/components/ContactNameInlineEdit'
 import { PhoneList } from '@/components/PhoneRow'
 import type {
   CommandCenterPayload,
@@ -75,14 +77,6 @@ function mailingAddressKey(value: string): string {
     .replace(/\b(BOULEVARD)\b/g, 'BLVD')
     .replace(/\b(DRIVE)\b/g, 'DR')
     .replace(/[^A-Z0-9]/g, '')
-}
-
-function splitDisplayName(full: string): { first_name: string | null; last_name: string | null } {
-  const trimmed = full.trim()
-  if (!trimmed) return { first_name: null, last_name: null }
-  const parts = trimmed.split(/\s+/)
-  if (parts.length === 1) return { first_name: parts[0], last_name: null }
-  return { first_name: parts.slice(0, -1).join(' '), last_name: parts[parts.length - 1] }
 }
 
 type CompanyRow = {
@@ -515,14 +509,9 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
       row,
       name,
     }: {
-      row: { type: 'person'; contact: PropertyContact } | { type: 'company'; company: CompanyRow }
+      row: { type: 'company'; company: CompanyRow }
       name: string
     }) => {
-      if (row.type === 'person') {
-        const parts = splitDisplayName(name)
-        await contactService.updateContact(row.contact.id, parts)
-        return
-      }
       const company = row.company
       if (company.organizationId != null) {
         await organizationService.updateOrganization(company.organizationId, { name })
@@ -789,7 +778,6 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
           {peopleContacts.map((contact, index) => {
             const fullName =
               [contact.first_name, contact.last_name].filter(Boolean).join(' ') || '(No name)'
-            const personKey = `person-${contact.id}`
             return (
               <React.Fragment key={contact.id}>
                 {index > 0 && <Divider />}
@@ -797,45 +785,19 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
                   sx={{ flexDirection: 'column', alignItems: 'stretch', py: 1.25 }}
                   data-testid={`person-row-${contact.id}`}
                 >
-                  {editingKey === personKey ? (
-                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', width: '100%' }}>
-                      <TextField
-                        size="small"
-                        fullWidth
-                        value={editValue}
-                        onChange={(e) => setEditValue(e.target.value)}
-                        inputProps={{ 'data-testid': 'person-name-edit-input' }}
-                      />
-                      <IconButton
-                        size="small"
-                        color="primary"
-                        aria-label="Save name"
-                        disabled={!editValue.trim() || saveNameMutation.isPending}
-                        onClick={() =>
-                          saveNameMutation.mutate({
-                            row: { type: 'person', contact },
-                            name: editValue.trim(),
-                          })
-                        }
-                      >
-                        <CheckIcon fontSize="small" />
-                      </IconButton>
-                      <IconButton size="small" aria-label="Cancel edit" onClick={cancelEdit}>
-                        <CloseIcon fontSize="small" />
-                      </IconButton>
-                    </Box>
-                  ) : (
-                    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, width: '100%' }}>
+                  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, width: '100%' }}>
                       <Box sx={{ flex: 1, minWidth: 0 }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                          <Typography
-                            sx={{
-                              ...ccRowTitleSx,
-                              fontWeight: contact.is_primary ? 500 : 400,
-                            }}
-                          >
-                            {fullName}
-                          </Typography>
+                          <ContactNameInlineEdit
+                            contactId={contact.id}
+                            displayName={fullName}
+                            leadId={propertyId}
+                            isPrimary={Boolean(contact.is_primary)}
+                            inputTestId="person-name-edit-input"
+                            editButtonTestId="edit-person-name-btn"
+                            titleSx={{ fontWeight: contact.is_primary ? 500 : 400 }}
+                            rootSx={{ width: 'auto', maxWidth: '100%' }}
+                          />
                           {contact.is_primary && (
                             <Chip size="small" label="Primary" color="primary" />
                           )}
@@ -876,16 +838,7 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
                             </Typography>
                           ))}
                       </Box>
-                      <IconButton
-                        size="small"
-                        aria-label={`Edit ${fullName}`}
-                        onClick={() => startEdit(personKey, fullName)}
-                        data-testid="edit-person-name-btn"
-                      >
-                        <EditOutlinedIcon fontSize="small" />
-                      </IconButton>
                     </Box>
-                  )}
                   <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
                     {!contact.is_primary && (
                       <Button

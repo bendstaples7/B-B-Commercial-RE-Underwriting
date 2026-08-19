@@ -278,8 +278,32 @@ class HubSpotMatcherService:
                     # Don't override suppressed/do_not_contact with a pipeline stage
                     if lead.lead_status not in ('suppressed', 'do_not_contact'):
                         if not manual_status_change_wins(lead):
-                            lead.lead_status = new_lead_status
-                            updated_fields.append("lead_status")
+                            from app.services.lead_status_service import (
+                                apply_lead_status_change,
+                                lead_has_active_outreach_work,
+                            )
+                            if (
+                                new_lead_status == 'deprioritize'
+                                and lead_has_active_outreach_work(lead.id)
+                            ):
+                                logger.info(
+                                    'Skipping HubSpot deprioritize for lead %s — '
+                                    'open follow-up or mail work',
+                                    lead.id,
+                                )
+                            else:
+                                apply_lead_status_change(
+                                    lead,
+                                    new_lead_status,
+                                    reason=(
+                                        f"HubSpot deal stage '{stage_label}'"
+                                    ),
+                                    actor='System',
+                                    source='hubspot',
+                                    recompute_action=False,
+                                    commit=False,
+                                )
+                                updated_fields.append("lead_status")
 
         # Address fields — fill in nulls only.
         field_map = {
@@ -404,12 +428,14 @@ class HubSpotMatcherService:
         # --- Owner name -------------------------------------------------------
         first_name = (props.get("firstname") or "").strip() or None
         last_name = (props.get("lastname") or "").strip() or None
-        if first_name and not lead.owner_first_name:
-            lead.owner_first_name = first_name
-            updated_fields.append("owner_first_name")
-        if last_name and not lead.owner_last_name:
-            lead.owner_last_name = last_name
-            updated_fields.append("owner_last_name")
+        from app.services.contact_service import ContactService
+        if not ContactService.primary_owner_name_locked(lead.id):
+            if first_name and not lead.owner_first_name:
+                lead.owner_first_name = first_name
+                updated_fields.append("owner_first_name")
+            if last_name and not lead.owner_last_name:
+                lead.owner_last_name = last_name
+                updated_fields.append("owner_last_name")
 
         # --- Phones -----------------------------------------------------------
         from app.services.phone_confidence_service import PhoneConfidenceService

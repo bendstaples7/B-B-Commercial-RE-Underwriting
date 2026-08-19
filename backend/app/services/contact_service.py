@@ -25,6 +25,22 @@ from sqlalchemy.orm import selectinload
 logger = logging.getLogger(__name__)
 
 
+def _contact_display_name(first: str | None, last: str | None) -> str:
+    return ' '.join(
+        p for p in ((first or '').strip(), (last or '').strip()) if p
+    ) or '(No name)'
+
+
+def _request_actor() -> str:
+    try:
+        from flask import g, has_request_context
+        if has_request_context():
+            return getattr(g, 'user_id', None) or 'anonymous'
+    except Exception:  # noqa: BLE001
+        pass
+    return 'anonymous'
+
+
 def _strip_invisible(value: str) -> str:
     """Strip all Unicode whitespace and control characters from *value*.
 
@@ -80,6 +96,7 @@ class ContactService:
             role=data.get('role', 'owner'),
             role_description=data.get('role_description'),
             notes=data.get('notes'),
+            keep_on_gis=bool(data.get('keep_on_gis', False)),
         )
         db.session.add(contact)
         db.session.flush()  # populate contact.id before inserting children
@@ -145,9 +162,21 @@ class ContactService:
             self._validate_name(merged)
 
         # Update scalar fields
+        name_keys = ('first_name' in data) or ('last_name' in data)
+        old_first = contact.first_name
+        old_last = contact.last_name
         for field in ('first_name', 'last_name', 'role', 'role_description', 'notes'):
             if field in data:
                 setattr(contact, field, data[field])
+
+        if name_keys:
+            contact.name_locked = True
+            self._sync_primary_owner_names_after_edit(
+                contact,
+                previous_first=old_first,
+                previous_last=old_last,
+                actor=_request_actor(),
+            )
 
         # Replace phones atomically
         if 'phones' in data:
@@ -174,6 +203,63 @@ class ContactService:
         db.session.commit()
         logger.info("Updated Contact id=%d", contact.id)
         return contact
+
+    @staticmethod
+    def primary_owner_name_locked(property_id: int) -> bool:
+        """True when the property's primary contact has a human-locked name."""
+        link = (
+            PropertyContact.query
+            .filter_by(property_id=property_id, is_primary=True)
+            .first()
+        )
+        if link is None:
+            return False
+        contact = db.session.get(Contact, link.contact_id)
+        return bool(contact is not None and contact.name_locked)
+
+    def _sync_primary_owner_names_after_edit(
+        self,
+        contact: Contact,
+        *,
+        previous_first: str | None,
+        previous_last: str | None,
+        actor: str,
+    ) -> None:
+        from datetime import datetime, timezone
+
+        from app.models.lead_timeline_entry import LeadTimelineEntry
+
+        previous = _contact_display_name(previous_first, previous_last)
+        current = _contact_display_name(contact.first_name, contact.last_name)
+        links = PropertyContact.query.filter_by(contact_id=contact.id).all()
+        seen_leads: set[int] = set()
+        for link in links:
+            lead = db.session.get(Property, link.property_id)
+            if lead is None:
+                continue
+            if link.is_primary:
+                lead.owner_first_name = contact.first_name
+                lead.owner_last_name = contact.last_name
+            if previous == current or lead.id in seen_leads:
+                continue
+            seen_leads.add(lead.id)
+            label = 'Owner name' if link.is_primary else 'Contact name'
+            db.session.add(LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type='owner_name_changed',
+                occurred_at=datetime.now(timezone.utc),
+                source='manual',
+                actor=actor,
+                summary=f"{label} changed from '{previous}' to '{current}'.",
+                event_metadata={
+                    'previous_first_name': previous_first,
+                    'previous_last_name': previous_last,
+                    'new_first_name': contact.first_name,
+                    'new_last_name': contact.last_name,
+                    'contact_id': contact.id,
+                    'is_primary': bool(link.is_primary),
+                },
+            ))
 
     # ------------------------------------------------------------------
     # Delete
@@ -724,6 +810,41 @@ class ContactService:
         if not unmatched:
             return 0
 
+        from app.models.lead_timeline_entry import LeadTimelineEntry
+
+        kept_ids_logged = {
+            (row.event_metadata or {}).get('contact_id')
+            for row in LeadTimelineEntry.query.filter_by(
+                lead_id=property_id,
+                event_type='contact_kept',
+            ).all()
+        }
+
+        to_archive: list[PropertyContact] = []
+        for link in unmatched:
+            contact = db.session.get(Contact, link.contact_id)
+            if contact is not None and getattr(contact, 'keep_on_gis', False):
+                if contact.id not in kept_ids_logged:
+                    db.session.add(LeadTimelineEntry(
+                        lead_id=property_id,
+                        event_type='contact_kept',
+                        occurred_at=datetime.now(timezone.utc),
+                        source='system',
+                        actor='GIS',
+                        summary=(
+                            f"Kept {_contact_display_name(contact.first_name, contact.last_name)} "
+                            "— GIS did not list this person."
+                        ),
+                        event_metadata={'contact_id': contact.id},
+                    ))
+                    kept_ids_logged.add(contact.id)
+                continue
+            to_archive.append(link)
+
+        unmatched = to_archive
+        if not unmatched:
+            return 0
+
         lead = Property.query.get(property_id)
         if lead is not None:
             capture_owner_snapshot(lead, reason=REASON_CONTACT_REPLACED, commit=False)
@@ -859,6 +980,68 @@ class ContactService:
                     return contact
         return None
 
+    @staticmethod
+    def _contact_outreach_signal_score(contact: Contact) -> int:
+        """Higher = already-called / HubSpot-primary / confident phone on file."""
+        score = 0
+        for phone in contact.phones or []:
+            if phone.last_called_at:
+                score += 100
+            if phone.last_outcome:
+                score += 25
+            if phone.confidence_score:
+                score += int(phone.confidence_score)
+            if 'hubspot primary' in (phone.notes or '').lower():
+                score += 50
+        return score
+
+    def _apply_kept_named_owner(
+        self,
+        contact: Contact,
+        link: PropertyContact,
+        property_id: int,
+        first_name: str | None,
+        last_name: str | None,
+        *,
+        is_primary: bool,
+    ) -> tuple[Contact, PropertyContact]:
+        from app.services.plugins.owner_name_utils import (
+            is_cleaner_person_display_name,
+            is_marketing_or_listing_noise_last,
+        )
+
+        incoming_cleaner = is_cleaner_person_display_name(first_name, last_name)
+        existing_cleaner = is_cleaner_person_display_name(
+            contact.first_name, contact.last_name,
+        )
+        if not getattr(contact, 'name_locked', False):
+            if incoming_cleaner and (
+                not existing_cleaner
+                or (
+                    (first_name or '').strip()
+                    and len((first_name or '').strip()) > len(
+                        (contact.first_name or '').strip()
+                    )
+                )
+            ):
+                if (first_name or '').strip():
+                    contact.first_name = first_name
+                if (last_name or '').strip() and not is_marketing_or_listing_noise_last(
+                    last_name,
+                ):
+                    contact.last_name = last_name
+            elif not (contact.last_name or '').strip() and (last_name or '').strip():
+                if not is_marketing_or_listing_noise_last(last_name):
+                    contact.last_name = last_name
+        if link.role == 'former_owner':
+            self._reactivate_owner_link(link, property_id, is_primary=is_primary)
+        elif is_primary:
+            PropertyContact.query.filter_by(
+                property_id=property_id, is_primary=True,
+            ).update({'is_primary': False})
+            link.is_primary = True
+        return contact, link
+
     def _upsert_named_owner(
         self,
         property_id: int,
@@ -881,13 +1064,65 @@ class ContactService:
         last_norm = (last_name or '').strip().lower()
         wanted_phones = {d for d in (phone_digit_list or []) if d}
 
+        # A human-locked primary owner must stay the GIS/upsert target even when
+        # the incoming spelling does not fuzzy-match (otherwise GIS creates a
+        # duplicate and archives the name you typed).
+        if is_primary:
+            locked_primary = (
+                db.session.query(Contact, PropertyContact)
+                .join(PropertyContact, PropertyContact.contact_id == Contact.id)
+                .filter(
+                    PropertyContact.property_id == property_id,
+                    PropertyContact.role == 'owner',
+                    PropertyContact.is_primary.is_(True),
+                    Contact.name_locked.is_(True),
+                )
+                .first()
+            )
+            if locked_primary is not None:
+                contact, link = locked_primary
+                return self._apply_kept_named_owner(
+                    contact,
+                    link,
+                    property_id,
+                    first_name,
+                    last_name,
+                    is_primary=is_primary,
+                )
+
         existing_rows = (
             db.session.query(Contact, PropertyContact)
+            .options(selectinload(Contact.phones))
             .join(PropertyContact, PropertyContact.contact_id == Contact.id)
             .filter(PropertyContact.property_id == property_id)
             .all()
         )
+        outreach_first_tokens: dict[str, int] = {}
         for contact, link in existing_rows:
+            if link.role not in ('owner', 'former_owner'):
+                continue
+            tok = ((contact.first_name or '').strip().lower().split() or [''])[0]
+            if not tok:
+                continue
+            if any(
+                phone_digits(p.value)
+                and (
+                    p.last_called_at
+                    or p.last_outcome
+                    or (
+                        p.confidence_score is not None
+                        and p.confidence_score >= 10
+                    )
+                    or 'hubspot primary' in (p.notes or '').lower()
+                )
+                for p in (contact.phones or [])
+            ):
+                outreach_first_tokens[tok] = outreach_first_tokens.get(tok, 0) + 1
+        MatchRow = tuple[int, int, int, int, Contact, PropertyContact]
+        matches: list[MatchRow] = []
+        for contact, link in existing_rows:
+            if link.role not in ('owner', 'former_owner'):
+                continue
             c_first = (contact.first_name or '').strip().lower()
             c_last = (contact.last_name or '').strip().lower()
             exact = c_first == first_norm and c_last == last_norm
@@ -897,8 +1132,17 @@ class ContactService:
             alias = (not exact and not fuzzy) and same_person_name_alias(
                 contact.first_name, contact.last_name, first_name, last_name,
             )
+            initial_upgrade = (
+                not exact
+                and not fuzzy
+                and not alias
+                and c_last == last_norm
+                and len(c_first) == 1
+                and first_norm.startswith(c_first)
+                and is_cleaner_person_display_name(first_name, last_name)
+            )
             phone_hit = False
-            if not exact and not fuzzy and not alias:
+            if not exact and not fuzzy and not alias and not initial_upgrade:
                 phones = list(contact.phones or [])
                 contact_digits = {
                     phone_digits(p.value) for p in phones if phone_digits(p.value)
@@ -927,47 +1171,61 @@ class ContactService:
                 )
                 if wanted_phones:
                     # Shared phone alone is not identity — require a name gate.
-                    phone_hit = bool(contact_digits & wanted_phones) and name_ok
+                    # GIS listing-name refreshes can also bring a new dump phone
+                    # for the same first-name person; keep the dialed/HubSpot
+                    # owner when the incoming last name is listing noise.
+                    unique_outreach = (
+                        bool(c_first_token)
+                        and outreach_first_tokens.get(c_first_token[0], 0) == 1
+                    )
+                    phone_hit = (
+                        (bool(contact_digits & wanted_phones) and name_ok)
+                        or (
+                            bool(outreach_digits)
+                            and name_ok
+                            and is_marketing_or_listing_noise_last(last_name)
+                            and unique_outreach
+                        )
+                    )
                 elif outreach_digits:
                     # GIS rename often arrives with no phones — keep the dialed
-                    # / HubSpot-primary owner when first names still match.
-                    phone_hit = name_ok
-            if not exact and not fuzzy and not alias and not phone_hit:
-                continue
-            if link.role not in ('owner', 'former_owner'):
-                continue
-            # Display-name policy: keep outreach identity; never overwrite with
-            # brokerage / listing junk (Sam For Sale By Owner > Sam Old Town CBRE).
-            incoming_cleaner = is_cleaner_person_display_name(first_name, last_name)
-            existing_cleaner = is_cleaner_person_display_name(
-                contact.first_name, contact.last_name,
-            )
-            if incoming_cleaner and (
-                not existing_cleaner
-                or (
-                    (first_name or '').strip()
-                    and len((first_name or '').strip()) > len(
-                        (contact.first_name or '').strip()
+                    # / HubSpot-primary owner when first names still match and
+                    # that first name is unique among dialed people on the lead.
+                    unique_outreach = (
+                        bool(c_first_token)
+                        and outreach_first_tokens.get(c_first_token[0], 0) == 1
                     )
-                )
-            ):
-                if (first_name or '').strip():
-                    contact.first_name = first_name
-                if (last_name or '').strip() and not is_marketing_or_listing_noise_last(
-                    last_name,
-                ):
-                    contact.last_name = last_name
-            elif not (contact.last_name or '').strip() and (last_name or '').strip():
-                if not is_marketing_or_listing_noise_last(last_name):
-                    contact.last_name = last_name
-            if link.role == 'former_owner':
-                self._reactivate_owner_link(link, property_id, is_primary=is_primary)
-            elif is_primary:
-                PropertyContact.query.filter_by(
-                    property_id=property_id, is_primary=True,
-                ).update({'is_primary': False})
-                link.is_primary = True
-            return contact, link
+                    phone_hit = name_ok and unique_outreach
+            if not exact and not fuzzy and not alias and not initial_upgrade and not phone_hit:
+                continue
+            incoming_noise = is_marketing_or_listing_noise_last(last_name)
+            if exact:
+                match_rank = 2 if incoming_noise else 0
+            else:
+                match_rank = 1
+            role_rank = 0 if link.role == 'owner' else 1
+            # Exact GIS name beats a first-initial guess even if that guess
+            # has call history. Outreach only breaks ties inside a rank so a
+            # dialed person still wins over an exact listing-noise last name.
+            matches.append((
+                match_rank,
+                -self._contact_outreach_signal_score(contact),
+                role_rank,
+                contact.id,
+                contact,
+                link,
+            ))
+        if matches:
+            matches.sort(key=lambda row: row[:4])
+            _rank, _score, _role, _cid, contact, link = matches[0]
+            return self._apply_kept_named_owner(
+                contact,
+                link,
+                property_id,
+                first_name,
+                last_name,
+                is_primary=is_primary,
+            )
 
         # Cross-property reuse: same user + phone/email (+ name gate) on another building.
         reused = self.find_reusable_contact_for_user(
@@ -997,12 +1255,13 @@ class ContactService:
                     PropertyContact.query.filter_by(
                         property_id=property_id, is_primary=True,
                     ).update({'is_primary': False})
-                if (first_name or '').strip() and len((first_name or '').strip()) > len(
-                    (reused.first_name or '').strip()
-                ):
-                    reused.first_name = first_name
-                if (last_name or '').strip() and not (reused.last_name or '').strip():
-                    reused.last_name = last_name
+                if not getattr(reused, 'name_locked', False):
+                    if (first_name or '').strip() and len((first_name or '').strip()) > len(
+                        (reused.first_name or '').strip()
+                    ):
+                        reused.first_name = first_name
+                    if (last_name or '').strip() and not (reused.last_name or '').strip():
+                        reused.last_name = last_name
                 link = PropertyContact(
                     property_id=property_id,
                     contact_id=reused.id,
@@ -1653,6 +1912,220 @@ class ContactService:
             from app.services.phone_confidence_service import PhoneConfidenceService
             PhoneConfidenceService.recompute_for_lead(property_id)
         return removed
+
+    @staticmethod
+    def _is_listing_junk_contact(contact: Contact) -> bool:
+        from app.services.plugins.owner_name_utils import (
+            contact_display_name,
+            is_address_like_contact,
+            is_entity_contact,
+            is_generic_owner_name,
+        )
+
+        display = contact_display_name(contact.first_name, contact.last_name)
+        first = (contact.first_name or '').strip()
+        last = (contact.last_name or '').strip()
+        if is_entity_contact(contact.first_name, contact.last_name):
+            return True
+        if is_address_like_contact(contact.first_name, contact.last_name):
+            return True
+        # Listing placeholders with no person first name ("For rent sign").
+        # Do not treat "Sam For Sale By Owner" as junk — that is the dialed person.
+        if not first:
+            return is_generic_owner_name(display) or is_generic_owner_name(last)
+        if not last and is_generic_owner_name(first):
+            return True
+        return False
+
+    @staticmethod
+    def _normalized_phone_digits(value: str | None) -> str:
+        digits = phone_digits(value)
+        if digits.startswith('1') and len(digits) == 11:
+            return digits[1:]
+        return digits
+
+    def _owner_contact_digits(self, contact: Contact) -> set[str]:
+        return {
+            self._normalized_phone_digits(p.value)
+            for p in (contact.phones or [])
+            if self._normalized_phone_digits(p.value)
+        }
+
+    def _same_person_owner_identity(self, a: Contact, b: Contact) -> bool:
+        from app.services.plugins.owner_name_utils import same_person_name_alias
+
+        if same_person_name_alias(
+            a.first_name, a.last_name, b.first_name, b.last_name,
+        ):
+            return True
+        token_a = (a.first_name or '').strip().lower().split()[:1]
+        token_b = (b.first_name or '').strip().lower().split()[:1]
+        if not token_a or token_a != token_b:
+            return False
+        return bool(self._owner_contact_digits(a) & self._owner_contact_digits(b))
+
+    def heal_same_person_owner_cluster(
+        self,
+        property_id: int,
+        *,
+        apply: bool = True,
+        keep_phone_digits: str | None = None,
+        refresh_scoring: bool = True,
+        bump_call_task: bool = False,
+        commit: bool = True,
+    ) -> dict:
+        """Reactivate the dialed same-person owner; archive GIS name duplicates.
+
+        Keeps HubSpot-primary / last-called contact as primary ``owner``, moves
+        other cluster phones onto it, demotes duplicate owner links.
+        """
+        from datetime import datetime, timezone
+
+        rows = (
+            db.session.query(Contact, PropertyContact)
+            .options(selectinload(Contact.phones))
+            .join(PropertyContact, PropertyContact.contact_id == Contact.id)
+            .filter(PropertyContact.property_id == property_id)
+            .filter(PropertyContact.role.in_(('owner', 'former_owner')))
+            .all()
+        )
+        people = [
+            (contact, link)
+            for contact, link in rows
+            if not self._is_listing_junk_contact(contact)
+        ]
+        if len(people) < 2:
+            return {'kept': None, 'demoted': [], 'healed': False}
+
+        wanted = self._normalized_phone_digits(keep_phone_digits) if keep_phone_digits else ''
+
+        scored: list[tuple[int, Contact, PropertyContact]] = []
+        for contact, link in people:
+            score = self._contact_outreach_signal_score(contact)
+            if wanted:
+                for phone in contact.phones or []:
+                    if self._normalized_phone_digits(phone.value) == wanted:
+                        score += 1000
+                        break
+            if link.role == 'owner':
+                score += 5
+            if link.is_primary:
+                score += 2
+            scored.append((score, contact, link))
+        scored.sort(key=lambda item: (-item[0], item[1].id))
+
+        if wanted:
+            keep_score, keep_contact, keep_link = scored[0]
+            if keep_score < 1000:
+                return {'kept': None, 'demoted': [], 'healed': False}
+            cluster = [
+                item for item in scored
+                if self._same_person_owner_identity(keep_contact, item[1])
+                or item[1].id == keep_contact.id
+            ]
+        else:
+            seed = scored[0][1]
+            cluster = [
+                item for item in scored
+                if item[1].id == seed.id or self._same_person_owner_identity(seed, item[1])
+            ]
+            if len(cluster) < 2:
+                return {'kept': None, 'demoted': [], 'healed': False}
+            cluster.sort(key=lambda item: (-item[0], item[1].id))
+            keep_score, keep_contact, keep_link = cluster[0]
+
+        demote = [
+            (contact, link)
+            for _score, contact, link in cluster
+            if contact.id != keep_contact.id
+        ]
+        if not demote:
+            return {'kept': keep_contact.id, 'demoted': [], 'healed': False}
+
+        if not apply:
+            return {
+                'kept': keep_contact.id,
+                'demoted': [contact.id for contact, _link in demote],
+                'healed': False,
+            }
+
+        now = datetime.now(timezone.utc)
+        for contact, link in demote:
+            self._migrate_outreach_phones_to_contact(contact.id, keep_contact.id)
+            if link.role == 'owner':
+                link.role = 'former_owner'
+                link.is_primary = False
+                link.superseded_at = now
+
+        PropertyContact.query.filter_by(property_id=property_id, is_primary=True).update(
+            {'is_primary': False},
+        )
+        keep_link.role = 'owner'
+        keep_link.is_primary = True
+        keep_link.superseded_at = None
+        db.session.flush()
+
+        from app.services.phone_confidence_service import PhoneConfidenceService
+        PhoneConfidenceService.recompute_for_lead(property_id)
+        if bump_call_task:
+            lead = Property.query.get(property_id)
+            if lead is not None:
+                from app.services.mail_task_lifecycle_service import (
+                    ensure_due_today_call_task,
+                )
+                ensure_due_today_call_task(lead, actor='heal_same_person_owners')
+        if refresh_scoring:
+            from app.services.lead_refresh import refresh_lead_scoring
+            refresh_lead_scoring(property_id)
+        if commit:
+            db.session.commit()
+        return {
+            'kept': keep_contact.id,
+            'demoted': [contact.id for contact, _link in demote],
+            'healed': True,
+        }
+
+    def heal_same_person_owners_all_leads(
+        self,
+        *,
+        commit: bool = True,
+        refresh_scoring: bool = True,
+    ) -> int:
+        """Idempotent heal for every property with 2+ person owner fragments."""
+        property_ids = [
+            row[0]
+            for row in db.session.query(PropertyContact.property_id)
+            .filter(PropertyContact.role.in_(('owner', 'former_owner')))
+            .group_by(PropertyContact.property_id)
+            .having(sqlalchemy.func.count(PropertyContact.id) >= 2)
+            .all()
+        ]
+        healed_ids: list[int] = []
+        for property_id in property_ids:
+            result = self.heal_same_person_owner_cluster(
+                property_id,
+                apply=True,
+                refresh_scoring=False,
+                bump_call_task=False,
+                commit=False,
+            )
+            if result.get('healed'):
+                healed_ids.append(property_id)
+        if commit:
+            db.session.commit()
+        if commit and refresh_scoring and healed_ids:
+            from app.services.lead_refresh import refresh_lead_scoring
+
+            for property_id in healed_ids:
+                try:
+                    refresh_lead_scoring(property_id)
+                except Exception:
+                    logger.warning(
+                        'heal_same_person_owners: scoring failed for lead %s',
+                        property_id,
+                        exc_info=True,
+                    )
+        return len(healed_ids)
 
     def _attach_flat_phones_emails(
         self,

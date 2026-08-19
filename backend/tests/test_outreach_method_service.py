@@ -272,7 +272,17 @@ def test_resolve_outreach_contacts_for_leads_batch(monkeypatch):
         def fetchall(self):
             return []
 
+    def _unexpected_payload_call(*_args, **_kwargs):
+        raise AssertionError('batch resolver must not call per-lead phone payload builder')
+
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
     monkeypatch.setattr('app.db.session.execute', lambda *args, **kwargs: _EmptyResult())
+    monkeypatch.setattr(
+        PhoneConfidenceService,
+        'build_phones_payload',
+        _unexpected_payload_call,
+    )
 
     phone_lead = _lead_with_contact(
         id=101,
@@ -291,3 +301,132 @@ def test_resolve_outreach_contacts_for_leads_batch(monkeypatch):
     assert resolved[101]['display'] == '(555) 111-2222'
     assert resolved[102]['channel'] == 'email'
     assert resolved[102]['display'] == 'owner@example.com'
+
+
+def test_resolve_outreach_phone_matches_key_contact_former_owner_hubspot(app):
+    """4490-shaped: task phone is HubSpot primary, not GIS phone_1."""
+    from datetime import datetime, timezone
+
+    from app import db
+    from app.models.contact import Contact
+    from app.models.contact_phone import ContactPhone
+    from app.models.lead import Lead
+    from app.models.property_contact import PropertyContact
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
+    with app.app_context():
+        lead = Lead(
+            property_street='4490 Outreach Phone St',
+            lead_score=40.0,
+            phone_1='(773) 454-0106',
+            recommended_contact_method='phone',
+        )
+        db.session.add(lead)
+        db.session.flush()
+
+        former = Contact(first_name='Sam', last_name='For Sale By Owner', role='owner')
+        current = Contact(first_name='Sam', last_name='Old Town Square Cbre', role='owner')
+        db.session.add_all([former, current])
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=lead.id, contact_id=former.id,
+            role='former_owner', is_primary=False,
+        ))
+        db.session.add(PropertyContact(
+            property_id=lead.id, contact_id=current.id,
+            role='owner', is_primary=True,
+        ))
+        db.session.add(ContactPhone(
+            contact_id=former.id,
+            value='(773) 271-5525',
+            label='mobile',
+            confidence_score=85,
+            last_called_at=datetime.now(timezone.utc),
+            last_outcome='no_answer',
+            notes='HubSpot primary',
+        ))
+        db.session.add(ContactPhone(
+            contact_id=current.id,
+            value='(773) 454-0106',
+            label='other',
+            confidence_score=None,
+        ))
+        db.session.commit()
+
+        key_contact = PhoneConfidenceService.build_phones_payload(lead.id, lead)
+        result = resolve_outreach_contact(lead, 'phone')
+        assert result is not None
+        assert PhoneConfidenceService.normalize_phone(result['value']).endswith('7732715525')
+        assert PhoneConfidenceService.normalize_phone(key_contact[0]['value']).endswith(
+            '7732715525',
+        )
+
+
+def _lead_with_primary_phone(
+    *,
+    street: str,
+    flat_phone: str | None,
+    contact_phone: str,
+    confidence_score: int | None,
+    notes: str | None = None,
+):
+    from app import db
+    from app.models.contact import Contact
+    from app.models.contact_phone import ContactPhone
+    from app.models.lead import Lead
+    from app.models.property_contact import PropertyContact
+
+    lead = Lead(
+        property_street=street,
+        lead_score=40.0,
+        phone_1=flat_phone,
+        recommended_contact_method='phone',
+    )
+    db.session.add(lead)
+    db.session.flush()
+
+    contact = Contact(first_name='Owner', last_name='Phone', role='owner')
+    db.session.add(contact)
+    db.session.flush()
+    db.session.add(PropertyContact(
+        property_id=lead.id,
+        contact_id=contact.id,
+        role='owner',
+        is_primary=True,
+    ))
+    db.session.add(ContactPhone(
+        contact_id=contact.id,
+        value=contact_phone,
+        label='mobile',
+        confidence_score=confidence_score,
+        notes=notes,
+    ))
+    db.session.commit()
+    return lead
+
+
+def test_resolve_outreach_phone_skips_bad_only_numbers(app):
+    with app.app_context():
+        lead = _lead_with_primary_phone(
+            street='Bad Phone Only St',
+            flat_phone='123',
+            contact_phone='(555) 000-1111',
+            confidence_score=5,
+            notes='wrong number',
+        )
+
+        assert resolve_outreach_contact(lead, 'phone') is None
+
+
+def test_resolve_outreach_phone_prefers_flat_over_low_confidence_relational(app):
+    with app.app_context():
+        lead = _lead_with_primary_phone(
+            street='Flat Beats Low Confidence St',
+            flat_phone='(555) 222-3333',
+            contact_phone='(555) 000-1111',
+            confidence_score=25,
+        )
+
+        result = resolve_outreach_contact(lead, 'phone')
+        assert result is not None
+        assert result['display'] == '(555) 222-3333'

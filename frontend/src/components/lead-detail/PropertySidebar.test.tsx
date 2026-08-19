@@ -622,6 +622,8 @@ describe('PropertySidebar always-visible sale and PIN', () => {
   })
 
   it('offers re-verify refresh between freshness and sale history after a successful check', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-25T00:00:00Z'))
     const onViewSaleHistory = vi.fn()
     renderSidebar(
       makePayload({

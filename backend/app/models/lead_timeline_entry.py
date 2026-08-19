@@ -19,6 +19,8 @@ class LeadTimelineEntry(db.Model):
         'mail_queued', 'mail_sent', 'mail_delivered',
         'property_match_approved', 'property_match_rejected',
         'property_address_incomplete', 'property_address_completed',
+        'owner_name_changed',
+        'contact_kept',
         name='timeline_event_type_enum'
     ), nullable=False, index=True)
 

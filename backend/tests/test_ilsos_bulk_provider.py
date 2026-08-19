@@ -83,7 +83,7 @@ class TestIllinoisSosBulkProvider:
         with app.app_context():
             provider = IllinoisSosBulkProvider()
             assert provider.is_configured() is False
-            with pytest.raises(EntityLookupProviderNotConfiguredError):
+            with pytest.raises(EntityLookupProviderNotConfiguredError, match="Illinois LLC list is not loaded yet"):
                 provider.lookup_llc("ANY LLC")
 
     def test_lookup_returns_managers_and_agent(self, app):
@@ -274,3 +274,186 @@ def test_opencorporates_inactive_status_is_not_active():
     result = provider.lookup_llc("Requested LLC")
     assert result.found is True
     assert result.status == "inactive"
+
+
+class TestIlsosBulkImportIfStale:
+    def test_skips_when_fresh_and_tables_have_rows(self, app, tmp_path):
+        from datetime import timedelta
+
+        from app.models.il_sos_llc import IlSosImportRun
+        from app.services.entity_lookup.ilsos_import_service import (
+            import_ilsos_bulk_if_stale,
+        )
+
+        with app.app_context():
+            now = datetime.utcnow()
+            db.session.add(IlSosLlcEntity(
+                file_number="99887766",
+                name="FRESH LLC",
+                normalized_name=normalize_llc_name("FRESH LLC"),
+                imported_at=now,
+            ))
+            db.session.add(IlSosImportRun(
+                source="test",
+                status="success",
+                started_at=now - timedelta(days=1),
+                finished_at=now - timedelta(hours=2),
+                row_counts={"entities_loaded": 1},
+            ))
+            db.session.commit()
+
+            called = {"n": 0}
+
+            def _boom(*_a, **_k):
+                called["n"] += 1
+                raise AssertionError("should skip download")
+
+            from app.services.entity_lookup import ilsos_import_service as svc
+            orig = svc.IlSosBulkImportService.import_all
+            svc.IlSosBulkImportService.import_all = _boom  # type: ignore[method-assign]
+            try:
+                result = import_ilsos_bulk_if_stale(tmp_path)
+            finally:
+                svc.IlSosBulkImportService.import_all = orig  # type: ignore[method-assign]
+
+            assert result["skipped"] is True
+            assert result["reason"] == "fresh"
+            assert called["n"] == 0
+
+    def test_runs_when_tables_empty(self, app, tmp_path):
+        from app.services.entity_lookup.ilsos_import_service import (
+            import_ilsos_bulk_if_stale,
+        )
+
+        with app.app_context():
+            captured = {}
+
+            def _fake_import(self, cache_dir, **kwargs):
+                captured["cache_dir"] = cache_dir
+                return {"dry_run": False, "row_counts": {"entities_loaded": 3}}
+
+            from app.services.entity_lookup import ilsos_import_service as svc
+            orig = svc.IlSosBulkImportService.import_all
+            svc.IlSosBulkImportService.import_all = _fake_import  # type: ignore[method-assign]
+            try:
+                result = import_ilsos_bulk_if_stale(tmp_path)
+            finally:
+                svc.IlSosBulkImportService.import_all = orig  # type: ignore[method-assign]
+
+            assert result["skipped"] is False
+            assert result["row_counts"]["entities_loaded"] == 3
+            assert captured["cache_dir"] == tmp_path
+
+
+def test_slim_master_keeps_only_join_fields():
+    from app.services.entity_lookup.ilsos_import_service import _slim_master_by_file_number
+
+    slim = _slim_master_by_file_number([
+        {
+            "file_number": "11223344",
+            "status_code": "00",
+            "management_type": "M",
+            "juris_organized": "IL",
+            "purpose_code": "DROPME",
+        },
+        {"file_number": "", "status_code": "00"},
+    ])
+    assert slim == {
+        "11223344": {
+            "status_code": "00",
+            "management_type": "M",
+            "juris_organized": "IL",
+        },
+    }
+
+
+def test_latest_agent_keeps_newest_change_date():
+    from app.services.entity_lookup.ilsos_import_service import _iter_latest_agent_by_file_number
+
+    latest = dict(_iter_latest_agent_by_file_number([
+        {
+            "file_number": "11223344",
+            "agent_name": "OLD AGENT",
+            "agent_change_date": "20240101",
+        },
+        {
+            "file_number": "11223344",
+            "agent_name": "NEW AGENT",
+            "agent_change_date": "20240601",
+        },
+        {
+            "file_number": "55667788",
+            "agent_name": "LATER INPUT AGENT",
+        },
+        {
+            "file_number": "55667788",
+            "agent_name": "LAST INPUT AGENT",
+        },
+        {
+            "file_number": "99001122",
+            "agent_name": "OLD CSV AGENT",
+            "agent_change_date": "2024-01-01",
+        },
+        {
+            "file_number": "99001122",
+            "agent_name": "NEW CSV AGENT",
+            "agent_change_date": "2024-06-01",
+        },
+    ]))
+
+    assert latest["11223344"]["agent_name"] == "NEW AGENT"
+    assert latest["55667788"]["agent_name"] == "LAST INPUT AGENT"
+    assert latest["99001122"]["agent_name"] == "NEW CSV AGENT"
+
+
+def test_latest_agent_keeps_iso_change_date_over_yyyymmdd():
+    from app.services.entity_lookup.ilsos_import_service import _iter_latest_agent_by_file_number
+
+    latest = dict(_iter_latest_agent_by_file_number([
+        {
+            "file_number": "11223344",
+            "agent_name": "OLD AGENT",
+            "agent_change_date": "20240101",
+        },
+        {
+            "file_number": "11223344",
+            "agent_name": "NEW AGENT",
+            "agent_change_date": "2024-06-01",
+        },
+    ]))
+
+    assert latest["11223344"]["agent_name"] == "NEW AGENT"
+
+
+def test_ilsos_weekly_beat_is_registered():
+    from celery_worker import celery
+
+    job = celery.conf.beat_schedule.get("ilsos-weekly-bulk-refresh")
+    assert job is not None
+    assert job["task"] == "ilsos.refresh_bulk"
+
+
+def test_ilsos_refresh_task_soft_fails(monkeypatch):
+    from celery_worker import ilsos_refresh_bulk_task
+
+    class _App:
+        def app_context(self):
+            from contextlib import nullcontext
+            return nullcontext()
+
+    monkeypatch.setattr(
+        "app.create_app",
+        lambda: _App(),
+    )
+
+    def _raise(*_a, **_k):
+        raise RuntimeError("download failed")
+
+    monkeypatch.setattr(
+        "app.services.entity_lookup.ilsos_import_service.import_ilsos_bulk_if_stale",
+        _raise,
+    )
+    result = ilsos_refresh_bulk_task()
+    assert result["ok"] is False
+    assert "download failed" in result["error"]
+

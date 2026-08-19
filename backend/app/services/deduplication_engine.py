@@ -230,12 +230,17 @@ class DeduplicationEngine:
             DeduplicationResult with outcome='updated' or 'conflict'.
         """
         from app import db
+        from app.services.contact_service import ContactService
 
         conflicts = []
         updated = False
 
         # Fields that must never be overwritten (internal metadata)
         PROTECTED_FIELDS = {'id', 'created_at', 'last_import_job_id'}
+        if ContactService.primary_owner_name_locked(existing.id):
+            PROTECTED_FIELDS = PROTECTED_FIELDS | {
+                'owner_first_name', 'owner_last_name',
+            }
 
         for field, incoming_value in incoming.items():
             if field in PROTECTED_FIELDS:
