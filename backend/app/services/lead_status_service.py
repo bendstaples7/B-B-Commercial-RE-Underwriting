@@ -166,38 +166,12 @@ def heal_working_deprioritize_leads(
     recompute_action: bool = True,
 ) -> int:
     """Unpark deprioritize leads that still have follow-up or mail work."""
-    from datetime import date
-
-    from app.models.mail_queue_item import MailQueueItem
-    from app.utils.call_completable_task import (
-        is_call_completable_task,
-        is_legacy_entity_research_task,
-    )
-
-    today = date.today()
     parked = Lead.query.filter_by(lead_status='deprioritize').all()
     healed = 0
     for lead in parked:
         if _has_manual_deprioritize(lead.id):
             continue
-        queued = MailQueueItem.query.filter_by(
-            lead_id=lead.id, status='queued',
-        ).first()
-        overdue_work = False
-        if queued is None:
-            open_tasks = LeadTask.query.filter_by(lead_id=lead.id, status='open').all()
-            for task in open_tasks:
-                if is_legacy_entity_research_task(task.task_type, task.title):
-                    continue
-                is_mail_follow = task.task_type == 'add_to_mail_batch'
-                is_call = is_call_completable_task(task.task_type, task.title)
-                if not is_mail_follow and not is_call:
-                    continue
-                due = task.due_date
-                if is_mail_follow or due is None or due <= today:
-                    overdue_work = True
-                    break
-        if queued is None and not overdue_work:
+        if not lead_has_active_outreach_work(lead.id):
             continue
         if unpark_deprioritize_for_active_work(
             lead,

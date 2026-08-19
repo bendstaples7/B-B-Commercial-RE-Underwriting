@@ -1,7 +1,9 @@
 """Contact model — represents a person associated with one or more properties."""
-from app import db
 from datetime import datetime
+
 from sqlalchemy import false
+
+from app import db
 
 
 class Contact(db.Model):

@@ -269,6 +269,7 @@ class TestOwnerNameLock:
             )
             db.session.commit()
             db.session.refresh(kept)
+            assert kept.id == contact.id
             assert kept.first_name == 'Gilberto'
 
     def test_gis_enrichment_skips_locked_owner_names(self, app):

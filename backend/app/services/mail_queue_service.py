@@ -233,7 +233,6 @@ class MailQueueService:
         invalid = 0
         results = []
         queued_lead_ids: list[int] = []
-        unparked_lead_ids: list[int] = []
         rejected_lead_ids: list[int] = []
         hubspot_sync_ids: list[str] = []
         recent_sale_hubspot_sync: dict[str, str] = {}
@@ -379,8 +378,6 @@ class MailQueueService:
                     added += 1
                     queued_lead_ids.append(lead_id)
                     hubspot_sync_ids.extend(outcome.get('hubspot_sync') or [])
-                    if outcome.get('unparked'):
-                        unparked_lead_ids.append(lead_id)
                 elif status == 'invalid_address':
                     invalid += 1
                     rejected_lead_ids.append(lead_id)

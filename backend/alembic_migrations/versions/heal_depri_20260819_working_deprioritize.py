@@ -7,7 +7,8 @@ Create Date: 2026-08-19
 import os
 import sys
 
-from alembic import op  # noqa: F401 — Alembic revision module contract
+import sqlalchemy as sa
+from alembic import op
 
 revision = 'heal_depri_20260819'
 down_revision = 'heal_own_20260819'
@@ -16,6 +17,13 @@ depends_on = None
 
 
 def upgrade():
+    bind = op.get_bind()
+    parked = bind.execute(sa.text(
+        "SELECT COUNT(*) FROM leads WHERE lead_status = 'deprioritize'"
+    )).scalar()
+    if not parked:
+        return
+
     backend_dir = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
@@ -27,7 +35,11 @@ def upgrade():
     from app.services.lead_status_service import heal_working_deprioritize_leads
 
     def _run():
-        heal_working_deprioritize_leads(commit=True, recompute_action=False)
+        heal_working_deprioritize_leads(
+            commit=True,
+            push_hubspot=False,
+            recompute_action=False,
+        )
 
     if has_app_context():
         _run()

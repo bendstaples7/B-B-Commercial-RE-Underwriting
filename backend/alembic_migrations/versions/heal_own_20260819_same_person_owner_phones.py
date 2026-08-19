@@ -11,7 +11,8 @@ contact and move extra numbers onto them.
 import os
 import sys
 
-from alembic import op  # noqa: F401 — Alembic revision module contract
+import sqlalchemy as sa
+from alembic import op
 
 revision = 'heal_own_20260819'
 down_revision = 'mail_nudge_20260814'
@@ -20,6 +21,19 @@ depends_on = None
 
 
 def upgrade():
+    bind = op.get_bind()
+    clustered = bind.execute(sa.text("""
+        SELECT COUNT(*) FROM (
+            SELECT property_id
+            FROM property_contacts
+            WHERE role IN ('owner', 'former_owner')
+            GROUP BY property_id
+            HAVING COUNT(*) >= 2
+        ) clustered
+    """)).scalar()
+    if not clustered:
+        return
+
     backend_dir = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
@@ -31,13 +45,10 @@ def upgrade():
     from app.services.contact_service import ContactService
 
     def _run():
-        from app import db
-
-        # Fresh-DB upgrades can reach this revision after older best-effort
-        # backfills leave the Flask scoped session in a rolled-back-required
-        # state. Clear that app session before this data heal queries through it.
-        db.session.rollback()
-        ContactService().heal_same_person_owners_all_leads(commit=True)
+        ContactService().heal_same_person_owners_all_leads(
+            commit=True,
+            refresh_scoring=False,
+        )
 
     if has_app_context():
         _run()

@@ -2039,7 +2039,12 @@ class ContactService:
             'healed': True,
         }
 
-    def heal_same_person_owners_all_leads(self, *, commit: bool = True) -> int:
+    def heal_same_person_owners_all_leads(
+        self,
+        *,
+        commit: bool = True,
+        refresh_scoring: bool = True,
+    ) -> int:
         """Idempotent heal for every property with 2+ person owner fragments."""
         property_ids = [
             row[0]
@@ -2054,7 +2059,7 @@ class ContactService:
             result = self.heal_same_person_owner_cluster(
                 property_id,
                 apply=True,
-                refresh_scoring=True,
+                refresh_scoring=refresh_scoring,
                 bump_call_task=False,
                 commit=False,
             )
