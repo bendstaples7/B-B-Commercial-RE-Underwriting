@@ -1139,7 +1139,17 @@ class ContactService:
                 )
                 if wanted_phones:
                     # Shared phone alone is not identity — require a name gate.
-                    phone_hit = bool(contact_digits & wanted_phones) and name_ok
+                    # GIS listing-name refreshes can also bring a new dump phone
+                    # for the same first-name person; keep the dialed/HubSpot
+                    # owner when the incoming last name is listing noise.
+                    phone_hit = (
+                        (bool(contact_digits & wanted_phones) and name_ok)
+                        or (
+                            bool(outreach_digits)
+                            and name_ok
+                            and is_marketing_or_listing_noise_last(last_name)
+                        )
+                    )
                 elif outreach_digits:
                     # GIS rename often arrives with no phones — keep the dialed
                     # / HubSpot-primary owner when first names still match.

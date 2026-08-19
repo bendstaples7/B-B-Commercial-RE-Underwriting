@@ -18,6 +18,7 @@ export interface ContactNameInlineEditProps {
   inputTestId: string
   editButtonTestId: string
   displayNameTestId?: string
+  rootSx?: object
 }
 
 export function ContactNameInlineEdit({
@@ -29,6 +30,7 @@ export function ContactNameInlineEdit({
   inputTestId,
   editButtonTestId,
   displayNameTestId,
+  rootSx,
 }: ContactNameInlineEditProps) {
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState(false)
@@ -58,7 +60,7 @@ export function ContactNameInlineEdit({
   if (editing) {
     return (
       <>
-        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', width: '100%' }}>
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', width: '100%', ...rootSx }}>
           <TextField
             size="small"
             fullWidth
@@ -103,7 +105,16 @@ export function ContactNameInlineEdit({
 
   return (
     <>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0, width: '100%' }}>
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 0.5,
+          minWidth: 0,
+          width: '100%',
+          ...rootSx,
+        }}
+      >
         <Typography
           sx={{ ...ccRowTitleSx, fontWeight: isPrimary ? 600 : 400, minWidth: 0, ...titleSx }}
           data-testid={displayNameTestId}

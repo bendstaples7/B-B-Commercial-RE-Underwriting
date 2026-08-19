@@ -254,7 +254,10 @@ describe('KeyContactCard', () => {
             last_name: 'Niece',
             role: 'owner',
             is_primary: false,
-            phones: [{ value: '3125550100', label: 'mobile' }],
+            phones: [
+              { value: '3125550100', label: 'mobile' },
+              { value: '7735550101', label: 'home' },
+            ],
             emails: [],
           },
         ],
@@ -265,6 +268,8 @@ describe('KeyContactCard', () => {
     expect(titles).toHaveLength(1)
     expect(screen.getByTestId('key-contact-add-person-btn')).toBeInTheDocument()
     expect(screen.getByTestId('key-contact-other-2')).toHaveTextContent('Yumi Niece')
+    expect(screen.getByTestId('key-contact-other-phone-2')).toHaveTextContent('(312) 555-0100')
+    expect(screen.getByTestId('key-contact-other-phone-2-2')).toHaveTextContent('(773) 555-0101')
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
   })
 

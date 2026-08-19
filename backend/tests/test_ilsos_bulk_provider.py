@@ -367,6 +367,34 @@ def test_slim_master_keeps_only_join_fields():
     }
 
 
+def test_latest_agent_keeps_newest_change_date():
+    from app.services.entity_lookup.ilsos_import_service import _latest_agent_by_file_number
+
+    latest = _latest_agent_by_file_number([
+        {
+            "file_number": "11223344",
+            "agent_name": "OLD AGENT",
+            "agent_change_date": "20240101",
+        },
+        {
+            "file_number": "11223344",
+            "agent_name": "NEW AGENT",
+            "agent_change_date": "20240601",
+        },
+        {
+            "file_number": "55667788",
+            "agent_name": "LATER INPUT AGENT",
+        },
+        {
+            "file_number": "55667788",
+            "agent_name": "LAST INPUT AGENT",
+        },
+    ])
+
+    assert latest["11223344"]["agent_name"] == "NEW AGENT"
+    assert latest["55667788"]["agent_name"] == "LAST INPUT AGENT"
+
+
 def test_ilsos_weekly_beat_is_registered():
     from celery_worker import celery
 

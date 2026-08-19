@@ -132,24 +132,34 @@ def _slim_master_by_file_number(records: Iterable[dict]) -> dict[str, dict]:
     return keyed
 
 
-def _dict_by_file_number(records: Iterable[dict], label: str) -> dict[str, dict]:
-    keyed: dict[str, dict] = {}
+def _agent_change_key(rec: dict, order: int) -> tuple[str, int]:
+    raw = (rec.get("agent_change_date") or "").strip()
+    yyyymmdd = raw if len(raw) == 8 and raw.isdigit() else ""
+    return yyyymmdd, order
+
+
+def _latest_agent_by_file_number(records: Iterable[dict]) -> dict[str, dict]:
+    keyed: dict[str, tuple[tuple[str, int], dict]] = {}
     duplicates = 0
-    for rec in records:
-        file_number = (rec.get("file_number") or "").strip()
+    for order, rec in enumerate(records):
+        file_number = (rec.get("file_number") or "").strip()[:8]
         if not file_number:
             continue
-        if file_number in keyed:
+        incoming_key = _agent_change_key(rec, order)
+        current = keyed.get(file_number)
+        if current is not None:
             duplicates += 1
-            logger.warning(
-                "Duplicate IL SOS %s record for file_number=%s; keeping latest",
-                label,
-                file_number,
-            )
-        keyed[file_number] = rec
+            if incoming_key < current[0]:
+                continue
+        keyed[file_number] = (incoming_key, rec)
     if duplicates:
-        logger.warning("IL SOS %s import saw %d duplicate file_number rows", label, duplicates)
-    return keyed
+        logger.warning(
+            "IL SOS agent import saw %d duplicate file_number rows; kept latest",
+            duplicates,
+        )
+    return {file_number: rec for file_number, (_key, rec) in keyed.items()}
+
+
 
 
 class IlSosBulkImportService:
@@ -270,18 +280,16 @@ class IlSosBulkImportService:
                 db.session.flush()
 
             agent_count = 0
-            seen_agents: set[str] = set()
+            latest_agent_recs = _latest_agent_by_file_number(agent_recs)
 
             def iter_agents():
                 nonlocal agent_count
-                for rec in agent_recs:
-                    fn = (rec.get("file_number") or "").strip()[:8]
-                    if not fn or fn in seen_agents or fn not in entity_keys:
+                for fn, rec in latest_agent_recs.items():
+                    if fn not in entity_keys:
                         continue
                     agent_name = (rec.get("agent_name") or "").strip()
                     if not agent_name:
                         continue
-                    seen_agents.add(fn)
                     agent_count += 1
                     yield IlSosLlcAgent(
                         file_number=fn,

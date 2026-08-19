@@ -105,10 +105,11 @@ def mailing_status_for_unpark(lead_id: int) -> str:
 
 def _has_manual_deprioritize(lead_id: int) -> bool:
     rows = (
-        LeadTimelineEntry.query.filter_by(
-            lead_id=lead_id,
-            event_type='status_changed',
-            source='manual',
+        LeadTimelineEntry.query.filter(
+            LeadTimelineEntry.lead_id == lead_id,
+            LeadTimelineEntry.event_type == 'status_changed',
+            LeadTimelineEntry.source == 'manual',
+            LeadTimelineEntry.is_deleted.is_(False),
         )
         .all()
     )
@@ -162,6 +163,7 @@ def heal_working_deprioritize_leads(
     *,
     commit: bool = True,
     push_hubspot: bool = False,
+    recompute_action: bool = True,
 ) -> int:
     """Unpark deprioritize leads that still have follow-up or mail work."""
     from datetime import date
@@ -192,7 +194,7 @@ def heal_working_deprioritize_leads(
                 if not is_mail_follow and not is_call:
                     continue
                 due = task.due_date
-                if is_mail_follow or due is None or due < today:
+                if is_mail_follow or due is None or due <= today:
                     overdue_work = True
                     break
         if queued is None and not overdue_work:
@@ -206,7 +208,7 @@ def heal_working_deprioritize_leads(
             ),
             source='system',
             commit=False,
-            recompute_action=True,
+            recompute_action=recompute_action,
             push_hubspot=push_hubspot,
         ):
             healed += 1

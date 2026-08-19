@@ -270,20 +270,29 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
             <Divider />
             {extraPeople.map((person) => {
               const personName = contactDisplayName(person) || '(No name)'
-              const firstPhone = person.phones?.find((p) => p?.value?.trim())
+              const phones = (person.phones || []).filter((p) => p?.value?.trim())
               return (
                 <Box key={person.id} data-testid={`key-contact-other-${person.id}`}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                     <Typography sx={{ ...ccRowTitleSx, fontWeight: 500 }}>{personName}</Typography>
                     <Chip size="small" label={formatContactRole(person)} variant="outlined" />
                   </Box>
-                  {firstPhone ? (
-                    <PhoneRow
-                      phone={firstPhone}
-                      dense
-                      actionable={!contactsUntrusted}
-                      valueTestId={`key-contact-other-phone-${person.id}`}
-                    />
+                  {phones.length > 0 ? (
+                    <Stack spacing={0.25}>
+                      {phones.map((phone, index) => (
+                        <PhoneRow
+                          key={`${phone.value}-${index}`}
+                          phone={phone}
+                          dense
+                          actionable={!contactsUntrusted}
+                          valueTestId={
+                            index === 0
+                              ? `key-contact-other-phone-${person.id}`
+                              : `key-contact-other-phone-${person.id}-${index + 1}`
+                          }
+                        />
+                      ))}
+                    </Stack>
                   ) : null}
                 </Box>
               )

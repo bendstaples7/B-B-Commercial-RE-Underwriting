@@ -509,14 +509,9 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
       row,
       name,
     }: {
-      row: { type: 'person'; contact: PropertyContact } | { type: 'company'; company: CompanyRow }
+      row: { type: 'company'; company: CompanyRow }
       name: string
     }) => {
-      if (row.type === 'person') {
-        const parts = splitDisplayName(name)
-        await contactService.updateContact(row.contact.id, parts)
-        return
-      }
       const company = row.company
       if (company.organizationId != null) {
         await organizationService.updateOrganization(company.organizationId, { name })
@@ -801,6 +796,7 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
                             inputTestId="person-name-edit-input"
                             editButtonTestId="edit-person-name-btn"
                             titleSx={{ fontWeight: contact.is_primary ? 500 : 400 }}
+                            rootSx={{ width: 'auto', maxWidth: '100%' }}
                           />
                           {contact.is_primary && (
                             <Chip size="small" label="Primary" color="primary" />

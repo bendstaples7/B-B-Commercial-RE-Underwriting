@@ -186,6 +186,96 @@ class TestUnparkDeprioritizeHeal:
             db.session.refresh(lead)
             assert lead.lead_status == 'deprioritize'
 
+    def test_heal_ignores_deleted_manual_deprioritize(self, app):
+        with app.app_context():
+            lead = Lead(
+                property_street='Deleted Manual Park St',
+                lead_status='deprioritize',
+            )
+            db.session.add(lead)
+            db.session.flush()
+            db.session.add(LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type='status_changed',
+                occurred_at=datetime.now(timezone.utc),
+                source='manual',
+                actor='ben',
+                summary="Status changed from 'mailing_no_contact_made' to 'deprioritize'.",
+                event_metadata={
+                    'previous_status': 'mailing_no_contact_made',
+                    'new_status': 'deprioritize',
+                },
+                is_deleted=True,
+            ))
+            db.session.add(LeadTask(
+                lead_id=lead.id,
+                task_type='call_owner_today',
+                title='Follow up',
+                status='open',
+                due_date=date.today() - timedelta(days=1),
+                created_by='test',
+            ))
+            db.session.commit()
+
+            healed = heal_working_deprioritize_leads(commit=True)
+            assert healed == 1
+            db.session.refresh(lead)
+            assert lead.lead_status == 'mailing_no_contact_made'
+
+    def test_heal_unparks_same_day_follow_up(self, app):
+        with app.app_context():
+            lead = Lead(
+                property_street='Due Today Park St',
+                lead_status='deprioritize',
+            )
+            db.session.add(lead)
+            db.session.flush()
+            db.session.add(LeadTask(
+                lead_id=lead.id,
+                task_type='call_owner_today',
+                title='Follow up',
+                status='open',
+                due_date=date.today(),
+                created_by='test',
+            ))
+            db.session.commit()
+
+            healed = heal_working_deprioritize_leads(commit=True)
+            assert healed == 1
+            db.session.refresh(lead)
+            assert lead.lead_status == 'mailing_no_contact_made'
+
+    def test_heal_can_skip_scoring_refresh_for_migration(self, app):
+        with app.app_context():
+            from unittest.mock import patch
+
+            lead = Lead(
+                property_street='No Rescore Park St',
+                lead_status='deprioritize',
+            )
+            db.session.add(lead)
+            db.session.flush()
+            db.session.add(LeadTask(
+                lead_id=lead.id,
+                task_type='call_owner_today',
+                title='Follow up',
+                status='open',
+                due_date=date.today(),
+                created_by='test',
+            ))
+            db.session.commit()
+
+            with patch('app.services.lead_refresh.refresh_lead_scoring') as refresh:
+                healed = heal_working_deprioritize_leads(
+                    commit=True,
+                    recompute_action=False,
+                )
+
+            assert healed == 1
+            refresh.assert_not_called()
+            db.session.refresh(lead)
+            assert lead.lead_status == 'mailing_no_contact_made'
+
     def test_enqueue_unparks_deprioritize(self, app):
         with app.app_context():
             from unittest.mock import patch

@@ -27,7 +27,7 @@ def upgrade():
     from app.services.lead_status_service import heal_working_deprioritize_leads
 
     def _run():
-        heal_working_deprioritize_leads(commit=True)
+        heal_working_deprioritize_leads(commit=True, recompute_action=False)
 
     if has_app_context():
         _run()

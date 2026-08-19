@@ -1,6 +1,7 @@
 """Contact model — represents a person associated with one or more properties."""
 from app import db
 from datetime import datetime
+from sqlalchemy import false
 
 
 class Contact(db.Model):
@@ -22,11 +23,11 @@ class Contact(db.Model):
     notes = db.Column(db.Text, nullable=True)
     # True after a human edits first/last — GIS/upsert must not overwrite names.
     name_locked = db.Column(
-        db.Boolean, nullable=False, default=False, server_default='false',
+        db.Boolean, nullable=False, default=False, server_default=false(),
     )
     # True when created via Add Contact — GIS must not archive this person.
     keep_on_gis = db.Column(
-        db.Boolean, nullable=False, default=False, server_default='false',
+        db.Boolean, nullable=False, default=False, server_default=false(),
     )
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(

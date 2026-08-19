@@ -353,17 +353,71 @@ def _collect_flat_emails(lead: Lead) -> list[str]:
 
 
 def _batch_best_phone_by_lead(leads: list[Lead]) -> dict[int, str]:
-    """Best phone per lead — same ranked list as Key Contact ``phones[]``."""
-    from app.services.phone_confidence_service import PhoneConfidenceService
+    """Best viable phone per lead, resolved with one relational query."""
+    from sqlalchemy import bindparam, text
+
+    from app import db
+    from app.services.phone_confidence_service import (
+        DEFAULT_CONFIDENCE,
+        MIN_VIABLE_CONFIDENCE,
+    )
+
+    lead_ids = [lead.id for lead in leads if isinstance(getattr(lead, 'id', None), int)]
+    if not lead_ids:
+        return {}
+
+    statement = text("""
+        SELECT pc.property_id,
+               cp.value,
+               COALESCE(cp.confidence_score, :default_confidence) AS score,
+               CASE
+                 WHEN LOWER(COALESCE(cp.notes, '')) LIKE '%hubspot primary%' THEN 0
+                 ELSE 1
+               END AS hubspot_rank,
+               cp.id
+        FROM contact_phones cp
+        JOIN property_contacts pc ON pc.contact_id = cp.contact_id
+        WHERE pc.property_id IN :lead_ids
+          AND (
+            pc.role IS NULL
+            OR pc.role <> 'former_owner'
+            OR cp.last_called_at IS NOT NULL
+            OR cp.last_outcome IS NOT NULL
+            OR COALESCE(cp.confidence_score, 0) >= :min_viable_confidence
+            OR LOWER(COALESCE(cp.notes, '')) LIKE '%hubspot primary%'
+          )
+        ORDER BY pc.property_id, score DESC, hubspot_rank ASC, cp.id ASC
+    """).bindparams(bindparam('lead_ids', expanding=True))
+    rows = db.session.execute(
+        statement,
+        {
+            'lead_ids': lead_ids,
+            'default_confidence': DEFAULT_CONFIDENCE,
+            'min_viable_confidence': MIN_VIABLE_CONFIDENCE,
+        },
+    ).fetchall()
+
+    relational: dict[int, list[tuple[int, str]]] = defaultdict(list)
+    for property_id, value, score, _hubspot_rank, _phone_id in rows:
+        digits = re.sub(r'\D', '', str(value or ''))
+        if len(digits) < 7 or int(score or 0) < MIN_VIABLE_CONFIDENCE:
+            continue
+        relational[int(property_id)].append((int(score), str(value).strip()))
 
     result: dict[int, str] = {}
     for lead in leads:
         lead_id = getattr(lead, 'id', None)
         if not isinstance(lead_id, int):
             continue
-        phones = PhoneConfidenceService.build_phones_payload(lead_id, lead)
-        if phones:
-            result[lead_id] = phones[0]['value']
+        if relational.get(lead_id):
+            result[lead_id] = relational[lead_id][0][1]
+            continue
+        for slot in range(1, 8):
+            raw = getattr(lead, f'phone_{slot}', None)
+            digits = re.sub(r'\D', '', str(raw or ''))
+            if len(digits) >= 7:
+                result[lead_id] = str(raw).strip()
+                break
     return result
 
 

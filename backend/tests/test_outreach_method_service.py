@@ -272,7 +272,17 @@ def test_resolve_outreach_contacts_for_leads_batch(monkeypatch):
         def fetchall(self):
             return []
 
+    def _unexpected_payload_call(*_args, **_kwargs):
+        raise AssertionError('batch resolver must not call per-lead phone payload builder')
+
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
     monkeypatch.setattr('app.db.session.execute', lambda *args, **kwargs: _EmptyResult())
+    monkeypatch.setattr(
+        PhoneConfidenceService,
+        'build_phones_payload',
+        _unexpected_payload_call,
+    )
 
     phone_lead = _lead_with_contact(
         id=101,
@@ -350,3 +360,41 @@ def test_resolve_outreach_phone_matches_key_contact_former_owner_hubspot(app):
         assert PhoneConfidenceService.normalize_phone(key_contact[0]['value']).endswith(
             '7732715525',
         )
+
+
+def test_resolve_outreach_phone_skips_bad_only_numbers(app):
+    from app import db
+    from app.models.contact import Contact
+    from app.models.contact_phone import ContactPhone
+    from app.models.lead import Lead
+    from app.models.property_contact import PropertyContact
+
+    with app.app_context():
+        lead = Lead(
+            property_street='Bad Phone Only St',
+            lead_score=40.0,
+            phone_1='123',
+            recommended_contact_method='phone',
+        )
+        db.session.add(lead)
+        db.session.flush()
+
+        contact = Contact(first_name='Bad', last_name='Phone', role='owner')
+        db.session.add(contact)
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=lead.id,
+            contact_id=contact.id,
+            role='owner',
+            is_primary=True,
+        ))
+        db.session.add(ContactPhone(
+            contact_id=contact.id,
+            value='(555) 000-1111',
+            label='mobile',
+            confidence_score=5,
+            notes='wrong number',
+        ))
+        db.session.commit()
+
+        assert resolve_outreach_contact(lead, 'phone') is None

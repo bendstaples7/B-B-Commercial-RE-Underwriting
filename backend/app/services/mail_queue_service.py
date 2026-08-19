@@ -433,10 +433,6 @@ class MailQueueService:
         )
         db.session.add(attempt)
         db.session.commit()
-        if unparked_lead_ids:
-            from app.services.lead_refresh import refresh_lead_scoring
-            for lid in unparked_lead_ids:
-                refresh_lead_scoring(lid)
         # After commit: escalate invalid_address leads into skip-trace ladder
         from app.services.skip_trace_escalation_helpers import escalate_invalid_mail_safe
         for outcome in results:
