@@ -233,6 +233,7 @@ class MailQueueService:
         invalid = 0
         results = []
         queued_lead_ids: list[int] = []
+        unparked_lead_ids: list[int] = []
         rejected_lead_ids: list[int] = []
         hubspot_sync_ids: list[str] = []
         recent_sale_hubspot_sync: dict[str, str] = {}
@@ -341,6 +342,17 @@ class MailQueueService:
                                 lead_id, actor=user_id, commit=False,
                             )
                             create_pending_mail_follow_up_task(lead, actor=user_id)
+                            from app.services.lead_status_service import (
+                                unpark_deprioritize_for_active_work,
+                            )
+                            unparked = unpark_deprioritize_for_active_work(
+                                lead,
+                                actor=user_id,
+                                reason='Queued for direct mail',
+                                source='system',
+                                commit=False,
+                                recompute_action=False,
+                            )
                             # Flush remaining writes before savepoint release so
                             # success accounting only runs if the unit commits.
                             db.session.flush()
@@ -348,6 +360,7 @@ class MailQueueService:
                                 'lead_id': lead_id,
                                 'status': 'queued',
                                 'hubspot_sync': pending_sync,
+                                'unparked': unparked,
                             }
 
                 # Savepoint released successfully — record a single outcome.
@@ -366,6 +379,8 @@ class MailQueueService:
                     added += 1
                     queued_lead_ids.append(lead_id)
                     hubspot_sync_ids.extend(outcome.get('hubspot_sync') or [])
+                    if outcome.get('unparked'):
+                        unparked_lead_ids.append(lead_id)
                 elif status == 'invalid_address':
                     invalid += 1
                     rejected_lead_ids.append(lead_id)
@@ -418,6 +433,10 @@ class MailQueueService:
         )
         db.session.add(attempt)
         db.session.commit()
+        if unparked_lead_ids:
+            from app.services.lead_refresh import refresh_lead_scoring
+            for lid in unparked_lead_ids:
+                refresh_lead_scoring(lid)
         # After commit: escalate invalid_address leads into skip-trace ladder
         from app.services.skip_trace_escalation_helpers import escalate_invalid_mail_safe
         for outcome in results:

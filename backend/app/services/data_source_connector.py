@@ -509,12 +509,22 @@ class DataSourceConnector:
         source_name : str
             Used for the ``changed_by`` audit trail value.
         """
+        skip_owner_names = False
+        if any(
+            name in enrichment_data.fields
+            for name in ('owner_first_name', 'owner_last_name')
+        ):
+            from app.services.contact_service import ContactService
+            skip_owner_names = ContactService.primary_owner_name_locked(lead.id)
+
         for field_name, new_value in enrichment_data.fields.items():
             if field_name not in ENRICHABLE_FIELDS:
                 logger.debug(
                     "Skipping non-enrichable field '%s' from source '%s'",
                     field_name, source_name,
                 )
+                continue
+            if skip_owner_names and field_name in ('owner_first_name', 'owner_last_name'):
                 continue
 
             old_value = getattr(lead, field_name, None)

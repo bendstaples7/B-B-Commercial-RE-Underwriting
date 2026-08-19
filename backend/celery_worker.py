@@ -283,6 +283,15 @@ celery.conf.beat_schedule['socrata-cache-refresh'] = {
     'kwargs': {'dataset': 'all'},
 }
 
+# Weekly Illinois SOS LLC dump — Research LLC needs these rows. Skip-if-fresh
+# lives in the task (do not re-download on every Deploy).
+celery.conf.beat_schedule['ilsos-weekly-bulk-refresh'] = {
+    'task': 'ilsos.refresh_bulk',
+    'schedule': crontab(hour=5, minute=15, day_of_week='sunday'),
+    'options': {'expires': 6 * 3600},
+}
+
+
 
 def _serialize_property_facts(property_facts) -> dict:
     """Convert a ``PropertyFacts`` ORM object to a plain dict.
@@ -1134,6 +1143,26 @@ def socrata_cache_refresh_task(dataset: str = 'all') -> dict:
                 for r in sync_results
             ]
         }
+
+
+@celery.task(name='ilsos.refresh_bulk')
+def ilsos_refresh_bulk_task() -> dict:
+    """Refresh free Illinois SOS LLC bulk tables when the last import is stale."""
+    import logging
+    from pathlib import Path
+
+    from app import create_app
+    from app.services.entity_lookup.ilsos_import_service import import_ilsos_bulk_if_stale
+
+    logger = logging.getLogger('celery.ilsos.refresh_bulk')
+    app = create_app()
+    cache_dir = Path(_backend_dir) / 'data' / 'il_sos_bulk'
+    try:
+        with app.app_context():
+            return import_ilsos_bulk_if_stale(cache_dir)
+    except Exception as exc:  # noqa: BLE001 — Beat must not die on a failed dump
+        logger.exception('Illinois SOS bulk refresh failed: %s', exc)
+        return {'skipped': False, 'ok': False, 'error': str(exc)}
 
 
 @celery.task(name='multifamily.recompute_all_deals')

@@ -1951,7 +1951,9 @@ export type TimelineEventType =
   | 'hubspot_task'
   | 'hubspot_deal_stage'
   | 'property_analysis_completed'
-  | 'lead_imported';
+  | 'lead_imported'
+  | 'owner_name_changed'
+  | 'contact_kept';
 
 export interface LeadTask {
   id: number | string;

@@ -1,7 +1,9 @@
-import { Box, Link, Paper, Stack, Typography } from '@mui/material'
+import { useState } from 'react'
+import { Box, Button, Chip, Divider, Link, Paper, Stack, Typography } from '@mui/material'
 import EmailOutlinedIcon from '@mui/icons-material/EmailOutlined'
 import LocalPostOfficeOutlinedIcon from '@mui/icons-material/LocalPostOfficeOutlined'
-import type { CommandCenterPayload, LeadPhone } from '@/types'
+import PersonAddIcon from '@mui/icons-material/PersonAdd'
+import type { CommandCenterPayload, LeadPhone, PropertyContactSummary } from '@/types'
 import {
   ccCardSx,
   ccMetaSx,
@@ -12,6 +14,13 @@ import { PriorOwnerStaleOverlay } from '@/components/lead-detail/PriorOwnerStale
 import { PhoneRow } from '@/components/PhoneRow'
 import { CopyIconButton } from '@/components/CopyIconButton'
 import { looksLikePhoneNumber } from '@/utils/phone'
+import {
+  additionalPeopleForKeyContact,
+  contactDisplayName,
+  primaryEditablePersonContact,
+} from '@/utils/propertyContacts'
+import { ContactNameInlineEdit } from '@/components/ContactNameInlineEdit'
+import { ContactFormModal } from '@/components/ContactFormModal'
 
 export interface KeyContactCardProps {
   name: string | null
@@ -113,14 +122,22 @@ export function resolveKeyContactChannels(data: CommandCenterPayload): KeyContac
   return channels
 }
 
+function formatContactRole(contact: PropertyContactSummary): string {
+  const role = (contact.role || 'owner').replace(/_/g, ' ')
+  return role.replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
 /**
  * Persistent Key Contact card — name / phone / email / mailing (no avatar).
  * On lg+ this is the single outreach contact surface.
  */
 export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyContactCardProps) {
+  const [addOpen, setAddOpen] = useState(false)
   const channels = resolveKeyContactChannels(commandCenterData)
   const mailing = formatKeyContactMailing(commandCenterData)
   const displayName = name?.trim() || 'No contact on file'
+  const editablePerson = primaryEditablePersonContact(commandCenterData.contacts)
+  const extraPeople = additionalPeopleForKeyContact(commandCenterData.contacts)
   const phoneChannels = channels.filter(
     (c): c is Extract<KeyContactChannel, { kind: 'phone' }> => c.kind === 'phone',
   )
@@ -130,9 +147,24 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
   const contactsUntrusted = Boolean(commandCenterData.contacts_likely_prior_owner)
   const contactBody = (
     <>
-      <Typography sx={{ ...ccRowTitleSx, fontWeight: 600, mb: 1.5 }} data-testid="key-contact-name">
-        {displayName}
-      </Typography>
+      {editablePerson ? (
+        <Box sx={{ mb: 1.5 }}>
+          <ContactNameInlineEdit
+            contactId={editablePerson.id}
+            displayName={displayName}
+            leadId={commandCenterData.id}
+            isPrimary
+            inputTestId="key-contact-name-edit-input"
+            editButtonTestId="edit-key-contact-name-btn"
+            displayNameTestId="key-contact-name"
+            titleSx={{ fontWeight: 600, mb: 0 }}
+          />
+        </Box>
+      ) : (
+        <Typography sx={{ ...ccRowTitleSx, fontWeight: 600, mb: 1.5 }} data-testid="key-contact-name">
+          {displayName}
+        </Typography>
+      )}
       <Stack spacing={1}>
         {phoneChannels.length === 0 ? (
           <Typography sx={ccMetaSx} data-testid="key-contact-phone-empty">
@@ -233,6 +265,31 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
             </Typography>
           )}
         </Box>
+        {extraPeople.length > 0 && (
+          <Stack spacing={1} sx={{ pt: 0.5 }} data-testid="key-contact-other-people">
+            <Divider />
+            {extraPeople.map((person) => {
+              const personName = contactDisplayName(person) || '(No name)'
+              const firstPhone = person.phones?.find((p) => p?.value?.trim())
+              return (
+                <Box key={person.id} data-testid={`key-contact-other-${person.id}`}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                    <Typography sx={{ ...ccRowTitleSx, fontWeight: 500 }}>{personName}</Typography>
+                    <Chip size="small" label={formatContactRole(person)} variant="outlined" />
+                  </Box>
+                  {firstPhone ? (
+                    <PhoneRow
+                      phone={firstPhone}
+                      dense
+                      actionable={!contactsUntrusted}
+                      valueTestId={`key-contact-other-phone-${person.id}`}
+                    />
+                  ) : null}
+                </Box>
+              )
+            })}
+          </Stack>
+        )}
       </Stack>
     </>
   )
@@ -252,9 +309,30 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
           : {}),
       }}
     >
-      <Typography sx={ccSectionTitleSx} component="h2">
-        Key Contact
-      </Typography>
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 1,
+          mb: 1,
+        }}
+      >
+        <Typography sx={ccSectionTitleSx} component="h2">
+          Key Contact
+        </Typography>
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={<PersonAddIcon />}
+          onClick={() => setAddOpen(true)}
+          aria-label="Add person"
+          data-testid="key-contact-add-person-btn"
+          sx={{ cursor: 'pointer', flexShrink: 0 }}
+        >
+          Add person
+        </Button>
+      </Box>
       {contactsUntrusted ? (
         <PriorOwnerStaleOverlay
           testId="key-contact-stale"
@@ -265,6 +343,11 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
       ) : (
         contactBody
       )}
+      <ContactFormModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        propertyId={commandCenterData.id}
+      />
     </Paper>
   )
 }

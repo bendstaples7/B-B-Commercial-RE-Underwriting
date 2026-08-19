@@ -184,6 +184,168 @@ class TestUpdateContact:
             assert updated.notes == "Updated notes"
 
 
+class TestOwnerNameLock:
+    def test_update_name_locks_and_syncs_primary_lead(self, app):
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property('11130 Name Edit St')
+            prop.owner_first_name = 'Hilberto'
+            prop.owner_last_name = 'Olivier'
+            db.session.commit()
+            contact = service.create_contact({
+                'first_name': 'Hilberto',
+                'last_name': 'Olivier',
+            })
+            service.link_contact_to_property(
+                prop.id, contact.id, role='owner', is_primary=True,
+            )
+
+            updated = service.update_contact(contact.id, {
+                'first_name': 'Gilberto',
+                'last_name': 'Olivier',
+            })
+            db.session.refresh(prop)
+            db.session.refresh(updated)
+            assert updated.name_locked is True
+            assert prop.owner_first_name == 'Gilberto'
+            assert prop.owner_last_name == 'Olivier'
+            from app.models.lead_timeline_entry import LeadTimelineEntry
+            row = LeadTimelineEntry.query.filter_by(
+                lead_id=prop.id, event_type='owner_name_changed',
+            ).one()
+            assert 'Gilberto' in row.summary
+            assert row.source == 'manual'
+
+    def test_locked_name_survives_gis_upsert(self, app):
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property('11130 Locked Gis St')
+            contact = service.create_contact({
+                'first_name': 'Gilberto',
+                'last_name': 'Olivier',
+            })
+            service.link_contact_to_property(
+                prop.id, contact.id, role='owner', is_primary=True,
+            )
+            service.update_contact(contact.id, {
+                'first_name': 'Gilberto',
+                'last_name': 'Olivier',
+            })
+
+            kept, _link = service._upsert_named_owner(
+                prop.id,
+                'Hilberto',
+                'Olivier Jr',
+                is_primary=True,
+            )
+            db.session.commit()
+            db.session.refresh(kept)
+            assert kept.id == contact.id
+            assert kept.first_name == 'Gilberto'
+            assert kept.last_name == 'Olivier'
+            assert kept.name_locked is True
+            owners = PropertyContact.query.filter_by(
+                property_id=prop.id, role='owner',
+            ).all()
+            assert len(owners) == 1
+            assert owners[0].contact_id == contact.id
+
+    def test_unlocked_can_take_cleaner_gis_first_name(self, app):
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property('11130 Unlocked Gis St')
+            contact = service.create_contact({
+                'first_name': 'G',
+                'last_name': 'Olivier',
+            })
+            service.link_contact_to_property(
+                prop.id, contact.id, role='owner', is_primary=True,
+            )
+            kept, _link = service._upsert_named_owner(
+                prop.id,
+                'Gilberto',
+                'Olivier',
+                is_primary=True,
+            )
+            db.session.commit()
+            db.session.refresh(kept)
+            assert kept.first_name == 'Gilberto'
+
+    def test_gis_enrichment_skips_locked_owner_names(self, app):
+        with app.app_context():
+            from app.services.data_source_connector import (
+                DataSourceConnector,
+                EnrichmentData,
+            )
+            service = ContactService()
+            prop = _make_property('11130 Enrich Lock St')
+            contact = service.create_contact({
+                'first_name': 'Hilberto',
+                'last_name': 'Olivier',
+            })
+            service.link_contact_to_property(
+                prop.id, contact.id, role='owner', is_primary=True,
+            )
+            service.update_contact(contact.id, {
+                'first_name': 'Gilberto',
+                'last_name': 'Olivier',
+            })
+            db.session.refresh(prop)
+            DataSourceConnector()._apply_enrichment(
+                prop,
+                EnrichmentData(fields={
+                    'owner_first_name': 'HILBERTO',
+                    'owner_last_name': 'OLIVIER JR',
+                }),
+                'gis',
+            )
+            db.session.refresh(prop)
+            assert prop.owner_first_name == 'Gilberto'
+            assert prop.owner_last_name == 'Olivier'
+
+
+class TestKeepOnGis:
+    def test_added_owner_survives_gis_upsert_of_primary_only(self, app):
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property('11130 Yumi Keep St')
+            yoko = service.create_contact({
+                'first_name': 'Yoko',
+                'last_name': 'Miller',
+            })
+            service.link_contact_to_property(
+                prop.id, yoko.id, role='owner', is_primary=True,
+            )
+            yumi = service.create_contact({
+                'first_name': 'Yumi',
+                'last_name': 'Niece',
+                'keep_on_gis': True,
+            })
+            service.link_contact_to_property(
+                prop.id, yumi.id, role='owner', is_primary=False,
+            )
+            assert yumi.keep_on_gis is True
+
+            prop.owner_first_name = 'Yoko'
+            prop.owner_last_name = 'Miller'
+            prop.owner_2_first_name = None
+            prop.owner_2_last_name = None
+            db.session.commit()
+            service.upsert_owners_from_lead(prop, commit=True)
+
+            yumi_link = PropertyContact.query.filter_by(
+                property_id=prop.id, contact_id=yumi.id,
+            ).one()
+            assert yumi_link.role == 'owner'
+            db.session.refresh(yumi)
+            assert yumi.first_name == 'Yumi'
+            from app.models.lead_timeline_entry import LeadTimelineEntry
+            kept_row = LeadTimelineEntry.query.filter_by(
+                lead_id=prop.id, event_type='contact_kept',
+            ).one()
+            assert 'Yumi' in kept_row.summary
+
+
 # ---------------------------------------------------------------------------
 # delete_contact
 # ---------------------------------------------------------------------------
@@ -641,3 +803,140 @@ class TestSamePersonOwnerConsolidate:
 
             assert contact.id == outreach.id
             assert link.role == 'owner'
+
+    def test_upsert_from_lead_keeps_fsbo_when_gis_dump_phones_differ(self, app):
+        """Real GIS path: dump digits do not include the HubSpot number."""
+        with app.app_context():
+            from datetime import datetime, timezone
+
+            service = ContactService()
+            prop = _make_property('4490 Gis Dump St')
+            outreach = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'For Sale By Owner',
+                'phones': [{'value': '(773) 271-5525', 'label': 'mobile'}],
+            })
+            service.link_contact_to_property(
+                prop.id, outreach.id, role='owner', is_primary=True,
+            )
+            phone = ContactPhone.query.filter_by(contact_id=outreach.id).first()
+            phone.confidence_score = 85
+            phone.notes = 'HubSpot primary'
+            phone.last_called_at = datetime.now(timezone.utc)
+            phone.last_outcome = 'no_answer'
+            prop.owner_first_name = 'Sam'
+            prop.owner_last_name = 'Old Town Square Cbre'
+            prop.phone_1 = '(773) 454-0106'
+            db.session.commit()
+
+            results = service.upsert_owners_from_lead(prop, commit=True)
+            kept, link = results[0]
+            assert kept.id == outreach.id
+            assert kept.last_name == 'For Sale By Owner'
+            assert link.role == 'owner'
+            owners = PropertyContact.query.filter_by(
+                property_id=prop.id, role='owner',
+            ).all()
+            assert len(owners) == 1
+            assert owners[0].contact_id == outreach.id
+
+    def test_upsert_from_lead_reactivates_fsbo_when_cbre_already_split(self, app):
+        """Existing GIS duplicate must not win on exact junk-name match."""
+        with app.app_context():
+            from datetime import datetime, timezone
+
+            service = ContactService()
+            prop = _make_property('4490 Already Split St')
+            outreach = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'For Sale By Owner',
+                'phones': [{'value': '+17732715525', 'label': 'mobile'}],
+            })
+            gis = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'Old Town Square Cbre',
+                'phones': [{'value': '(773) 454-0106', 'label': 'other'}],
+            })
+            service.link_contact_to_property(
+                prop.id, outreach.id, role='former_owner', is_primary=False,
+            )
+            service.link_contact_to_property(
+                prop.id, gis.id, role='owner', is_primary=True,
+            )
+            phone = ContactPhone.query.filter_by(contact_id=outreach.id).first()
+            phone.confidence_score = 85
+            phone.notes = 'HubSpot primary'
+            phone.last_called_at = datetime.now(timezone.utc)
+            phone.last_outcome = 'no_answer'
+            prop.owner_first_name = 'Sam'
+            prop.owner_last_name = 'Old Town Square Cbre'
+            prop.phone_1 = '(773) 454-0106'
+            db.session.commit()
+
+            results = service.upsert_owners_from_lead(prop, commit=True)
+            kept, link = results[0]
+            assert kept.id == outreach.id
+            assert link.role == 'owner'
+            assert link.is_primary is True
+            gis_link = PropertyContact.query.filter_by(
+                property_id=prop.id, contact_id=gis.id,
+            ).one()
+            assert gis_link.role == 'former_owner'
+            digits = {
+                ''.join(ch for ch in (p.value or '') if ch.isdigit())
+                for p in ContactPhone.query.filter_by(contact_id=outreach.id).all()
+            }
+            assert any(d.endswith('7732715525') for d in digits)
+            assert any('7734540106' in d for d in digits)
+
+    def test_heal_reactivates_fsbo_and_skips_for_rent_sign(self, app):
+        with app.app_context():
+            from datetime import datetime, timezone
+
+            service = ContactService()
+            prop = _make_property('4490 Heal Cluster St')
+            outreach = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'For Sale By Owner',
+                'phones': [{'value': '(773) 271-5525', 'label': 'mobile'}],
+            })
+            gis = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'Old Town Square Cbre',
+                'phones': [{'value': '(773) 454-0106', 'label': 'other'}],
+            })
+            sign = service.create_contact({
+                'first_name': 'For rent sign',
+                'last_name': '',
+                'phones': [{'value': '(773) 454-0106', 'label': 'other'}],
+            })
+            service.link_contact_to_property(
+                prop.id, outreach.id, role='former_owner', is_primary=False,
+            )
+            service.link_contact_to_property(
+                prop.id, gis.id, role='owner', is_primary=True,
+            )
+            service.link_contact_to_property(
+                prop.id, sign.id, role='former_owner', is_primary=False,
+            )
+            phone = ContactPhone.query.filter_by(contact_id=outreach.id).first()
+            phone.confidence_score = 85
+            phone.notes = 'HubSpot primary'
+            phone.last_called_at = datetime.now(timezone.utc)
+            db.session.commit()
+
+            result = service.heal_same_person_owner_cluster(
+                prop.id, apply=True, refresh_scoring=False, bump_call_task=False,
+            )
+            assert result['kept'] == outreach.id
+            assert gis.id in result['demoted']
+            assert sign.id not in result['demoted']
+            outreach_link = PropertyContact.query.filter_by(
+                property_id=prop.id, contact_id=outreach.id,
+            ).one()
+            assert outreach_link.role == 'owner'
+            assert outreach_link.is_primary is True
+            sign_link = PropertyContact.query.filter_by(
+                property_id=prop.id, contact_id=sign.id,
+            ).one()
+            assert sign_link.role == 'former_owner'

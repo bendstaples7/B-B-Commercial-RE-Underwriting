@@ -1,14 +1,20 @@
-import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
-import { ThemeProvider, createTheme } from '@mui/material'
+import { describe, expect, it, vi } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@/test/testUtils'
 import {
   KeyContactCard,
   formatKeyContactMailing,
   resolveKeyContactChannels,
 } from './KeyContactCard'
+import { contactService } from '@/services/api'
 import type { CommandCenterPayload } from '@/types'
 
-const theme = createTheme()
+vi.mock('@/services/api', () => ({
+  contactService: {
+    updateContact: vi.fn(),
+    createContact: vi.fn(),
+    linkContactToProperty: vi.fn(),
+  },
+}))
 
 function basePayload(overrides: Partial<CommandCenterPayload> = {}): CommandCenterPayload {
   return {
@@ -31,9 +37,7 @@ function basePayload(overrides: Partial<CommandCenterPayload> = {}): CommandCent
 
 function renderCard(data: CommandCenterPayload, name = 'Test Owner') {
   return render(
-    <ThemeProvider theme={theme}>
-      <KeyContactCard name={name} commandCenterData={data} />
-    </ThemeProvider>,
+    <KeyContactCard name={name} commandCenterData={data} />,
   )
 }
 
@@ -193,5 +197,81 @@ describe('KeyContactCard', () => {
     )
     expect(screen.queryByTestId('key-contact-email-copy')).not.toBeInTheDocument()
     expect(screen.getByTestId('key-contact-mailing-copy')).toBeInTheDocument()
+  })
+
+  it('edits the primary person name from the pencil', async () => {
+    vi.mocked(contactService.updateContact).mockResolvedValue({
+      id: 88,
+      first_name: 'Gilberto',
+      last_name: 'Olivier',
+    } as Awaited<ReturnType<typeof contactService.updateContact>>)
+
+    renderCard(
+      basePayload({
+        contacts: [{
+          id: 88,
+          first_name: 'Hilberto',
+          last_name: 'Olivier',
+          role: 'owner',
+          is_primary: true,
+          phones: [],
+          emails: [],
+        }],
+      }),
+      'Hilberto Olivier',
+    )
+
+    fireEvent.click(screen.getByTestId('edit-key-contact-name-btn'))
+    fireEvent.change(screen.getByTestId('key-contact-name-edit-input'), {
+      target: { value: 'Gilberto Olivier' },
+    })
+    fireEvent.click(screen.getByLabelText('Save name'))
+
+    await waitFor(() => {
+      expect(contactService.updateContact).toHaveBeenCalledWith(88, {
+        first_name: 'Gilberto',
+        last_name: 'Olivier',
+      })
+    })
+  })
+
+  it('settles Key Contact with extra people and Add person (one title)', () => {
+    renderCard(
+      basePayload({
+        contacts: [
+          {
+            id: 1,
+            first_name: 'Yoko',
+            last_name: 'Miller',
+            role: 'owner',
+            is_primary: true,
+            phones: [],
+            emails: [],
+          },
+          {
+            id: 2,
+            first_name: 'Yumi',
+            last_name: 'Niece',
+            role: 'owner',
+            is_primary: false,
+            phones: [{ value: '3125550100', label: 'mobile' }],
+            emails: [],
+          },
+        ],
+      }),
+      'Yoko Miller',
+    )
+    const titles = screen.getAllByRole('heading', { name: 'Key Contact' })
+    expect(titles).toHaveLength(1)
+    expect(screen.getByTestId('key-contact-add-person-btn')).toBeInTheDocument()
+    expect(screen.getByTestId('key-contact-other-2')).toHaveTextContent('Yumi Niece')
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+  })
+
+  it('opens the existing add-person form from Key Contact', () => {
+    renderCard(basePayload({ contacts: [] }), 'Yoko Miller')
+    fireEvent.click(screen.getByTestId('key-contact-add-person-btn'))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getAllByText('Add Contact').length).toBeGreaterThan(0)
   })
 })

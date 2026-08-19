@@ -6,6 +6,8 @@ import {
   isEntityContactName,
   isGenericOwnerName,
   ownerDisplayEntries,
+  primaryEditablePersonContact,
+  additionalPeopleForKeyContact,
   primaryOwnerDisplayName,
   rankOwnersForDisplay,
 } from './propertyContacts'
@@ -161,5 +163,25 @@ describe('ownerDisplayEntries', () => {
       expect.objectContaining({ label: 'Owner', name: 'Joseph Kiferbaum' }),
       expect.objectContaining({ label: 'Company', name: 'Kdg Avondale LLC' }),
     ])
+  })
+})
+
+describe('primaryEditablePersonContact', () => {
+  it('prefers the primary person over another ranked owner', () => {
+    const picked = primaryEditablePersonContact([
+      makeContact({ id: 1, first_name: 'Spouse', last_name: 'Owner', is_primary: false }),
+      makeContact({ id: 2, first_name: 'Gilberto', last_name: 'Olivier', is_primary: true }),
+    ])
+    expect(picked?.id).toBe(2)
+  })
+})
+
+describe('additionalPeopleForKeyContact', () => {
+  it('lists extra people and skips the primary', () => {
+    const extra = additionalPeopleForKeyContact([
+      makeContact({ id: 1, first_name: 'Yoko', last_name: 'Miller', is_primary: true }),
+      makeContact({ id: 2, first_name: 'Yumi', last_name: 'Niece', is_primary: false }),
+    ])
+    expect(extra.map((c) => c.id)).toEqual([2])
   })
 })

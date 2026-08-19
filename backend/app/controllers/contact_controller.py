@@ -106,6 +106,8 @@ def _serialize_contact(contact):
         'role': contact.role,
         'role_description': contact.role_description,
         'notes': contact.notes,
+        'name_locked': bool(contact.name_locked),
+        'keep_on_gis': bool(contact.keep_on_gis),
         'phones': PhoneConfidenceService.serialize_contact_phones(
             contact.phones,
             include_contact_id=True,
@@ -162,6 +164,7 @@ def create_contact():
     Returns 201 with serialized Contact on success.
     """
     data = request.get_json(silent=True) or {}
+    data['keep_on_gis'] = True
     contact = contact_service.create_contact(data)
     return jsonify(_serialize_contact(contact)), 201
 

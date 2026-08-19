@@ -205,6 +205,41 @@ export function rankOwnersForDisplay(
   return [...owners].sort((a, b) => ownerRankTier(a) - ownerRankTier(b))
 }
 
+export function splitDisplayName(full: string): { first_name: string | null; last_name: string | null } {
+  const trimmed = full.trim()
+  if (!trimmed) return { first_name: null, last_name: null }
+  const parts = trimmed.split(/\s+/)
+  if (parts.length === 1) return { first_name: parts[0], last_name: null }
+  return { first_name: parts.slice(0, -1).join(' '), last_name: parts[parts.length - 1] }
+}
+
+/** First linked person we can rename (not company / address-like). */
+export function primaryEditablePersonContact(
+  contacts: PropertyContactSummary[] | undefined | null,
+): PropertyContactSummary | null {
+  const ranked = rankOwnersForDisplay(contacts)
+  const personOk = (contact: PropertyContactSummary) =>
+    Boolean(contact.id)
+    && !isAddressLikeContactName(contact)
+    && !isEntityContactName(contact)
+    && Boolean(contactDisplayName(contact))
+  const primary = ranked.find((contact) => contact.is_primary && personOk(contact))
+  if (primary) return primary
+  return ranked.find(personOk) ?? null
+}
+
+/** Extra people on Key Contact (not the primary, not companies / address-like). */
+export function additionalPeopleForKeyContact(
+  contacts: PropertyContactSummary[] | undefined | null,
+): PropertyContactSummary[] {
+  const primaryId = primaryEditablePersonContact(contacts)?.id
+  return (contacts ?? []).filter((contact) => {
+    if (!contact.id || contact.id === primaryId) return false
+    if (isAddressLikeContactName(contact) || isEntityContactName(contact)) return false
+    return Boolean(contactDisplayName(contact))
+  })
+}
+
 export type OwnerDisplayEntry = {
   label: 'Owner' | 'Owner 2' | 'Company' | 'Also listed'
   name: string

@@ -291,3 +291,62 @@ def test_resolve_outreach_contacts_for_leads_batch(monkeypatch):
     assert resolved[101]['display'] == '(555) 111-2222'
     assert resolved[102]['channel'] == 'email'
     assert resolved[102]['display'] == 'owner@example.com'
+
+
+def test_resolve_outreach_phone_matches_key_contact_former_owner_hubspot(app):
+    """4490-shaped: task phone is HubSpot primary, not GIS phone_1."""
+    from datetime import datetime, timezone
+
+    from app import db
+    from app.models.contact import Contact
+    from app.models.contact_phone import ContactPhone
+    from app.models.lead import Lead
+    from app.models.property_contact import PropertyContact
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
+    with app.app_context():
+        lead = Lead(
+            property_street='4490 Outreach Phone St',
+            lead_score=40.0,
+            phone_1='(773) 454-0106',
+            recommended_contact_method='phone',
+        )
+        db.session.add(lead)
+        db.session.flush()
+
+        former = Contact(first_name='Sam', last_name='For Sale By Owner', role='owner')
+        current = Contact(first_name='Sam', last_name='Old Town Square Cbre', role='owner')
+        db.session.add_all([former, current])
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=lead.id, contact_id=former.id,
+            role='former_owner', is_primary=False,
+        ))
+        db.session.add(PropertyContact(
+            property_id=lead.id, contact_id=current.id,
+            role='owner', is_primary=True,
+        ))
+        db.session.add(ContactPhone(
+            contact_id=former.id,
+            value='(773) 271-5525',
+            label='mobile',
+            confidence_score=85,
+            last_called_at=datetime.now(timezone.utc),
+            last_outcome='no_answer',
+            notes='HubSpot primary',
+        ))
+        db.session.add(ContactPhone(
+            contact_id=current.id,
+            value='(773) 454-0106',
+            label='other',
+            confidence_score=None,
+        ))
+        db.session.commit()
+
+        key_contact = PhoneConfidenceService.build_phones_payload(lead.id, lead)
+        result = resolve_outreach_contact(lead, 'phone')
+        assert result is not None
+        assert PhoneConfidenceService.normalize_phone(result['value']).endswith('7732715525')
+        assert PhoneConfidenceService.normalize_phone(key_contact[0]['value']).endswith(
+            '7732715525',
+        )

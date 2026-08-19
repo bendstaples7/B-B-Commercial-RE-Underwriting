@@ -11,6 +11,7 @@ from app.services.entity_lookup import (
     EntityLookupProviderNotConfiguredError,
     EntityLookupResult,
     EntityPartyResult,
+    ILSOS_NOT_LOADED_MESSAGE,
     party_looks_like_company,
     split_person_name,
 )
@@ -71,10 +72,7 @@ class IllinoisSosBulkProvider:
             )
 
         if not self.is_configured():
-            raise EntityLookupProviderNotConfiguredError(
-                "Illinois SOS bulk data not loaded. "
-                "Run: python scripts/import_il_sos_llc_bulk.py --apply"
-            )
+            raise EntityLookupProviderNotConfiguredError(ILSOS_NOT_LOADED_MESSAGE)
 
         entity = self._find_entity(cleaned)
         if entity is None:
