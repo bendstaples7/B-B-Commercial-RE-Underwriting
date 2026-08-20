@@ -264,16 +264,27 @@ def _apply_parsed_note_property_facts_to_lead(
         and note_units_i >= NOTE_COMMERCIAL_UNIT_THRESHOLD
     )
     if trigger_commercial:
+        category_locked = bool(getattr(lead, 'lead_category_locked', False))
         category = (getattr(lead, 'lead_category', None) or '').strip().lower() or 'residential'
         if category == 'residential':
+            if category_locked:
+                return _ordered_unique(updated)
             lead.lead_category = 'commercial'
+            category = 'commercial'
             updated.append('lead_category')
         property_type = getattr(lead, 'property_type', None)
-        if not (isinstance(property_type, str) and property_type.strip()):
+        if (
+            category == 'commercial'
+            and not (isinstance(property_type, str) and property_type.strip())
+        ):
             lead.property_type = 'Commercial'
             updated.append('property_type')
 
-    # Deduplicate while preserving order
+    return _ordered_unique(updated)
+
+
+def _ordered_unique(updated: list[str]) -> list[str]:
+    """Deduplicate update names while preserving order."""
     seen: set[str] = set()
     ordered: list[str] = []
     for key in updated:

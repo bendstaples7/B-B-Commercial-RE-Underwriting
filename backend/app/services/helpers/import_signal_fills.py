@@ -99,19 +99,26 @@ def apply_import_signal_fills(lead: Any) -> list[str]:
         lead.units = units
         updated.append('units')
 
-    category = resolve_commercial_category_fill_if_blank(
-        current_category=getattr(lead, 'lead_category', None),
-        deal_source=deal_source,
-    )
-    if category is not None:
-        lead.lead_category = category
-        updated.append('lead_category')
+    category_locked = bool(getattr(lead, 'lead_category_locked', False))
+    current_category = (getattr(lead, 'lead_category', None) or '').strip().lower() or 'residential'
+    category = None
+    if not category_locked:
+        category = resolve_commercial_category_fill_if_blank(
+            current_category=current_category,
+            deal_source=deal_source,
+        )
+        if category is not None:
+            lead.lead_category = category
+            updated.append('lead_category')
 
-    # Fill blank property_type label when CoStar/commercial signals apply.
+    # Fill blank display label when the category is or becomes commercial.
+    # A locked residential category must not be re-labeled from import signals.
+    effective_category = category or current_category
     property_type = getattr(lead, 'property_type', None)
     if (
-        category == 'commercial' or is_commercial_deal_source(deal_source)
-    ) and not (isinstance(property_type, str) and property_type.strip()):
+        effective_category == 'commercial'
+        and not (isinstance(property_type, str) and property_type.strip())
+    ):
         lead.property_type = 'Commercial'
         updated.append('property_type')
 

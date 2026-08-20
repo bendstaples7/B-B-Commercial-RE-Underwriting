@@ -115,6 +115,38 @@ class TestApplyToLead:
         assert lead.lead_category == 'residential'
         assert lead.note_property_facts['units'] == 2
 
+    def test_locked_residential_category_does_not_get_commercial_label(self):
+        lead = SimpleNamespace(
+            units=None,
+            bedrooms=None,
+            bathrooms=None,
+            lead_category='residential',
+            lead_category_locked=True,
+            property_type=None,
+            note_property_facts=None,
+        )
+        updated = apply_note_property_facts_to_lead(lead, FOSTER_NOTE, source='hubspot_note')
+        assert 'lead_category' not in updated
+        assert 'property_type' not in updated
+        assert lead.lead_category == 'residential'
+        assert lead.property_type is None
+
+    def test_locked_commercial_category_gets_blank_display_label(self):
+        lead = SimpleNamespace(
+            units=None,
+            bedrooms=None,
+            bathrooms=None,
+            lead_category='commercial',
+            lead_category_locked=True,
+            property_type=None,
+            note_property_facts=None,
+        )
+        updated = apply_note_property_facts_to_lead(lead, FOSTER_NOTE, source='hubspot_note')
+        assert 'lead_category' not in updated
+        assert 'property_type' in updated
+        assert lead.lead_category == 'commercial'
+        assert lead.property_type == 'Commercial'
+
     def test_heal_gate_and_empty_sentinel(self):
         from app.services.helpers.note_property_facts import (
             EMPTY_NOTE_PROPERTY_FACTS,
@@ -271,3 +303,18 @@ class TestRicherFactsPreferDetailAndRecency:
             {'units': 4, 'beds': 1, 'baths': 1},
             {'units': 2, 'beds': 4, 'baths': 2},
         ]
+
+    def test_locked_category_stays_residential_when_note_says_six_units(self):
+        lead = SimpleNamespace(
+            units=None,
+            bedrooms=None,
+            bathrooms=None,
+            lead_category='residential',
+            lead_category_locked=True,
+            property_type=None,
+            note_property_facts=None,
+        )
+        apply_note_property_facts_to_lead(lead, FOSTER_NOTE, source='hubspot_note')
+        assert lead.units == 6
+        assert lead.lead_category == 'residential'
+        assert lead.property_type is None

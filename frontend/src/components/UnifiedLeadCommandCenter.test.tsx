@@ -27,6 +27,9 @@ vi.mock('@/services/api', () => ({
   commandCenterService: {
     getCommandCenter: vi.fn(),
     updateStatus: vi.fn(),
+    updateCategory: vi.fn(),
+    mergeInto: vi.fn(),
+    getMergePreview: vi.fn(),
     moveToSkipTrace: vi.fn(),
     getTimeline: vi.fn(),
   },

@@ -178,6 +178,7 @@ VALID_SORT_ORDERS = ['asc', 'desc']
 VALID_SOURCE_TYPES = [
     "foreclosure", "long_owned", "absentee_owner", "tax_distress", "manual_distress"
 ]
+VALID_LEAD_CATEGORIES = ['residential', 'commercial']
 
 
 class LeadListQuerySchema(Schema):
@@ -191,7 +192,7 @@ class LeadListQuerySchema(Schema):
 
     # Filters
     property_type = fields.Str(load_default=None, validate=validate.Length(max=50))
-    lead_category = fields.Str(load_default=None, validate=validate.OneOf(['residential', 'commercial']))
+    lead_category = fields.Str(load_default=None, validate=validate.OneOf(VALID_LEAD_CATEGORIES))
     city = fields.Str(load_default=None, validate=validate.Length(max=100))
     state = fields.Str(load_default=None, validate=validate.Length(max=50))
     zip = fields.Str(load_default=None, validate=validate.Length(max=20))
@@ -436,7 +437,7 @@ class ImportStartRequestSchema(Schema):
     field_mapping_id = fields.Int(load_default=None, validate=validate.Range(min=1))
     lead_category = fields.Str(
         load_default='residential',
-        validate=validate.OneOf(['residential', 'commercial']),
+        validate=validate.OneOf(VALID_LEAD_CATEGORIES),
     )
 
 
@@ -1643,6 +1644,7 @@ VALID_TIMELINE_EVENT_TYPES = [
     'task_snoozed', 'recommended_action_changed', 'status_changed',
     'hubspot_note', 'hubspot_call', 'hubspot_task', 'hubspot_deal_stage',
     'property_analysis_completed', 'lead_imported',
+    'category_changed', 'leads_merged',
 ]
 
 VALID_TIMELINE_SOURCES = ['manual', 'system', 'hubspot']
@@ -1720,6 +1722,14 @@ class LeadStatusUpdateSchema(RequestSchema):
     )
     actor = fields.String(load_default='anonymous')
     reason = fields.String(load_default=None, validate=validate.Length(max=500))
+
+
+class LeadCategoryUpdateSchema(RequestSchema):
+    """Validation schema for PATCH /api/leads/:id/category."""
+    lead_category = fields.String(
+        required=True,
+        validate=validate.OneOf(VALID_LEAD_CATEGORIES),
+    )
 
 
 class LogCallFollowUpSchema(RequestSchema):

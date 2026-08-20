@@ -113,3 +113,32 @@ class TestApplyImportSignalFills:
         assert apply_import_signal_fills(lead) == []
         assert lead.units == 6
         assert lead.property_type == 'Multi-Family'
+
+    def test_locked_category_is_not_upgraded_from_costar(self):
+        lead = SimpleNamespace(
+            deal_source='CoStar',
+            deal_description='Units: 12',
+            units=2,
+            lead_category='residential',
+            lead_category_locked=True,
+            property_type=None,
+        )
+        updated = apply_import_signal_fills(lead)
+        assert 'lead_category' not in updated
+        assert 'property_type' not in updated
+        assert lead.lead_category == 'residential'
+        assert lead.property_type is None
+
+    def test_locked_commercial_category_gets_blank_display_label(self):
+        lead = SimpleNamespace(
+            deal_source='Listsource',
+            deal_description='Units: 12',
+            units=12,
+            lead_category='commercial',
+            lead_category_locked=True,
+            property_type=None,
+        )
+        updated = apply_import_signal_fills(lead)
+        assert updated == ['property_type']
+        assert lead.lead_category == 'commercial'
+        assert lead.property_type == 'Commercial'

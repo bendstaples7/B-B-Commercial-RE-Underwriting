@@ -16,6 +16,7 @@ from app.services.lead_merge_utils import (
     merge_mailer_history,
     pick_merge_winner,
     streets_match_normalized,
+    streets_match_same_situs,
     winner_sort_key,
 )
 from app.services.plugins.pin_utils import normalize_pin_for_socrata
@@ -330,6 +331,11 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
         if field in ('most_recent_sale', 'acquisition_date', 'most_recent_sale_price'):
             # Handled below — prefer the newer transfer, not "winner empty only".
             continue
+        if field in ('lead_category', 'property_type') and bool(
+            getattr(winner, 'lead_category_locked', False)
+        ):
+            # Locked Residential/Commercial must not pick up loser CoStar/type fills.
+            continue
         if (w_val is None or w_val == '') and l_val not in (None, ''):
             setattr(winner, field, l_val)
 
@@ -343,6 +349,59 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
 
     _prefer_newer_sale_onto_winner(winner, loser)
     _prefer_cleaner_property_street(winner, loser)
+    people_before = 0
+    try:
+        from app.models.property_contact import PropertyContact
+        people_before = (
+            PropertyContact.query.filter_by(property_id=winner_id, role='owner').count()
+        )
+    except Exception:  # noqa: BLE001
+        people_before = 0
+    contacts_combined = 0
+    try:
+        from app.services.contact_service import ContactService
+        contacts_combined = ContactService().unlink_duplicate_person_owners(winner_id)
+    except Exception as exc:
+        logger.warning(
+            'same-person contact combine after merge failed winner=%s loser=%s: %s',
+            winner_id,
+            loser_id,
+            exc,
+        )
+    people_after = people_before
+    try:
+        from app.models.property_contact import PropertyContact
+        people_after = (
+            PropertyContact.query.filter_by(property_id=winner_id, role='owner').count()
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from app.services.lead_timeline_service import LeadTimelineService
+        LeadTimelineService().append(
+            winner_id,
+            'leads_merged',
+            changed_by,
+            (
+                f'Combined record #{loser_id} into this one. '
+                'People from both were kept; the same person got all phone numbers.'
+            ),
+            metadata={
+                'loser_id': loser_id,
+                'winner_id': winner_id,
+                'people_kept': people_after,
+                'contacts_combined': int(contacts_combined or 0),
+            },
+            source='system',
+            commit=False,
+        )
+    except Exception as exc:
+        logger.warning(
+            'timeline after merge failed winner=%s loser=%s: %s',
+            winner_id,
+            loser_id,
+            exc,
+        )
     try:
         from app.services.property_address_service import (
             ensure_lead_property_address_complete,
@@ -430,6 +489,197 @@ def find_building_owner_siblings(lead: Lead, *, limit: int = 40) -> list[Lead]:
     return siblings
 
 
+def find_same_building_leads(
+    lead: Lead,
+    *,
+    limit: int = 8,
+    owner_user_id: str | None = None,
+) -> list[Lead]:
+    """Same building-level street, regardless of owner name.
+
+    Used by the lead-page merge banner so Yoko vs Yoko+Edwin still surface.
+    Do not use the house-number ``1%`` prefilter — that scan is capped and
+    drops real twins when many streets start with the same number.
+    """
+    street = (lead.property_street or '').strip()
+    lead_id = getattr(lead, 'id', None)
+    if not street or not isinstance(lead_id, int):
+        return []
+
+    base_query = Lead.query.filter(Lead.id != lead_id)
+    if owner_user_id is not None:
+        base_query = base_query.filter(Lead.owner_user_id == owner_user_id)
+
+    key = dedup_street_key(street)
+    if key:
+        found: dict[int, Lead] = {}
+        indexed_matches = (
+            base_query.filter(
+                or_(
+                    Lead.normalized_street == key,
+                    Lead.normalized_street.ilike(f'{key} %'),
+                ),
+            )
+            .order_by(Lead.id.asc())
+            .limit(max(limit * 8, 64))
+            .all()
+        )
+        for other in indexed_matches:
+            if streets_match_same_situs(street, other.property_street):
+                found[other.id] = other
+            if len(found) >= limit:
+                break
+        if len(found) < limit:
+            missing_normalized = (
+                base_query.filter(
+                    or_(
+                        Lead.normalized_street.is_(None),
+                        Lead.normalized_street == '',
+                    ),
+                    func.lower(func.trim(Lead.property_street)) == street.lower(),
+                )
+                .order_by(Lead.id.asc())
+                .limit(limit - len(found))
+                .all()
+            )
+            for other in missing_normalized:
+                if streets_match_same_situs(street, other.property_street):
+                    found[other.id] = other
+        return list(found.values())[:limit]
+
+    siblings: list[Lead] = []
+    q = base_query.filter(
+        func.lower(func.trim(Lead.property_street)) == street.lower(),
+    )
+    for other in q.order_by(Lead.id.asc()).limit(limit).all():
+        if streets_match_same_situs(street, other.property_street):
+            siblings.append(other)
+        if len(siblings) >= limit:
+            break
+    return siblings
+
+
+def _lead_owner_display_name(lead: Lead) -> str:
+    primary = ' '.join(
+        p for p in (
+            (lead.owner_first_name or '').strip(),
+            (lead.owner_last_name or '').strip(),
+        ) if p
+    )
+    second = ' '.join(
+        p for p in (
+            (getattr(lead, 'owner_2_first_name', None) or '').strip(),
+            (getattr(lead, 'owner_2_last_name', None) or '').strip(),
+        ) if p
+    )
+    if primary and second:
+        return f'{primary} + {second}'
+    return primary or second or f'Lead #{lead.id}'
+
+
+def _people_names_for_lead_ids(lead_ids: list[int]) -> dict[int, list[str]]:
+    """Active person names on each lead (owners, not companies / former)."""
+    from app.models.contact import Contact
+    from app.models.property_contact import PropertyContact
+    from app.services.contact_service import _contact_display_name
+    from app.services.plugins.owner_name_utils import (
+        is_address_like_contact,
+        is_entity_contact,
+    )
+
+    out: dict[int, list[str]] = {lid: [] for lid in lead_ids}
+    if not lead_ids:
+        return out
+    rows = (
+        db.session.query(Contact, PropertyContact)
+        .join(PropertyContact, PropertyContact.contact_id == Contact.id)
+        .filter(
+            PropertyContact.property_id.in_(lead_ids),
+            or_(
+                PropertyContact.role.is_(None),
+                PropertyContact.role != 'former_owner',
+            ),
+        )
+        .order_by(PropertyContact.is_primary.desc(), PropertyContact.id.asc())
+        .all()
+    )
+    seen: dict[int, set[str]] = {lid: set() for lid in lead_ids}
+    for contact, link in rows:
+        lid = link.property_id
+        if lid not in out:
+            continue
+        if is_entity_contact(contact.first_name, contact.last_name):
+            continue
+        if is_address_like_contact(contact.first_name, contact.last_name):
+            continue
+        name = _contact_display_name(contact.first_name, contact.last_name)
+        if name in seen[lid]:
+            continue
+        seen[lid].add(name)
+        out[lid].append(name)
+    return out
+
+
+def same_address_lead_summaries(
+    lead: Lead,
+    *,
+    limit: int = 8,
+    owner_user_id: str | None = None,
+    include_all_owners: bool = False,
+) -> list[dict[str, Any]]:
+    """Skinny same-building twins for the command-center merge banner."""
+    scoped_owner_user_id = owner_user_id
+    if not include_all_owners:
+        scoped_owner_user_id = scoped_owner_user_id or getattr(lead, 'owner_user_id', None)
+        if not scoped_owner_user_id:
+            return []
+    siblings = find_same_building_leads(
+        lead,
+        limit=limit,
+        owner_user_id=scoped_owner_user_id,
+    )
+    if not siblings:
+        return []
+    names_by_id = _people_names_for_lead_ids([item.id for item in siblings])
+    summaries: list[dict[str, Any]] = []
+    for item in siblings:
+        people = names_by_id.get(item.id) or []
+        summaries.append({
+            'id': item.id,
+            'property_street': item.property_street,
+            'owner_display_name': _lead_owner_display_name(item),
+            'people_names': people,
+        })
+    return summaries
+
+
+def merge_preview_for_ids(lead_id: int, other_id: int) -> dict[str, Any]:
+    """Validate same-building merge and return people on both sides."""
+    if lead_id == other_id:
+        raise ValueError('winner and loser must be different leads')
+    lead = db.session.get(Lead, lead_id)
+    other = db.session.get(Lead, other_id)
+    if lead is None or other is None:
+        raise ValueError('winner or loser lead not found')
+    same_building = streets_match_same_situs(lead.property_street, other.property_street)
+    names = _people_names_for_lead_ids([lead_id, other_id])
+    return {
+        'same_building': bool(same_building),
+        'current': {
+            'id': lead.id,
+            'property_street': lead.property_street,
+            'owner_display_name': _lead_owner_display_name(lead),
+            'people_names': names.get(lead_id) or [],
+        },
+        'other': {
+            'id': other.id,
+            'property_street': other.property_street,
+            'owner_display_name': _lead_owner_display_name(other),
+            'people_names': names.get(other_id) or [],
+        },
+    }
+
+
 def cluster_preview_for_lead(lead: Lead) -> dict[str, Any] | None:
     """Suggested soft-merge cluster for Needs Review (duplicate_lead_cluster)."""
     siblings = find_building_owner_siblings(lead)
@@ -463,8 +713,8 @@ def merge_loser_into_winner(
     loser = db.session.get(Lead, loser_id)
     if winner is None or loser is None:
         raise ValueError('winner or loser lead not found')
-    if not streets_match_normalized(winner.property_street, loser.property_street):
-        raise ValueError('leads do not share a building-level street')
+    if not streets_match_same_situs(winner.property_street, loser.property_street):
+        raise ValueError('leads do not share the same address / unit')
 
     with db.session.begin_nested():
         merge_lead_into_winner(winner, loser, changed_by=changed_by)

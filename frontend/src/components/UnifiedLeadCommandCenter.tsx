@@ -84,6 +84,7 @@ import {
 import { KeyContactCard } from '@/components/lead-detail/KeyContactCard'
 import { PropertyKpiCard } from '@/components/lead-detail/PropertyKpiCard'
 import { PropertyOverviewQuickStats, shouldShowCondoCheckCell } from '@/components/lead-detail/PropertyOverviewQuickStats'
+import { SameAddressMergeBanner } from '@/components/lead-detail/SameAddressMergeBanner'
 import { HeaderCondoCheckPanel } from '@/components/lead-detail/HeaderCondoCheckPanel'
 import { HeaderLeadScorePanel, type ScoreFlash } from '@/components/lead-detail/HeaderLeadScorePanel'
 import { DeepDiveDetailsCard } from '@/components/lead-detail/DeepDiveDetailsCard'
@@ -148,6 +149,7 @@ interface PropertyOverviewHeaderProps {
   onAfterPinDeprioritize?: () => void | Promise<void>
   /** Brief score delta pill shown after an activity save (call/note/email). */
   scoreFlash?: ScoreFlash | null
+  onCategoryChanged?: (next: 'residential' | 'commercial') => void | Promise<void>
 }
 
 function formatPropertyAddress(data: CommandCenterPayload): string {
@@ -172,6 +174,7 @@ function PropertyOverviewHeader({
   onAfterPinDeprioritize,
   statusSelectorRef,
   scoreFlash,
+  onCategoryChanged,
 }: PropertyOverviewHeaderProps & { statusSelectorRef?: React.RefObject<HTMLDivElement | null> }) {
   const [scoreDialogOpen, setScoreDialogOpen] = useState(false)
   const [pinSnack, setPinSnack] = useState<string | null>(null)
@@ -421,6 +424,8 @@ function PropertyOverviewHeader({
           <PropertyOverviewQuickStats
             commandCenterData={commandCenterData}
             centerInGap={centerKpis}
+            leadId={leadId}
+            onCategoryChanged={onCategoryChanged}
           />
           </Box>
 
@@ -2115,6 +2120,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             fromQueue={fromQueue}
             statusSelectorRef={statusSelectorRef}
             scoreFlash={scoreFlash}
+            onCategoryChanged={async () => {
+              await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+            }}
             onBeforePinDeprioritize={() => {
               pinDeprioritizeNextIdRef.current = snapshotNextQueueLeadId()
             }}
@@ -2128,6 +2136,24 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 })
               }
             }}
+          />
+          <SameAddressMergeBanner
+            leadId={leadId}
+            twins={commandCenterData.same_address_leads ?? []}
+            currentOwnerLabel={
+              primaryOwnerDisplayName(
+                commandCenterData.contacts,
+                commandCenterData.owner_first_name,
+                commandCenterData.owner_last_name,
+                commandCenterData.organizations,
+              ) || `Lead #${leadId}`
+            }
+            currentPeopleNames={(commandCenterData.contacts ?? [])
+              .filter((contact) => (contact.role || '') !== 'former_owner')
+              .map((contact) =>
+                [contact.first_name, contact.last_name].filter(Boolean).join(' ').trim(),
+              )
+              .filter(Boolean)}
           />
         </Box>
       </Box>

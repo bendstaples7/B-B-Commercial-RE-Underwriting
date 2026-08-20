@@ -21,6 +21,8 @@ class LeadTimelineEntry(db.Model):
         'property_address_incomplete', 'property_address_completed',
         'owner_name_changed',
         'contact_kept',
+        'category_changed',
+        'leads_merged',
         name='timeline_event_type_enum'
     ), nullable=False, index=True)
 
