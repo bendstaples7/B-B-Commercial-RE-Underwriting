@@ -83,3 +83,63 @@ def test_ops_alert_msmtp_rfc_and_curl_fail():
     assert not re.search(r"msmtp[^\n]*--subject", ops)
     assert "--fail" in ops
     assert "json.dumps" in ops
+
+
+def test_pg_idle_xact_watchdog_wrapper_is_bounded_and_alerts_failures():
+    watchdog = (REPO_ROOT / "scripts" / "pg-idle-xact-watchdog.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "source \"${APP_DIR}/backend/.env\"" not in watchdog
+    assert "DATABASE_URL_LINE=\"$(" in watchdog
+    assert "grep -E '^[[:space:]]*DATABASE_URL=' \"$ENV_FILE\" | head -1 || true" in watchdog
+    assert "unknown argument" in watchdog
+    assert "flock -n 9" in watchdog
+    assert "timeout --signal=TERM" in watchdog
+    assert "source /home/deploy/backup.conf" in watchdog
+    assert "OPS_ALERT_DELIVERY_FAILED" in watchdog
+    assert "watchdog failed with exit $RC" in watchdog
+    assert "Postgres idle-xact watchdog failed" in watchdog
+
+
+def test_deploy_lock_gate_runs_before_dedup_and_rolls_back():
+    deploy_sh = (REPO_ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    lock_idx = deploy_sh.index("Pre-migration lock gate")
+    dedup_idx = deploy_sh.index("Pre-migration dedup cleanup")
+    assert lock_idx < dedup_idx
+    lock_section = deploy_sh[lock_idx:dedup_idx]
+    assert "rollback 1" in lock_section
+    assert "exit 1" not in lock_section
+    dedup_section = deploy_sh[dedup_idx:deploy_sh.index("flask db upgrade head")]
+    assert "timeout --signal=TERM" in dedup_section
+    assert "DEDUP_VERIFY_RC" in dedup_section
+    assert "DEDUP_VERIFY_RC\" -gt 1" in dedup_section
+    assert "Duplicate clusters detected" in dedup_section
+
+
+def test_deploy_preserves_checkout_after_partial_migration_apply():
+    deploy_sh = (REPO_ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    assert "fail_after_partial_migration_apply" in deploy_sh
+    assert "migration_revision_is_committed" in deploy_sh
+    assert "SELECT version_num FROM alembic_version" in deploy_sh
+    assert "BB_MIGRATE_VERIFY_TIMEOUT_SEC" in deploy_sh
+    assert "connect_timeout=5" in deploy_sh
+    assert "SET statement_timeout = '5s'" in deploy_sh
+    assert "return 2" in deploy_sh
+    assert "could not verify whether marker revision committed" in deploy_sh
+    assert "Not rolling back checkout because Alembic may have committed a revision" in deploy_sh
+    timeout_section = deploy_sh[
+        deploy_sh.index("if [ \"$UPGRADE_RC\" -eq 124 ]"):
+        deploy_sh.index("echo \"    Migrations applied\"")
+    ]
+    assert "maybe_preserve_after_migration_marker" in timeout_section
+    assert "rollback 1" in timeout_section
+
+
+def test_one_shot_heal_scripts_force_production_env():
+    for rel in (
+        "backend/scripts/heal_working_deprioritize.py",
+        "backend/scripts/heal_same_person_owners.py",
+    ):
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        assert "os.environ['FLASK_ENV'] = 'production'" in text
+        assert "create_app('production')" in text

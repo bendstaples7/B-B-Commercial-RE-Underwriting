@@ -327,6 +327,67 @@ def run_migrations_offline():
         context.run_migrations()
 
 
+# Migration connection guards: per-revision commits, Postgres timeouts, revision logs.
+
+def _is_postgres_connection(connection) -> bool:
+    dialect = getattr(connection, 'dialect', None)
+    name = getattr(dialect, 'name', None) if dialect is not None else None
+    return name == 'postgresql'
+
+
+def _apply_postgres_migration_timeouts(connection) -> None:
+    """SET LOCAL timeouts for the current Postgres transaction.
+
+    Re-applied on every transaction begin so values survive
+    ``transaction_per_migration=True`` (each revision commits).
+    """
+    from sqlalchemy import text
+
+    connection.execute(text("SET LOCAL idle_in_transaction_session_timeout = '10min'"))
+    connection.execute(text("SET LOCAL lock_timeout = '5min'"))
+
+
+def _install_postgres_timeout_begin_hook(connection) -> None:
+    if not _is_postgres_connection(connection):
+        return
+    from sqlalchemy import event
+
+    @event.listens_for(connection, 'begin')
+    def _on_begin(conn):  # noqa: ANN001
+        _apply_postgres_migration_timeouts(conn)
+
+
+def _revision_id_from_step(step) -> str:
+    for attr in ('up_revision_id', 'revision', 'up_revision'):
+        val = getattr(step, attr, None)
+        if val:
+            return str(val)
+    return str(step)
+
+
+def _make_on_version_apply():
+    """Log completed revisions and optionally write BB_MIGRATE_LAST_REV_FILE.
+
+    Alembic invokes ``on_version_apply`` after a revision has run, so this emits
+    completion-only logs rather than pretending to mark revision start time.
+    """
+    def on_version_apply(ctx, step, heads, **kw):  # noqa: ANN001, ARG001
+        rev = _revision_id_from_step(step)
+        logger.info('Alembic completed revision %s', rev)
+        marker_path = os.environ.get('BB_MIGRATE_LAST_REV_FILE')
+        if marker_path:
+            try:
+                with open(marker_path, 'w', encoding='utf-8') as fh:
+                    fh.write(rev)
+            except OSError as exc:
+                logger.warning('Could not write BB_MIGRATE_LAST_REV_FILE: %s', exc)
+
+    def finalize():
+        return None
+
+    return on_version_apply, finalize
+
+
 def run_migrations_online():
     """Run migrations in 'online' mode.
 
@@ -345,9 +406,19 @@ def run_migrations_online():
                 directives[:] = []
                 logger.info('No changes in schema detected.')
 
-    conf_args = current_app.extensions['migrate'].configure_args
-    if conf_args.get("process_revision_directives") is None:
-        conf_args["process_revision_directives"] = process_revision_directives
+    conf_args = dict(current_app.extensions['migrate'].configure_args or {})
+    if conf_args.get('process_revision_directives') is None:
+        conf_args['process_revision_directives'] = process_revision_directives
+
+    # One commit per revision so DDL AccessExclusiveLock cannot span into the
+    # next revision (Deploy wedge class).
+    conf_args['transaction_per_migration'] = True
+    # Always register our logger (merge with any existing Flask-Migrate callbacks).
+    existing_cb = conf_args.get('on_version_apply') or ()
+    if callable(existing_cb):
+        existing_cb = (existing_cb,)
+    on_version_apply, finalize_revisions = _make_on_version_apply()
+    conf_args['on_version_apply'] = tuple(existing_cb) + (on_version_apply,)
 
     connectable = get_engine()
 
@@ -362,6 +433,7 @@ def run_migrations_online():
         _run_pre_upgrade_guards(connectable=connectable)
 
     with connectable.connect() as connection:
+        _install_postgres_timeout_begin_hook(connection)
         context.configure(
             connection=connection,
             target_metadata=get_metadata(),
@@ -370,6 +442,7 @@ def run_migrations_online():
 
         with context.begin_transaction():
             context.run_migrations()
+        finalize_revisions()
 
 
 if context.is_offline_mode():

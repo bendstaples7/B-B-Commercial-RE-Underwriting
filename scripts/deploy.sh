@@ -89,6 +89,84 @@ rollback() {
 }
 trap 'rollback $?' ERR
 
+fail_after_partial_migration_apply() {
+    local exit_code="${1:-1}"
+    local reason="$2"
+    local last_rev="$3"
+    cd "$APP_DIR"
+    echo "FAILED: ${reason}"
+    echo "    Last revision marker in this run: ${last_rev}"
+    echo "    Not rolling back checkout because Alembic may have committed a revision."
+    echo "    Preserving target code on disk to avoid running older code against a newer schema."
+    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Migration failure after possible partial apply at ${last_rev}; preserved ${TARGET_SHA}" >> "$ROLLBACK_LOG"
+    if [[ -f /home/deploy/ops-alert.sh ]]; then
+        # shellcheck source=/dev/null
+        source /home/deploy/ops-alert.sh
+        send_alert "Deploy failed after possible partial migration apply" \
+            "Deploy on $(hostname) failed after Alembic marker ${last_rev}. Preserved checkout ${TARGET_SHA}; manual repair required. Reason: ${reason}" || true
+    fi
+    exit "$exit_code"
+}
+
+migration_revision_is_committed() {
+    local expected_rev="$1"
+    local verify_timeout="${BB_MIGRATE_VERIFY_TIMEOUT_SEC:-15}"
+    local rc=0
+    timeout --signal=TERM --kill-after=5 "$verify_timeout" \
+        python3.11 - "$expected_rev" <<'PY' || rc=$?
+import os
+import sys
+
+import psycopg2
+
+expected = sys.argv[1]
+url = os.environ.get("DATABASE_URL")
+if not url:
+    sys.exit(2)
+if url.startswith("postgresql+psycopg2://"):
+    url = "postgresql://" + url[len("postgresql+psycopg2://"):]
+try:
+    conn = psycopg2.connect(url, connect_timeout=5)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = '5s'")
+            cur.execute("SELECT version_num FROM alembic_version")
+            revisions = {str(row[0]) for row in cur.fetchall()}
+    finally:
+        conn.close()
+except Exception as exc:
+    print(f"migration revision verification failed: {exc}", file=sys.stderr)
+    sys.exit(2)
+sys.exit(0 if expected in revisions else 1)
+PY
+    case "$rc" in
+        0) return 0 ;;
+        1) return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
+maybe_preserve_after_migration_marker() {
+    local exit_code="$1"
+    local reason="$2"
+    local last_rev="$3"
+    if [[ "$last_rev" == "(unknown)" || "$last_rev" == "unknown" || -z "$last_rev" ]]; then
+        return 1
+    fi
+    local verify_rc=0
+    migration_revision_is_committed "$last_rev" || verify_rc=$?
+    if [ "$verify_rc" -eq 0 ]; then
+        fail_after_partial_migration_apply "$exit_code" "$reason" "$last_rev"
+    fi
+    if [ "$verify_rc" -ne 1 ]; then
+        fail_after_partial_migration_apply \
+            "$exit_code" \
+            "${reason}; could not verify whether marker revision committed" \
+            "$last_rev"
+    fi
+    return 1
+}
+
 # Celery is stopped before the memory guard to free worker RSS on the 2GB VPS.
 # Durable marker + EXIT trap restore Celery if deploy exits before step 7
 # (memory preflight failure, cancelled SSH). Liveness/ensure honor the marker mtime.
@@ -354,29 +432,69 @@ FLASK_ENV=production flask db check 2>/dev/null || {
     echo "    (flask db check may not be available in all Flask-Migrate versions)"
 }
 
+echo "==> (4b) Pre-migration lock gate (fail only — no auto-kill)"
+# Run BEFORE f9 dedup cleanup so merge queries cannot hang on existing locks.
+LOCK_GUARD_PY="${APP_DIR}/scripts/pg_lock_guard.py"
+if [[ ! -f "${LOCK_GUARD_PY}" ]]; then
+    LOCK_GUARD_PY="/home/deploy/pg_lock_guard.py"
+fi
+if [[ ! -f "${LOCK_GUARD_PY}" ]]; then
+    echo "FAILED: pg_lock_guard.py not found (expected under ${APP_DIR}/scripts/)"
+    rollback 1
+fi
+if ! python3.11 "${LOCK_GUARD_PY}" preflight; then
+    echo "FAILED: pre-migration lock gate — DB already has idle-in-transaction or AccessExclusiveLock"
+    if [[ -f /home/deploy/ops-alert.sh ]]; then
+        # shellcheck source=/dev/null
+        source /home/deploy/ops-alert.sh
+        send_alert "Deploy blocked: Postgres lock gate" \
+            "flask db upgrade refused on $(hostname): idle-in-transaction or AccessExclusiveLock present. Watchdog owns kills; re-run Deploy after locks clear." || true
+    fi
+    rollback 1
+fi
+
 echo "==> (4a) Pre-migration dedup cleanup"
 # Migration f9a0b1c2d3e4 requires zero owner+street duplicate clusters.
 # Production legacy data must be merged before the unique index is created.
+BB_DEDUP_PREFLIGHT_TIMEOUT_SEC="${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC:-300}"
 F9_PENDING_RC=0
-python3.11 scripts/preflight_dedup_migration.py --f9-pending || F9_PENDING_RC=$?
+timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
+    python3.11 scripts/preflight_dedup_migration.py --f9-pending || F9_PENDING_RC=$?
 if [ "$F9_PENDING_RC" -gt 1 ]; then
     echo "FAILED: preflight_dedup_migration.py --f9-pending exited $F9_PENDING_RC"
-    exit 1
+    rollback 1
 fi
 if [ "$F9_PENDING_RC" -eq 0 ]; then
     echo "    f9 dedup index migration pending — running preflight"
-    python3.11 scripts/preflight_dedup_migration.py --report || true
-    if ! python3.11 scripts/preflight_dedup_migration.py --verify; then
+    timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
+        python3.11 scripts/preflight_dedup_migration.py --report || true
+    DEDUP_VERIFY_RC=0
+    timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
+        python3.11 scripts/preflight_dedup_migration.py --verify || DEDUP_VERIFY_RC=$?
+    if [ "$DEDUP_VERIFY_RC" -gt 1 ]; then
+        echo "FAILED: preflight_dedup_migration.py --verify exited $DEDUP_VERIFY_RC"
+        rollback 1
+    fi
+    if [ "$DEDUP_VERIFY_RC" -eq 1 ]; then
         echo "    Duplicate clusters detected — running merge_duplicate_leads --mode dedup"
-        python3.11 scripts/merge_duplicate_leads.py --mode dedup || {
-            echo "FAILED: dedup merge"
-            exit 1
-        }
-        python3.11 scripts/preflight_dedup_migration.py --verify || {
+        timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
+            python3.11 scripts/merge_duplicate_leads.py --mode dedup || {
+                echo "FAILED: dedup merge"
+                rollback 1
+            }
+        DEDUP_VERIFY_AFTER_RC=0
+        timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
+            python3.11 scripts/preflight_dedup_migration.py --verify || DEDUP_VERIFY_AFTER_RC=$?
+        if [ "$DEDUP_VERIFY_AFTER_RC" -ne 0 ]; then
+            if [ "$DEDUP_VERIFY_AFTER_RC" -gt 1 ]; then
+                echo "FAILED: post-merge preflight_dedup_migration.py --verify exited $DEDUP_VERIFY_AFTER_RC"
+                rollback 1
+            fi
             echo "FAILED: duplicate clusters remain after dedup merge"
-            python3.11 scripts/preflight_dedup_migration.py --report
-            exit 1
-        }
+            timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
+                python3.11 scripts/preflight_dedup_migration.py --report || true
+            rollback 1
+        fi
     else
         echo "    No duplicate clusters — merge not required"
     fi
@@ -384,8 +502,54 @@ else
     echo "    f9 dedup migration already applied — skipping dedup cleanup"
 fi
 
-FLASK_ENV=production flask db upgrade head || { echo "FAILED: flask db upgrade"; exit 1; }
+echo "==> (4c) flask db upgrade head (wall-clock timeout)"
+BB_MIGRATE_TIMEOUT_SEC="${BB_MIGRATE_TIMEOUT_SEC:-900}"
+BB_MIGRATE_LAST_REV_FILE="${BB_MIGRATE_LAST_REV_FILE:-/tmp/bb_migrate_last_rev.txt}"
+export BB_MIGRATE_LAST_REV_FILE
+rm -f "${BB_MIGRATE_LAST_REV_FILE}" 2>/dev/null || true
+set +e
+timeout --signal=TERM --kill-after=30 "${BB_MIGRATE_TIMEOUT_SEC}" \
+    env FLASK_ENV=production flask db upgrade head
+UPGRADE_RC=$?
+set -e
+if [ "$UPGRADE_RC" -eq 124 ] || [ "$UPGRADE_RC" -eq 137 ]; then
+    LAST_REV="(unknown)"
+    if [[ -f "${BB_MIGRATE_LAST_REV_FILE}" ]]; then
+        LAST_REV="$(cat "${BB_MIGRATE_LAST_REV_FILE}" 2>/dev/null || echo unknown)"
+    fi
+    maybe_preserve_after_migration_marker \
+        1 \
+        "flask db upgrade timed out after ${BB_MIGRATE_TIMEOUT_SEC}s" \
+        "$LAST_REV" || true
+    echo "FAILED: flask db upgrade timed out after ${BB_MIGRATE_TIMEOUT_SEC}s (stuck migration aborted)"
+    echo "    No completed revision was logged in this deploy run"
+    rollback 1
+fi
+if [ "$UPGRADE_RC" -ne 0 ]; then
+    LAST_REV="(unknown)"
+    if [[ -f "${BB_MIGRATE_LAST_REV_FILE}" ]]; then
+        LAST_REV="$(cat "${BB_MIGRATE_LAST_REV_FILE}" 2>/dev/null || echo unknown)"
+    fi
+    maybe_preserve_after_migration_marker \
+        "$UPGRADE_RC" \
+        "flask db upgrade failed with exit ${UPGRADE_RC}" \
+        "$LAST_REV" || true
+    echo "FAILED: flask db upgrade (exit ${UPGRADE_RC})"
+    rollback 1
+fi
 echo "    Migrations applied"
+
+echo "==> (4d) Post-migrate DB-only smoke (no gunicorn)"
+if ! python3.11 "${LOCK_GUARD_PY}" smoke; then
+    echo "FAILED: post-migrate DB smoke (contacts/leads/locks)"
+    if [[ -f /home/deploy/ops-alert.sh ]]; then
+        # shellcheck source=/dev/null
+        source /home/deploy/ops-alert.sh
+        send_alert "Deploy failed: post-migrate DB smoke" \
+            "flask db upgrade finished on $(hostname) but DB smoke failed (locks or unreadable contacts/leads)." || true
+    fi
+    rollback 1
+fi
 
 cd ..
 

@@ -255,6 +255,8 @@ jobs:
           scp -i ~/.ssh/id_deploy scripts/ensure_frontend_dist_readable.sh $VPS_USER@$VPS_HOST:/home/deploy/ensure_frontend_dist_readable.sh
           scp -i ~/.ssh/id_deploy scripts/spa-dist-fingerprint.sh $VPS_USER@$VPS_HOST:/home/deploy/spa-dist-fingerprint.sh
           scp -i ~/.ssh/id_deploy scripts/spa-uptime-canary.sh $VPS_USER@$VPS_HOST:/home/deploy/spa-uptime-canary.sh
+          scp -i ~/.ssh/id_deploy scripts/pg-idle-xact-watchdog.sh $VPS_USER@$VPS_HOST:/home/deploy/pg-idle-xact-watchdog.sh
+          scp -i ~/.ssh/id_deploy scripts/pg_lock_guard.py $VPS_USER@$VPS_HOST:/home/deploy/pg_lock_guard.py
           scp -i ~/.ssh/id_deploy scripts/restore_frontend_dist_backup.sh $VPS_USER@$VPS_HOST:/home/deploy/restore_frontend_dist_backup.sh
           scp -i ~/.ssh/id_deploy scripts/spa_asset_refs.py $VPS_USER@$VPS_HOST:/home/deploy/spa_asset_refs.py
           scp -i ~/.ssh/id_deploy scripts/deploy-async-stack-checks.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy-async-stack-checks.sh
@@ -283,7 +285,7 @@ jobs:
           scp -i ~/.ssh/id_deploy backup_lib.py $VPS_USER@$VPS_HOST:/home/deploy/backup_lib.py
           # Set correct permissions on backup scripts
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
-            "chmod 750 /home/deploy/backup.sh /home/deploy/backup_remote_transfer.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh /home/deploy/install-backup-cron.sh /home/deploy/celery-liveness-check.sh /home/deploy/check-lead-cc-mount-health.sh /home/deploy/ops-alert.sh /home/deploy/verify-backup-health.sh /home/deploy/restore-drill.sh /home/deploy/post-deploy-rollback.sh /home/deploy/ensure_frontend_dist_readable.sh /home/deploy/spa-dist-fingerprint.sh /home/deploy/spa-uptime-canary.sh /home/deploy/restore_frontend_dist_backup.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py /home/deploy/backup_health_check.py /home/deploy/lead_cc_mount_health.py /home/deploy/setup-b2-rclone.py /home/deploy/setup-cloudflare-rclone.py /home/deploy/configure_backup_remotes.py /home/deploy/inject-remote-backup.py /home/deploy/spa_asset_refs.py"
+            "chmod 750 /home/deploy/backup.sh /home/deploy/backup_remote_transfer.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh /home/deploy/install-backup-cron.sh /home/deploy/celery-liveness-check.sh /home/deploy/check-lead-cc-mount-health.sh /home/deploy/ops-alert.sh /home/deploy/verify-backup-health.sh /home/deploy/restore-drill.sh /home/deploy/post-deploy-rollback.sh /home/deploy/ensure_frontend_dist_readable.sh /home/deploy/spa-dist-fingerprint.sh /home/deploy/spa-uptime-canary.sh /home/deploy/pg-idle-xact-watchdog.sh /home/deploy/restore_frontend_dist_backup.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py /home/deploy/backup_health_check.py /home/deploy/lead_cc_mount_health.py /home/deploy/pg_lock_guard.py /home/deploy/setup-b2-rclone.py /home/deploy/setup-cloudflare-rclone.py /home/deploy/configure_backup_remotes.py /home/deploy/inject-remote-backup.py /home/deploy/spa_asset_refs.py"
           # Create a stub backup.conf if none exists so backup.sh can run without blocking the deploy.
           # The stub has empty remote/alert credentials — backup will skip remote transfer and alerting
           # but will still run pg_dump and write a local manifest entry.

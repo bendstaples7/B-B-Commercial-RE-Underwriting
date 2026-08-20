@@ -8,6 +8,7 @@ from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry
 
 logger = logging.getLogger(__name__)
+_HEAL_CANDIDATE_ID_CHUNK_SIZE = 1000
 
 
 def _cancel_tasks_for_terminal_status(
@@ -66,24 +67,7 @@ def _sync_cancelled_hubspot_tasks(hubspot_task_ids: set[str]) -> None:
 
 def lead_has_active_outreach_work(lead_id: int) -> bool:
     """True when the lead has queued mail or an open call/follow-up/mail task."""
-    from app.models.mail_queue_item import MailQueueItem
-    from app.utils.call_completable_task import (
-        is_call_completable_task,
-        is_legacy_entity_research_task,
-    )
-
-    queued = MailQueueItem.query.filter_by(lead_id=lead_id, status='queued').first()
-    if queued is not None:
-        return True
-    open_tasks = LeadTask.query.filter_by(lead_id=lead_id, status='open').all()
-    for task in open_tasks:
-        if is_legacy_entity_research_task(task.task_type, task.title):
-            continue
-        if task.task_type == 'add_to_mail_batch':
-            return True
-        if is_call_completable_task(task.task_type, task.title):
-            return True
-    return False
+    return lead_id in _active_outreach_work_lead_ids([lead_id])
 
 
 def mailing_status_for_unpark(lead_id: int) -> str:
@@ -104,20 +88,7 @@ def mailing_status_for_unpark(lead_id: int) -> str:
 
 
 def _has_manual_deprioritize(lead_id: int) -> bool:
-    rows = (
-        LeadTimelineEntry.query.filter(
-            LeadTimelineEntry.lead_id == lead_id,
-            LeadTimelineEntry.event_type == 'status_changed',
-            LeadTimelineEntry.source == 'manual',
-            LeadTimelineEntry.is_deleted.is_(False),
-        )
-        .all()
-    )
-    for row in rows:
-        meta = row.event_metadata or {}
-        if meta.get('new_status') == 'deprioritize':
-            return True
-    return False
+    return lead_id in _manual_deprioritize_lead_ids([lead_id])
 
 
 def unpark_deprioritize_for_active_work(
@@ -166,13 +137,8 @@ def heal_working_deprioritize_leads(
     recompute_action: bool = True,
 ) -> int:
     """Unpark deprioritize leads that still have follow-up or mail work."""
-    parked = Lead.query.filter_by(lead_status='deprioritize').all()
-    healed = 0
-    for lead in parked:
-        if _has_manual_deprioritize(lead.id):
-            continue
-        if not lead_has_active_outreach_work(lead.id):
-            continue
+    healed_ids: list[int] = []
+    for lead in working_deprioritize_heal_candidates():
         if unpark_deprioritize_for_active_work(
             lead,
             actor='System',
@@ -182,13 +148,130 @@ def heal_working_deprioritize_leads(
             ),
             source='system',
             commit=False,
-            recompute_action=recompute_action,
+            recompute_action=False,
             push_hubspot=push_hubspot,
         ):
-            healed += 1
+            healed_ids.append(lead.id)
     if commit:
         db.session.commit()
-    return healed
+        if recompute_action:
+            from app.services.lead_refresh import refresh_lead_scoring
+            for lead_id in healed_ids:
+                refresh_lead_scoring(lead_id)
+    elif recompute_action and healed_ids:
+        logger.warning(
+            'Skipping scoring refresh for %d deprioritize heal(s) because commit=False',
+            len(healed_ids),
+        )
+    return len(healed_ids)
+
+
+def working_deprioritize_heal_candidates() -> list[Lead]:
+    """Return parked leads that the deprioritize healer would unpark."""
+    candidate_ids = _working_deprioritize_heal_candidate_ids()
+    if not candidate_ids:
+        return []
+    leads = []
+    for chunk in _chunked_ids(candidate_ids):
+        leads.extend(Lead.query.filter(Lead.id.in_(chunk)).all())
+    by_id = {lead.id: lead for lead in leads}
+    return [by_id[lead_id] for lead_id in candidate_ids if lead_id in by_id]
+
+
+def count_working_deprioritize_heal_candidates() -> int:
+    """Count parked leads the deprioritize healer would unpark using batched queries."""
+    return len(_working_deprioritize_heal_candidate_ids())
+
+
+def _working_deprioritize_heal_candidate_ids() -> list[int]:
+    parked_ids = [
+        lead_id for (lead_id,) in (
+            db.session.query(Lead.id)
+            .filter(Lead.lead_status == 'deprioritize')
+            .all()
+        )
+    ]
+    if not parked_ids:
+        return []
+
+    candidate_ids: list[int] = []
+    for parked_chunk in _chunked_ids(parked_ids):
+        manual_ids = _manual_deprioritize_lead_ids(parked_chunk)
+        eligible_pool = [
+            lead_id for lead_id in parked_chunk
+            if lead_id not in manual_ids
+        ]
+        if not eligible_pool:
+            continue
+        active_ids = _active_outreach_work_lead_ids(eligible_pool)
+        candidate_ids.extend(
+            lead_id for lead_id in eligible_pool if lead_id in active_ids
+        )
+    return candidate_ids
+
+
+def _chunked_ids(lead_ids: list[int]) -> list[list[int]]:
+    return [
+        lead_ids[i:i + _HEAL_CANDIDATE_ID_CHUNK_SIZE]
+        for i in range(0, len(lead_ids), _HEAL_CANDIDATE_ID_CHUNK_SIZE)
+    ]
+
+
+def _manual_deprioritize_lead_ids(lead_ids: list[int]) -> set[int]:
+    out: set[int] = set()
+    for chunk in _chunked_ids(lead_ids):
+        rows = (
+            LeadTimelineEntry.query.filter(
+                LeadTimelineEntry.lead_id.in_(chunk),
+                LeadTimelineEntry.event_type == 'status_changed',
+                LeadTimelineEntry.source == 'manual',
+                LeadTimelineEntry.is_deleted.is_(False),
+            )
+            .all()
+        )
+        for row in rows:
+            meta = row.event_metadata or {}
+            if meta.get('new_status') == 'deprioritize':
+                out.add(row.lead_id)
+    return out
+
+
+def _active_outreach_work_lead_ids(lead_ids: list[int]) -> set[int]:
+    from app.models.mail_queue_item import MailQueueItem
+    from app.utils.call_completable_task import (
+        is_call_completable_task,
+        is_legacy_entity_research_task,
+    )
+
+    active: set[int] = set()
+    for chunk in _chunked_ids(lead_ids):
+        active.update(
+            lead_id for (lead_id,) in (
+                db.session.query(MailQueueItem.lead_id)
+                .filter(
+                    MailQueueItem.lead_id.in_(chunk),
+                    MailQueueItem.status == 'queued',
+                )
+                .all()
+            )
+        )
+        task_rows = (
+            db.session.query(LeadTask.lead_id, LeadTask.task_type, LeadTask.title)
+            .filter(
+                LeadTask.lead_id.in_(chunk),
+                LeadTask.status == 'open',
+            )
+            .all()
+        )
+        for lead_id, task_type, title in task_rows:
+            if is_legacy_entity_research_task(task_type, title):
+                continue
+            if task_type == 'add_to_mail_batch':
+                active.add(lead_id)
+                continue
+            if is_call_completable_task(task_type, title):
+                active.add(lead_id)
+    return active
 
 
 def apply_lead_status_change(
