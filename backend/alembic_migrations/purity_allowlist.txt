@@ -1,0 +1,11 @@
+# Historical Alembic revisions that import app.* for already-applied data
+# backfills. New revisions must NOT be added here without review — prefer
+# pure SQL/DDL in Alembic and one-shot scripts under backend/scripts/.
+#
+# create_app / ContactService are NEVER allowlisted (see check_migration_purity.py).
+
+a1b2c3d4e5f6_backfill_lead_enrichment_from_hubspot.py
+f8a9b0c1d2e3_add_leads_normalized_street_dedup.py
+i3j4k5l6m7n8_backfill_contacts_from_flat_fields.py
+note_pf_20260812_note_property_facts.py
+t9u0v1w2x3y4_add_mail_enqueue_attempts.py

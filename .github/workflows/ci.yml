@@ -404,6 +404,9 @@ jobs:
       - name: Check for parallel implementations and incomplete migrations
         run: python scripts/check_duplication.py
 
+      - name: Check Alembic migration purity (no nested create_app / ContactService)
+        run: python scripts/check_migration_purity.py
+
   vps-readiness:
     name: VPS readiness — deploy infra PRs
     runs-on: ubuntu-latest

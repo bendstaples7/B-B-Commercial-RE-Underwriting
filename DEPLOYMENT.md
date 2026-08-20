@@ -95,9 +95,29 @@ when the database is already at the current head revision.
 
 - Reads the Alembic migration chain from `backend/alembic_migrations/`
 - Determines which revisions have not yet been applied to the database
-- Applies each pending revision in dependency order
+- Applies each pending revision in dependency order (**one transaction per revision**)
 - Records the new head revision in the `alembic_version` table
 - Exits with status code 0 on success, non-zero on any failure
+
+**Schema vs data heals:** Alembic revisions must stay SQL/DDL (or no-ops). Nested
+`create_app()` / service heals inside a migration can deadlock behind table locks
+and wedge the API. Run data heals as one-shot scripts under `backend/scripts/`
+(see `heal_same_person_owners.py`, `heal_working_deprioritize.py`). CI enforces
+this via `python scripts/check_migration_purity.py`.
+
+**Deploy migration guards** (step 4 in `scripts/deploy.sh`):
+
+1. **Pre-migration lock gate** — refuses `flask db upgrade` if any session is
+   `idle in transaction` longer than ~60s or holds `AccessExclusiveLock` on
+   core tables. Fail only (no auto-kill); the cron watchdog owns terminates.
+2. **Upgrade timeout** — `BB_MIGRATE_TIMEOUT_SEC` (default 900). On timeout,
+   Deploy aborts and prints the last revision from `BB_MIGRATE_LAST_REV_FILE`.
+3. **Post-migrate DB smoke** — cheap `contacts`/`leads` reads plus lock checks
+   that do not depend on gunicorn `/api/health`.
+
+**Watchdog cron:** `pg-idle-xact-watchdog.sh` every 5 minutes terminates
+dangerous idle-in-transaction sessions (exclusive lock ≥10 min, or any idle-in-xact
+≥30 min) and alerts via `ops-alert.sh`.
 
 All migrations are idempotent (`IF NOT EXISTS` / `EXCEPTION WHEN duplicate_object`),
 so re-running after a partial failure is safe and requires no manual intervention.

@@ -384,8 +384,63 @@ else
     echo "    f9 dedup migration already applied — skipping dedup cleanup"
 fi
 
-FLASK_ENV=production flask db upgrade head || { echo "FAILED: flask db upgrade"; exit 1; }
+echo "==> (4b) Pre-migration lock gate (fail only — no auto-kill)"
+# Refuse to start upgrade if idle-in-transaction or AccessExclusiveLock already present.
+LOCK_GUARD_PY="${APP_DIR}/scripts/pg_lock_guard.py"
+if [[ ! -f "${LOCK_GUARD_PY}" ]]; then
+    LOCK_GUARD_PY="/home/deploy/pg_lock_guard.py"
+fi
+if [[ ! -f "${LOCK_GUARD_PY}" ]]; then
+    echo "FAILED: pg_lock_guard.py not found (expected under ${APP_DIR}/scripts/)"
+    exit 1
+fi
+if ! python3.11 "${LOCK_GUARD_PY}" preflight; then
+    echo "FAILED: pre-migration lock gate — DB already has idle-in-transaction or AccessExclusiveLock"
+    if [[ -f /home/deploy/ops-alert.sh ]]; then
+        # shellcheck source=/dev/null
+        source /home/deploy/ops-alert.sh
+        send_alert "Deploy blocked: Postgres lock gate" \
+            "flask db upgrade refused on $(hostname): idle-in-transaction or AccessExclusiveLock present. Watchdog owns kills; re-run Deploy after locks clear." || true
+    fi
+    exit 1
+fi
+
+echo "==> (4c) flask db upgrade head (wall-clock timeout)"
+BB_MIGRATE_TIMEOUT_SEC="${BB_MIGRATE_TIMEOUT_SEC:-900}"
+BB_MIGRATE_LAST_REV_FILE="${BB_MIGRATE_LAST_REV_FILE:-/tmp/bb_migrate_last_rev.txt}"
+export BB_MIGRATE_LAST_REV_FILE
+rm -f "${BB_MIGRATE_LAST_REV_FILE}" 2>/dev/null || true
+set +e
+timeout --signal=TERM --kill-after=30 "${BB_MIGRATE_TIMEOUT_SEC}" \
+    env FLASK_ENV=production flask db upgrade head
+UPGRADE_RC=$?
+set -e
+if [ "$UPGRADE_RC" -eq 124 ] || [ "$UPGRADE_RC" -eq 137 ]; then
+    LAST_REV="(unknown)"
+    if [[ -f "${BB_MIGRATE_LAST_REV_FILE}" ]]; then
+        LAST_REV="$(cat "${BB_MIGRATE_LAST_REV_FILE}" 2>/dev/null || echo unknown)"
+    fi
+    echo "FAILED: flask db upgrade timed out after ${BB_MIGRATE_TIMEOUT_SEC}s (stuck migration aborted)"
+    echo "    Last revision started (if logged): ${LAST_REV}"
+    exit 1
+fi
+if [ "$UPGRADE_RC" -ne 0 ]; then
+    echo "FAILED: flask db upgrade (exit ${UPGRADE_RC})"
+    exit 1
+fi
 echo "    Migrations applied"
+
+echo "==> (4d) Post-migrate DB-only smoke (no gunicorn)"
+if ! python3.11 "${LOCK_GUARD_PY}" smoke; then
+    echo "FAILED: post-migrate DB smoke (contacts/leads/locks)"
+    if [[ -f /home/deploy/ops-alert.sh ]]; then
+        # shellcheck source=/dev/null
+        source /home/deploy/ops-alert.sh
+        send_alert "Deploy failed: post-migrate DB smoke" \
+            "flask db upgrade finished on $(hostname) but DB smoke failed (locks or unreadable contacts/leads)." || true
+    fi
+    exit 1
+fi
 
 cd ..
 
