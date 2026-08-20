@@ -33,6 +33,8 @@ describe('first-paint settle — same-address merge banner', () => {
     expect(banner).toContain('data-testid="same-address-merge-dialog"')
     expect(banner).toContain('Combine these records')
     expect(banner).toMatch(/twins\.length|hasTwins/)
+    expect(ulcc).toContain('afterCommandCenterMutation')
+    expect(banner).toContain('onMerged')
   })
 
   it('banner + dialog landmarks settle when twin payload is present', async () => {
@@ -51,6 +53,7 @@ describe('first-paint settle — same-address merge banner', () => {
               people_names: ['Twin'],
             },
           ]}
+          onMerged={vi.fn()}
         />
       </MemoryRouter>,
     )

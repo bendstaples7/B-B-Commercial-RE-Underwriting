@@ -85,6 +85,7 @@ import { KeyContactCard } from '@/components/lead-detail/KeyContactCard'
 import { PropertyKpiCard } from '@/components/lead-detail/PropertyKpiCard'
 import { PropertyOverviewQuickStats, shouldShowCondoCheckCell } from '@/components/lead-detail/PropertyOverviewQuickStats'
 import { SameAddressMergeBanner } from '@/components/lead-detail/SameAddressMergeBanner'
+import { afterCommandCenterMutation } from '@/utils/afterCommandCenterMutation'
 import { HeaderCondoCheckPanel } from '@/components/lead-detail/HeaderCondoCheckPanel'
 import { HeaderLeadScorePanel, type ScoreFlash } from '@/components/lead-detail/HeaderLeadScorePanel'
 import { DeepDiveDetailsCard } from '@/components/lead-detail/DeepDiveDetailsCard'
@@ -2154,6 +2155,13 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 [contact.first_name, contact.last_name].filter(Boolean).join(' ').trim(),
               )
               .filter(Boolean)}
+            onMerged={async ({ winnerId, loserId }) => {
+              await afterCommandCenterMutation(queryClient, {
+                winnerId,
+                loserId,
+                navigate,
+              })
+            }}
           />
         </Box>
       </Box>

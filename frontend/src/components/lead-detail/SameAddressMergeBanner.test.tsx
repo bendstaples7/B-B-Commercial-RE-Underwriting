@@ -1,19 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { useState } from 'react'
 import { render, screen, waitFor } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { SameAddressMergeBanner } from '@/components/lead-detail/SameAddressMergeBanner'
 import { commandCenterService } from '@/services/api'
-
-const mockNavigate = vi.fn()
-
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-  }
-})
+import type { SameAddressLeadSummary } from '@/types'
+import {
+  afterCommandCenterMutation,
+  commandCenterQueryKey,
+} from '@/utils/afterCommandCenterMutation'
 
 vi.mock('@/services/api', () => ({
   commandCenterService: {
@@ -22,9 +18,15 @@ vi.mock('@/services/api', () => ({
   },
 }))
 
+const twin200: SameAddressLeadSummary = {
+  id: 200,
+  property_street: '1110 Yoko Ave',
+  owner_display_name: 'Yoko + Edwin',
+  people_names: ['Yoko Miller', 'Edwin Chen'],
+}
+
 describe('SameAddressMergeBanner', () => {
   beforeEach(() => {
-    mockNavigate.mockReset()
     vi.mocked(commandCenterService.getMergePreview).mockReset()
     vi.mocked(commandCenterService.mergeInto).mockReset()
     vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
@@ -36,20 +38,15 @@ describe('SameAddressMergeBanner', () => {
 
   it('settles banner landmark and merge is not a silent no-op', async () => {
     const user = userEvent.setup()
+    const onMerged = vi.fn().mockResolvedValue(undefined)
     render(
       <MemoryRouter>
         <SameAddressMergeBanner
           leadId={100}
           currentOwnerLabel="Yoko Miller"
           currentPeopleNames={['Yoko Miller']}
-          twins={[
-            {
-              id: 200,
-              property_street: '1110 Yoko Ave',
-              owner_display_name: 'Yoko + Edwin',
-              people_names: ['Yoko Miller', 'Edwin Chen'],
-            },
-          ]}
+          twins={[twin200]}
+          onMerged={onMerged}
         />
       </MemoryRouter>,
     )
@@ -63,11 +60,164 @@ describe('SameAddressMergeBanner', () => {
     await waitFor(() => {
       expect(commandCenterService.mergeInto).toHaveBeenCalledWith(100, 200)
     })
-    expect(mockNavigate).toHaveBeenCalledWith('/leads/200')
+    expect(onMerged).toHaveBeenCalledWith({ winnerId: 200, loserId: 100 })
+  })
+
+  it('when winner differs from current lead, onMerged still runs (navigate owned by helper)', async () => {
+    const user = userEvent.setup()
+    const navigate = vi.fn()
+    const invalidateQueries = vi.fn().mockResolvedValue(undefined)
+    const queryClient = { invalidateQueries } as never
+    vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
+      winner_id: 200,
+      loser_id: 100,
+      merged: true,
+    })
+    render(
+      <MemoryRouter>
+        <SameAddressMergeBanner
+          leadId={100}
+          currentOwnerLabel="Current"
+          currentPeopleNames={['Current']}
+          twins={[twin200]}
+          onMerged={async ({ winnerId, loserId }) => {
+            await afterCommandCenterMutation(queryClient, {
+              winnerId,
+              loserId,
+              navigate,
+            })
+          }}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    await user.click(screen.getByTestId('same-address-merge-stay-200'))
+    await user.click(screen.getByTestId('same-address-merge-confirm'))
+    await waitFor(() => {
+      expect(navigate).toHaveBeenCalledWith('/leads/200')
+    })
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: commandCenterQueryKey(200),
+    })
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: commandCenterQueryKey(100),
+    })
+  })
+
+  it('still shows success snack if onMerged refresh throws after merge', async () => {
+    const user = userEvent.setup()
+    vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
+      winner_id: 100,
+      loser_id: 200,
+      merged: true,
+    })
+    render(
+      <MemoryRouter>
+        <SameAddressMergeBanner
+          leadId={100}
+          currentOwnerLabel="Current"
+          currentPeopleNames={['Current']}
+          twins={[
+            {
+              id: 200,
+              property_street: '1 Main',
+              owner_display_name: 'Twin',
+              people_names: ['Twin'],
+            },
+          ]}
+          onMerged={async () => {
+            throw new Error('invalidate failed')
+          }}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    await user.click(screen.getByTestId('same-address-merge-confirm'))
+    await waitFor(() => {
+      expect(screen.getByText('Records combined.')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('same-address-merge-error')).not.toBeInTheDocument()
+  })
+
+  it('calls onMerged when stay is the current lead (same-URL stay)', async () => {
+    const user = userEvent.setup()
+    const onMerged = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
+      winner_id: 100,
+      loser_id: 200,
+      merged: true,
+    })
+    render(
+      <MemoryRouter>
+        <SameAddressMergeBanner
+          leadId={100}
+          currentOwnerLabel="Current"
+          currentPeopleNames={['Current']}
+          twins={[
+            {
+              id: 200,
+              property_street: '1 Main',
+              owner_display_name: 'Twin',
+              people_names: ['Twin'],
+            },
+          ]}
+          onMerged={onMerged}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    await user.click(screen.getByTestId('same-address-merge-confirm'))
+    await waitFor(() => {
+      expect(onMerged).toHaveBeenCalledWith({ winnerId: 100, loserId: 200 })
+    })
+  })
+
+  it('outcome: banner clears after Combine when stay=current and twins refetch empty', async () => {
+    const user = userEvent.setup()
+    vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
+      winner_id: 100,
+      loser_id: 200,
+      merged: true,
+    })
+
+    function Harness() {
+      const [twins, setTwins] = useState<SameAddressLeadSummary[]>([
+        {
+          id: 200,
+          property_street: '1 Main',
+          owner_display_name: 'Twin',
+          people_names: ['Twin'],
+        },
+      ])
+      return (
+        <SameAddressMergeBanner
+          leadId={100}
+          currentOwnerLabel="Current"
+          currentPeopleNames={['Current']}
+          twins={twins}
+          onMerged={async () => {
+            setTwins([])
+          }}
+        />
+      )
+    }
+
+    render(
+      <MemoryRouter>
+        <Harness />
+      </MemoryRouter>,
+    )
+    expect(screen.getByTestId('same-address-merge-banner')).toBeInTheDocument()
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    await user.click(screen.getByTestId('same-address-merge-confirm'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('same-address-merge-banner')).not.toBeInTheDocument()
+    })
   })
 
   it('lets you pick which twin to remove when several share the address', async () => {
     const user = userEvent.setup()
+    const onMerged = vi.fn().mockResolvedValue(undefined)
     vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
       winner_id: 100,
       loser_id: 300,
@@ -93,6 +243,7 @@ describe('SameAddressMergeBanner', () => {
               people_names: ['B'],
             },
           ]}
+          onMerged={onMerged}
         />
       </MemoryRouter>,
     )
@@ -102,10 +253,12 @@ describe('SameAddressMergeBanner', () => {
     await waitFor(() => {
       expect(commandCenterService.mergeInto).toHaveBeenCalledWith(300, 100)
     })
+    expect(onMerged).toHaveBeenCalledWith({ winnerId: 100, loserId: 300 })
   })
 
   it('uses the selected remove row when a different twin stays', async () => {
     const user = userEvent.setup()
+    const onMerged = vi.fn().mockResolvedValue(undefined)
     vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
       winner_id: 200,
       loser_id: 300,
@@ -131,6 +284,7 @@ describe('SameAddressMergeBanner', () => {
               people_names: ['B'],
             },
           ]}
+          onMerged={onMerged}
         />
       </MemoryRouter>,
     )
@@ -141,6 +295,7 @@ describe('SameAddressMergeBanner', () => {
     await waitFor(() => {
       expect(commandCenterService.mergeInto).toHaveBeenCalledWith(300, 200)
     })
+    expect(onMerged).toHaveBeenCalledWith({ winnerId: 200, loserId: 300 })
   })
 
   it('rejects paste of a different building via merge preview', async () => {
@@ -174,6 +329,7 @@ describe('SameAddressMergeBanner', () => {
               people_names: ['Edwin'],
             },
           ]}
+          onMerged={vi.fn()}
         />
       </MemoryRouter>,
     )
@@ -188,6 +344,7 @@ describe('SameAddressMergeBanner', () => {
 
   it('waits for pasted lead validation before merging', async () => {
     const user = userEvent.setup()
+    const onMerged = vi.fn().mockResolvedValue(undefined)
     let resolvePreview: (value: {
       same_building: boolean
       current: {
@@ -227,6 +384,7 @@ describe('SameAddressMergeBanner', () => {
               people_names: ['Edwin'],
             },
           ]}
+          onMerged={onMerged}
         />
       </MemoryRouter>,
     )
@@ -255,6 +413,7 @@ describe('SameAddressMergeBanner', () => {
     await waitFor(() => {
       expect(commandCenterService.mergeInto).toHaveBeenCalledWith(300, 100)
     })
+    expect(onMerged).toHaveBeenCalledWith({ winnerId: 100, loserId: 300 })
   })
 
   it('clears pasted lead state after cancel and reopen', async () => {
@@ -288,6 +447,7 @@ describe('SameAddressMergeBanner', () => {
               people_names: ['Edwin'],
             },
           ]}
+          onMerged={vi.fn()}
         />
       </MemoryRouter>,
     )
