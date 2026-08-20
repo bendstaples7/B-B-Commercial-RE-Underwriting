@@ -108,6 +108,34 @@ fail_after_partial_migration_apply() {
     exit "$exit_code"
 }
 
+migration_revision_is_committed() {
+    local expected_rev="$1"
+    python3.11 - "$expected_rev" <<'PY'
+import os
+import sys
+
+import psycopg2
+
+expected = sys.argv[1]
+url = os.environ.get("DATABASE_URL")
+if not url:
+    sys.exit(1)
+if url.startswith("postgresql+psycopg2://"):
+    url = "postgresql://" + url[len("postgresql+psycopg2://"):]
+try:
+    conn = psycopg2.connect(url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT version_num FROM alembic_version")
+            revisions = {str(row[0]) for row in cur.fetchall()}
+    finally:
+        conn.close()
+except Exception:
+    sys.exit(1)
+sys.exit(0 if expected in revisions else 1)
+PY
+}
+
 # Celery is stopped before the memory guard to free worker RSS on the 2GB VPS.
 # Durable marker + EXIT trap restore Celery if deploy exits before step 7
 # (memory preflight failure, cancelled SSH). Liveness/ensure honor the marker mtime.
@@ -458,7 +486,8 @@ if [ "$UPGRADE_RC" -eq 124 ] || [ "$UPGRADE_RC" -eq 137 ]; then
     if [[ -f "${BB_MIGRATE_LAST_REV_FILE}" ]]; then
         LAST_REV="$(cat "${BB_MIGRATE_LAST_REV_FILE}" 2>/dev/null || echo unknown)"
     fi
-    if [[ "$LAST_REV" != "(unknown)" && "$LAST_REV" != "unknown" && -n "$LAST_REV" ]]; then
+    if [[ "$LAST_REV" != "(unknown)" && "$LAST_REV" != "unknown" && -n "$LAST_REV" ]] \
+        && migration_revision_is_committed "$LAST_REV"; then
         fail_after_partial_migration_apply \
             1 \
             "flask db upgrade timed out after ${BB_MIGRATE_TIMEOUT_SEC}s" \
@@ -473,7 +502,8 @@ if [ "$UPGRADE_RC" -ne 0 ]; then
     if [[ -f "${BB_MIGRATE_LAST_REV_FILE}" ]]; then
         LAST_REV="$(cat "${BB_MIGRATE_LAST_REV_FILE}" 2>/dev/null || echo unknown)"
     fi
-    if [[ "$LAST_REV" != "(unknown)" && "$LAST_REV" != "unknown" && -n "$LAST_REV" ]]; then
+    if [[ "$LAST_REV" != "(unknown)" && "$LAST_REV" != "unknown" && -n "$LAST_REV" ]] \
+        && migration_revision_is_committed "$LAST_REV"; then
         fail_after_partial_migration_apply \
             "$UPGRADE_RC" \
             "flask db upgrade failed with exit ${UPGRADE_RC}" \

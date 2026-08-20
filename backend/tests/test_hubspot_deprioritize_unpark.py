@@ -12,6 +12,7 @@ from app.services.lead_scoring_engine import LeadScoringEngine
 from app.services.lead_status_service import (
     count_working_deprioritize_heal_candidates,
     heal_working_deprioritize_leads,
+    lead_has_active_outreach_work,
     working_deprioritize_heal_candidates,
 )
 from app.services.mail_queue_service import MailQueueService
@@ -239,6 +240,34 @@ class TestUnparkDeprioritizeHeal:
             candidates = working_deprioritize_heal_candidates()
             assert [lead.id for lead in candidates] == [eligible.id]
             assert count_working_deprioritize_heal_candidates() == 1
+            assert lead_has_active_outreach_work(eligible.id) is True
+
+    def test_heal_candidate_ids_are_chunked(self, app, monkeypatch):
+        with app.app_context():
+            from app.services import lead_status_service as service
+
+            monkeypatch.setattr(service, '_HEAL_CANDIDATE_ID_CHUNK_SIZE', 1)
+            leads = [
+                Lead(
+                    property_street=f'Chunked Park St {idx}',
+                    lead_status='deprioritize',
+                )
+                for idx in range(3)
+            ]
+            db.session.add_all(leads)
+            db.session.flush()
+            for lead in leads:
+                db.session.add(LeadTask(
+                    lead_id=lead.id,
+                    task_type='call_owner_today',
+                    title='Follow up',
+                    status='open',
+                    due_date=date.today(),
+                    created_by='test',
+                ))
+            db.session.commit()
+
+            assert count_working_deprioritize_heal_candidates() == 3
 
     def test_heal_ignores_deleted_manual_deprioritize(self, app):
         with app.app_context():

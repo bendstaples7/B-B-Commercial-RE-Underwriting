@@ -119,12 +119,15 @@ def test_deploy_lock_gate_runs_before_dedup_and_rolls_back():
 def test_deploy_preserves_checkout_after_partial_migration_apply():
     deploy_sh = (REPO_ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
     assert "fail_after_partial_migration_apply" in deploy_sh
+    assert "migration_revision_is_committed" in deploy_sh
+    assert "SELECT version_num FROM alembic_version" in deploy_sh
     assert "Not rolling back checkout because Alembic committed at least one revision" in deploy_sh
     timeout_section = deploy_sh[
         deploy_sh.index("if [ \"$UPGRADE_RC\" -eq 124 ]"):
         deploy_sh.index("echo \"    Migrations applied\"")
     ]
     assert "fail_after_partial_migration_apply" in timeout_section
+    assert "migration_revision_is_committed \"$LAST_REV\"" in timeout_section
     assert "rollback 1" in timeout_section
 
 

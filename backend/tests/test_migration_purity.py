@@ -132,6 +132,24 @@ def test_bans_contact_service_attribute_alias(tmp_path: Path):
     assert any('Service(...)' in v for v in viol)
 
 
+def test_bans_contact_service_computed_attribute_alias(tmp_path: Path):
+    mod = _load_mod()
+    f = tmp_path / 'contact_computed_alias.py'
+    f.write_text(
+        textwrap.dedent(
+            '''
+            def upgrade():
+                Service = make_module().ContactService
+                Service()
+            '''
+        ),
+        encoding='utf-8',
+    )
+    viol = mod.check_file(f, allowlisted=True)
+    assert any('ContactService' in v for v in viol)
+    assert any('Service(...)' in v for v in viol)
+
+
 def test_contact_service_call_reports_once(tmp_path: Path):
     mod = _load_mod()
     f = tmp_path / 'contact_call.py'
