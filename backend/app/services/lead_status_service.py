@@ -166,13 +166,8 @@ def heal_working_deprioritize_leads(
     recompute_action: bool = True,
 ) -> int:
     """Unpark deprioritize leads that still have follow-up or mail work."""
-    parked = Lead.query.filter_by(lead_status='deprioritize').all()
     healed = 0
-    for lead in parked:
-        if _has_manual_deprioritize(lead.id):
-            continue
-        if not lead_has_active_outreach_work(lead.id):
-            continue
+    for lead in working_deprioritize_heal_candidates():
         if unpark_deprioritize_for_active_work(
             lead,
             actor='System',
@@ -189,6 +184,16 @@ def heal_working_deprioritize_leads(
     if commit:
         db.session.commit()
     return healed
+
+
+def working_deprioritize_heal_candidates() -> list[Lead]:
+    """Return parked leads that the deprioritize healer would unpark."""
+    parked = Lead.query.filter_by(lead_status='deprioritize').all()
+    return [
+        lead for lead in parked
+        if not _has_manual_deprioritize(lead.id)
+        and lead_has_active_outreach_work(lead.id)
+    ]
 
 
 def apply_lead_status_change(

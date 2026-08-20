@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 _SCRIPT = Path(__file__).resolve().parents[2] / 'scripts' / 'pg_lock_guard.py'
 
@@ -20,6 +24,30 @@ def test_normalize_url():
     mod = _load()
     assert mod._normalize_url('postgresql+psycopg2://u:p@h/db') == 'postgresql://u:p@h/db'
     assert mod._normalize_url('postgresql://u:p@h/db') == 'postgresql://u:p@h/db'
+
+
+def test_connect_failure_exits_2(monkeypatch):
+    mod = _load()
+    psycopg2 = SimpleNamespace(connect=MagicMock(side_effect=RuntimeError('bad dsn')))
+    monkeypatch.setitem(sys.modules, 'psycopg2', psycopg2)
+    monkeypatch.setenv('DATABASE_URL', 'postgresql://bad')
+
+    with pytest.raises(SystemExit) as exc:
+        mod._connect()
+
+    assert exc.value.code == 2
+
+
+def test_fetch_blockers_checks_current_schema_relations_not_allowlist():
+    mod = _load()
+    cur = MagicMock()
+    cur.fetchall.side_effect = [[], []]
+
+    mod._fetch_blockers(cur, 60)
+
+    exclusive_sql = cur.execute.call_args_list[1].args[0]
+    assert "n.nspname NOT IN ('pg_catalog'" in exclusive_sql
+    assert 'c.relname = ANY' not in exclusive_sql
 
 
 def test_watchdog_dry_run_no_terminate():

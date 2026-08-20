@@ -31,7 +31,6 @@ def _normalize_url(url: str) -> str:
 
 def _connect():
     import psycopg2
-    from psycopg2 import OperationalError
 
     url = os.environ.get('DATABASE_URL')
     if not url:
@@ -39,7 +38,7 @@ def _connect():
         sys.exit(2)
     try:
         return psycopg2.connect(_normalize_url(url))
-    except OperationalError as exc:
+    except Exception as exc:  # noqa: BLE001 - normalize all connection failures to code 2.
         print(f'DATABASE_URL connection failed: {exc}', file=sys.stderr)
         sys.exit(2)
 

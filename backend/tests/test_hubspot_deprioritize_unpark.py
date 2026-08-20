@@ -9,7 +9,10 @@ from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.models.mail_queue_item import MailQueueItem
 from app.services.hubspot_matcher_service import HubSpotMatcherService
 from app.services.lead_scoring_engine import LeadScoringEngine
-from app.services.lead_status_service import heal_working_deprioritize_leads
+from app.services.lead_status_service import (
+    heal_working_deprioritize_leads,
+    working_deprioritize_heal_candidates,
+)
 from app.services.mail_queue_service import MailQueueService
 
 
@@ -186,6 +189,55 @@ class TestUnparkDeprioritizeHeal:
             db.session.refresh(lead)
             assert lead.lead_status == 'deprioritize'
 
+    def test_heal_candidates_match_apply_eligibility(self, app):
+        with app.app_context():
+            eligible = Lead(
+                property_street='Eligible Park St',
+                lead_status='deprioritize',
+            )
+            manual = Lead(
+                property_street='Manual Candidate Park St',
+                lead_status='deprioritize',
+            )
+            idle = Lead(
+                property_street='Idle Candidate Park St',
+                lead_status='deprioritize',
+            )
+            db.session.add_all([eligible, manual, idle])
+            db.session.flush()
+            db.session.add(LeadTask(
+                lead_id=eligible.id,
+                task_type='call_owner_today',
+                title='Follow up',
+                status='open',
+                due_date=date.today(),
+                created_by='test',
+            ))
+            db.session.add(LeadTimelineEntry(
+                lead_id=manual.id,
+                event_type='status_changed',
+                occurred_at=datetime.now(timezone.utc),
+                source='manual',
+                actor='ben',
+                summary="Status changed from 'mailing_no_contact_made' to 'deprioritize'.",
+                event_metadata={
+                    'previous_status': 'mailing_no_contact_made',
+                    'new_status': 'deprioritize',
+                },
+            ))
+            db.session.add(LeadTask(
+                lead_id=manual.id,
+                task_type='call_owner_today',
+                title='Follow up',
+                status='open',
+                due_date=date.today(),
+                created_by='test',
+            ))
+            db.session.commit()
+
+            candidates = working_deprioritize_heal_candidates()
+            assert [lead.id for lead in candidates] == [eligible.id]
+
     def test_heal_ignores_deleted_manual_deprioritize(self, app):
         with app.app_context():
             lead = Lead(
@@ -275,6 +327,16 @@ class TestUnparkDeprioritizeHeal:
             refresh.assert_not_called()
             db.session.refresh(lead)
             assert lead.lead_status == 'mailing_no_contact_made'
+
+    def test_standalone_heal_script_uses_production_and_recomputes(self):
+        from pathlib import Path
+
+        script = Path(__file__).resolve().parents[1] / 'scripts' / 'heal_working_deprioritize.py'
+        text = script.read_text(encoding='utf-8')
+        assert "os.environ.setdefault('FLASK_ENV', 'production')" in text
+        assert "create_app('production')" in text
+        assert 'working_deprioritize_heal_candidates' in text
+        assert 'recompute_action=True' in text
 
     def test_enqueue_unparks_deprioritize(self, app):
         with app.app_context():

@@ -32,27 +32,17 @@ def main() -> None:
 
     from app import create_app
     from app.services.lead_status_service import (
-        _has_manual_deprioritize,
         heal_working_deprioritize_leads,
-        lead_has_active_outreach_work,
+        working_deprioritize_heal_candidates,
     )
-    from app.models import Lead
 
     # Match Deploy / production: avoid development auto-migrate side effects.
+    os.environ.setdefault('FLASK_ENV', 'production')
     app = create_app('production')
     with app.app_context():
         if args.dry_run:
-            candidates = 0
-            parked = Lead.query.filter_by(lead_status='deprioritize').all()
-            for lead in parked:
-                if _has_manual_deprioritize(lead.id):
-                    continue
-                if not lead_has_active_outreach_work(lead.id):
-                    continue
-                candidates += 1
             print(json.dumps({
-                'deprioritize_total': len(parked),
-                'eligible_candidates': candidates,
+                'eligible_candidates': len(working_deprioritize_heal_candidates()),
                 'dry_run': True,
             }))
             print('Dry-run only — pass --apply to write')

@@ -378,26 +378,33 @@ fi
 echo "==> (4a) Pre-migration dedup cleanup"
 # Migration f9a0b1c2d3e4 requires zero owner+street duplicate clusters.
 # Production legacy data must be merged before the unique index is created.
+BB_DEDUP_PREFLIGHT_TIMEOUT_SEC="${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC:-300}"
 F9_PENDING_RC=0
-python3.11 scripts/preflight_dedup_migration.py --f9-pending || F9_PENDING_RC=$?
+timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
+    python3.11 scripts/preflight_dedup_migration.py --f9-pending || F9_PENDING_RC=$?
 if [ "$F9_PENDING_RC" -gt 1 ]; then
     echo "FAILED: preflight_dedup_migration.py --f9-pending exited $F9_PENDING_RC"
     rollback 1
 fi
 if [ "$F9_PENDING_RC" -eq 0 ]; then
     echo "    f9 dedup index migration pending — running preflight"
-    python3.11 scripts/preflight_dedup_migration.py --report || true
-    if ! python3.11 scripts/preflight_dedup_migration.py --verify; then
+    timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
+        python3.11 scripts/preflight_dedup_migration.py --report || true
+    if ! timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
+        python3.11 scripts/preflight_dedup_migration.py --verify; then
         echo "    Duplicate clusters detected — running merge_duplicate_leads --mode dedup"
-        python3.11 scripts/merge_duplicate_leads.py --mode dedup || {
-            echo "FAILED: dedup merge"
-            rollback 1
-        }
-        python3.11 scripts/preflight_dedup_migration.py --verify || {
-            echo "FAILED: duplicate clusters remain after dedup merge"
-            python3.11 scripts/preflight_dedup_migration.py --report
-            rollback 1
-        }
+        timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
+            python3.11 scripts/merge_duplicate_leads.py --mode dedup || {
+                echo "FAILED: dedup merge"
+                rollback 1
+            }
+        timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
+            python3.11 scripts/preflight_dedup_migration.py --verify || {
+                echo "FAILED: duplicate clusters remain after dedup merge"
+                timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
+                    python3.11 scripts/preflight_dedup_migration.py --report || true
+                rollback 1
+            }
     else
         echo "    No duplicate clusters — merge not required"
     fi

@@ -57,14 +57,10 @@ class _PurityVisitor(ast.NodeVisitor):
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             root = alias.name.split('.', 1)[0]
-            asname = alias.asname or alias.name
             if root == 'app' and not self.allowlisted:
                 self.violations.append(
                     (node.lineno, f'app import not on purity allowlist: import {alias.name}')
                 )
-            if alias.name == 'app' or alias.name.endswith('.create_app'):
-                # import app as x — create_app may be x.create_app
-                pass
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:

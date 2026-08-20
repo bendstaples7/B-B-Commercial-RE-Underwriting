@@ -366,27 +366,14 @@ def _revision_id_from_step(step) -> str:
 
 
 def _make_on_version_apply():
-    """Log each revision and optionally write BB_MIGRATE_LAST_REV_FILE.
+    """Log completed revisions and optionally write BB_MIGRATE_LAST_REV_FILE.
 
-    Returns ``(on_version_apply, finalize)`` — call ``finalize()`` after
-    ``run_migrations()`` so the last revision gets an end log line.
+    Alembic invokes ``on_version_apply`` after a revision has run, so this emits
+    completion-only logs rather than pretending to mark revision start time.
     """
-    import time
-
-    state = {'t0': None, 'rev': None}
-
     def on_version_apply(ctx, step, heads, **kw):  # noqa: ANN001, ARG001
         rev = _revision_id_from_step(step)
-        now = time.monotonic()
-        if state['t0'] is not None and state['rev'] is not None:
-            logger.info(
-                'Alembic finished revision %s in %.2fs',
-                state['rev'],
-                now - state['t0'],
-            )
-        logger.info('Alembic applied revision %s', rev)
-        state['t0'] = now
-        state['rev'] = rev
+        logger.info('Alembic completed revision %s', rev)
         marker_path = os.environ.get('BB_MIGRATE_LAST_REV_FILE')
         if marker_path:
             try:
@@ -396,12 +383,7 @@ def _make_on_version_apply():
                 logger.warning('Could not write BB_MIGRATE_LAST_REV_FILE: %s', exc)
 
     def finalize():
-        if state['t0'] is not None and state['rev'] is not None:
-            logger.info(
-                'Alembic finished revision %s (callback span %.2fs; on_version_apply is post-apply)',
-                state['rev'],
-                time.monotonic() - state['t0'],
-            )
+        return None
 
     return on_version_apply, finalize
 

@@ -34,6 +34,44 @@ def test_bans_create_app_even_when_allowlisted(tmp_path: Path):
     assert any('create_app' in v for v in viol)
 
 
+def test_bans_qualified_create_app_even_when_allowlisted(tmp_path: Path):
+    mod = _load_mod()
+    f = tmp_path / 'bad_qualified.py'
+    f.write_text(
+        textwrap.dedent(
+            '''
+            import app
+
+            def upgrade():
+                app.create_app()
+            '''
+        ),
+        encoding='utf-8',
+    )
+    viol = mod.check_file(f, allowlisted=True)
+    assert any('create_app' in v for v in viol)
+
+
+def test_bans_multiline_aliased_create_app_even_when_allowlisted(tmp_path: Path):
+    mod = _load_mod()
+    f = tmp_path / 'bad_multiline.py'
+    f.write_text(
+        textwrap.dedent(
+            '''
+            from app import (
+                create_app as make_app,
+            )
+
+            def upgrade():
+                make_app()
+            '''
+        ),
+        encoding='utf-8',
+    )
+    viol = mod.check_file(f, allowlisted=True)
+    assert any('create_app' in v for v in viol)
+
+
 def test_bans_contact_service(tmp_path: Path):
     mod = _load_mod()
     f = tmp_path / 'bad_cs.py'
@@ -107,6 +145,14 @@ def test_non_allowlisted_app_import_fails(tmp_path: Path):
         'from app.services.lead_merge_utils import dedup_street_key\n',
         encoding='utf-8',
     )
+    viol = mod.check_file(f, allowlisted=False)
+    assert any('allowlist' in v for v in viol)
+
+
+def test_non_allowlisted_comma_app_import_fails(tmp_path: Path):
+    mod = _load_mod()
+    f = tmp_path / 'new_bad.py'
+    f.write_text('import os, app\n', encoding='utf-8')
     viol = mod.check_file(f, allowlisted=False)
     assert any('allowlist' in v for v in viol)
 

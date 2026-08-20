@@ -113,8 +113,8 @@ this via `python scripts/check_migration_purity.py`.
    auto-kill); the cron watchdog owns terminates. Runs before f9 dedup cleanup
    so merge queries cannot hang on existing locks.
 2. **Upgrade timeout** — `BB_MIGRATE_TIMEOUT_SEC` (default 900). On timeout,
-   Deploy aborts and prints the last revision from `BB_MIGRATE_LAST_REV_FILE`
-   (written after each revision applies).
+   Deploy aborts and prints the last completed revision from
+   `BB_MIGRATE_LAST_REV_FILE` (written after each revision applies).
 3. **Post-migrate DB smoke** — cheap `contacts`/`leads` reads plus lock checks
    that do not depend on gunicorn `/api/health`.
 

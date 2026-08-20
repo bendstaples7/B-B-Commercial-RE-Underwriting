@@ -1,7 +1,6 @@
 """Unit tests for Alembic env.py migration lock guards (timeouts + revision id)."""
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -80,7 +79,8 @@ def test_begin_hook_registers_listener_and_applies_timeouts():
 
     sync_conn = MagicMock()
     on_begin(sync_conn)
-    assert sync_conn.execute.call_count == 2
+    on_begin(sync_conn)
+    assert sync_conn.execute.call_count == 4
     sqls = [str(c.args[0]) for c in sync_conn.execute.call_args_list]
     assert any('idle_in_transaction_session_timeout' in s for s in sqls)
     assert any('lock_timeout' in s for s in sqls)
