@@ -840,8 +840,18 @@ def get_command_center(lead_id: int):
     related_properties = ContactService().get_related_properties(lead_id)
     same_address_leads: list[dict] = []
     try:
+        from app.controllers.property_controller import _current_user_is_admin
         from app.services.lead_dedup_service import same_address_lead_summaries
-        same_address_leads = same_address_lead_summaries(lead)
+        current_user_id = getattr(g, 'user_id', None)
+        same_address_owner_scope = (
+            None
+            if _current_user_is_admin()
+            else (current_user_id or '__unauthorized__')
+        )
+        same_address_leads = same_address_lead_summaries(
+            lead,
+            owner_user_id=same_address_owner_scope,
+        )
     except Exception:  # noqa: BLE001 — never block command center
         logger.exception('same_address_lead_summaries failed for lead %s', lead_id)
 

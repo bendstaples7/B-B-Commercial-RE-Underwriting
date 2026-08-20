@@ -112,7 +112,8 @@ def streets_match_normalized(a: Optional[str], b: Optional[str]) -> bool:
 
 
 _SITUS_UNIT_RE = re.compile(
-    r'(?:\b(?:unit|apt|apartment|suite|ste)\b|#)\s*([a-z0-9-]+)\s*$',
+    r'(?:\b(?:unit|apt|apartment|suite|ste)\b|#)\s*([a-z0-9-]+)\s*$'
+    r'|\s+((?=[a-z0-9-]*[a-z])(?=[a-z0-9-]*\d)[a-z0-9-]+)\s*$',
     re.IGNORECASE,
 )
 
@@ -125,7 +126,8 @@ def situs_unit_token(street: Optional[str]) -> str:
     match = _SITUS_UNIT_RE.search(line)
     if not match:
         return ''
-    return re.sub(r'[^a-z0-9]', '', match.group(1).lower())
+    raw = match.group(1) or match.group(2) or ''
+    return re.sub(r'[^a-z0-9]', '', raw.lower())
 
 
 def streets_match_same_situs(a: Optional[str], b: Optional[str]) -> bool:

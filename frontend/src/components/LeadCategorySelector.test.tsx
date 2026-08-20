@@ -17,6 +17,19 @@ describe('LeadCategorySelector', () => {
       lead_category_locked: true,
       property_type: null,
       lead_score: 40,
+      timeline_entry: {
+        id: 1,
+        lead_id: 42,
+        event_type: 'category_changed',
+        occurred_at: '2026-08-20T00:00:00Z',
+        source: 'manual',
+        actor: 'test-user',
+        summary: 'Lead category changed.',
+        metadata: null,
+        hubspot_activity_id: null,
+        is_deleted: false,
+        created_at: '2026-08-20T00:00:00Z',
+      },
     })
   })
 

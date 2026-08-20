@@ -1391,6 +1391,7 @@ export const commandCenterService = {
     leadCategory: 'residential' | 'commercial',
   ): Promise<{
     lead_category: string; lead_category_locked: boolean; property_type: string | null; lead_score: number | null
+    timeline_entry: LeadTimelineEntry
   }> =>
     api.patch(`/leads/${leadId}/category`, { lead_category: leadCategory }).then(r => r.data),
   dismissDuplicateReview: (

@@ -489,7 +489,12 @@ def find_building_owner_siblings(lead: Lead, *, limit: int = 40) -> list[Lead]:
     return siblings
 
 
-def find_same_building_leads(lead: Lead, *, limit: int = 8) -> list[Lead]:
+def find_same_building_leads(
+    lead: Lead,
+    *,
+    limit: int = 8,
+    owner_user_id: str | None = None,
+) -> list[Lead]:
     """Same building-level street, regardless of owner name.
 
     Used by the lead-page merge banner so Yoko vs Yoko+Edwin still surface.
@@ -501,43 +506,49 @@ def find_same_building_leads(lead: Lead, *, limit: int = 8) -> list[Lead]:
     if not street or not isinstance(lead_id, int):
         return []
 
+    base_query = Lead.query.filter(Lead.id != lead_id)
+    if owner_user_id is not None:
+        base_query = base_query.filter(Lead.owner_user_id == owner_user_id)
+
     key = dedup_street_key(street)
     if key:
-        exact = (
-            Lead.query.filter(
-                Lead.id != lead_id,
-                func.lower(func.trim(Lead.property_street)) == street.lower(),
+        found: dict[int, Lead] = {}
+        indexed_matches = (
+            base_query.filter(
+                or_(
+                    Lead.normalized_street == key,
+                    Lead.normalized_street.ilike(f'{key} %'),
+                ),
             )
             .order_by(Lead.id.asc())
-            .limit(limit)
+            .limit(max(limit * 8, 64))
             .all()
         )
-        found: dict[int, Lead] = {item.id: item for item in exact}
+        for other in indexed_matches:
+            if streets_match_same_situs(street, other.property_street):
+                found[other.id] = other
+            if len(found) >= limit:
+                break
         if len(found) < limit:
-            extras = (
-                Lead.query.filter(
-                    Lead.id != lead_id,
+            missing_normalized = (
+                base_query.filter(
                     or_(
-                        Lead.normalized_street == key,
-                        Lead.normalized_street.ilike(f'{key} %'),
+                        Lead.normalized_street.is_(None),
+                        Lead.normalized_street == '',
                     ),
+                    func.lower(func.trim(Lead.property_street)) == street.lower(),
                 )
                 .order_by(Lead.id.asc())
-                .limit(max(limit * 8, 64))
+                .limit(limit - len(found))
                 .all()
             )
-            for other in extras:
-                if other.id in found:
-                    continue
+            for other in missing_normalized:
                 if streets_match_same_situs(street, other.property_street):
                     found[other.id] = other
-                if len(found) >= limit:
-                    break
         return list(found.values())[:limit]
 
     siblings: list[Lead] = []
-    q = Lead.query.filter(
-        Lead.id != lead_id,
+    q = base_query.filter(
         func.lower(func.trim(Lead.property_street)) == street.lower(),
     )
     for other in q.order_by(Lead.id.asc()).limit(limit).all():
@@ -609,9 +620,18 @@ def _people_names_for_lead_ids(lead_ids: list[int]) -> dict[int, list[str]]:
     return out
 
 
-def same_address_lead_summaries(lead: Lead, *, limit: int = 8) -> list[dict[str, Any]]:
+def same_address_lead_summaries(
+    lead: Lead,
+    *,
+    limit: int = 8,
+    owner_user_id: str | None = None,
+) -> list[dict[str, Any]]:
     """Skinny same-building twins for the command-center merge banner."""
-    siblings = find_same_building_leads(lead, limit=limit)
+    siblings = find_same_building_leads(
+        lead,
+        limit=limit,
+        owner_user_id=owner_user_id,
+    )
     if not siblings:
         return []
     names_by_id = _people_names_for_lead_ids([item.id for item in siblings])

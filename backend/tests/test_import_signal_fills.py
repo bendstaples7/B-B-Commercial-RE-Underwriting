@@ -128,3 +128,17 @@ class TestApplyImportSignalFills:
         assert 'property_type' not in updated
         assert lead.lead_category == 'residential'
         assert lead.property_type is None
+
+    def test_locked_commercial_category_gets_blank_display_label(self):
+        lead = SimpleNamespace(
+            deal_source='Listsource',
+            deal_description='Units: 12',
+            units=12,
+            lead_category='commercial',
+            lead_category_locked=True,
+            property_type=None,
+        )
+        updated = apply_import_signal_fills(lead)
+        assert updated == ['property_type']
+        assert lead.lead_category == 'commercial'
+        assert lead.property_type == 'Commercial'

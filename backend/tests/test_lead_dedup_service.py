@@ -75,6 +75,23 @@ class TestCitiesCompatible:
         assert cities_compatible('Chicago', 'chicago') is True
 
 
+class TestSitusUnitToken:
+    def test_trailing_alphanumeric_unit_is_respected(self):
+        from app.services.lead_merge_utils import (
+            situs_unit_token,
+            streets_match_same_situs,
+        )
+
+        assert situs_unit_token('123 Main St 1R') == '1r'
+        assert situs_unit_token('123 Main St 2R') == '2r'
+        assert not streets_match_same_situs('123 Main St 1R', '123 Main St 2R')
+
+    def test_zip_only_suffix_is_not_treated_as_unit(self):
+        from app.services.lead_merge_utils import situs_unit_token
+
+        assert situs_unit_token('1719 W Barry 60657') == ''
+
+
 class TestLeadDedupFields:
     def test_refresh_sets_normalized_street(self, app):
         with app.app_context():

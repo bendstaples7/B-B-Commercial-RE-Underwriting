@@ -178,6 +178,7 @@ VALID_SORT_ORDERS = ['asc', 'desc']
 VALID_SOURCE_TYPES = [
     "foreclosure", "long_owned", "absentee_owner", "tax_distress", "manual_distress"
 ]
+VALID_LEAD_CATEGORIES = ['residential', 'commercial']
 
 
 class LeadListQuerySchema(Schema):
@@ -191,7 +192,7 @@ class LeadListQuerySchema(Schema):
 
     # Filters
     property_type = fields.Str(load_default=None, validate=validate.Length(max=50))
-    lead_category = fields.Str(load_default=None, validate=validate.OneOf(['residential', 'commercial']))
+    lead_category = fields.Str(load_default=None, validate=validate.OneOf(VALID_LEAD_CATEGORIES))
     city = fields.Str(load_default=None, validate=validate.Length(max=100))
     state = fields.Str(load_default=None, validate=validate.Length(max=50))
     zip = fields.Str(load_default=None, validate=validate.Length(max=20))
@@ -436,7 +437,7 @@ class ImportStartRequestSchema(Schema):
     field_mapping_id = fields.Int(load_default=None, validate=validate.Range(min=1))
     lead_category = fields.Str(
         load_default='residential',
-        validate=validate.OneOf(['residential', 'commercial']),
+        validate=validate.OneOf(VALID_LEAD_CATEGORIES),
     )
 
 
@@ -1721,9 +1722,6 @@ class LeadStatusUpdateSchema(RequestSchema):
     )
     actor = fields.String(load_default='anonymous')
     reason = fields.String(load_default=None, validate=validate.Length(max=500))
-
-
-VALID_LEAD_CATEGORIES = ['residential', 'commercial']
 
 
 class LeadCategoryUpdateSchema(RequestSchema):

@@ -1016,6 +1016,45 @@ class TestSameAddressLeadsPayload:
             assert both.id in twin_ids
             assert other_block.id not in twin_ids
 
+    def test_command_center_excludes_same_address_leads_owned_by_other_user(self, client, app):
+        from app.services.lead_dedup_service import refresh_lead_dedup_fields
+
+        with app.app_context():
+            owned = _make_lead(
+                app,
+                '1110 Private Ave',
+                owner_first_name='Owner',
+                owner_last_name='One',
+                owner_user_id='test-user',
+            )
+            visible_twin = _make_lead(
+                app,
+                '1110 Private Ave',
+                owner_first_name='Owner',
+                owner_last_name='Two',
+                owner_user_id='test-user',
+            )
+            other_user_twin = _make_lead(
+                app,
+                '1110 Private Ave',
+                owner_first_name='Other',
+                owner_last_name='User',
+                owner_user_id='other-user',
+            )
+            for item in (owned, visible_twin, other_user_twin):
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+
+            response = client.get(
+                f'/api/leads/{owned.id}/command-center',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            twin_ids = {row['id'] for row in (body.get('same_address_leads') or [])}
+            assert visible_twin.id in twin_ids
+            assert other_user_twin.id not in twin_ids
+
 
 class TestMergePreviewAndUnitGuard:
     def test_merge_preview_same_building_false_for_other_unit(self, client, app):

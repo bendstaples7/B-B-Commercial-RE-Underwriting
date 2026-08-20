@@ -25,6 +25,8 @@ vi.mock('@/services/api', () => ({
 describe('SameAddressMergeBanner', () => {
   beforeEach(() => {
     mockNavigate.mockReset()
+    vi.mocked(commandCenterService.getMergePreview).mockReset()
+    vi.mocked(commandCenterService.mergeInto).mockReset()
     vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
       winner_id: 200,
       loser_id: 100,
@@ -102,6 +104,45 @@ describe('SameAddressMergeBanner', () => {
     })
   })
 
+  it('uses the selected remove row when a different twin stays', async () => {
+    const user = userEvent.setup()
+    vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
+      winner_id: 200,
+      loser_id: 300,
+      merged: true,
+    })
+    render(
+      <MemoryRouter>
+        <SameAddressMergeBanner
+          leadId={100}
+          currentOwnerLabel="Current"
+          currentPeopleNames={['Current']}
+          twins={[
+            {
+              id: 200,
+              property_street: '1 Main',
+              owner_display_name: 'Twin A',
+              people_names: ['A'],
+            },
+            {
+              id: 300,
+              property_street: '1 Main',
+              owner_display_name: 'Twin B',
+              people_names: ['B'],
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    await user.click(screen.getByTestId('same-address-merge-stay-200'))
+    await user.click(screen.getByTestId('same-address-merge-remove-300'))
+    await user.click(screen.getByTestId('same-address-merge-confirm'))
+    await waitFor(() => {
+      expect(commandCenterService.mergeInto).toHaveBeenCalledWith(300, 200)
+    })
+  })
+
   it('rejects paste of a different building via merge preview', async () => {
     const user = userEvent.setup()
     vi.mocked(commandCenterService.getMergePreview).mockResolvedValue({
@@ -143,5 +184,124 @@ describe('SameAddressMergeBanner', () => {
       expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 999)
     })
     expect(await screen.findByText('That record is not the same address.')).toBeInTheDocument()
+  })
+
+  it('waits for pasted lead validation before merging', async () => {
+    const user = userEvent.setup()
+    let resolvePreview: (value: {
+      same_building: boolean
+      current: {
+        id: number
+        property_street: string
+        owner_display_name: string
+        people_names: string[]
+      }
+      other: {
+        id: number
+        property_street: string
+        owner_display_name: string
+        people_names: string[]
+      }
+    }) => void = () => {}
+    vi.mocked(commandCenterService.getMergePreview).mockReturnValue(
+      new Promise((resolve) => {
+        resolvePreview = resolve
+      }),
+    )
+    vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
+      winner_id: 100,
+      loser_id: 300,
+      merged: true,
+    })
+    render(
+      <MemoryRouter>
+        <SameAddressMergeBanner
+          leadId={100}
+          currentOwnerLabel="Yoko"
+          currentPeopleNames={['Yoko']}
+          twins={[
+            {
+              id: 200,
+              property_street: '1110 Yoko Ave',
+              owner_display_name: 'Edwin',
+              people_names: ['Edwin'],
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    await user.type(screen.getByTestId('same-address-merge-paste-id'), '300')
+    await user.click(screen.getByTestId('same-address-merge-confirm'))
+
+    expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 300)
+    expect(commandCenterService.mergeInto).not.toHaveBeenCalled()
+
+    resolvePreview({
+      same_building: true,
+      current: {
+        id: 100,
+        property_street: '1110 Yoko Ave',
+        owner_display_name: 'Yoko',
+        people_names: ['Yoko'],
+      },
+      other: {
+        id: 300,
+        property_street: '1110 Yoko Ave',
+        owner_display_name: 'Manual twin',
+        people_names: ['Manual twin'],
+      },
+    })
+    await waitFor(() => {
+      expect(commandCenterService.mergeInto).toHaveBeenCalledWith(300, 100)
+    })
+  })
+
+  it('clears pasted lead state after cancel and reopen', async () => {
+    const user = userEvent.setup()
+    vi.mocked(commandCenterService.getMergePreview).mockResolvedValue({
+      same_building: true,
+      current: {
+        id: 100,
+        property_street: '1110 Yoko Ave',
+        owner_display_name: 'Yoko',
+        people_names: ['Yoko'],
+      },
+      other: {
+        id: 300,
+        property_street: '1110 Yoko Ave',
+        owner_display_name: 'Manual twin',
+        people_names: ['Manual twin'],
+      },
+    })
+    render(
+      <MemoryRouter>
+        <SameAddressMergeBanner
+          leadId={100}
+          currentOwnerLabel="Yoko"
+          currentPeopleNames={['Yoko']}
+          twins={[
+            {
+              id: 200,
+              property_street: '1110 Yoko Ave',
+              owner_display_name: 'Edwin',
+              people_names: ['Edwin'],
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    await user.type(screen.getByTestId('same-address-merge-paste-id'), '300')
+    await user.tab()
+    await waitFor(() => {
+      expect(screen.getAllByText('Manual twin (#300)').length).toBeGreaterThan(0)
+    })
+
+    await user.click(screen.getByText('Cancel'))
+    await user.click(screen.getByTestId('same-address-merge-open'))
+
+    expect(screen.getByTestId('same-address-merge-paste-id')).toHaveValue('')
+    expect(screen.queryAllByText('Manual twin (#300)')).toHaveLength(0)
   })
 })
