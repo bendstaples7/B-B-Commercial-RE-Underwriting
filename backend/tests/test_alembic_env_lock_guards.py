@@ -50,3 +50,37 @@ def test_transaction_per_migration_flag_in_env_source():
     src = _ENV_PATH.read_text(encoding='utf-8')
     assert "conf_args['transaction_per_migration'] = True" in src
     assert '_install_postgres_timeout_begin_hook' in src
+
+
+def test_begin_hook_registers_listener_and_applies_timeouts():
+    """Core guarantee: each connection.begin() re-applies SET LOCAL timeouts."""
+    from unittest.mock import patch
+
+    import sqlalchemy
+
+    ns = _load_helpers()
+    conn = MagicMock()
+    conn.dialect = SimpleNamespace(name='postgresql')
+    listeners: list = []
+
+    def fake_listens_for(target, identifier):
+        def deco(fn):
+            listeners.append((target, identifier, fn))
+            return fn
+
+        return deco
+
+    with patch.object(sqlalchemy.event, 'listens_for', fake_listens_for):
+        ns['_install_postgres_timeout_begin_hook'](conn)
+
+    assert len(listeners) == 1
+    target, identifier, on_begin = listeners[0]
+    assert target is conn
+    assert identifier == 'begin'
+
+    sync_conn = MagicMock()
+    on_begin(sync_conn)
+    assert sync_conn.execute.call_count == 2
+    sqls = [str(c.args[0]) for c in sync_conn.execute.call_args_list]
+    assert any('idle_in_transaction_session_timeout' in s for s in sqls)
+    assert any('lock_timeout' in s for s in sqls)

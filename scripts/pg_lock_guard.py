@@ -8,14 +8,8 @@ Modes:
 
 Exit codes:
   0 = ok (or watchdog found nothing / dry-run)
-  1 = blockers found / smoke failed / terminate attempted with errors
-  2 = usage / connection error
-
-Env:
-  DATABASE_URL — required (postgresql:// or postgresql+psycopg2://)
-  BB_IDLE_XACT_GRACE_SEC — preflight/smoke idle-in-xact age (default 60)
-  BB_WATCHDOG_EXCL_IDLE_SEC — exclusive+idle threshold (default 600)
-  BB_WATCHDOG_ANY_IDLE_SEC — any idle-in-xact threshold (default 1800)
+  1 = blockers found / smoke failed / sessions terminated (watchdog alert path)
+  2 = usage / connection / runtime error
 """
 from __future__ import annotations
 
@@ -25,12 +19,8 @@ import os
 import sys
 from typing import Any
 
-DEFAULT_RELATIONS = (
-    'contacts',
-    'leads',
-    'property_contacts',
-    'alembic_version',
-)
+# Cheap readability checks for post-migrate smoke.
+SMOKE_TABLES = ('contacts', 'leads')
 
 
 def _normalize_url(url: str) -> str:
@@ -41,15 +31,20 @@ def _normalize_url(url: str) -> str:
 
 def _connect():
     import psycopg2
+    from psycopg2 import OperationalError
 
     url = os.environ.get('DATABASE_URL')
     if not url:
         print('DATABASE_URL is required', file=sys.stderr)
         sys.exit(2)
-    return psycopg2.connect(_normalize_url(url))
+    try:
+        return psycopg2.connect(_normalize_url(url))
+    except OperationalError as exc:
+        print(f'DATABASE_URL connection failed: {exc}', file=sys.stderr)
+        sys.exit(2)
 
 
-def _fetch_blockers(cur, grace_sec: int, relations: tuple[str, ...]) -> list[dict[str, Any]]:
+def _fetch_blockers(cur, grace_sec: int) -> list[dict[str, Any]]:
     cur.execute(
         """
         SELECT a.pid,
@@ -84,26 +79,30 @@ def _fetch_blockers(cur, grace_sec: int, relations: tuple[str, ...]) -> list[dic
             'query': r[7],
         })
 
+    # Any granted AccessExclusiveLock on a user relation in this database
+    # (not limited to a four-name allowlist — Deploy must not start Alembic
+    # while *any* exclusive migration-class lock is held).
     cur.execute(
         """
         SELECT a.pid,
                a.usename,
                a.state,
                l.mode,
-               c.relname,
+               n.nspname || '.' || c.relname AS relname,
                EXTRACT(EPOCH FROM (now() - a.xact_start)) AS xact_age_sec,
                left(a.query, 200) AS query
         FROM pg_locks l
         JOIN pg_class c ON c.oid = l.relation
+        JOIN pg_namespace n ON n.oid = c.relnamespace
         JOIN pg_stat_activity a ON a.pid = l.pid
         WHERE l.granted
           AND l.mode = 'AccessExclusiveLock'
-          AND c.relname = ANY(%s)
+          AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
           AND a.datname = current_database()
           AND a.pid <> pg_backend_pid()
         ORDER BY a.pid
-        """,
-        (list(relations),),
+        """
     )
     for r in cur.fetchall():
         rows.append({
@@ -124,12 +123,15 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     conn = _connect()
     try:
         cur = conn.cursor()
-        blockers = _fetch_blockers(cur, grace, DEFAULT_RELATIONS)
+        blockers = _fetch_blockers(cur, grace)
         if blockers:
             print('PREFLIGHT FAIL: migration blockers present', file=sys.stderr)
             print(json.dumps(blockers, indent=2, default=str), file=sys.stderr)
             return 1
-        print('PREFLIGHT OK: no idle-in-xact (>%ss) or AccessExclusiveLock on app tables' % grace)
+        print(
+            'PREFLIGHT OK: no idle-in-xact (>%ss) or AccessExclusiveLock on user tables'
+            % grace
+        )
         return 0
     finally:
         conn.close()
@@ -142,10 +144,10 @@ def cmd_smoke(args: argparse.Namespace) -> int:
         cur = conn.cursor()
         cur.execute("SET statement_timeout = '5s'")
         cur.execute("SET lock_timeout = '5s'")
-        for table in ('contacts', 'leads'):
+        for table in SMOKE_TABLES:
             cur.execute(f'SELECT 1 FROM {table} LIMIT 1')
             cur.fetchone()
-        blockers = _fetch_blockers(cur, grace, DEFAULT_RELATIONS)
+        blockers = _fetch_blockers(cur, grace)
         if blockers:
             print('SMOKE FAIL: post-migrate lock / idle-in-xact check failed', file=sys.stderr)
             print(json.dumps(blockers, indent=2, default=str), file=sys.stderr)
@@ -203,6 +205,38 @@ def _watchdog_targets(cur, excl_sec: int, any_sec: int) -> list[dict[str, Any]]:
     return out
 
 
+def _still_dangerous(cur, pid: int, excl_sec: int, any_sec: int) -> bool:
+    """Re-check immediately before terminate so we do not kill a recycled PID."""
+    cur.execute(
+        """
+        SELECT EXTRACT(EPOCH FROM (now() - a.xact_start)) AS xact_age_sec,
+               EXISTS (
+                   SELECT 1
+                   FROM pg_locks l
+                   WHERE l.pid = a.pid
+                     AND l.granted
+                     AND l.mode = 'AccessExclusiveLock'
+               ) AS holds_exclusive
+        FROM pg_stat_activity a
+        WHERE a.pid = %s
+          AND a.datname = current_database()
+          AND a.state = 'idle in transaction'
+          AND a.xact_start IS NOT NULL
+        """,
+        (pid,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return False
+    age = float(row[0] or 0)
+    holds_exclusive = bool(row[1])
+    if holds_exclusive and age >= excl_sec:
+        return True
+    if age >= any_sec:
+        return True
+    return False
+
+
 def cmd_watchdog(args: argparse.Namespace) -> int:
     excl_sec = int(os.environ.get('BB_WATCHDOG_EXCL_IDLE_SEC', args.excl_idle_sec))
     any_sec = int(os.environ.get('BB_WATCHDOG_ANY_IDLE_SEC', args.any_idle_sec))
@@ -217,16 +251,32 @@ def cmd_watchdog(args: argparse.Namespace) -> int:
         if args.dry_run:
             print('WATCHDOG dry-run: would terminate %d session(s)' % len(targets))
             return 0
+        terminated = 0
+        skipped = 0
         failed = 0
         for t in targets:
+            if not _still_dangerous(cur, t['pid'], excl_sec, any_sec):
+                print(f"skip pid={t['pid']} (no longer dangerous idle-in-xact)")
+                skipped += 1
+                continue
             cur.execute('SELECT pg_terminate_backend(%s)', (t['pid'],))
             ok = cur.fetchone()[0]
-            print(f"terminated pid={t['pid']} ok={ok} age={t['xact_age_sec']:.0f}s excl={t['holds_exclusive']}")
-            if not ok:
+            print(
+                f"terminated pid={t['pid']} ok={ok} age={t['xact_age_sec']:.0f}s "
+                f"excl={t['holds_exclusive']}"
+            )
+            if ok:
+                terminated += 1
+            else:
                 failed += 1
         conn.commit()
-        # Always exit 1 when we terminated so the shell wrapper can alert
-        return 1 if targets else 0
+        if terminated:
+            return 1
+        if failed:
+            print(f'WATCHDOG: {failed} terminate call(s) returned false', file=sys.stderr)
+            return 2
+        print(f'WATCHDOG: nothing terminated (skipped={skipped})')
+        return 0
     finally:
         conn.close()
 
@@ -241,13 +291,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--excl-idle-sec', type=int, default=600)
     parser.add_argument('--any-idle-sec', type=int, default=1800)
     parser.add_argument('--dry-run', action='store_true')
-    args = parser.parse_args(argv)
-
-    if args.mode == 'preflight':
-        return cmd_preflight(args)
-    if args.mode == 'smoke':
-        return cmd_smoke(args)
-    return cmd_watchdog(args)
+    try:
+        args = parser.parse_args(argv)
+        if args.mode == 'preflight':
+            return cmd_preflight(args)
+        if args.mode == 'smoke':
+            return cmd_smoke(args)
+        return cmd_watchdog(args)
+    except SystemExit as exc:
+        code = exc.code
+        if code is None:
+            return 0
+        if isinstance(code, int):
+            return code
+        return 2
+    except Exception as exc:
+        print(f'pg_lock_guard error: {exc}', file=sys.stderr)
+        return 2
 
 
 if __name__ == '__main__':

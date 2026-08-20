@@ -45,6 +45,51 @@ def test_bans_contact_service(tmp_path: Path):
     assert any('ContactService' in v for v in viol)
 
 
+def test_bans_comma_import_create_app(tmp_path: Path):
+    mod = _load_mod()
+    f = tmp_path / 'comma_import.py'
+    f.write_text(
+        'from app import db, create_app\napp = create_app()\n',
+        encoding='utf-8',
+    )
+    viol = mod.check_file(f, allowlisted=True)
+    assert any('create_app' in v for v in viol)
+
+
+def test_bans_qualified_create_app_call(tmp_path: Path):
+    mod = _load_mod()
+    f = tmp_path / 'qualified.py'
+    f.write_text(
+        textwrap.dedent(
+            '''
+            import app
+            def upgrade():
+                app.create_app()
+            '''
+        ),
+        encoding='utf-8',
+    )
+    viol = mod.check_file(f, allowlisted=True)
+    assert any('create_app' in v for v in viol)
+
+
+def test_bans_multiline_from_import(tmp_path: Path):
+    mod = _load_mod()
+    f = tmp_path / 'multiline.py'
+    f.write_text(
+        textwrap.dedent(
+            '''
+            from app.services.contact_service import (
+                ContactService,
+            )
+            '''
+        ),
+        encoding='utf-8',
+    )
+    viol = mod.check_file(f, allowlisted=True)
+    assert any('ContactService' in v for v in viol)
+
+
 def test_allowlisted_app_import_ok(tmp_path: Path):
     mod = _load_mod()
     f = tmp_path / 'ok_helper.py'

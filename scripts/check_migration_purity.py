@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Fail CI when Alembic revisions nest app factories / second DB sessions.
 
-Banned (never allowlisted):
-  - create_app( / from app import create_app
-  - ContactService (nested service heal class that opens app work mid-migration)
+Banned (never allowlisted), detected via AST over the full module:
+  - create_app(...) including qualified ``app.create_app()`` / aliases
+  - ContactService
 
-Other ``from app...`` / ``import app...`` in historical revisions may appear in
+Other ``import app`` / ``from app...`` in historical revisions may appear in
 ``backend/alembic_migrations/purity_allowlist.txt`` (one basename per line).
 
 Usage:
@@ -15,46 +15,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import re
+import ast
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_VERSIONS = REPO_ROOT / 'backend' / 'alembic_migrations' / 'versions'
 DEFAULT_ALLOWLIST = REPO_ROOT / 'backend' / 'alembic_migrations' / 'purity_allowlist.txt'
-
-# Never escapable via allowlist
-BANNED_ALWAYS = [
-    re.compile(r'from\s+app\s+import\s+create_app\b'),
-    re.compile(r'(?<![\w.])create_app\s*\('),
-    re.compile(r'\bContactService\b'),
-]
-
-APP_IMPORT = re.compile(
-    r'^\s*(?:from\s+app(?:\.|\s)|import\s+app(?:\.|\s|$))'
-)
-
-
-def _strip_line_comment(line: str) -> str:
-    """Remove # comments outside of simple quotes (good enough for migrations)."""
-    in_single = False
-    in_double = False
-    out: list[str] = []
-    i = 0
-    while i < len(line):
-        ch = line[i]
-        if ch == "'" and not in_double:
-            in_single = not in_single
-            out.append(ch)
-        elif ch == '"' and not in_single:
-            in_double = not in_double
-            out.append(ch)
-        elif ch == '#' and not in_single and not in_double:
-            break
-        else:
-            out.append(ch)
-        i += 1
-    return ''.join(out)
 
 
 def load_allowlist(path: Path) -> set[str]:
@@ -69,24 +36,91 @@ def load_allowlist(path: Path) -> set[str]:
     return names
 
 
-def check_file(path: Path, allowlisted: bool) -> list[str]:
-    """Return human-readable violation strings for one revision file."""
-    text = path.read_text(encoding='utf-8')
-    violations: list[str] = []
-    for lineno, raw in enumerate(text.splitlines(), start=1):
-        code = _strip_line_comment(raw)
-        if not code.strip():
-            continue
-        for pat in BANNED_ALWAYS:
-            if pat.search(code):
-                violations.append(
-                    f'{path.name}:{lineno}: banned pattern {pat.pattern!r}: {raw.strip()}'
+def _call_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _call_name(node.value)
+        if base:
+            return f'{base}.{node.attr}'
+        return node.attr
+    return None
+
+
+class _PurityVisitor(ast.NodeVisitor):
+    def __init__(self, allowlisted: bool) -> None:
+        self.allowlisted = allowlisted
+        self.violations: list[tuple[int, str]] = []
+        # names that alias create_app
+        self._create_app_aliases: set[str] = {'create_app'}
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            root = alias.name.split('.', 1)[0]
+            asname = alias.asname or alias.name
+            if root == 'app' and not self.allowlisted:
+                self.violations.append(
+                    (node.lineno, f'app import not on purity allowlist: import {alias.name}')
                 )
-        if not allowlisted and APP_IMPORT.search(code):
-            violations.append(
-                f'{path.name}:{lineno}: app import not on purity allowlist: {raw.strip()}'
-            )
-    return violations
+            if alias.name == 'app' or alias.name.endswith('.create_app'):
+                # import app as x — create_app may be x.create_app
+                pass
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        mod = node.module or ''
+        if mod == 'app' or mod.startswith('app.'):
+            for alias in node.names:
+                if alias.name == 'create_app' or (alias.asname and alias.name == 'create_app'):
+                    bound = alias.asname or 'create_app'
+                    self._create_app_aliases.add(bound)
+                    self.violations.append(
+                        (node.lineno, f'banned create_app import: from {mod} import {alias.name}')
+                    )
+                elif alias.name == 'ContactService' or (
+                    alias.asname == 'ContactService' or alias.name.endswith('ContactService')
+                ):
+                    self.violations.append(
+                        (node.lineno, f'banned ContactService import: from {mod} import {alias.name}')
+                    )
+                elif not self.allowlisted:
+                    self.violations.append(
+                        (
+                            node.lineno,
+                            f'app import not on purity allowlist: from {mod} import {alias.name}',
+                        )
+                    )
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        name = _call_name(node.func)
+        if name:
+            leaf = name.rsplit('.', 1)[-1]
+            if leaf == 'create_app' or name in self._create_app_aliases:
+                self.violations.append(
+                    (node.lineno, f'banned create_app() call: {name}(...)')
+                )
+            if leaf == 'ContactService' or name.endswith('.ContactService'):
+                self.violations.append(
+                    (node.lineno, f'banned ContactService use: {name}(...)')
+                )
+        self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, ast.Load) and node.id == 'ContactService':
+            self.violations.append((node.lineno, 'banned ContactService reference'))
+        self.generic_visit(node)
+
+
+def check_file(path: Path, allowlisted: bool) -> list[str]:
+    text = path.read_text(encoding='utf-8')
+    try:
+        tree = ast.parse(text, filename=str(path))
+    except SyntaxError as exc:
+        return [f'{path.name}: syntax error: {exc}']
+    visitor = _PurityVisitor(allowlisted=allowlisted)
+    visitor.visit(tree)
+    return [f'{path.name}:{lineno}: {msg}' for lineno, msg in visitor.violations]
 
 
 def check_tree(versions_dir: Path, allowlist_path: Path) -> list[str]:

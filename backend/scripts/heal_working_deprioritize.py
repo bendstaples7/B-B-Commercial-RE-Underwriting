@@ -31,26 +31,37 @@ def main() -> None:
     args = parser.parse_args()
 
     from app import create_app
-    from app.services.lead_status_service import heal_working_deprioritize_leads
+    from app.services.lead_status_service import (
+        _has_manual_deprioritize,
+        heal_working_deprioritize_leads,
+        lead_has_active_outreach_work,
+    )
+    from app.models import Lead
 
-    app = create_app()
+    # Match Deploy / production: avoid development auto-migrate side effects.
+    app = create_app('production')
     with app.app_context():
         if args.dry_run:
-            from app.models import Lead
-            from app import db
-            count = (
-                db.session.query(Lead)
-                .filter(Lead.lead_status == 'deprioritize')
-                .count()
-            )
-            print(json.dumps({'deprioritize_count': count, 'dry_run': True}))
+            candidates = 0
+            parked = Lead.query.filter_by(lead_status='deprioritize').all()
+            for lead in parked:
+                if _has_manual_deprioritize(lead.id):
+                    continue
+                if not lead_has_active_outreach_work(lead.id):
+                    continue
+                candidates += 1
+            print(json.dumps({
+                'deprioritize_total': len(parked),
+                'eligible_candidates': candidates,
+                'dry_run': True,
+            }))
             print('Dry-run only — pass --apply to write')
             return
 
         healed = heal_working_deprioritize_leads(
             commit=True,
             push_hubspot=False,
-            recompute_action=False,
+            recompute_action=True,
         )
         print(json.dumps({'healed': healed}, default=str))
 

@@ -107,11 +107,14 @@ this via `python scripts/check_migration_purity.py`.
 
 **Deploy migration guards** (step 4 in `scripts/deploy.sh`):
 
-1. **Pre-migration lock gate** — refuses `flask db upgrade` if any session is
-   `idle in transaction` longer than ~60s or holds `AccessExclusiveLock` on
-   core tables. Fail only (no auto-kill); the cron watchdog owns terminates.
+1. **Pre-migration lock gate (4b before 4a)** — refuses further migrate work if
+   any session is `idle in transaction` longer than ~60s or holds
+   `AccessExclusiveLock` on **any user-schema relation**. Fail only (no
+   auto-kill); the cron watchdog owns terminates. Runs before f9 dedup cleanup
+   so merge queries cannot hang on existing locks.
 2. **Upgrade timeout** — `BB_MIGRATE_TIMEOUT_SEC` (default 900). On timeout,
-   Deploy aborts and prints the last revision from `BB_MIGRATE_LAST_REV_FILE`.
+   Deploy aborts and prints the last revision from `BB_MIGRATE_LAST_REV_FILE`
+   (written after each revision applies).
 3. **Post-migrate DB smoke** — cheap `contacts`/`leads` reads plus lock checks
    that do not depend on gunicorn `/api/health`.
 

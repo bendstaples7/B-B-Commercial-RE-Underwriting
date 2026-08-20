@@ -384,7 +384,7 @@ def _make_on_version_apply():
                 state['rev'],
                 now - state['t0'],
             )
-        logger.info('Alembic starting revision %s', rev)
+        logger.info('Alembic applied revision %s', rev)
         state['t0'] = now
         state['rev'] = rev
         marker_path = os.environ.get('BB_MIGRATE_LAST_REV_FILE')
@@ -398,7 +398,7 @@ def _make_on_version_apply():
     def finalize():
         if state['t0'] is not None and state['rev'] is not None:
             logger.info(
-                'Alembic finished revision %s in %.2fs',
+                'Alembic finished revision %s (callback span %.2fs; on_version_apply is post-apply)',
                 state['rev'],
                 time.monotonic() - state['t0'],
             )

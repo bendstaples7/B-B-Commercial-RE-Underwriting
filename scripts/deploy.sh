@@ -354,45 +354,15 @@ FLASK_ENV=production flask db check 2>/dev/null || {
     echo "    (flask db check may not be available in all Flask-Migrate versions)"
 }
 
-echo "==> (4a) Pre-migration dedup cleanup"
-# Migration f9a0b1c2d3e4 requires zero owner+street duplicate clusters.
-# Production legacy data must be merged before the unique index is created.
-F9_PENDING_RC=0
-python3.11 scripts/preflight_dedup_migration.py --f9-pending || F9_PENDING_RC=$?
-if [ "$F9_PENDING_RC" -gt 1 ]; then
-    echo "FAILED: preflight_dedup_migration.py --f9-pending exited $F9_PENDING_RC"
-    exit 1
-fi
-if [ "$F9_PENDING_RC" -eq 0 ]; then
-    echo "    f9 dedup index migration pending — running preflight"
-    python3.11 scripts/preflight_dedup_migration.py --report || true
-    if ! python3.11 scripts/preflight_dedup_migration.py --verify; then
-        echo "    Duplicate clusters detected — running merge_duplicate_leads --mode dedup"
-        python3.11 scripts/merge_duplicate_leads.py --mode dedup || {
-            echo "FAILED: dedup merge"
-            exit 1
-        }
-        python3.11 scripts/preflight_dedup_migration.py --verify || {
-            echo "FAILED: duplicate clusters remain after dedup merge"
-            python3.11 scripts/preflight_dedup_migration.py --report
-            exit 1
-        }
-    else
-        echo "    No duplicate clusters — merge not required"
-    fi
-else
-    echo "    f9 dedup migration already applied — skipping dedup cleanup"
-fi
-
 echo "==> (4b) Pre-migration lock gate (fail only — no auto-kill)"
-# Refuse to start upgrade if idle-in-transaction or AccessExclusiveLock already present.
+# Run BEFORE f9 dedup cleanup so merge queries cannot hang on existing locks.
 LOCK_GUARD_PY="${APP_DIR}/scripts/pg_lock_guard.py"
 if [[ ! -f "${LOCK_GUARD_PY}" ]]; then
     LOCK_GUARD_PY="/home/deploy/pg_lock_guard.py"
 fi
 if [[ ! -f "${LOCK_GUARD_PY}" ]]; then
     echo "FAILED: pg_lock_guard.py not found (expected under ${APP_DIR}/scripts/)"
-    exit 1
+    rollback 1
 fi
 if ! python3.11 "${LOCK_GUARD_PY}" preflight; then
     echo "FAILED: pre-migration lock gate — DB already has idle-in-transaction or AccessExclusiveLock"
@@ -402,7 +372,37 @@ if ! python3.11 "${LOCK_GUARD_PY}" preflight; then
         send_alert "Deploy blocked: Postgres lock gate" \
             "flask db upgrade refused on $(hostname): idle-in-transaction or AccessExclusiveLock present. Watchdog owns kills; re-run Deploy after locks clear." || true
     fi
-    exit 1
+    rollback 1
+fi
+
+echo "==> (4a) Pre-migration dedup cleanup"
+# Migration f9a0b1c2d3e4 requires zero owner+street duplicate clusters.
+# Production legacy data must be merged before the unique index is created.
+F9_PENDING_RC=0
+python3.11 scripts/preflight_dedup_migration.py --f9-pending || F9_PENDING_RC=$?
+if [ "$F9_PENDING_RC" -gt 1 ]; then
+    echo "FAILED: preflight_dedup_migration.py --f9-pending exited $F9_PENDING_RC"
+    rollback 1
+fi
+if [ "$F9_PENDING_RC" -eq 0 ]; then
+    echo "    f9 dedup index migration pending — running preflight"
+    python3.11 scripts/preflight_dedup_migration.py --report || true
+    if ! python3.11 scripts/preflight_dedup_migration.py --verify; then
+        echo "    Duplicate clusters detected — running merge_duplicate_leads --mode dedup"
+        python3.11 scripts/merge_duplicate_leads.py --mode dedup || {
+            echo "FAILED: dedup merge"
+            rollback 1
+        }
+        python3.11 scripts/preflight_dedup_migration.py --verify || {
+            echo "FAILED: duplicate clusters remain after dedup merge"
+            python3.11 scripts/preflight_dedup_migration.py --report
+            rollback 1
+        }
+    else
+        echo "    No duplicate clusters — merge not required"
+    fi
+else
+    echo "    f9 dedup migration already applied — skipping dedup cleanup"
 fi
 
 echo "==> (4c) flask db upgrade head (wall-clock timeout)"
@@ -421,12 +421,12 @@ if [ "$UPGRADE_RC" -eq 124 ] || [ "$UPGRADE_RC" -eq 137 ]; then
         LAST_REV="$(cat "${BB_MIGRATE_LAST_REV_FILE}" 2>/dev/null || echo unknown)"
     fi
     echo "FAILED: flask db upgrade timed out after ${BB_MIGRATE_TIMEOUT_SEC}s (stuck migration aborted)"
-    echo "    Last revision started (if logged): ${LAST_REV}"
-    exit 1
+    echo "    Last revision applied (if logged): ${LAST_REV}"
+    rollback 1
 fi
 if [ "$UPGRADE_RC" -ne 0 ]; then
     echo "FAILED: flask db upgrade (exit ${UPGRADE_RC})"
-    exit 1
+    rollback 1
 fi
 echo "    Migrations applied"
 
@@ -439,7 +439,7 @@ if ! python3.11 "${LOCK_GUARD_PY}" smoke; then
         send_alert "Deploy failed: post-migrate DB smoke" \
             "flask db upgrade finished on $(hostname) but DB smoke failed (locks or unreadable contacts/leads)." || true
     fi
-    exit 1
+    rollback 1
 fi
 
 cd ..

@@ -37,7 +37,8 @@ def main() -> None:
     from app import create_app
     from app.services.contact_service import ContactService
 
-    app = create_app()
+    # Match Deploy / production: avoid development auto-migrate side effects.
+    app = create_app('production')
     with app.app_context():
         result = ContactService().heal_same_person_owner_cluster(
             args.lead_id,
