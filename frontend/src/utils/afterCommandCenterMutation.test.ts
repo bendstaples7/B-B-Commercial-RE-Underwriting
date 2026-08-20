@@ -25,6 +25,53 @@ describe('afterCommandCenterMutation', () => {
     expect(navigate).toHaveBeenCalledWith('/leads/11130')
   })
 
+  it('still navigates when invalidating a commandCenter key rejects', async () => {
+    const invalidateQueries = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('winner cache unavailable'))
+      .mockResolvedValueOnce(undefined)
+    const navigate = vi.fn()
+    const queryClient = { invalidateQueries } as never
+
+    await afterCommandCenterMutation(queryClient, {
+      winnerId: 11130,
+      loserId: 2036,
+      navigate,
+    })
+
+    expect(invalidateQueries).toHaveBeenCalledTimes(2)
+    expect(navigate).toHaveBeenCalledWith('/leads/11130')
+  })
+
+  it('preserves queue URL, queue state, and destination flash when navigating', async () => {
+    const invalidateQueries = vi.fn().mockResolvedValue(undefined)
+    const navigate = vi.fn()
+    const queryClient = { invalidateQueries } as never
+    const fromQueue = {
+      key: 'todays-action',
+      label: "Today's Action",
+      outreach: 'call_now',
+      visitedHistory: [10, 20],
+      forwardStack: [40],
+    }
+    const flashSnackbar = { message: 'Records combined.' }
+
+    await afterCommandCenterMutation(queryClient, {
+      winnerId: 11130,
+      loserId: 2036,
+      navigate,
+      fromQueue,
+      flashSnackbar,
+    })
+
+    expect(navigate).toHaveBeenCalledWith('/leads/11130?queue=todays-action', {
+      state: {
+        fromQueue,
+        flashSnackbar,
+      },
+    })
+  })
+
   it('still invalidates winner when already on that lead (no loser)', async () => {
     const invalidateQueries = vi.fn().mockResolvedValue(undefined)
     const navigate = vi.fn()

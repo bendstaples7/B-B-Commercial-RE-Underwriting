@@ -2156,10 +2156,14 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               )
               .filter(Boolean)}
             onMerged={async ({ winnerId, loserId }) => {
+              const mergeFlash = { message: 'Records combined.' }
+              setActivitySnackbar({ open: true, ...mergeFlash })
               await afterCommandCenterMutation(queryClient, {
                 winnerId,
                 loserId,
                 navigate,
+                fromQueue,
+                flashSnackbar: winnerId === leadId ? undefined : mergeFlash,
               })
             }}
           />
