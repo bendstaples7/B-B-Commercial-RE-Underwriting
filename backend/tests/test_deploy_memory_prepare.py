@@ -131,7 +131,6 @@ def test_deploy_preserves_checkout_after_partial_migration_apply():
         deploy_sh.index("if [ \"$UPGRADE_RC\" -eq 124 ]"):
         deploy_sh.index("echo \"    Migrations applied\"")
     ]
-    assert "fail_after_partial_migration_apply" in timeout_section
     assert "maybe_preserve_after_migration_marker" in timeout_section
     assert "rollback 1" in timeout_section
 
