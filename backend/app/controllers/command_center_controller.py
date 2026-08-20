@@ -843,14 +843,16 @@ def get_command_center(lead_id: int):
         from app.controllers.property_controller import _current_user_is_admin
         from app.services.lead_dedup_service import same_address_lead_summaries
         current_user_id = getattr(g, 'user_id', None)
+        include_all_same_address_owners = _current_user_is_admin()
         same_address_owner_scope = (
             None
-            if _current_user_is_admin()
+            if include_all_same_address_owners
             else (current_user_id or '__unauthorized__')
         )
         same_address_leads = same_address_lead_summaries(
             lead,
             owner_user_id=same_address_owner_scope,
+            include_all_owners=include_all_same_address_owners,
         )
     except Exception:  # noqa: BLE001 — never block command center
         logger.exception('same_address_lead_summaries failed for lead %s', lead_id)

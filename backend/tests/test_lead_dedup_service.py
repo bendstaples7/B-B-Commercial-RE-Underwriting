@@ -670,6 +670,56 @@ class TestSameBuildingBannerAndAdditivePeople:
             assert same_unit.id in ids
             assert other_unit.id not in ids
 
+    def test_same_address_summaries_default_to_current_lead_owner_scope(self, app):
+        from app.services.lead_dedup_service import (
+            refresh_lead_dedup_fields,
+            same_address_lead_summaries,
+        )
+
+        with app.app_context():
+            lead = Lead(
+                property_street='100 Scoped Ave',
+                owner_first_name='Scoped',
+                owner_last_name='Owner',
+                owner_user_id='user-1',
+            )
+            same_owner = Lead(
+                property_street='100 Scoped Ave',
+                owner_first_name='Same',
+                owner_last_name='Owner',
+                owner_user_id='user-1',
+            )
+            other_owner = Lead(
+                property_street='100 Scoped Ave',
+                owner_first_name='Other',
+                owner_last_name='Owner',
+                owner_user_id='user-2',
+            )
+            db.session.add_all([lead, same_owner, other_owner])
+            for item in (lead, same_owner, other_owner):
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+
+            ids = {row['id'] for row in same_address_lead_summaries(lead)}
+            assert same_owner.id in ids
+            assert other_owner.id not in ids
+
+    def test_same_address_summaries_without_owner_scope_fail_closed(self, app):
+        from app.services.lead_dedup_service import (
+            refresh_lead_dedup_fields,
+            same_address_lead_summaries,
+        )
+
+        with app.app_context():
+            lead = Lead(property_street='100 Unowned Ave')
+            twin = Lead(property_street='100 Unowned Ave')
+            db.session.add_all([lead, twin])
+            for item in (lead, twin):
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+
+            assert same_address_lead_summaries(lead) == []
+
     def test_merge_keeps_edwin_and_unions_yoko_phones(self, app):
         from app.models.contact_phone import ContactPhone
         from app.models.property_contact import PropertyContact

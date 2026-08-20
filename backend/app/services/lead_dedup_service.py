@@ -625,12 +625,18 @@ def same_address_lead_summaries(
     *,
     limit: int = 8,
     owner_user_id: str | None = None,
+    include_all_owners: bool = False,
 ) -> list[dict[str, Any]]:
     """Skinny same-building twins for the command-center merge banner."""
+    scoped_owner_user_id = owner_user_id
+    if not include_all_owners:
+        scoped_owner_user_id = scoped_owner_user_id or getattr(lead, 'owner_user_id', None)
+        if not scoped_owner_user_id:
+            return []
     siblings = find_same_building_leads(
         lead,
         limit=limit,
-        owner_user_id=owner_user_id,
+        owner_user_id=scoped_owner_user_id,
     )
     if not siblings:
         return []
