@@ -90,7 +90,8 @@ def test_pg_idle_xact_watchdog_wrapper_is_bounded_and_alerts_failures():
         encoding="utf-8"
     )
     assert "source \"${APP_DIR}/backend/.env\"" not in watchdog
-    assert "DATABASE_URL=\"$(" in watchdog
+    assert "DATABASE_URL_LINE=\"$(" in watchdog
+    assert "grep -E '^[[:space:]]*DATABASE_URL=' \"$ENV_FILE\" | head -1 || true" in watchdog
     assert "unknown argument" in watchdog
     assert "flock -n 9" in watchdog
     assert "timeout --signal=TERM" in watchdog
@@ -110,3 +111,28 @@ def test_deploy_lock_gate_runs_before_dedup_and_rolls_back():
     assert "exit 1" not in lock_section
     dedup_section = deploy_sh[dedup_idx:deploy_sh.index("flask db upgrade head")]
     assert "timeout --signal=TERM" in dedup_section
+    assert "DEDUP_VERIFY_RC" in dedup_section
+    assert "DEDUP_VERIFY_RC\" -gt 1" in dedup_section
+    assert "Duplicate clusters detected" in dedup_section
+
+
+def test_deploy_preserves_checkout_after_partial_migration_apply():
+    deploy_sh = (REPO_ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    assert "fail_after_partial_migration_apply" in deploy_sh
+    assert "Not rolling back checkout because Alembic committed at least one revision" in deploy_sh
+    timeout_section = deploy_sh[
+        deploy_sh.index("if [ \"$UPGRADE_RC\" -eq 124 ]"):
+        deploy_sh.index("echo \"    Migrations applied\"")
+    ]
+    assert "fail_after_partial_migration_apply" in timeout_section
+    assert "rollback 1" in timeout_section
+
+
+def test_one_shot_heal_scripts_force_production_env():
+    for rel in (
+        "backend/scripts/heal_working_deprioritize.py",
+        "backend/scripts/heal_same_person_owners.py",
+    ):
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        assert "os.environ['FLASK_ENV'] = 'production'" in text
+        assert "create_app('production')" in text

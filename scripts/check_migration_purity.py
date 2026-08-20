@@ -51,15 +51,33 @@ class _PurityVisitor(ast.NodeVisitor):
     def __init__(self, allowlisted: bool) -> None:
         self.allowlisted = allowlisted
         self.violations: list[tuple[int, str]] = []
+        self._seen_violations: set[tuple[int, str]] = set()
         # names that alias create_app
         self._create_app_aliases: set[str] = {'create_app'}
+        self._contact_service_aliases: set[str] = {'ContactService'}
+
+    def _add_violation(self, lineno: int, key: str, message: str) -> None:
+        marker = (lineno, key)
+        if marker in self._seen_violations:
+            return
+        self._seen_violations.add(marker)
+        self.violations.append((lineno, message))
+
+    def _add_contact_service_violation(self, lineno: int, name: str) -> None:
+        self._add_violation(
+            lineno,
+            'ContactService',
+            f'banned ContactService use: {name}',
+        )
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             root = alias.name.split('.', 1)[0]
             if root == 'app' and not self.allowlisted:
-                self.violations.append(
-                    (node.lineno, f'app import not on purity allowlist: import {alias.name}')
+                self._add_violation(
+                    node.lineno,
+                    f'app-import:{alias.name}',
+                    f'app import not on purity allowlist: import {alias.name}',
                 )
         self.generic_visit(node)
 
@@ -70,22 +88,38 @@ class _PurityVisitor(ast.NodeVisitor):
                 if alias.name == 'create_app' or (alias.asname and alias.name == 'create_app'):
                     bound = alias.asname or 'create_app'
                     self._create_app_aliases.add(bound)
-                    self.violations.append(
-                        (node.lineno, f'banned create_app import: from {mod} import {alias.name}')
+                    self._add_violation(
+                        node.lineno,
+                        'create_app',
+                        f'banned create_app import: from {mod} import {alias.name}',
                     )
                 elif alias.name == 'ContactService' or (
                     alias.asname == 'ContactService' or alias.name.endswith('ContactService')
                 ):
-                    self.violations.append(
-                        (node.lineno, f'banned ContactService import: from {mod} import {alias.name}')
+                    bound = alias.asname or alias.name
+                    self._contact_service_aliases.add(bound)
+                    self._add_contact_service_violation(
+                        node.lineno,
+                        f'from {mod} import {alias.name}',
                     )
                 elif not self.allowlisted:
-                    self.violations.append(
-                        (
-                            node.lineno,
-                            f'app import not on purity allowlist: from {mod} import {alias.name}',
-                        )
+                    self._add_violation(
+                        node.lineno,
+                        f'app-import:{mod}.{alias.name}',
+                        f'app import not on purity allowlist: from {mod} import {alias.name}',
                     )
+        self.generic_visit(node)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        value_name = _call_name(node.value)
+        if value_name and (
+            value_name.endswith('.ContactService')
+            or value_name in self._contact_service_aliases
+        ):
+            self._add_contact_service_violation(node.lineno, value_name)
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self._contact_service_aliases.add(target.id)
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -93,18 +127,28 @@ class _PurityVisitor(ast.NodeVisitor):
         if name:
             leaf = name.rsplit('.', 1)[-1]
             if leaf == 'create_app' or name in self._create_app_aliases:
-                self.violations.append(
-                    (node.lineno, f'banned create_app() call: {name}(...)')
+                self._add_violation(
+                    node.lineno,
+                    'create_app',
+                    f'banned create_app() call: {name}(...)',
                 )
-            if leaf == 'ContactService' or name.endswith('.ContactService'):
-                self.violations.append(
-                    (node.lineno, f'banned ContactService use: {name}(...)')
-                )
+            if (
+                leaf == 'ContactService'
+                or name.endswith('.ContactService')
+                or name in self._contact_service_aliases
+            ):
+                self._add_contact_service_violation(node.lineno, f'{name}(...)')
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        name = _call_name(node)
+        if isinstance(node.ctx, ast.Load) and name and name.endswith('.ContactService'):
+            self._add_contact_service_violation(node.lineno, name)
         self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:
-        if isinstance(node.ctx, ast.Load) and node.id == 'ContactService':
-            self.violations.append((node.lineno, 'banned ContactService reference'))
+        if isinstance(node.ctx, ast.Load) and node.id in self._contact_service_aliases:
+            self._add_contact_service_violation(node.lineno, node.id)
         self.generic_visit(node)
 
 

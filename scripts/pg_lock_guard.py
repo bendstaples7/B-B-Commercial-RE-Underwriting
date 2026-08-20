@@ -98,6 +98,7 @@ def _fetch_blockers(cur, grace_sec: int) -> list[dict[str, Any]]:
           AND l.mode = 'AccessExclusiveLock'
           AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
           AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+          AND n.nspname !~ '^pg_(toast_)?temp_[0-9]+$'
           AND a.datname = current_database()
           AND a.pid <> pg_backend_pid()
         ORDER BY a.pid
@@ -167,6 +168,7 @@ def _watchdog_targets(cur, excl_sec: int, any_sec: int) -> list[dict[str, Any]]:
             SELECT a.pid,
                    a.usename,
                    a.state,
+                   a.backend_start,
                    EXTRACT(EPOCH FROM (now() - a.xact_start)) AS xact_age_sec,
                    left(a.query, 200) AS query,
                    EXISTS (
@@ -183,7 +185,7 @@ def _watchdog_targets(cur, excl_sec: int, any_sec: int) -> list[dict[str, Any]]:
               AND a.state = 'idle in transaction'
               AND a.xact_start IS NOT NULL
         )
-        SELECT pid, usename, state, xact_age_sec, query, holds_exclusive
+        SELECT pid, usename, state, backend_start, xact_age_sec, query, holds_exclusive
         FROM idle
         WHERE (holds_exclusive AND xact_age_sec >= %s)
            OR (xact_age_sec >= %s)
@@ -197,14 +199,21 @@ def _watchdog_targets(cur, excl_sec: int, any_sec: int) -> list[dict[str, Any]]:
             'pid': r[0],
             'usename': r[1],
             'state': r[2],
-            'xact_age_sec': float(r[3] or 0),
-            'query': r[4],
-            'holds_exclusive': bool(r[5]),
+            'backend_start': r[3],
+            'xact_age_sec': float(r[4] or 0),
+            'query': r[5],
+            'holds_exclusive': bool(r[6]),
         })
     return out
 
 
-def _still_dangerous(cur, pid: int, excl_sec: int, any_sec: int) -> bool:
+def _still_dangerous(
+    cur,
+    pid: int,
+    backend_start: Any,
+    excl_sec: int,
+    any_sec: int,
+) -> bool:
     """Re-check immediately before terminate so we do not kill a recycled PID."""
     cur.execute(
         """
@@ -218,11 +227,12 @@ def _still_dangerous(cur, pid: int, excl_sec: int, any_sec: int) -> bool:
                ) AS holds_exclusive
         FROM pg_stat_activity a
         WHERE a.pid = %s
+          AND a.backend_start = %s
           AND a.datname = current_database()
           AND a.state = 'idle in transaction'
           AND a.xact_start IS NOT NULL
         """,
-        (pid,),
+        (pid, backend_start),
     )
     row = cur.fetchone()
     if not row:
@@ -254,7 +264,7 @@ def cmd_watchdog(args: argparse.Namespace) -> int:
         skipped = 0
         failed = 0
         for t in targets:
-            if not _still_dangerous(cur, t['pid'], excl_sec, any_sec):
+            if not _still_dangerous(cur, t['pid'], t['backend_start'], excl_sec, any_sec):
                 print(f"skip pid={t['pid']} (no longer dangerous idle-in-xact)")
                 skipped += 1
                 continue

@@ -89,6 +89,25 @@ rollback() {
 }
 trap 'rollback $?' ERR
 
+fail_after_partial_migration_apply() {
+    local exit_code="${1:-1}"
+    local reason="$2"
+    local last_rev="$3"
+    cd "$APP_DIR"
+    echo "FAILED: ${reason}"
+    echo "    Last revision applied in this run: ${last_rev}"
+    echo "    Not rolling back checkout because Alembic committed at least one revision."
+    echo "    Preserving target code on disk to avoid running older code against a newer schema."
+    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Migration failure after partial apply at ${last_rev}; preserved ${TARGET_SHA}" >> "$ROLLBACK_LOG"
+    if [[ -f /home/deploy/ops-alert.sh ]]; then
+        # shellcheck source=/dev/null
+        source /home/deploy/ops-alert.sh
+        send_alert "Deploy failed after partial migration apply" \
+            "Deploy on $(hostname) failed after Alembic applied ${last_rev}. Preserved checkout ${TARGET_SHA}; manual repair required. Reason: ${reason}" || true
+    fi
+    exit "$exit_code"
+}
+
 # Celery is stopped before the memory guard to free worker RSS on the 2GB VPS.
 # Durable marker + EXIT trap restore Celery if deploy exits before step 7
 # (memory preflight failure, cancelled SSH). Liveness/ensure honor the marker mtime.
@@ -390,21 +409,33 @@ if [ "$F9_PENDING_RC" -eq 0 ]; then
     echo "    f9 dedup index migration pending — running preflight"
     timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
         python3.11 scripts/preflight_dedup_migration.py --report || true
-    if ! timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
-        python3.11 scripts/preflight_dedup_migration.py --verify; then
+    DEDUP_VERIFY_RC=0
+    timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
+        python3.11 scripts/preflight_dedup_migration.py --verify || DEDUP_VERIFY_RC=$?
+    if [ "$DEDUP_VERIFY_RC" -gt 1 ]; then
+        echo "FAILED: preflight_dedup_migration.py --verify exited $DEDUP_VERIFY_RC"
+        rollback 1
+    fi
+    if [ "$DEDUP_VERIFY_RC" -eq 1 ]; then
         echo "    Duplicate clusters detected — running merge_duplicate_leads --mode dedup"
         timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
             python3.11 scripts/merge_duplicate_leads.py --mode dedup || {
                 echo "FAILED: dedup merge"
                 rollback 1
             }
+        DEDUP_VERIFY_AFTER_RC=0
         timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
-            python3.11 scripts/preflight_dedup_migration.py --verify || {
-                echo "FAILED: duplicate clusters remain after dedup merge"
-                timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
-                    python3.11 scripts/preflight_dedup_migration.py --report || true
+            python3.11 scripts/preflight_dedup_migration.py --verify || DEDUP_VERIFY_AFTER_RC=$?
+        if [ "$DEDUP_VERIFY_AFTER_RC" -ne 0 ]; then
+            if [ "$DEDUP_VERIFY_AFTER_RC" -gt 1 ]; then
+                echo "FAILED: post-merge preflight_dedup_migration.py --verify exited $DEDUP_VERIFY_AFTER_RC"
                 rollback 1
-            }
+            fi
+            echo "FAILED: duplicate clusters remain after dedup merge"
+            timeout --signal=TERM --kill-after=30 "${BB_DEDUP_PREFLIGHT_TIMEOUT_SEC}" \
+                python3.11 scripts/preflight_dedup_migration.py --report || true
+            rollback 1
+        fi
     else
         echo "    No duplicate clusters — merge not required"
     fi
@@ -427,11 +458,27 @@ if [ "$UPGRADE_RC" -eq 124 ] || [ "$UPGRADE_RC" -eq 137 ]; then
     if [[ -f "${BB_MIGRATE_LAST_REV_FILE}" ]]; then
         LAST_REV="$(cat "${BB_MIGRATE_LAST_REV_FILE}" 2>/dev/null || echo unknown)"
     fi
+    if [[ "$LAST_REV" != "(unknown)" && "$LAST_REV" != "unknown" && -n "$LAST_REV" ]]; then
+        fail_after_partial_migration_apply \
+            1 \
+            "flask db upgrade timed out after ${BB_MIGRATE_TIMEOUT_SEC}s" \
+            "$LAST_REV"
+    fi
     echo "FAILED: flask db upgrade timed out after ${BB_MIGRATE_TIMEOUT_SEC}s (stuck migration aborted)"
-    echo "    Last revision applied (if logged): ${LAST_REV}"
+    echo "    No completed revision was logged in this deploy run"
     rollback 1
 fi
 if [ "$UPGRADE_RC" -ne 0 ]; then
+    LAST_REV="(unknown)"
+    if [[ -f "${BB_MIGRATE_LAST_REV_FILE}" ]]; then
+        LAST_REV="$(cat "${BB_MIGRATE_LAST_REV_FILE}" 2>/dev/null || echo unknown)"
+    fi
+    if [[ "$LAST_REV" != "(unknown)" && "$LAST_REV" != "unknown" && -n "$LAST_REV" ]]; then
+        fail_after_partial_migration_apply \
+            "$UPGRADE_RC" \
+            "flask db upgrade failed with exit ${UPGRADE_RC}" \
+            "$LAST_REV"
+    fi
     echo "FAILED: flask db upgrade (exit ${UPGRADE_RC})"
     rollback 1
 fi

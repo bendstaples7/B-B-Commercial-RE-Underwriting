@@ -38,6 +38,7 @@ def main() -> None:
     from app.services.contact_service import ContactService
 
     # Match Deploy / production: avoid development auto-migrate side effects.
+    os.environ['FLASK_ENV'] = 'production'
     app = create_app('production')
     with app.app_context():
         result = ContactService().heal_same_person_owner_cluster(

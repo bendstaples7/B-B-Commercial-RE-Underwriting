@@ -10,6 +10,7 @@ from app.models.mail_queue_item import MailQueueItem
 from app.services.hubspot_matcher_service import HubSpotMatcherService
 from app.services.lead_scoring_engine import LeadScoringEngine
 from app.services.lead_status_service import (
+    count_working_deprioritize_heal_candidates,
     heal_working_deprioritize_leads,
     working_deprioritize_heal_candidates,
 )
@@ -237,6 +238,7 @@ class TestUnparkDeprioritizeHeal:
 
             candidates = working_deprioritize_heal_candidates()
             assert [lead.id for lead in candidates] == [eligible.id]
+            assert count_working_deprioritize_heal_candidates() == 1
 
     def test_heal_ignores_deleted_manual_deprioritize(self, app):
         with app.app_context():
@@ -328,14 +330,51 @@ class TestUnparkDeprioritizeHeal:
             db.session.refresh(lead)
             assert lead.lead_status == 'mailing_no_contact_made'
 
+    def test_heal_commits_unpark_before_scoring_refresh_rollback(self, app):
+        with app.app_context():
+            from unittest.mock import patch
+
+            lead = Lead(
+                property_street='Refresh Rollback Park St',
+                lead_status='deprioritize',
+            )
+            db.session.add(lead)
+            db.session.flush()
+            db.session.add(LeadTask(
+                lead_id=lead.id,
+                task_type='call_owner_today',
+                title='Follow up',
+                status='open',
+                due_date=date.today(),
+                created_by='test',
+            ))
+            db.session.commit()
+
+            def rollback_refresh(_lead_id):
+                db.session.rollback()
+
+            with patch(
+                'app.services.lead_refresh.refresh_lead_scoring',
+                side_effect=rollback_refresh,
+            ):
+                healed = heal_working_deprioritize_leads(
+                    commit=True,
+                    recompute_action=True,
+                )
+
+            assert healed == 1
+            db.session.expire_all()
+            refreshed = db.session.get(Lead, lead.id)
+            assert refreshed.lead_status == 'mailing_no_contact_made'
+
     def test_standalone_heal_script_uses_production_and_recomputes(self):
         from pathlib import Path
 
         script = Path(__file__).resolve().parents[1] / 'scripts' / 'heal_working_deprioritize.py'
         text = script.read_text(encoding='utf-8')
-        assert "os.environ.setdefault('FLASK_ENV', 'production')" in text
+        assert "os.environ['FLASK_ENV'] = 'production'" in text
         assert "create_app('production')" in text
-        assert 'working_deprioritize_heal_candidates' in text
+        assert 'count_working_deprioritize_heal_candidates' in text
         assert 'recompute_action=True' in text
 
     def test_enqueue_unparks_deprioritize(self, app):

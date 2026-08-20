@@ -32,17 +32,17 @@ def main() -> None:
 
     from app import create_app
     from app.services.lead_status_service import (
+        count_working_deprioritize_heal_candidates,
         heal_working_deprioritize_leads,
-        working_deprioritize_heal_candidates,
     )
 
     # Match Deploy / production: avoid development auto-migrate side effects.
-    os.environ.setdefault('FLASK_ENV', 'production')
+    os.environ['FLASK_ENV'] = 'production'
     app = create_app('production')
     with app.app_context():
         if args.dry_run:
             print(json.dumps({
-                'eligible_candidates': len(working_deprioritize_heal_candidates()),
+                'eligible_candidates': count_working_deprioritize_heal_candidates(),
                 'dry_run': True,
             }))
             print('Dry-run only — pass --apply to write')

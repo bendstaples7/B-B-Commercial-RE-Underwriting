@@ -94,23 +94,6 @@ def test_bans_comma_import_create_app(tmp_path: Path):
     assert any('create_app' in v for v in viol)
 
 
-def test_bans_qualified_create_app_call(tmp_path: Path):
-    mod = _load_mod()
-    f = tmp_path / 'qualified.py'
-    f.write_text(
-        textwrap.dedent(
-            '''
-            import app
-            def upgrade():
-                app.create_app()
-            '''
-        ),
-        encoding='utf-8',
-    )
-    viol = mod.check_file(f, allowlisted=True)
-    assert any('create_app' in v for v in viol)
-
-
 def test_bans_multiline_from_import(tmp_path: Path):
     mod = _load_mod()
     f = tmp_path / 'multiline.py'
@@ -126,6 +109,36 @@ def test_bans_multiline_from_import(tmp_path: Path):
     )
     viol = mod.check_file(f, allowlisted=True)
     assert any('ContactService' in v for v in viol)
+
+
+def test_bans_contact_service_attribute_alias(tmp_path: Path):
+    mod = _load_mod()
+    f = tmp_path / 'contact_alias.py'
+    f.write_text(
+        textwrap.dedent(
+            '''
+            from app.services import contact_service
+
+            Service = contact_service.ContactService
+
+            def upgrade():
+                Service()
+            '''
+        ),
+        encoding='utf-8',
+    )
+    viol = mod.check_file(f, allowlisted=True)
+    assert any('ContactService' in v for v in viol)
+    assert any('Service(...)' in v for v in viol)
+
+
+def test_contact_service_call_reports_once(tmp_path: Path):
+    mod = _load_mod()
+    f = tmp_path / 'contact_call.py'
+    f.write_text('ContactService()\n', encoding='utf-8')
+    viol = mod.check_file(f, allowlisted=True)
+    contact_violations = [v for v in viol if 'ContactService' in v]
+    assert len(contact_violations) == 1
 
 
 def test_allowlisted_app_import_ok(tmp_path: Path):

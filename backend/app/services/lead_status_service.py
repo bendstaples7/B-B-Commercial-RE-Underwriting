@@ -166,7 +166,7 @@ def heal_working_deprioritize_leads(
     recompute_action: bool = True,
 ) -> int:
     """Unpark deprioritize leads that still have follow-up or mail work."""
-    healed = 0
+    healed_ids: list[int] = []
     for lead in working_deprioritize_heal_candidates():
         if unpark_deprioritize_for_active_work(
             lead,
@@ -177,23 +177,111 @@ def heal_working_deprioritize_leads(
             ),
             source='system',
             commit=False,
-            recompute_action=recompute_action,
+            recompute_action=False,
             push_hubspot=push_hubspot,
         ):
-            healed += 1
+            healed_ids.append(lead.id)
     if commit:
         db.session.commit()
-    return healed
+        if recompute_action:
+            from app.services.lead_refresh import refresh_lead_scoring
+            for lead_id in healed_ids:
+                refresh_lead_scoring(lead_id)
+    elif recompute_action and healed_ids:
+        logger.warning(
+            'Skipping scoring refresh for %d deprioritize heal(s) because commit=False',
+            len(healed_ids),
+        )
+    return len(healed_ids)
 
 
 def working_deprioritize_heal_candidates() -> list[Lead]:
     """Return parked leads that the deprioritize healer would unpark."""
-    parked = Lead.query.filter_by(lead_status='deprioritize').all()
-    return [
-        lead for lead in parked
-        if not _has_manual_deprioritize(lead.id)
-        and lead_has_active_outreach_work(lead.id)
+    candidate_ids = _working_deprioritize_heal_candidate_ids()
+    if not candidate_ids:
+        return []
+    leads = Lead.query.filter(Lead.id.in_(candidate_ids)).all()
+    by_id = {lead.id: lead for lead in leads}
+    return [by_id[lead_id] for lead_id in candidate_ids if lead_id in by_id]
+
+
+def count_working_deprioritize_heal_candidates() -> int:
+    """Count parked leads the deprioritize healer would unpark using batched queries."""
+    return len(_working_deprioritize_heal_candidate_ids())
+
+
+def _working_deprioritize_heal_candidate_ids() -> list[int]:
+    parked_ids = [
+        lead_id for (lead_id,) in (
+            db.session.query(Lead.id)
+            .filter(Lead.lead_status == 'deprioritize')
+            .all()
+        )
     ]
+    if not parked_ids:
+        return []
+
+    manual_ids = _manual_deprioritize_lead_ids(parked_ids)
+    eligible_pool = [lead_id for lead_id in parked_ids if lead_id not in manual_ids]
+    if not eligible_pool:
+        return []
+
+    active_ids = _active_outreach_work_lead_ids(eligible_pool)
+    return [lead_id for lead_id in eligible_pool if lead_id in active_ids]
+
+
+def _manual_deprioritize_lead_ids(lead_ids: list[int]) -> set[int]:
+    rows = (
+        LeadTimelineEntry.query.filter(
+            LeadTimelineEntry.lead_id.in_(lead_ids),
+            LeadTimelineEntry.event_type == 'status_changed',
+            LeadTimelineEntry.source == 'manual',
+            LeadTimelineEntry.is_deleted.is_(False),
+        )
+        .all()
+    )
+    out: set[int] = set()
+    for row in rows:
+        meta = row.event_metadata or {}
+        if meta.get('new_status') == 'deprioritize':
+            out.add(row.lead_id)
+    return out
+
+
+def _active_outreach_work_lead_ids(lead_ids: list[int]) -> set[int]:
+    from app.models.mail_queue_item import MailQueueItem
+    from app.utils.call_completable_task import (
+        is_call_completable_task,
+        is_legacy_entity_research_task,
+    )
+
+    active = {
+        lead_id for (lead_id,) in (
+            db.session.query(MailQueueItem.lead_id)
+            .filter(
+                MailQueueItem.lead_id.in_(lead_ids),
+                MailQueueItem.status == 'queued',
+            )
+            .all()
+        )
+    }
+    task_rows = (
+        db.session.query(LeadTask.lead_id, LeadTask.task_type, LeadTask.title)
+        .filter(
+            LeadTask.lead_id.in_(lead_ids),
+            LeadTask.status == 'open',
+        )
+        .all()
+    )
+    for lead_id, task_type, title in task_rows:
+        if is_legacy_entity_research_task(task_type, title):
+            continue
+        if task_type == 'add_to_mail_batch':
+            active.add(lead_id)
+            continue
+        if is_call_completable_task(task_type, title):
+            active.add(lead_id)
+    return active
 
 
 def apply_lead_status_change(

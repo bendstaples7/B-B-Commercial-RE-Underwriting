@@ -84,12 +84,17 @@ mark_alert_state() {
 if [[ -z "${DATABASE_URL:-}" ]]; then
     ENV_FILE="${APP_DIR}/backend/.env"
     if [[ -f "$ENV_FILE" ]]; then
-        DATABASE_URL="$(
-            grep -E '^[[:space:]]*DATABASE_URL=' "$ENV_FILE" | head -1 \
-                | sed -E 's/^[[:space:]]*DATABASE_URL=//' \
-                | sed -E 's/^["'\'']//; s/["'\'']$//'
+        DATABASE_URL_LINE="$(
+            grep -E '^[[:space:]]*DATABASE_URL=' "$ENV_FILE" | head -1 || true
         )"
-        export DATABASE_URL
+        if [[ -n "$DATABASE_URL_LINE" ]]; then
+            DATABASE_URL="$(
+                printf '%s\n' "$DATABASE_URL_LINE" \
+                    | sed -E 's/^[[:space:]]*DATABASE_URL=//' \
+                    | sed -E 's/^["'\'']//; s/["'\'']$//'
+            )"
+            export DATABASE_URL
+        fi
     fi
 fi
 
