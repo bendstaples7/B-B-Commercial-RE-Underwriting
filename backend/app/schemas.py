@@ -1643,6 +1643,7 @@ VALID_TIMELINE_EVENT_TYPES = [
     'task_snoozed', 'recommended_action_changed', 'status_changed',
     'hubspot_note', 'hubspot_call', 'hubspot_task', 'hubspot_deal_stage',
     'property_analysis_completed', 'lead_imported',
+    'category_changed', 'leads_merged',
 ]
 
 VALID_TIMELINE_SOURCES = ['manual', 'system', 'hubspot']
@@ -1720,6 +1721,17 @@ class LeadStatusUpdateSchema(RequestSchema):
     )
     actor = fields.String(load_default='anonymous')
     reason = fields.String(load_default=None, validate=validate.Length(max=500))
+
+
+VALID_LEAD_CATEGORIES = ['residential', 'commercial']
+
+
+class LeadCategoryUpdateSchema(RequestSchema):
+    """Validation schema for PATCH /api/leads/:id/category."""
+    lead_category = fields.String(
+        required=True,
+        validate=validate.OneOf(VALID_LEAD_CATEGORIES),
+    )
 
 
 class LogCallFollowUpSchema(RequestSchema):

@@ -18,6 +18,7 @@ import {
 } from '@/utils/formatters'
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
 import { formatNoteUnitMixLabel } from '@/utils/notePropertyFacts'
+import { LeadCategorySelector } from '@/components/LeadCategorySelector'
 
 const EM_DASH = '—'
 
@@ -202,11 +203,15 @@ export interface PropertyOverviewQuickStatsProps {
   commandCenterData: CommandCenterPayload
   /** Residential (no condo): center the 2×2 in the address↔score gap. */
   centerInGap?: boolean
+  leadId?: number
+  onCategoryChanged?: (next: 'residential' | 'commercial') => void | Promise<void>
 }
 
 export function PropertyOverviewQuickStats({
   commandCenterData,
   centerInGap = false,
+  leadId,
+  onCategoryChanged,
 }: PropertyOverviewQuickStatsProps) {
   const estValue = formatMoneyValue(commandCenterData.assessed_value ?? null)
   const lastSale = resolveLastSaleCell(commandCenterData)
@@ -268,6 +273,7 @@ export function PropertyOverviewQuickStats({
       sx={centerInGap ? ccHeaderQuickStatsCenteredSx : ccHeaderQuickStatsSx}
     >
       {cells.map((cell) => {
+        const isCategoryControl = cell.id === 'category' && typeof leadId === 'number'
         const body = (
           <Box
             data-testid={`quick-stat-${cell.id}`}
@@ -280,26 +286,34 @@ export function PropertyOverviewQuickStats({
             }}
           >
             <Typography sx={{ ...ccKpiLabelSx, fontSize: '0.65rem' }}>{cell.label}</Typography>
-            <Typography
-              data-testid={`quick-stat-${cell.id}-value`}
-              sx={{
-                ...ccKpiValueSx,
-                fontSize: '0.875rem',
-                mt: 0.125,
-                lineHeight: 1.25,
-                minWidth: 0,
-                maxWidth: '100%',
-                // Last sale: one line. Units/Category: wrap within cell only (no Category spill).
-                whiteSpace: cell.allowWrap ? 'normal' : 'nowrap',
-                overflowWrap: cell.allowWrap ? 'break-word' : undefined,
-                wordBreak: cell.allowWrap ? 'break-word' : undefined,
-                textOverflow: cell.allowWrap ? undefined : 'ellipsis',
-                overflow: 'hidden',
-              }}
-              title={cell.tooltip ? undefined : cell.value.replace(/\n/g, ' · ')}
-            >
-              {cell.value}
-            </Typography>
+            {isCategoryControl ? (
+              <LeadCategorySelector
+                leadId={leadId}
+                category={commandCenterData.lead_category}
+                onChanged={onCategoryChanged}
+              />
+            ) : (
+              <Typography
+                data-testid={`quick-stat-${cell.id}-value`}
+                sx={{
+                  ...ccKpiValueSx,
+                  fontSize: '0.875rem',
+                  mt: 0.125,
+                  lineHeight: 1.25,
+                  minWidth: 0,
+                  maxWidth: '100%',
+                  // Last sale: one line. Units/Category: wrap within cell only (no Category spill).
+                  whiteSpace: cell.allowWrap ? 'normal' : 'nowrap',
+                  overflowWrap: cell.allowWrap ? 'break-word' : undefined,
+                  wordBreak: cell.allowWrap ? 'break-word' : undefined,
+                  textOverflow: cell.allowWrap ? undefined : 'ellipsis',
+                  overflow: 'hidden',
+                }}
+                title={cell.tooltip ? undefined : cell.value.replace(/\n/g, ' · ')}
+              >
+                {cell.value}
+              </Typography>
+            )}
           </Box>
         )
 

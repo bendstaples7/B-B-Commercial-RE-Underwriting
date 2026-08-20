@@ -263,7 +263,7 @@ def _apply_parsed_note_property_facts_to_lead(
         note_units_i is not None
         and note_units_i >= NOTE_COMMERCIAL_UNIT_THRESHOLD
     )
-    if trigger_commercial:
+    if trigger_commercial and not bool(getattr(lead, 'lead_category_locked', False)):
         category = (getattr(lead, 'lead_category', None) or '').strip().lower() or 'residential'
         if category == 'residential':
             lead.lead_category = 'commercial'

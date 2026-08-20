@@ -18,7 +18,7 @@ from app.exceptions import RealEstateAnalysisException
 from app.models import Lead, LeadTask, LeadTimelineEntry
 from app.schemas import (
     LeadTaskCreateSchema, LeadTaskUpdateSchema, LeadTaskSnoozeSchema,
-    LogNoteSchema, LogCallSchema, LeadStatusUpdateSchema,
+    LogNoteSchema, LogCallSchema, LeadStatusUpdateSchema, LeadCategoryUpdateSchema,
     ParkLeadSchema, DoNotContactSchema, ReactivateLeadSchema,
     LeadTimelineEntrySchema,
 )
@@ -838,6 +838,12 @@ def get_command_center(lead_id: int):
 
     contacts_payload = ContactService().get_ordered_contacts_payload(lead_id)
     related_properties = ContactService().get_related_properties(lead_id)
+    same_address_leads: list[dict] = []
+    try:
+        from app.services.lead_dedup_service import same_address_lead_summaries
+        same_address_leads = same_address_lead_summaries(lead)
+    except Exception:  # noqa: BLE001 — never block command center
+        logger.exception('same_address_lead_summaries failed for lead %s', lead_id)
 
     from app.services.owner_snapshot_service import (
         ensure_stale_owner_snapshot,
@@ -1083,6 +1089,7 @@ def get_command_center(lead_id: int):
         'organizations': organizations_payload,
         'entity_research': entity_research_payload,
         'related_properties': related_properties,
+        'same_address_leads': same_address_leads,
         # Property details
         'property_street': _display_street(lead.property_street),
         'property_city': lead.property_city,
@@ -1129,6 +1136,7 @@ def get_command_center(lead_id: int):
         'deal_source': deal_source,
         'deal_description': deal_description,
         'lead_category': lead.lead_category,
+        'lead_category_locked': bool(getattr(lead, 'lead_category_locked', False)),
         'notes': lead.notes,
         # Flag when lead.notes content implies contact was made but status says otherwise.
         # Used by the frontend to show a warning banner nudging the user to update status.
@@ -1480,6 +1488,101 @@ def update_status(lead_id: int):
         'lead_score': lead.lead_score,
         'timeline_entry': _serialize_timeline_entry(entry),
     }), 200
+
+
+@command_center_bp.route('/<int:lead_id>/category', methods=['PATCH'])
+@require_auth
+@handle_errors
+def update_category(lead_id: int):
+    """
+    PATCH /api/leads/<lead_id>/category
+
+    Set Residential or Commercial and lock it so CoStar/notes cannot flip it back.
+    """
+    from app import db
+    import datetime as _dt
+
+    data = LeadCategoryUpdateSchema().load(request.get_json() or {})
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return denied
+
+    new_category = data['lead_category']
+    old_category = (lead.lead_category or '').strip().lower() or 'residential'
+    actor = str(getattr(g, 'user_id', None) or 'anonymous')
+
+    lead.lead_category = new_category
+    lead.lead_category_locked = True
+    cleared_type = False
+    if new_category == 'residential':
+        ptype = (lead.property_type or '').strip()
+        if ptype.lower() == 'commercial':
+            lead.property_type = None
+            cleared_type = True
+
+    label = 'Residential' if new_category == 'residential' else 'Commercial'
+    old_label = 'Residential' if old_category == 'residential' else (
+        'Commercial' if old_category == 'commercial' else old_category
+    )
+    summary = f'Category set to {label}'
+    if old_category != new_category:
+        summary = f'Category changed from {old_label} to {label}'
+
+    entry = LeadTimelineEntry(
+        lead_id=lead_id,
+        event_type='category_changed',
+        occurred_at=_dt.datetime.utcnow(),
+        source='manual',
+        actor=actor,
+        summary=summary[:500],
+        event_metadata={
+            'previous_category': old_category,
+            'new_category': new_category,
+            'cleared_commercial_property_type': cleared_type,
+        },
+    )
+    db.session.add(lead)
+    db.session.add(entry)
+    db.session.commit()
+
+    from app.services.lead_refresh import refresh_lead_scoring
+    refresh_lead_scoring(lead_id)
+    db.session.refresh(lead)
+    db.session.refresh(entry)
+
+    return jsonify({
+        'lead_category': lead.lead_category,
+        'lead_category_locked': bool(lead.lead_category_locked),
+        'property_type': lead.property_type,
+        'lead_score': lead.lead_score,
+        'timeline_entry': _serialize_timeline_entry(entry),
+    }), 200
+
+
+@command_center_bp.route('/<int:lead_id>/merge-preview/<int:other_id>', methods=['GET'])
+@require_auth
+@handle_errors
+def merge_preview(lead_id: int, other_id: int):
+    """GET /api/leads/<lead_id>/merge-preview/<other_id> — people on both records."""
+    from app.services.lead_dedup_service import merge_preview_for_ids
+
+    lead = Lead.query.get(lead_id)
+    other = Lead.query.get(other_id)
+    if lead is None or other is None:
+        return jsonify({'error': 'Not found'}), 404
+    for item in (lead, other):
+        denied = _require_lead_read_access(item)
+        if denied is not None:
+            return denied
+    try:
+        preview = merge_preview_for_ids(lead_id, other_id)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify(preview), 200
 
 
 @command_center_bp.route('/<int:lead_id>/move-to-skip-trace', methods=['POST'])

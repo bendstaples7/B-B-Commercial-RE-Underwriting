@@ -58,6 +58,36 @@ describe('first-paint settle — CC packing / KPI / condo pending / no_sale', ()
     expect(screen.getByTestId('quick-stat-est-value')).toBeInTheDocument()
   })
 
+  it('category selector landmark is wired on the live header (primary title unique)', () => {
+    const ulcc = readFileSync(
+      resolve(__dirname, '../UnifiedLeadCommandCenter.tsx'),
+      'utf8',
+    )
+    const stats = readFileSync(
+      resolve(__dirname, './PropertyOverviewQuickStats.tsx'),
+      'utf8',
+    )
+    const selector = readFileSync(
+      resolve(__dirname, '../LeadCategorySelector.tsx'),
+      'utf8',
+    )
+    expect(ulcc).toContain('data-testid="property-overview-address-line"')
+    expect(ulcc).toContain('SameAddressMergeBanner')
+    expect(stats).toContain('LeadCategorySelector')
+    expect(selector).toContain('data-testid="lead-category-selector"')
+  })
+
+  it('category selector settles in the Category KPI cell when leadId is wired', () => {
+    render(
+      <PropertyOverviewQuickStats commandCenterData={payload()} leadId={1} />,
+    )
+    expect(screen.getByTestId('property-overview-quick-stats')).toBeInTheDocument()
+    expect(screen.getByTestId('lead-category-selector')).toHaveTextContent('Commercial')
+    expect(screen.getByTestId('quick-stat-category')).toContainElement(
+      screen.getByTestId('lead-category-selector'),
+    )
+  })
+
   it('condo pending landmark: Checking… when building_ownership_pending', async () => {
     const { resolveCondoCheckLines } = await import(
       '@/components/lead-detail/PropertyOverviewQuickStats'

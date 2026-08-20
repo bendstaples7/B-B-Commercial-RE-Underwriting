@@ -924,6 +924,133 @@ class TestUpdateStatus:
             assert response.status_code == 400
 
 
+class TestUpdateCategory:
+    def test_sets_residential_and_locks(self, client, app):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '10 Category St',
+                lead_category='commercial',
+                property_type='Commercial',
+                deal_source='CoStar',
+            )
+            response = client.patch(
+                f'/api/leads/{lead.id}/category',
+                data=json.dumps({'lead_category': 'residential'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            assert body['lead_category'] == 'residential'
+            assert body['lead_category_locked'] is True
+            assert body['property_type'] is None
+            db.session.refresh(lead)
+            assert lead.lead_category == 'residential'
+            assert lead.lead_category_locked is True
+            entry = LeadTimelineEntry.query.filter_by(
+                lead_id=lead.id, event_type='category_changed',
+            ).first()
+            assert entry is not None
+
+    def test_command_center_get_does_not_overwrite_locked_residential(self, client, app):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '11 Category St',
+                lead_category='residential',
+                deal_source='CoStar',
+                deal_description='Units: 12',
+            )
+            lead.lead_category_locked = True
+            db.session.add(lead)
+            db.session.commit()
+            response = client.get(
+                f'/api/leads/{lead.id}/command-center',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            assert body['lead_category'] == 'residential'
+            assert body['lead_category_locked'] is True
+            db.session.refresh(lead)
+            assert lead.lead_category == 'residential'
+
+
+class TestSameAddressLeadsPayload:
+    def test_command_center_includes_same_street_twin(self, client, app):
+        from app.services.lead_dedup_service import refresh_lead_dedup_fields
+
+        with app.app_context():
+            yoko = _make_lead(
+                app,
+                '1110 Yoko Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+            )
+            both = _make_lead(
+                app,
+                '1110 Yoko Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+                owner_2_first_name='Edwin',
+                owner_2_last_name='Chen',
+            )
+            other_block = _make_lead(
+                app,
+                '2200 Different St',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+            )
+            for item in (yoko, both, other_block):
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+
+            response = client.get(
+                f'/api/leads/{yoko.id}/command-center',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            twin_ids = {row['id'] for row in (body.get('same_address_leads') or [])}
+            assert both.id in twin_ids
+            assert other_block.id not in twin_ids
+
+
+class TestMergePreviewAndUnitGuard:
+    def test_merge_preview_same_building_false_for_other_unit(self, client, app):
+        from app.services.lead_dedup_service import refresh_lead_dedup_fields
+
+        with app.app_context():
+            a = _make_lead(app, '1 Oak Brook Club Dr Unit A-30')
+            b = _make_lead(app, '1 Oak Brook Club Dr Unit A-206')
+            for item in (a, b):
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+            response = client.get(
+                f'/api/leads/{a.id}/merge-preview/{b.id}',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            assert body['same_building'] is False
+
+    def test_merge_into_rejects_other_unit(self, client, app):
+        from app.services.lead_dedup_service import refresh_lead_dedup_fields
+
+        with app.app_context():
+            a = _make_lead(app, '1 Oak Brook Club Dr Unit A-30')
+            b = _make_lead(app, '1 Oak Brook Club Dr Unit A-206')
+            for item in (a, b):
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+            response = client.post(
+                f'/api/leads/{b.id}/merge-into/{a.id}',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 400
+
+
 class TestMoveToSkipTrace:
     @patch(
         'app.services.hubspot_writeback_service.HubSpotWriteBackService.'

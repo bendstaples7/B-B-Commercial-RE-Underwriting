@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from app import db
 from app.models.hubspot_match import HubSpotMatch
 from app.models.lead import Lead
+from app.models.contact import Contact
 from app.services.lead_dedup_service import (
     find_lead_by_identity,
     merge_confidence,
@@ -549,3 +550,243 @@ class TestSiblingAbsorbAndSoftMerge:
             refreshed = db.session.get(Lead, winner.id)
             assert refreshed.property_street == '2834 N Drake Ave 1r'
             assert refreshed.county_assessor_pin == '13262220410000'
+
+
+class TestSameBuildingBannerAndAdditivePeople:
+    def test_find_same_building_ignores_owner_name(self, app):
+        from app.services.lead_dedup_service import (
+            find_same_building_leads,
+            refresh_lead_dedup_fields,
+        )
+
+        with app.app_context():
+            yoko = Lead(
+                property_street='1110 Yoko Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+            )
+            both = Lead(
+                property_street='1110 Yoko Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+                owner_2_first_name='Edwin',
+                owner_2_last_name='Chen',
+            )
+            other_block = Lead(
+                property_street='2200 Different St',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+            )
+            db.session.add_all([yoko, both, other_block])
+            for item in (yoko, both, other_block):
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+
+            twins = find_same_building_leads(yoko)
+            ids = {item.id for item in twins}
+            assert both.id in ids
+            assert other_block.id not in ids
+
+    def test_find_same_building_not_dropped_when_many_streets_share_house_1(self, app):
+        from app.services.lead_dedup_service import (
+            find_same_building_leads,
+            refresh_lead_dedup_fields,
+        )
+
+        with app.app_context():
+            decoys = []
+            for idx in range(70):
+                decoys.append(Lead(
+                    property_street=f'1 Dummy{idx} St',
+                    owner_first_name='Decoy',
+                    owner_last_name=f'Owner{idx}',
+                ))
+            twin_a = Lead(
+                property_street='1 Oak Brook Club Dr Unit A-30',
+                owner_first_name='Bonnie',
+                owner_last_name='Biggerstaff',
+            )
+            twin_b = Lead(
+                property_street='1 Oak Brook Club Dr Unit A-30',
+                owner_first_name='Don',
+                owner_last_name='Gorz',
+            )
+            db.session.add_all(decoys + [twin_a, twin_b])
+            for item in decoys + [twin_a, twin_b]:
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+
+            twins = find_same_building_leads(twin_a)
+            ids = {item.id for item in twins}
+            assert twin_b.id in ids
+            assert not ids.intersection({item.id for item in decoys})
+
+    def test_find_same_building_does_not_list_other_condo_units(self, app):
+        from app.services.lead_dedup_service import (
+            find_same_building_leads,
+            refresh_lead_dedup_fields,
+        )
+
+        with app.app_context():
+            unit_a = Lead(
+                property_street='1 Oak Brook Club Dr Unit A-30',
+                owner_first_name='Bonnie',
+                owner_last_name='Biggerstaff',
+            )
+            same_unit = Lead(
+                property_street='1 Oak Brook Club Dr Unit A-30',
+                owner_first_name='Don',
+                owner_last_name='Gorz',
+            )
+            other_unit = Lead(
+                property_street='1 Oak Brook Club Dr Unit A-206',
+                owner_first_name='Angeline',
+                owner_last_name='Christou',
+            )
+            db.session.add_all([unit_a, same_unit, other_unit])
+            for item in (unit_a, same_unit, other_unit):
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+
+            twins = find_same_building_leads(unit_a)
+            ids = {item.id for item in twins}
+            assert same_unit.id in ids
+            assert other_unit.id not in ids
+
+    def test_merge_keeps_edwin_and_unions_yoko_phones(self, app):
+        from app.models.contact_phone import ContactPhone
+        from app.models.property_contact import PropertyContact
+        from app.services.contact_service import ContactService
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='1110 Yoko Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+                owner_2_first_name='Edwin',
+                owner_2_last_name='Chen',
+            )
+            loser = Lead(
+                property_street='1110 Yoko Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+            )
+            db.session.add_all([winner, loser])
+            db.session.commit()
+
+            service = ContactService()
+            yoko_winner = service.create_contact({
+                'first_name': 'Yoko',
+                'last_name': 'Miller',
+                'phones': [{'value': '7735551111', 'label': 'mobile'}],
+                'emails': [{'value': 'yoko@example.com', 'label': 'personal'}],
+            })
+            edwin = service.create_contact({
+                'first_name': 'Edwin',
+                'last_name': 'Chen',
+                'phones': [{'value': '3125552222', 'label': 'mobile'}],
+            })
+            yoko_loser = service.create_contact({
+                'first_name': 'Yoko',
+                'last_name': 'Miller',
+                'phones': [{'value': '8475553333', 'label': 'home'}],
+            })
+            service.link_contact_to_property(
+                winner.id, yoko_winner.id, role='owner', is_primary=True,
+            )
+            service.link_contact_to_property(
+                winner.id, edwin.id, role='owner', is_primary=False,
+            )
+            service.link_contact_to_property(
+                loser.id, yoko_loser.id, role='owner', is_primary=True,
+            )
+            db.session.commit()
+            loser_id = loser.id
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ):
+                merge_lead_into_winner(winner, loser, changed_by='test')
+                db.session.commit()
+
+            assert Lead.query.get(loser_id) is None
+            owners = PropertyContact.query.filter_by(
+                property_id=winner.id, role='owner',
+            ).all()
+            assert len(owners) == 2
+            names = set()
+            yoko_phones: set[str] = set()
+            yoko_emails: set[str] = set()
+            for link in owners:
+                contact = db.session.get(Contact, link.contact_id)
+                names.add(f'{contact.first_name} {contact.last_name}'.strip())
+                if (contact.first_name or '').strip().lower() == 'yoko':
+                    yoko_phones = {
+                        p.value for p in ContactPhone.query.filter_by(
+                            contact_id=contact.id,
+                        ).all()
+                    }
+                    yoko_emails = {e.value for e in (contact.emails or [])}
+            assert 'Yoko Miller' in names
+            assert 'Edwin Chen' in names
+            digits = {''.join(c for c in v if c.isdigit())[-10:] for v in yoko_phones}
+            assert '7735551111' in digits
+            assert '8475553333' in digits
+            assert 'yoko@example.com' in {e.lower() for e in yoko_emails}
+
+
+    def test_merge_rejects_different_condo_units(self, app):
+        from app.services.lead_dedup_service import merge_loser_into_winner
+
+        with app.app_context():
+            winner = Lead(property_street='1 Oak Brook Club Dr Unit A-30')
+            loser = Lead(property_street='1 Oak Brook Club Dr Unit A-206')
+            db.session.add_all([winner, loser])
+            db.session.commit()
+            try:
+                merge_loser_into_winner(winner.id, loser.id, changed_by='test', commit=False)
+                assert False, 'expected different-unit merge to fail'
+            except ValueError as exc:
+                assert 'address' in str(exc).lower() or 'unit' in str(exc).lower()
+
+    def test_merge_rejects_bare_building_vs_unit(self, app):
+        from app.services.lead_dedup_service import merge_loser_into_winner
+
+        with app.app_context():
+            winner = Lead(property_street='1 Oak Brook Club Dr')
+            loser = Lead(property_street='1 Oak Brook Club Dr Unit A-30')
+            db.session.add_all([winner, loser])
+            db.session.commit()
+            try:
+                merge_loser_into_winner(winner.id, loser.id, changed_by='test', commit=False)
+                assert False, 'expected bare↔unit merge to fail'
+            except ValueError as exc:
+                assert 'address' in str(exc).lower() or 'unit' in str(exc).lower()
+
+    def test_merge_skips_category_copy_when_winner_locked(self, app):
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='1110 Yoko Ave',
+                lead_category='residential',
+                lead_category_locked=True,
+                property_type=None,
+            )
+            loser = Lead(
+                property_street='1110 Yoko Ave',
+                lead_category='commercial',
+                property_type='Commercial',
+            )
+            db.session.add_all([winner, loser])
+            db.session.commit()
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ):
+                merge_lead_into_winner(winner, loser, changed_by='test')
+                db.session.commit()
+            refreshed = db.session.get(Lead, winner.id)
+            assert refreshed.lead_category == 'residential'
+            assert refreshed.property_type is None
+            assert refreshed.lead_category_locked is True

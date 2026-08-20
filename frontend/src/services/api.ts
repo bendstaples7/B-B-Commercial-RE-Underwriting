@@ -14,6 +14,7 @@ import type {
   SearchParams,
   RuntimeHealthResponse,
   HealthCheckResponse,
+  SameAddressLeadSummary,
 } from '@/types'
 import {
   HubSpotConfigSchema,
@@ -1380,6 +1381,18 @@ export const commandCenterService = {
     winnerId: number,
   ): Promise<{ winner_id: number; loser_id: number; merged: boolean }> =>
     api.post(`/leads/${loserId}/merge-into/${winnerId}`).then(r => r.data),
+  getMergePreview: (
+    leadId: number,
+    otherId: number,
+  ): Promise<{ same_building: boolean; current: SameAddressLeadSummary; other: SameAddressLeadSummary }> =>
+    api.get(`/leads/${leadId}/merge-preview/${otherId}`).then(r => r.data),
+  updateCategory: (
+    leadId: number,
+    leadCategory: 'residential' | 'commercial',
+  ): Promise<{
+    lead_category: string; lead_category_locked: boolean; property_type: string | null; lead_score: number | null
+  }> =>
+    api.patch(`/leads/${leadId}/category`, { lead_category: leadCategory }).then(r => r.data),
   dismissDuplicateReview: (
     leadId: number,
   ): Promise<{ lead_id: number; dismissed: boolean }> =>

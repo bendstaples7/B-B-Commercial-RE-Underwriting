@@ -778,6 +778,55 @@ class ContactService:
             moved += 1
         return moved
 
+    def _migrate_emails_to_contact(
+        self,
+        from_contact_id: int,
+        to_contact_id: int,
+    ) -> int:
+        """Move unique emails from one contact onto another (case-insensitive)."""
+        if from_contact_id == to_contact_id:
+            return 0
+
+        other_active_links = (
+            PropertyContact.query.filter(PropertyContact.contact_id == from_contact_id)
+            .filter(
+                (PropertyContact.role.is_(None))
+                | (PropertyContact.role != 'former_owner')
+            )
+            .count()
+        )
+        clone_instead = other_active_links > 1
+
+        winner_emails = {
+            (e.value or '').strip().lower(): e
+            for e in ContactEmail.query.filter_by(contact_id=to_contact_id).all()
+            if (e.value or '').strip()
+        }
+        moved = 0
+        for email in list(
+            ContactEmail.query.filter_by(contact_id=from_contact_id).all()
+        ):
+            key = (email.value or '').strip().lower()
+            if not key:
+                continue
+            if key in winner_emails:
+                if not clone_instead:
+                    db.session.delete(email)
+                continue
+            if clone_instead:
+                db.session.add(ContactEmail(
+                    contact_id=to_contact_id,
+                    value=email.value,
+                    label=email.label,
+                ))
+                winner_emails[key] = email
+                moved += 1
+                continue
+            email.contact_id = to_contact_id
+            winner_emails[key] = email
+            moved += 1
+        return moved
+
     def _archive_unmatched_owners(
         self,
         property_id: int,
@@ -1900,10 +1949,12 @@ class ContactService:
 
             if prefer_new:
                 self._migrate_outreach_phones_to_contact(kept_c.id, contact.id)
+                self._migrate_emails_to_contact(kept_c.id, contact.id)
                 db.session.delete(kept_link)
                 kept[match_idx] = (contact, link)
             else:
                 self._migrate_outreach_phones_to_contact(contact.id, kept_c.id)
+                self._migrate_emails_to_contact(contact.id, kept_c.id)
                 db.session.delete(link)
             removed += 1
 

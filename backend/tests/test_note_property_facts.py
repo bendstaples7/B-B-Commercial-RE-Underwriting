@@ -271,3 +271,18 @@ class TestRicherFactsPreferDetailAndRecency:
             {'units': 4, 'beds': 1, 'baths': 1},
             {'units': 2, 'beds': 4, 'baths': 2},
         ]
+
+    def test_locked_category_stays_residential_when_note_says_six_units(self):
+        lead = SimpleNamespace(
+            units=None,
+            bedrooms=None,
+            bathrooms=None,
+            lead_category='residential',
+            lead_category_locked=True,
+            property_type=None,
+            note_property_facts=None,
+        )
+        apply_note_property_facts_to_lead(lead, FOSTER_NOTE, source='hubspot_note')
+        assert lead.units == 6
+        assert lead.lead_category == 'residential'
+        assert lead.property_type is None

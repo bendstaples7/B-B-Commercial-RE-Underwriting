@@ -1595,6 +1595,14 @@ export interface RelatedPropertySummary {
   lead_score?: number | null
 }
 
+/** Same-address duplicate lead for the merge banner (not portfolio). */
+export interface SameAddressLeadSummary {
+  id: number
+  property_street: string | null
+  owner_display_name: string
+  people_names: string[]
+}
+
 export type EntityLookupStatus =
   | 'pending'
   | 'resolved'
@@ -1953,7 +1961,9 @@ export type TimelineEventType =
   | 'property_analysis_completed'
   | 'lead_imported'
   | 'owner_name_changed'
-  | 'contact_kept';
+  | 'contact_kept'
+  | 'category_changed'
+  | 'leads_merged';
 
 export interface LeadTask {
   id: number | string;
@@ -2261,6 +2271,9 @@ export interface CommandCenterPayload {
   lead_score: number;
   lead_status: LeadStatus;
   lead_category?: string;
+  lead_category_locked?: boolean;
+  /** Same-building other leads (not other buildings in a portfolio). */
+  same_address_leads?: SameAddressLeadSummary[];
   review_reason?: string | null;
   has_property_match: boolean;
   analysis_session_id: number | null;

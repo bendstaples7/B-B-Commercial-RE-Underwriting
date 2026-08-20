@@ -1,6 +1,7 @@
 """Helpers for merging duplicate leads (normalized address + winner selection)."""
 from __future__ import annotations
 
+import re
 from typing import Any, Optional, Sequence
 
 from app.services.hubspot_matcher_service import HubSpotMatcherService
@@ -108,6 +109,38 @@ def streets_match_normalized(a: Optional[str], b: Optional[str]) -> bool:
         return True
     # Unit-suffix variants (e.g. bare building vs "Apt 1")
     return ka.startswith(kb + ' ') or kb.startswith(ka + ' ')
+
+
+_SITUS_UNIT_RE = re.compile(
+    r'(?:\b(?:unit|apt|apartment|suite|ste)\b|#)\s*([a-z0-9-]+)\s*$',
+    re.IGNORECASE,
+)
+
+
+def situs_unit_token(street: Optional[str]) -> str:
+    """Comparable unit token (A-30 and # A-30 → a30). Empty when none."""
+    line = (street_line_from_address(street) or street or '').strip()
+    if not line:
+        return ''
+    match = _SITUS_UNIT_RE.search(line)
+    if not match:
+        return ''
+    return re.sub(r'[^a-z0-9]', '', match.group(1).lower())
+
+
+def streets_match_same_situs(a: Optional[str], b: Optional[str]) -> bool:
+    """Same building, and the same unit when either side names one.
+
+    Used by the lead-page merge banner so condo A-30 is not offered as a
+    twin of condo A-206 in the same building.
+    """
+    if not streets_match_normalized(a, b):
+        return False
+    ua = situs_unit_token(a)
+    ub = situs_unit_token(b)
+    if ua or ub:
+        return ua == ub
+    return True
 
 
 def owner_group_key(
