@@ -18,16 +18,25 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { useNavigate } from 'react-router-dom'
 import { commandCenterService } from '@/services/api'
 import type { SameAddressLeadSummary } from '@/types'
 import { AppSnackbar } from '@/components/AppSnackbar'
+
+export type SameAddressMergedPayload = {
+  winnerId: number
+  loserId: number
+}
 
 export interface SameAddressMergeBannerProps {
   leadId: number
   twins: SameAddressLeadSummary[]
   currentOwnerLabel: string
   currentPeopleNames: string[]
+  /**
+   * Required: refresh Command Center after merge (same-URL navigate alone is a
+   * no-op). Prefer afterCommandCenterMutation via UnifiedLeadCommandCenter.
+   */
+  onMerged: (payload: SameAddressMergedPayload) => void | Promise<void>
 }
 
 function peopleLine(names: string[]): string {
@@ -40,8 +49,8 @@ export function SameAddressMergeBanner({
   twins,
   currentOwnerLabel,
   currentPeopleNames,
+  onMerged,
 }: SameAddressMergeBannerProps) {
-  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [winnerId, setWinnerId] = useState<number>(leadId)
   const [removeId, setRemoveId] = useState<number | null>(null)
@@ -186,9 +195,22 @@ export function SameAddressMergeBanner({
     setError(null)
     try {
       const result = await commandCenterService.mergeInto(otherId, stayId)
+      const mergedLoserId =
+        typeof result.loser_id === 'number' && result.loser_id > 0
+          ? result.loser_id
+          : otherId
+      // Merge already committed — refresh is best-effort so a failed invalidate
+      // does not look like a failed combine.
+      try {
+        await onMerged({
+          winnerId: result.winner_id,
+          loserId: mergedLoserId,
+        })
+      } catch {
+        // Swallow: snack below still reports success.
+      }
       setOpen(false)
       setSnack('Records combined.')
-      navigate(`/leads/${result.winner_id}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not combine those records.')
     } finally {
