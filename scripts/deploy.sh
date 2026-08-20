@@ -95,22 +95,25 @@ fail_after_partial_migration_apply() {
     local last_rev="$3"
     cd "$APP_DIR"
     echo "FAILED: ${reason}"
-    echo "    Last revision applied in this run: ${last_rev}"
-    echo "    Not rolling back checkout because Alembic committed at least one revision."
+    echo "    Last revision marker in this run: ${last_rev}"
+    echo "    Not rolling back checkout because Alembic may have committed a revision."
     echo "    Preserving target code on disk to avoid running older code against a newer schema."
-    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Migration failure after partial apply at ${last_rev}; preserved ${TARGET_SHA}" >> "$ROLLBACK_LOG"
+    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Migration failure after possible partial apply at ${last_rev}; preserved ${TARGET_SHA}" >> "$ROLLBACK_LOG"
     if [[ -f /home/deploy/ops-alert.sh ]]; then
         # shellcheck source=/dev/null
         source /home/deploy/ops-alert.sh
-        send_alert "Deploy failed after partial migration apply" \
-            "Deploy on $(hostname) failed after Alembic applied ${last_rev}. Preserved checkout ${TARGET_SHA}; manual repair required. Reason: ${reason}" || true
+        send_alert "Deploy failed after possible partial migration apply" \
+            "Deploy on $(hostname) failed after Alembic marker ${last_rev}. Preserved checkout ${TARGET_SHA}; manual repair required. Reason: ${reason}" || true
     fi
     exit "$exit_code"
 }
 
 migration_revision_is_committed() {
     local expected_rev="$1"
-    python3.11 - "$expected_rev" <<'PY'
+    local verify_timeout="${BB_MIGRATE_VERIFY_TIMEOUT_SEC:-15}"
+    local rc=0
+    timeout --signal=TERM --kill-after=5 "$verify_timeout" \
+        python3.11 - "$expected_rev" <<'PY' || rc=$?
 import os
 import sys
 
@@ -119,21 +122,49 @@ import psycopg2
 expected = sys.argv[1]
 url = os.environ.get("DATABASE_URL")
 if not url:
-    sys.exit(1)
+    sys.exit(2)
 if url.startswith("postgresql+psycopg2://"):
     url = "postgresql://" + url[len("postgresql+psycopg2://"):]
 try:
-    conn = psycopg2.connect(url)
+    conn = psycopg2.connect(url, connect_timeout=5)
     try:
         with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = '5s'")
             cur.execute("SELECT version_num FROM alembic_version")
             revisions = {str(row[0]) for row in cur.fetchall()}
     finally:
         conn.close()
-except Exception:
-    sys.exit(1)
+except Exception as exc:
+    print(f"migration revision verification failed: {exc}", file=sys.stderr)
+    sys.exit(2)
 sys.exit(0 if expected in revisions else 1)
 PY
+    case "$rc" in
+        0) return 0 ;;
+        1) return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
+maybe_preserve_after_migration_marker() {
+    local exit_code="$1"
+    local reason="$2"
+    local last_rev="$3"
+    if [[ "$last_rev" == "(unknown)" || "$last_rev" == "unknown" || -z "$last_rev" ]]; then
+        return 1
+    fi
+    local verify_rc=0
+    migration_revision_is_committed "$last_rev" || verify_rc=$?
+    if [ "$verify_rc" -eq 0 ]; then
+        fail_after_partial_migration_apply "$exit_code" "$reason" "$last_rev"
+    fi
+    if [ "$verify_rc" -ne 1 ]; then
+        fail_after_partial_migration_apply \
+            "$exit_code" \
+            "${reason}; could not verify whether marker revision committed" \
+            "$last_rev"
+    fi
+    return 1
 }
 
 # Celery is stopped before the memory guard to free worker RSS on the 2GB VPS.
@@ -486,13 +517,10 @@ if [ "$UPGRADE_RC" -eq 124 ] || [ "$UPGRADE_RC" -eq 137 ]; then
     if [[ -f "${BB_MIGRATE_LAST_REV_FILE}" ]]; then
         LAST_REV="$(cat "${BB_MIGRATE_LAST_REV_FILE}" 2>/dev/null || echo unknown)"
     fi
-    if [[ "$LAST_REV" != "(unknown)" && "$LAST_REV" != "unknown" && -n "$LAST_REV" ]] \
-        && migration_revision_is_committed "$LAST_REV"; then
-        fail_after_partial_migration_apply \
-            1 \
-            "flask db upgrade timed out after ${BB_MIGRATE_TIMEOUT_SEC}s" \
-            "$LAST_REV"
-    fi
+    maybe_preserve_after_migration_marker \
+        1 \
+        "flask db upgrade timed out after ${BB_MIGRATE_TIMEOUT_SEC}s" \
+        "$LAST_REV" || true
     echo "FAILED: flask db upgrade timed out after ${BB_MIGRATE_TIMEOUT_SEC}s (stuck migration aborted)"
     echo "    No completed revision was logged in this deploy run"
     rollback 1
@@ -502,13 +530,10 @@ if [ "$UPGRADE_RC" -ne 0 ]; then
     if [[ -f "${BB_MIGRATE_LAST_REV_FILE}" ]]; then
         LAST_REV="$(cat "${BB_MIGRATE_LAST_REV_FILE}" 2>/dev/null || echo unknown)"
     fi
-    if [[ "$LAST_REV" != "(unknown)" && "$LAST_REV" != "unknown" && -n "$LAST_REV" ]] \
-        && migration_revision_is_committed "$LAST_REV"; then
-        fail_after_partial_migration_apply \
-            "$UPGRADE_RC" \
-            "flask db upgrade failed with exit ${UPGRADE_RC}" \
-            "$LAST_REV"
-    fi
+    maybe_preserve_after_migration_marker \
+        "$UPGRADE_RC" \
+        "flask db upgrade failed with exit ${UPGRADE_RC}" \
+        "$LAST_REV" || true
     echo "FAILED: flask db upgrade (exit ${UPGRADE_RC})"
     rollback 1
 fi

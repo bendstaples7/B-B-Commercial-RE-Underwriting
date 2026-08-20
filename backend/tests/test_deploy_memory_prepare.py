@@ -121,13 +121,18 @@ def test_deploy_preserves_checkout_after_partial_migration_apply():
     assert "fail_after_partial_migration_apply" in deploy_sh
     assert "migration_revision_is_committed" in deploy_sh
     assert "SELECT version_num FROM alembic_version" in deploy_sh
-    assert "Not rolling back checkout because Alembic committed at least one revision" in deploy_sh
+    assert "BB_MIGRATE_VERIFY_TIMEOUT_SEC" in deploy_sh
+    assert "connect_timeout=5" in deploy_sh
+    assert "SET statement_timeout = '5s'" in deploy_sh
+    assert "return 2" in deploy_sh
+    assert "could not verify whether marker revision committed" in deploy_sh
+    assert "Not rolling back checkout because Alembic may have committed a revision" in deploy_sh
     timeout_section = deploy_sh[
         deploy_sh.index("if [ \"$UPGRADE_RC\" -eq 124 ]"):
         deploy_sh.index("echo \"    Migrations applied\"")
     ]
     assert "fail_after_partial_migration_apply" in timeout_section
-    assert "migration_revision_is_committed \"$LAST_REV\"" in timeout_section
+    assert "maybe_preserve_after_migration_marker" in timeout_section
     assert "rollback 1" in timeout_section
 
 

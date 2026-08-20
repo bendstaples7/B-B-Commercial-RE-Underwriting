@@ -113,8 +113,7 @@ class _PurityVisitor(ast.NodeVisitor):
     def visit_Assign(self, node: ast.Assign) -> None:
         value_name = _call_name(node.value)
         if value_name and (
-            value_name == 'ContactService'
-            or value_name.endswith('.ContactService')
+            value_name.endswith('.ContactService')
             or value_name in self._contact_service_aliases
         ):
             self._add_contact_service_violation(node.lineno, value_name)
