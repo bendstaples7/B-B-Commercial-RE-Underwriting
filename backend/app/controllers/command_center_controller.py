@@ -1635,6 +1635,7 @@ def update_property_overview(lead_id: int):
     entry = None
     if changed:
         parts = []
+        seen_labels = set()
         labels = {
             'assessed_value': 'Est. value',
             'most_recent_sale': 'Last sale date',
@@ -1644,7 +1645,11 @@ def update_property_overview(lead_id: int):
             'property_type': 'Property type',
         }
         for key in changed:
-            parts.append(labels.get(key, key))
+            label = labels.get(key, key)
+            if label in seen_labels:
+                continue
+            seen_labels.add(label)
+            parts.append(label)
         summary = 'Updated ' + ', '.join(parts)
         entry = LeadTimelineEntry(
             lead_id=lead_id,

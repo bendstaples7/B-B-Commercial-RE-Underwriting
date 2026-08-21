@@ -66,6 +66,7 @@ export function PropertyOverviewKpiEditor({
   const [valueDraft, setValueDraft] = useState('')
   const [saleDateDraft, setSaleDateDraft] = useState('')
   const [initialSaleDateDraft, setInitialSaleDateDraft] = useState('')
+  const [saleDateTouched, setSaleDateTouched] = useState(false)
   const [salePriceDraft, setSalePriceDraft] = useState('')
   const [unitsDraft, setUnitsDraft] = useState('')
   const [typeDraft, setTypeDraft] = useState('')
@@ -78,6 +79,7 @@ export function PropertyOverviewKpiEditor({
     const nextSaleDateDraft = saleDateInputValue(mostRecentSale)
     setSaleDateDraft(nextSaleDateDraft)
     setInitialSaleDateDraft(nextSaleDateDraft)
+    setSaleDateTouched(false)
     setSalePriceDraft(
       mostRecentSalePrice != null && Number.isFinite(Number(mostRecentSalePrice))
         ? String(mostRecentSalePrice)
@@ -114,16 +116,15 @@ export function PropertyOverviewKpiEditor({
         body.assessed_value = parseOptionalNumber(valueDraft)
       } else if (kind === 'last-sale') {
         const nextSaleDate = saleDateDraft.trim()
-        const rawHadSaleDate = Boolean((mostRecentSale || '').trim())
         const setSaleDateBody = (value: string | null) => {
           body[saleDateField] = value
           if (saleDateField === 'acquisition_date') {
             body.most_recent_sale = value
           }
         }
-        if (nextSaleDate) {
+        if (nextSaleDate && (saleDateTouched || saleDateDraft !== initialSaleDateDraft)) {
           setSaleDateBody(nextSaleDate)
-        } else if (initialSaleDateDraft || !rawHadSaleDate || saleDateDraft !== initialSaleDateDraft) {
+        } else if (!nextSaleDate && saleDateTouched) {
           setSaleDateBody(null)
         }
         body.most_recent_sale_price = parseOptionalNumber(salePriceDraft)
@@ -229,7 +230,10 @@ export function PropertyOverviewKpiEditor({
                 type="date"
                 size="small"
                 value={saleDateDraft}
-                onChange={(e) => setSaleDateDraft(e.target.value)}
+                onChange={(e) => {
+                  setSaleDateTouched(true)
+                  setSaleDateDraft(e.target.value)
+                }}
                 InputLabelProps={{ shrink: true }}
                 inputProps={{ 'data-testid': 'quick-stat-last-sale-date-input' }}
                 autoFocus

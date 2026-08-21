@@ -81,7 +81,8 @@ def ensure_coowner_on_lead(
         changed = True
 
     service = ContactService()
-    if not _has_owner_person(lead_id, first, last):
+    had_owner_person = _has_owner_person(lead_id, first, last)
+    if not had_owner_person:
         # Prefer upsert from flats when owner_2 was just filled.
         try:
             with db.session.begin_nested():
@@ -93,6 +94,8 @@ def ensure_coowner_on_lead(
                 )
         except IntegrityError:
             lead = db.session.get(Lead, lead_id)
+        if not had_owner_person and _has_owner_person(lead_id, first, last):
+            changed = True
         if lead is not None and not _has_owner_person(lead_id, first, last):
             service._upsert_named_owner(  # noqa: SLF001
                 lead_id,

@@ -1010,6 +1010,10 @@ class TestUpdatePropertyOverview:
                 lead_id=lead.id, event_type='property_overview_changed',
             ).first()
             assert entry is not None
+            assert entry.summary == (
+                'Updated Est. value, Last sale date, Last sale price, Units, '
+                'Property type'
+            )
 
     def test_rejects_empty_body(self, client, app):
         with app.app_context():

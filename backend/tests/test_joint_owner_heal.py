@@ -28,6 +28,29 @@ def test_ensure_coowner_adds_edwin(app):
         assert 'yoko' in names or any('yoko' in n for n in names)
 
 
+def test_ensure_coowner_counts_link_restore_when_owner2_already_set(app):
+    with app.app_context():
+        lead = Lead(
+            property_street='916 Heal Ave',
+            owner_first_name='Yoko',
+            owner_last_name='Miller',
+            owner_2_first_name='Edwin',
+            owner_2_last_name='Miller',
+        )
+        db.session.add(lead)
+        db.session.commit()
+
+        changed = ensure_coowner_on_lead(lead.id, 'Edwin', 'Miller', commit=True)
+
+        assert changed is True
+        owners = PropertyContact.query.filter_by(property_id=lead.id, role='owner').all()
+        names = {
+            f'{(db.session.get(Contact, link.contact_id).first_name or "")}'.lower()
+            for link in owners
+        }
+        assert 'edwin' in names
+
+
 def test_heal_splits_live_jammed_name(app):
     with app.app_context():
         lead = Lead(

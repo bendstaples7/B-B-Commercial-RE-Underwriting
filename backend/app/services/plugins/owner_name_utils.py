@@ -530,7 +530,7 @@ def apply_owner_name_fields(fields: dict, owner_name: str) -> None:
 
 
 _JOINT_PERSON_SPLIT_RE = re.compile(r"\s+(?:and|&)\s+", re.IGNORECASE)
-_JOINT_BUSINESS_PART_TOKENS = {
+_JOINT_BUSINESS_SUFFIX_TOKENS = {
     "ASSOC",
     "ASSOCIATES",
     "BROS",
@@ -541,6 +541,13 @@ _JOINT_BUSINESS_PART_TOKENS = {
     "SON",
     "SONS",
 }
+_JOINT_BUSINESS_SINGLE_PART_TOKENS = {
+    "ASSOCIATES",
+    "BROTHERS",
+    "COMPANY",
+    "PARTNERS",
+    "SONS",
+}
 
 
 def _joint_split_part_is_business_token(part: str) -> bool:
@@ -548,7 +555,9 @@ def _joint_split_part_is_business_token(part: str) -> bool:
     if not normalized:
         return False
     words = [word for word in normalized.split() if word]
-    return any(word in _JOINT_BUSINESS_PART_TOKENS for word in words)
+    if len(words) == 1:
+        return words[0] in _JOINT_BUSINESS_SINGLE_PART_TOKENS
+    return words[-1] in _JOINT_BUSINESS_SUFFIX_TOKENS
 
 
 def split_joint_person_owner_name(
@@ -575,7 +584,9 @@ def split_joint_person_owner_name(
     parts = [p.strip() for p in _JOINT_PERSON_SPLIT_RE.split(first) if p.strip()]
     if len(parts) < 2:
         return [(first, last)]
-    if any(_joint_split_part_is_business_token(part) for part in parts):
+    if _joint_split_part_is_business_token(last or '') or any(
+        _joint_split_part_is_business_token(part) for part in parts
+    ):
         return [(first, last)]
 
     # Require a shared last name so "Edwin and Yoyko" + Miller → two Millers.
