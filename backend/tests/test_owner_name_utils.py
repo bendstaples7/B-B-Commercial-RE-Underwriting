@@ -37,6 +37,14 @@ class TestSplitJointPersonOwnerName:
             ('Smith and Jones LLC', None),
         ]
 
+    def test_family_business_token_not_split(self):
+        assert split_joint_person_owner_name('SMITH & SONS', 'ROOFING') == [
+            ('SMITH & SONS', 'ROOFING'),
+        ]
+        assert split_joint_person_owner_name('SMITH and ASSOCIATES', 'REALTY') == [
+            ('SMITH and ASSOCIATES', 'REALTY'),
+        ]
+
     def test_joint_without_last_not_split(self):
         assert split_joint_person_owner_name('Edwin and Yoyko', None) == [
             ('Edwin and Yoyko', None),

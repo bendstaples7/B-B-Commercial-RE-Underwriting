@@ -17,6 +17,7 @@ import { ccKpiValueSx } from '@/components/lead-detail/commandCenterChrome'
 import { AppSnackbar } from '@/components/AppSnackbar'
 
 export type PropertyOverviewEditKind = 'est-value' | 'last-sale' | 'units-details'
+export type PropertyOverviewSaleDateField = 'most_recent_sale' | 'acquisition_date'
 
 export interface PropertyOverviewKpiEditorProps {
   leadId: number
@@ -24,6 +25,7 @@ export interface PropertyOverviewKpiEditorProps {
   displayValue: string
   assessedValue?: number | null
   mostRecentSale?: string | null
+  saleDateField?: PropertyOverviewSaleDateField
   mostRecentSalePrice?: number | null
   units?: number | null
   propertyType?: string | null
@@ -51,6 +53,7 @@ export function PropertyOverviewKpiEditor({
   displayValue,
   assessedValue,
   mostRecentSale,
+  saleDateField = 'most_recent_sale',
   mostRecentSalePrice,
   units,
   propertyType,
@@ -62,6 +65,7 @@ export function PropertyOverviewKpiEditor({
   const [snack, setSnack] = useState<string | null>(null)
   const [valueDraft, setValueDraft] = useState('')
   const [saleDateDraft, setSaleDateDraft] = useState('')
+  const [initialSaleDateDraft, setInitialSaleDateDraft] = useState('')
   const [salePriceDraft, setSalePriceDraft] = useState('')
   const [unitsDraft, setUnitsDraft] = useState('')
   const [typeDraft, setTypeDraft] = useState('')
@@ -71,7 +75,9 @@ export function PropertyOverviewKpiEditor({
   useEffect(() => {
     if (!open) return
     setValueDraft(assessedValue != null && Number.isFinite(Number(assessedValue)) ? String(assessedValue) : '')
-    setSaleDateDraft(saleDateInputValue(mostRecentSale))
+    const nextSaleDateDraft = saleDateInputValue(mostRecentSale)
+    setSaleDateDraft(nextSaleDateDraft)
+    setInitialSaleDateDraft(nextSaleDateDraft)
     setSalePriceDraft(
       mostRecentSalePrice != null && Number.isFinite(Number(mostRecentSalePrice))
         ? String(mostRecentSalePrice)
@@ -91,7 +97,9 @@ export function PropertyOverviewKpiEditor({
   const parseOptionalNumber = (raw: string): number | null => {
     const t = raw.trim()
     if (!t) return null
-    const n = Number(t.replace(/[$,\s]/g, ''))
+    const normalized = t.replace(/[$,\s]/g, '')
+    if (!normalized) throw new Error('Enter a valid number.')
+    const n = Number(normalized)
     if (!Number.isFinite(n)) {
       throw new Error('Enter a valid number.')
     }
@@ -105,14 +113,27 @@ export function PropertyOverviewKpiEditor({
       if (kind === 'est-value') {
         body.assessed_value = parseOptionalNumber(valueDraft)
       } else if (kind === 'last-sale') {
-        body.most_recent_sale = saleDateDraft.trim() || null
+        const nextSaleDate = saleDateDraft.trim()
+        const rawHadSaleDate = Boolean((mostRecentSale || '').trim())
+        const setSaleDateBody = (value: string | null) => {
+          body[saleDateField] = value
+          if (saleDateField === 'acquisition_date') {
+            body.most_recent_sale = value
+          }
+        }
+        if (nextSaleDate) {
+          setSaleDateBody(nextSaleDate)
+        } else if (initialSaleDateDraft || !rawHadSaleDate || saleDateDraft !== initialSaleDateDraft) {
+          setSaleDateBody(null)
+        }
         body.most_recent_sale_price = parseOptionalNumber(salePriceDraft)
       } else {
         const unitsVal = unitsDraft.trim()
-        body.units = unitsVal === '' ? null : parseOptionalNumber(unitsDraft)
-        if (body.units != null) {
-          body.units = Math.round(Number(body.units))
+        const unitsNumber = unitsVal === '' ? null : parseOptionalNumber(unitsDraft)
+        if (unitsNumber != null && !Number.isInteger(unitsNumber)) {
+          throw new Error('Units must be a whole number.')
         }
+        body.units = unitsNumber
         body.property_type = typeDraft.trim() || null
       }
       await commandCenterService.updatePropertyOverview(leadId, body)

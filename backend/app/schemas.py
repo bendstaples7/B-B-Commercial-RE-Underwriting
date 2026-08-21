@@ -1740,6 +1740,7 @@ class LeadPropertyOverviewUpdateSchema(RequestSchema):
     most_recent_sale = fields.String(
         allow_none=True, validate=validate.Length(max=64),
     )
+    acquisition_date = fields.Date(allow_none=True)
     most_recent_sale_price = fields.Float(
         allow_none=True, validate=validate.Range(min=0),
     )
@@ -1753,8 +1754,8 @@ class LeadPropertyOverviewUpdateSchema(RequestSchema):
     @validates_schema
     def require_one_field(self, data, **kwargs):
         keys = (
-            'assessed_value', 'most_recent_sale', 'most_recent_sale_price',
-            'units', 'property_type',
+            'assessed_value', 'most_recent_sale', 'acquisition_date',
+            'most_recent_sale_price', 'units', 'property_type',
         )
         if not any(k in data for k in keys):
             raise ValidationError('Provide at least one property overview field.')

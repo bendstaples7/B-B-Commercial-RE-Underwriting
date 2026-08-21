@@ -446,8 +446,16 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
     # Fail closed: co-owner split must not be swallowed (silent loss of people).
     _merge_flat_owner_people(winner, loser)
     people_before = 0
+    active_owner_ids_before: set[int] = set()
     try:
         from app.models.property_contact import PropertyContact
+        active_owner_ids_before = {
+            link.contact_id
+            for link in PropertyContact.query.filter_by(
+                property_id=winner_id,
+                role='owner',
+            ).all()
+        }
         people_before = (
             PropertyContact.query.filter_by(property_id=winner_id, role='owner').count()
         )
@@ -461,6 +469,7 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
         ContactService().upsert_owners_from_lead(
             winner,
             phone_source='flat_backfill',
+            preserve_unmatched_owner_ids=active_owner_ids_before,
             commit=False,
             refresh_scoring=False,
         )

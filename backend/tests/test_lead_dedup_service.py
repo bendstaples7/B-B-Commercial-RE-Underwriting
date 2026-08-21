@@ -850,9 +850,66 @@ class TestSameBuildingBannerAndAdditivePeople:
             for link in owners:
                 contact = db.session.get(Contact, link.contact_id)
                 names.add(f'{contact.first_name} {contact.last_name}'.strip())
-            assert any(n.lower().startswith('yoko') for n in names)
-            assert any(n.lower().startswith('edwin') for n in names)
-            assert len(owners) >= 2
+            assert len(owners) == 2
+            assert {n.lower().strip() for n in names} == {
+                'yoko miller',
+                'edwin miller',
+            }
+
+    def test_merge_preserves_distinct_third_repointed_owner_contact(self, app):
+        """A loser owner contact must stay active even when both flat slots are full."""
+        from app.models.property_contact import PropertyContact
+        from app.services.contact_service import ContactService
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='500 Three Owner Ave',
+                owner_first_name='Alice',
+                owner_last_name='Smith',
+                owner_2_first_name='Bob',
+                owner_2_last_name='Smith',
+            )
+            loser = Lead(
+                property_street='500 Three Owner Ave',
+                owner_first_name='Carol',
+                owner_last_name='Smith',
+            )
+            db.session.add_all([winner, loser])
+            db.session.commit()
+
+            service = ContactService()
+            alice = service.create_contact({'first_name': 'Alice', 'last_name': 'Smith'})
+            bob = service.create_contact({'first_name': 'Bob', 'last_name': 'Smith'})
+            carol = service.create_contact({'first_name': 'Carol', 'last_name': 'Smith'})
+            service.link_contact_to_property(
+                winner.id, alice.id, role='owner', is_primary=True,
+            )
+            service.link_contact_to_property(
+                winner.id, bob.id, role='owner', is_primary=False,
+            )
+            service.link_contact_to_property(
+                loser.id, carol.id, role='owner', is_primary=True,
+            )
+            db.session.commit()
+            loser_id = loser.id
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ):
+                merge_lead_into_winner(winner, loser, changed_by='test')
+                db.session.commit()
+
+            assert Lead.query.get(loser_id) is None
+            owners = PropertyContact.query.filter_by(
+                property_id=winner.id, role='owner',
+            ).all()
+            names = {
+                f'{db.session.get(Contact, link.contact_id).first_name} '
+                f'{db.session.get(Contact, link.contact_id).last_name}'.strip()
+                for link in owners
+            }
+            assert names == {'Alice Smith', 'Bob Smith', 'Carol Smith'}
 
 
     def test_merge_rejects_different_condo_units(self, app):

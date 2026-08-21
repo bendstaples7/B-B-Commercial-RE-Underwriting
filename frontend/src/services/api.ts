@@ -1397,6 +1397,7 @@ export const commandCenterService = {
     data: {
       assessed_value?: number | null
       most_recent_sale?: string | null
+      acquisition_date?: string | null
       most_recent_sale_price?: number | null
       units?: number | null
       property_type?: string | null
@@ -1404,6 +1405,7 @@ export const commandCenterService = {
   ): Promise<{
     assessed_value: number | null
     most_recent_sale: string | null
+    acquisition_date: string | null
     most_recent_sale_price: number | null
     units: number | null
     property_type: string | null

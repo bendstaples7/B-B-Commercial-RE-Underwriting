@@ -986,6 +986,7 @@ class TestUpdatePropertyOverview:
                 data=json.dumps({
                     'assessed_value': 425000,
                     'most_recent_sale': '2015-06-01',
+                    'acquisition_date': '2015-06-01',
                     'most_recent_sale_price': 390000,
                     'units': 1,
                     'property_type': 'Single Family',
@@ -997,11 +998,13 @@ class TestUpdatePropertyOverview:
             body = response.get_json()
             assert body['assessed_value'] == 425000
             assert body['most_recent_sale'] == '2015-06-01'
+            assert body['acquisition_date'] == '2015-06-01'
             assert body['most_recent_sale_price'] == 390000
             assert body['units'] == 1
             assert body['property_type'] == 'Single Family'
             assert body['timeline_entry'] is not None
             db.session.refresh(lead)
+            assert lead.acquisition_date == date(2015, 6, 1)
             assert lead.property_type == 'Single Family'
             entry = LeadTimelineEntry.query.filter_by(
                 lead_id=lead.id, event_type='property_overview_changed',

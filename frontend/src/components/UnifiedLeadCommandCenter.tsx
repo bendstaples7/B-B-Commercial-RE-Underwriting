@@ -228,9 +228,13 @@ function PropertyOverviewHeader({
     el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
     if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1')
     el.focus({ preventScroll: true })
+    const highlightToken = `${Date.now()}-${Math.random()}`
     el.setAttribute('data-owner-link-highlight', 'true')
+    el.setAttribute('data-owner-link-highlight-token', highlightToken)
     window.setTimeout(() => {
+      if (el.getAttribute('data-owner-link-highlight-token') !== highlightToken) return
       el.removeAttribute('data-owner-link-highlight')
+      el.removeAttribute('data-owner-link-highlight-token')
     }, 2000)
   }
 

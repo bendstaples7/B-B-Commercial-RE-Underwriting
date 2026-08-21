@@ -530,6 +530,25 @@ def apply_owner_name_fields(fields: dict, owner_name: str) -> None:
 
 
 _JOINT_PERSON_SPLIT_RE = re.compile(r"\s+(?:and|&)\s+", re.IGNORECASE)
+_JOINT_BUSINESS_PART_TOKENS = {
+    "ASSOC",
+    "ASSOCIATES",
+    "BROS",
+    "BROTHERS",
+    "CO",
+    "COMPANY",
+    "PARTNERS",
+    "SON",
+    "SONS",
+}
+
+
+def _joint_split_part_is_business_token(part: str) -> bool:
+    normalized = re.sub(r"[^A-Z0-9\s]", "", (part or "").upper()).strip()
+    if not normalized:
+        return False
+    words = [word for word in normalized.split() if word]
+    return any(word in _JOINT_BUSINESS_PART_TOKENS for word in words)
 
 
 def split_joint_person_owner_name(
@@ -555,6 +574,8 @@ def split_joint_person_owner_name(
 
     parts = [p.strip() for p in _JOINT_PERSON_SPLIT_RE.split(first) if p.strip()]
     if len(parts) < 2:
+        return [(first, last)]
+    if any(_joint_split_part_is_business_token(part) for part in parts):
         return [(first, last)]
 
     # Require a shared last name so "Edwin and Yoyko" + Miller → two Millers.

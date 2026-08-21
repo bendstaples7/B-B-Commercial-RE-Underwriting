@@ -25,6 +25,9 @@ def main() -> int:
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
 
+    from env_loader import load_project_env
+    load_project_env()
+
     from app import create_app
     from app.models.lead import Lead
     from app.services.joint_owner_heal import heal_joint_owner_names
@@ -56,7 +59,7 @@ def main() -> int:
             limit=args.limit,
         )
         print(stats)
-    return 0
+    return 1 if stats.get('errors') else 0
 
 
 if __name__ == '__main__':

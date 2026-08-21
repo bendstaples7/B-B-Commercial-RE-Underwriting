@@ -39,14 +39,18 @@ def _owner_links(lead_id: int) -> list[PropertyContact]:
     return PropertyContact.query.filter_by(property_id=lead_id, role='owner').all()
 
 
-def _has_owner_person(lead_id: int, first: str, last: str) -> bool:
+def _owner_person_link(lead_id: int, first: str, last: str) -> PropertyContact | None:
     for link in _owner_links(lead_id):
         contact = db.session.get(Contact, link.contact_id)
         if contact is None:
             continue
         if owner_names_equivalent(first, last, contact.first_name, contact.last_name):
-            return True
-    return False
+            return link
+    return None
+
+
+def _has_owner_person(lead_id: int, first: str, last: str) -> bool:
+    return _owner_person_link(lead_id, first, last) is not None
 
 
 def ensure_coowner_on_lead(
@@ -101,7 +105,7 @@ def ensure_coowner_on_lead(
 
     if commit:
         db.session.commit()
-    return changed or _has_owner_person(lead_id, first, last)
+    return changed
 
 
 def _heal_live_jammed_lead(lead: Lead, service: ContactService) -> bool:
@@ -127,10 +131,18 @@ def _heal_live_jammed_lead(lead: Lead, service: ContactService) -> bool:
         lead.owner_2_last_name = second[1]
         changed = True
 
-    for first, last in people:
-        if _has_owner_person(lead.id, first or '', last or ''):
+    for index, (first, last) in enumerate(people):
+        existing_link = _owner_person_link(lead.id, first or '', last or '')
+        want_primary = index == 0
+        if existing_link is not None:
+            if want_primary and not existing_link.is_primary:
+                PropertyContact.query.filter_by(
+                    property_id=lead.id,
+                    is_primary=True,
+                ).update({'is_primary': False})
+                existing_link.is_primary = True
+                changed = True
             continue
-        want_primary = len(_owner_links(lead.id)) == 0
         service._upsert_named_owner(  # noqa: SLF001
             lead.id,
             first,
@@ -163,6 +175,8 @@ def heal_joint_owner_names(
     }
 
     service = ContactService()
+    id_list = list(lead_ids) if lead_ids is not None else None
+    id_set = set(id_list) if id_list is not None else None
 
     if heal_live_jammed or lead_ids is not None:
         query = Lead.query.filter(
@@ -172,8 +186,7 @@ def heal_joint_owner_names(
                 Lead.owner_first_name.ilike('% & %'),
             ),
         )
-        if lead_ids is not None:
-            id_list = list(lead_ids)
+        if id_list is not None:
             query = query.filter(Lead.id.in_(id_list))
         if limit is not None:
             query = query.limit(limit)
@@ -191,7 +204,7 @@ def heal_joint_owner_names(
 
     if include_known_missing:
         for winner_id, first, last in KNOWN_MISSING_COOWNERS:
-            if lead_ids is not None and winner_id not in set(lead_ids):
+            if id_set is not None and winner_id not in id_set:
                 continue
             try:
                 with db.session.begin_nested():

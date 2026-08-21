@@ -1601,12 +1601,17 @@ def update_property_overview(lead_id: int):
     actor = str(getattr(g, 'user_id', None) or 'anonymous')
     changed: dict = {}
 
+    def _json_safe(value):
+        if isinstance(value, (_dt.datetime, _dt.date)):
+            return value.isoformat()
+        return value
+
     def _set(field: str, value):
         previous = getattr(lead, field, None)
         if previous == value:
             return
         setattr(lead, field, value)
-        changed[field] = {'previous': previous, 'new': value}
+        changed[field] = {'previous': _json_safe(previous), 'new': _json_safe(value)}
 
     if 'assessed_value' in data:
         _set('assessed_value', data['assessed_value'])
@@ -1615,6 +1620,8 @@ def update_property_overview(lead_id: int):
         if isinstance(sale, str):
             sale = sale.strip() or None
         _set('most_recent_sale', sale)
+    if 'acquisition_date' in data:
+        _set('acquisition_date', data['acquisition_date'])
     if 'most_recent_sale_price' in data:
         _set('most_recent_sale_price', data['most_recent_sale_price'])
     if 'units' in data:
@@ -1631,6 +1638,7 @@ def update_property_overview(lead_id: int):
         labels = {
             'assessed_value': 'Est. value',
             'most_recent_sale': 'Last sale date',
+            'acquisition_date': 'Last sale date',
             'most_recent_sale_price': 'Last sale price',
             'units': 'Units',
             'property_type': 'Property type',
@@ -1662,6 +1670,7 @@ def update_property_overview(lead_id: int):
     return jsonify({
         'assessed_value': lead.assessed_value,
         'most_recent_sale': lead.most_recent_sale,
+        'acquisition_date': lead.acquisition_date.isoformat() if lead.acquisition_date else None,
         'most_recent_sale_price': lead.most_recent_sale_price,
         'units': lead.units,
         'property_type': lead.property_type,

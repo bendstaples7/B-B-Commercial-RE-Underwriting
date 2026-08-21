@@ -1,14 +1,24 @@
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import {
   formatLastSaleCell,
   formatMoneyValue,
   formatUnitsDetailsCell,
   resolveLastSaleCell,
+  resolveLastSaleEditorFields,
   resolveNoSaleCopy,
   PropertyOverviewQuickStats,
 } from './PropertyOverviewQuickStats'
 import type { CommandCenterPayload } from '@/types'
+import { commandCenterService } from '@/services/api'
+
+vi.mock('@/services/api', () => ({
+  commandCenterService: {
+    updateCategory: vi.fn(),
+    updatePropertyOverview: vi.fn(),
+  },
+}))
 
 function basePayload(overrides: Partial<CommandCenterPayload> = {}): CommandCenterPayload {
   return {
@@ -28,6 +38,27 @@ function basePayload(overrides: Partial<CommandCenterPayload> = {}): CommandCent
     ...overrides,
   }
 }
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.mocked(commandCenterService.updatePropertyOverview).mockResolvedValue({
+    assessed_value: null,
+    most_recent_sale: null,
+    acquisition_date: null,
+    most_recent_sale_price: null,
+    units: null,
+    property_type: null,
+    lead_score: null,
+    timeline_entry: null,
+  })
+  vi.mocked(commandCenterService.updateCategory).mockResolvedValue({
+    lead_category: 'residential',
+    lead_category_locked: true,
+    property_type: null,
+    lead_score: null,
+    timeline_entry: {} as never,
+  })
+})
 
 describe('PropertyOverviewQuickStats formatters', () => {
   it('formats money and last sale with date + amount', () => {
@@ -49,6 +80,33 @@ describe('PropertyOverviewQuickStats formatters', () => {
         }),
       ),
     ).toBe('10/07/2008 · $425,000')
+  })
+
+  it('resolves editor sale fields from the same display fallbacks', () => {
+    expect(
+      resolveLastSaleEditorFields(
+        basePayload({
+          acquisition_date: '2020-01-02',
+          most_recent_sale_display: '01/02/2020',
+          most_recent_sale: null,
+        }),
+      ),
+    ).toMatchObject({
+      mostRecentSale: '01/02/2020',
+      saleDateField: 'acquisition_date',
+    })
+    expect(
+      resolveLastSaleEditorFields(
+        basePayload({
+          most_recent_sale_price: null,
+          sale_history: [{ sale_date: '2008-10-07', sale_price: 425000 }],
+        }),
+      ),
+    ).toMatchObject({
+      mostRecentSale: '2008-10-07',
+      mostRecentSalePrice: 425000,
+      saleDateField: 'most_recent_sale',
+    })
   })
 
   it('formats units · type', () => {
@@ -150,6 +208,105 @@ describe('PropertyOverviewQuickStats', () => {
     )
     expect(screen.queryByTestId('quick-stat-condo-check')).not.toBeInTheDocument()
     expect(screen.getByTestId('quick-stat-est-value')).toBeInTheDocument()
+  })
+
+  it('updates acquisition_date when that field drives the displayed sale date', async () => {
+    const user = userEvent.setup()
+    render(
+      <PropertyOverviewQuickStats
+        commandCenterData={basePayload({
+          acquisition_date: '2020-01-02',
+          most_recent_sale_display: '01/02/2020',
+          most_recent_sale_price: 425000,
+        })}
+        leadId={1}
+      />,
+    )
+
+    await user.click(screen.getByTestId('quick-stat-last-sale-edit-trigger'))
+    const dateInput = screen.getByTestId('quick-stat-last-sale-date-input')
+    await user.clear(dateInput)
+    await user.type(dateInput, '2021-03-04')
+    await user.click(screen.getByTestId('quick-stat-last-sale-save'))
+
+    await waitFor(() => {
+      expect(commandCenterService.updatePropertyOverview).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({
+          acquisition_date: '2021-03-04',
+          most_recent_sale: '2021-03-04',
+          most_recent_sale_price: 425000,
+        }),
+      )
+    })
+  })
+
+  it('seeds the sale editor price from sale_history fallback', async () => {
+    const user = userEvent.setup()
+    render(
+      <PropertyOverviewQuickStats
+        commandCenterData={basePayload({
+          most_recent_sale_price: null,
+          sale_history: [{ sale_date: '2008-10-07', sale_price: 425000 }],
+        })}
+        leadId={1}
+      />,
+    )
+
+    await user.click(screen.getByTestId('quick-stat-last-sale-edit-trigger'))
+
+    expect(screen.getByTestId('quick-stat-last-sale-price-input')).toHaveValue('425000')
+  })
+
+  it('rejects marker-only prices and fractional units before saving', async () => {
+    const user = userEvent.setup()
+    render(<PropertyOverviewQuickStats commandCenterData={basePayload({ units: 1 })} leadId={1} />)
+
+    await user.click(screen.getByTestId('quick-stat-last-sale-edit-trigger'))
+    const priceInput = screen.getByTestId('quick-stat-last-sale-price-input')
+    await user.type(priceInput, '$')
+    await user.click(screen.getByTestId('quick-stat-last-sale-save'))
+    expect(await screen.findByText('Enter a valid number.')).toBeInTheDocument()
+    expect(commandCenterService.updatePropertyOverview).not.toHaveBeenCalled()
+
+    await user.click(screen.getByTestId('quick-stat-last-sale-cancel'))
+    await user.click(screen.getByTestId('quick-stat-units-details-edit-trigger'))
+    const unitsInput = screen.getByTestId('quick-stat-units-input')
+    await user.clear(unitsInput)
+    await user.type(unitsInput, '1.5')
+    await user.click(screen.getByTestId('quick-stat-units-details-save'))
+    expect(await screen.findByText('Units must be a whole number.')).toBeInTheDocument()
+    expect(commandCenterService.updatePropertyOverview).not.toHaveBeenCalled()
+  })
+
+  it('preserves an unparseable raw sale date when only price changes', async () => {
+    const user = userEvent.setup()
+    render(
+      <PropertyOverviewQuickStats
+        commandCenterData={basePayload({
+          most_recent_sale: 'Recorded circa 2018',
+          most_recent_sale_price: 300000,
+        })}
+        leadId={1}
+      />,
+    )
+
+    await user.click(screen.getByTestId('quick-stat-last-sale-edit-trigger'))
+    const priceInput = screen.getByTestId('quick-stat-last-sale-price-input')
+    await user.clear(priceInput)
+    await user.type(priceInput, '325000')
+    await user.click(screen.getByTestId('quick-stat-last-sale-save'))
+
+    await waitFor(() => {
+      expect(commandCenterService.updatePropertyOverview).toHaveBeenCalledWith(
+        1,
+        expect.not.objectContaining({ most_recent_sale: expect.anything() }),
+      )
+    })
+    expect(commandCenterService.updatePropertyOverview).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ most_recent_sale_price: 325000 }),
+    )
   })
 
   it('shows Category as 4th KPI cell (user 12B)', () => {
