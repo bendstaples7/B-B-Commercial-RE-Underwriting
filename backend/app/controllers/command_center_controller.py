@@ -19,6 +19,7 @@ from app.models import Lead, LeadTask, LeadTimelineEntry
 from app.schemas import (
     LeadTaskCreateSchema, LeadTaskUpdateSchema, LeadTaskSnoozeSchema,
     LogNoteSchema, LogCallSchema, LeadStatusUpdateSchema, LeadCategoryUpdateSchema,
+    LeadPropertyOverviewUpdateSchema,
     ParkLeadSchema, DoNotContactSchema, ReactivateLeadSchema,
     LeadTimelineEntrySchema,
 )
@@ -1572,6 +1573,100 @@ def update_category(lead_id: int):
         'property_type': lead.property_type,
         'lead_score': lead.lead_score,
         'timeline_entry': _serialize_timeline_entry(entry),
+    }), 200
+
+
+@command_center_bp.route('/<int:lead_id>/property-overview', methods=['PATCH'])
+@require_auth
+@handle_errors
+def update_property_overview(lead_id: int):
+    """
+    PATCH /api/leads/<lead_id>/property-overview
+
+    Update header KPIs: assessed value, last sale date/price, units, property type.
+    """
+    from app import db
+    import datetime as _dt
+
+    raw = request.get_json() or {}
+    data = LeadPropertyOverviewUpdateSchema().load(raw)
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return denied
+
+    actor = str(getattr(g, 'user_id', None) or 'anonymous')
+    changed: dict = {}
+
+    def _set(field: str, value):
+        previous = getattr(lead, field, None)
+        if previous == value:
+            return
+        setattr(lead, field, value)
+        changed[field] = {'previous': previous, 'new': value}
+
+    if 'assessed_value' in data:
+        _set('assessed_value', data['assessed_value'])
+    if 'most_recent_sale' in data:
+        sale = data['most_recent_sale']
+        if isinstance(sale, str):
+            sale = sale.strip() or None
+        _set('most_recent_sale', sale)
+    if 'most_recent_sale_price' in data:
+        _set('most_recent_sale_price', data['most_recent_sale_price'])
+    if 'units' in data:
+        _set('units', data['units'])
+    if 'property_type' in data:
+        ptype = data['property_type']
+        if isinstance(ptype, str):
+            ptype = ptype.strip() or None
+        _set('property_type', ptype)
+
+    entry = None
+    if changed:
+        parts = []
+        labels = {
+            'assessed_value': 'Est. value',
+            'most_recent_sale': 'Last sale date',
+            'most_recent_sale_price': 'Last sale price',
+            'units': 'Units',
+            'property_type': 'Property type',
+        }
+        for key in changed:
+            parts.append(labels.get(key, key))
+        summary = 'Updated ' + ', '.join(parts)
+        entry = LeadTimelineEntry(
+            lead_id=lead_id,
+            event_type='property_overview_changed',
+            occurred_at=_dt.datetime.utcnow(),
+            source='manual',
+            actor=actor,
+            summary=summary[:500],
+            event_metadata={'changed': changed},
+        )
+        db.session.add(entry)
+
+    db.session.add(lead)
+    db.session.commit()
+
+    if changed:
+        from app.services.lead_refresh import refresh_lead_scoring
+        refresh_lead_scoring(lead_id)
+        db.session.refresh(lead)
+        if entry is not None:
+            db.session.refresh(entry)
+
+    return jsonify({
+        'assessed_value': lead.assessed_value,
+        'most_recent_sale': lead.most_recent_sale,
+        'most_recent_sale_price': lead.most_recent_sale_price,
+        'units': lead.units,
+        'property_type': lead.property_type,
+        'lead_score': lead.lead_score,
+        'timeline_entry': _serialize_timeline_entry(entry) if entry else None,
     }), 200
 
 

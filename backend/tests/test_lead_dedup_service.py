@@ -802,6 +802,58 @@ class TestSameBuildingBannerAndAdditivePeople:
             assert '8475553333' in digits
             assert 'yoko@example.com' in {e.lower() for e in yoko_emails}
 
+    def test_merge_splits_joint_edwin_and_yoyko_into_two_owners(self, app):
+        """Loser jammed 'Edwin and Yoyko' must become two people on the winner."""
+        from app.models.property_contact import PropertyContact
+        from app.services.contact_service import ContactService
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='915 W Lawrence Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+            )
+            loser = Lead(
+                property_street='915 W Lawrence Ave',
+                owner_first_name='Edwin and Yoyko',
+                owner_last_name='Miller',
+            )
+            db.session.add_all([winner, loser])
+            db.session.commit()
+
+            service = ContactService()
+            yoko = service.create_contact({
+                'first_name': 'Yoko',
+                'last_name': 'Miller',
+            })
+            service.link_contact_to_property(
+                winner.id, yoko.id, role='owner', is_primary=True,
+            )
+            db.session.commit()
+            loser_id = loser.id
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ):
+                merge_lead_into_winner(winner, loser, changed_by='test')
+                db.session.commit()
+
+            assert Lead.query.get(loser_id) is None
+            refreshed = db.session.get(Lead, winner.id)
+            assert (refreshed.owner_2_first_name or '').strip().lower() == 'edwin'
+            assert (refreshed.owner_2_last_name or '').strip().lower() == 'miller'
+            owners = PropertyContact.query.filter_by(
+                property_id=winner.id, role='owner',
+            ).all()
+            names = set()
+            for link in owners:
+                contact = db.session.get(Contact, link.contact_id)
+                names.add(f'{contact.first_name} {contact.last_name}'.strip())
+            assert any(n.lower().startswith('yoko') for n in names)
+            assert any(n.lower().startswith('edwin') for n in names)
+            assert len(owners) >= 2
+
 
     def test_merge_rejects_different_condo_units(self, app):
         from app.services.lead_dedup_service import merge_loser_into_winner

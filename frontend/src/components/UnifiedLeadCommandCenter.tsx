@@ -151,6 +151,7 @@ interface PropertyOverviewHeaderProps {
   /** Brief score delta pill shown after an activity save (call/note/email). */
   scoreFlash?: ScoreFlash | null
   onCategoryChanged?: (next: 'residential' | 'commercial') => void | Promise<void>
+  onPropertyOverviewChanged?: () => void | Promise<void>
 }
 
 function formatPropertyAddress(data: CommandCenterPayload): string {
@@ -176,6 +177,7 @@ function PropertyOverviewHeader({
   statusSelectorRef,
   scoreFlash,
   onCategoryChanged,
+  onPropertyOverviewChanged,
 }: PropertyOverviewHeaderProps & { statusSelectorRef?: React.RefObject<HTMLDivElement | null> }) {
   const [scoreDialogOpen, setScoreDialogOpen] = useState(false)
   const [pinSnack, setPinSnack] = useState<string | null>(null)
@@ -226,6 +228,10 @@ function PropertyOverviewHeader({
     el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
     if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1')
     el.focus({ preventScroll: true })
+    el.setAttribute('data-owner-link-highlight', 'true')
+    window.setTimeout(() => {
+      el.removeAttribute('data-owner-link-highlight')
+    }, 2000)
   }
 
   const metadataParts: React.ReactNode[] = []
@@ -427,6 +433,7 @@ function PropertyOverviewHeader({
             centerInGap={centerKpis}
             leadId={leadId}
             onCategoryChanged={onCategoryChanged}
+            onPropertyOverviewChanged={onPropertyOverviewChanged}
           />
           </Box>
 
@@ -2122,6 +2129,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             statusSelectorRef={statusSelectorRef}
             scoreFlash={scoreFlash}
             onCategoryChanged={async () => {
+              await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+            }}
+            onPropertyOverviewChanged={async () => {
               await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
             }}
             onBeforePinDeprioritize={() => {

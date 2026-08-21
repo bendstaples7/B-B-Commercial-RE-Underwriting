@@ -19,6 +19,7 @@ import {
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
 import { formatNoteUnitMixLabel } from '@/utils/notePropertyFacts'
 import { LeadCategorySelector } from '@/components/LeadCategorySelector'
+import { PropertyOverviewKpiEditor } from '@/components/lead-detail/PropertyOverviewKpiEditor'
 
 const EM_DASH = '—'
 
@@ -205,6 +206,7 @@ export interface PropertyOverviewQuickStatsProps {
   centerInGap?: boolean
   leadId?: number
   onCategoryChanged?: (next: 'residential' | 'commercial') => void | Promise<void>
+  onPropertyOverviewChanged?: () => void | Promise<void>
 }
 
 export function PropertyOverviewQuickStats({
@@ -212,6 +214,7 @@ export function PropertyOverviewQuickStats({
   centerInGap = false,
   leadId,
   onCategoryChanged,
+  onPropertyOverviewChanged,
 }: PropertyOverviewQuickStatsProps) {
   const estValue = formatMoneyValue(commandCenterData.assessed_value ?? null)
   const lastSale = resolveLastSaleCell(commandCenterData)
@@ -266,6 +269,9 @@ export function PropertyOverviewQuickStats({
     },
   ]
 
+  const editableKinds = new Set(['est-value', 'last-sale', 'units-details'])
+  const canEdit = typeof leadId === 'number'
+
   return (
     <Box
       data-testid="property-overview-quick-stats"
@@ -273,7 +279,8 @@ export function PropertyOverviewQuickStats({
       sx={centerInGap ? ccHeaderQuickStatsCenteredSx : ccHeaderQuickStatsSx}
     >
       {cells.map((cell) => {
-        const isCategoryControl = cell.id === 'category' && typeof leadId === 'number'
+        const isCategoryControl = cell.id === 'category' && canEdit
+        const isKpiEditor = canEdit && editableKinds.has(cell.id)
         const body = (
           <Box
             data-testid={`quick-stat-${cell.id}`}
@@ -291,6 +298,22 @@ export function PropertyOverviewQuickStats({
                 leadId={leadId}
                 category={commandCenterData.lead_category}
                 onChanged={onCategoryChanged}
+              />
+            ) : isKpiEditor ? (
+              <PropertyOverviewKpiEditor
+                leadId={leadId}
+                kind={cell.id as 'est-value' | 'last-sale' | 'units-details'}
+                displayValue={cell.value}
+                assessedValue={commandCenterData.assessed_value}
+                mostRecentSale={
+                  commandCenterData.most_recent_sale_display
+                  ?? commandCenterData.most_recent_sale
+                }
+                mostRecentSalePrice={commandCenterData.most_recent_sale_price}
+                units={commandCenterData.units}
+                propertyType={commandCenterData.property_type}
+                allowWrap={Boolean(cell.allowWrap)}
+                onSaved={onPropertyOverviewChanged}
               />
             ) : (
               <Typography

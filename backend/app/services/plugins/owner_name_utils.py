@@ -527,3 +527,126 @@ def apply_owner_name_fields(fields: dict, owner_name: str) -> None:
     else:
         fields["owner_first_name"] = parts[0]
         fields["owner_last_name"] = parts[1]
+
+
+_JOINT_PERSON_SPLIT_RE = re.compile(r"\s+(?:and|&)\s+", re.IGNORECASE)
+
+
+def split_joint_person_owner_name(
+    first_name: str | None,
+    last_name: str | None,
+) -> list[tuple[str | None, str | None]]:
+    """Split jammed co-owner first names into separate people.
+
+    Handles assessor-style ``"Edwin and Yoyko"`` / ``"A & B"`` with a shared
+    last name. Entity / institutional labels are left as a single identity.
+    """
+    first = re.sub(r"\s+", " ", (first_name or "").strip()) or None
+    last = re.sub(r"\s+", " ", (last_name or "").strip()) or None
+    if not first and not last:
+        return []
+
+    display = f"{first or ''} {last or ''}".strip()
+    if is_entity_name(display) or (first and is_entity_name(first)):
+        return [(first, last)]
+
+    if not first or not _JOINT_PERSON_SPLIT_RE.search(first):
+        return [(first, last)]
+
+    parts = [p.strip() for p in _JOINT_PERSON_SPLIT_RE.split(first) if p.strip()]
+    if len(parts) < 2:
+        return [(first, last)]
+
+    # Require a shared last name so "Edwin and Yoyko" + Miller → two Millers.
+    # Without a last name, keep the jammed string (ambiguous).
+    if not last:
+        return [(first, last)]
+
+    return [(part, last) for part in parts]
+
+
+def collect_flat_owner_people(lead) -> list[tuple[str | None, str | None]]:
+    """Owner 1 / Owner 2 people from flat lead fields, with joint names split."""
+    people: list[tuple[str | None, str | None]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(first: str | None, last: str | None) -> None:
+        for person_first, person_last in split_joint_person_owner_name(first, last):
+            key = (
+                re.sub(r"\s+", " ", (person_first or "").strip()).lower(),
+                re.sub(r"\s+", " ", (person_last or "").strip()).lower(),
+            )
+            if not key[0] and not key[1]:
+                continue
+            if key in seen:
+                continue
+            # Dedup aliases (Yoko vs Yoyko) against already-collected people.
+            duplicate = False
+            for existing_first, existing_last in people:
+                if owner_names_equivalent(
+                    person_first, person_last, existing_first, existing_last,
+                ):
+                    duplicate = True
+                    break
+            if duplicate:
+                continue
+            seen.add(key)
+            people.append((person_first, person_last))
+
+    _add(
+        getattr(lead, "owner_first_name", None),
+        getattr(lead, "owner_last_name", None),
+    )
+    _add(
+        getattr(lead, "owner_2_first_name", None),
+        getattr(lead, "owner_2_last_name", None),
+    )
+    return people
+
+
+def apply_joint_owner_split_to_lead_flats(lead) -> bool:
+    """Normalize jammed primary into owner + owner_2 when the second slot is empty.
+
+    Returns True when flat fields changed.
+    """
+    people = collect_flat_owner_people(lead)
+    if len(people) < 2:
+        # Still may need to collapse jammed primary into first person only.
+        split = split_joint_person_owner_name(
+            getattr(lead, "owner_first_name", None),
+            getattr(lead, "owner_last_name", None),
+        )
+        if len(split) == 1 and split[0][0] != getattr(lead, "owner_first_name", None):
+            lead.owner_first_name = split[0][0]
+            lead.owner_last_name = split[0][1]
+            return True
+        return False
+
+    first_person, second_person = people[0], people[1]
+    changed = False
+    if (
+        (lead.owner_first_name or None) != first_person[0]
+        or (lead.owner_last_name or None) != first_person[1]
+    ):
+        lead.owner_first_name = first_person[0]
+        lead.owner_last_name = first_person[1]
+        changed = True
+
+    o2_empty = not (
+        (getattr(lead, "owner_2_first_name", None) or "").strip()
+        or (getattr(lead, "owner_2_last_name", None) or "").strip()
+    )
+    if o2_empty or owner_names_equivalent(
+        getattr(lead, "owner_2_first_name", None),
+        getattr(lead, "owner_2_last_name", None),
+        second_person[0],
+        second_person[1],
+    ):
+        if (
+            (getattr(lead, "owner_2_first_name", None) or None) != second_person[0]
+            or (getattr(lead, "owner_2_last_name", None) or None) != second_person[1]
+        ):
+            lead.owner_2_first_name = second_person[0]
+            lead.owner_2_last_name = second_person[1]
+            changed = True
+    return changed

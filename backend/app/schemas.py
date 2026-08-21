@@ -1644,7 +1644,7 @@ VALID_TIMELINE_EVENT_TYPES = [
     'task_snoozed', 'recommended_action_changed', 'status_changed',
     'hubspot_note', 'hubspot_call', 'hubspot_task', 'hubspot_deal_stage',
     'property_analysis_completed', 'lead_imported',
-    'category_changed', 'leads_merged',
+    'category_changed', 'leads_merged', 'property_overview_changed',
 ]
 
 VALID_TIMELINE_SOURCES = ['manual', 'system', 'hubspot']
@@ -1730,6 +1730,34 @@ class LeadCategoryUpdateSchema(RequestSchema):
         required=True,
         validate=validate.OneOf(VALID_LEAD_CATEGORIES),
     )
+
+
+class LeadPropertyOverviewUpdateSchema(RequestSchema):
+    """Partial update for Command Center header property KPIs."""
+    assessed_value = fields.Float(
+        allow_none=True, validate=validate.Range(min=0),
+    )
+    most_recent_sale = fields.String(
+        allow_none=True, validate=validate.Length(max=64),
+    )
+    most_recent_sale_price = fields.Float(
+        allow_none=True, validate=validate.Range(min=0),
+    )
+    units = fields.Integer(
+        allow_none=True, validate=validate.Range(min=0),
+    )
+    property_type = fields.String(
+        allow_none=True, validate=validate.Length(max=50),
+    )
+
+    @validates_schema
+    def require_one_field(self, data, **kwargs):
+        keys = (
+            'assessed_value', 'most_recent_sale', 'most_recent_sale_price',
+            'units', 'property_type',
+        )
+        if not any(k in data for k in keys):
+            raise ValidationError('Provide at least one property overview field.')
 
 
 class LogCallFollowUpSchema(RequestSchema):

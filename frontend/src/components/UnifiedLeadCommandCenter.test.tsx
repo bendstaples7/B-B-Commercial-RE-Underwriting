@@ -400,7 +400,9 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
       })
       await user.click(screen.getByTestId('property-overview-owner-link'))
       expect(scrollIntoView).toHaveBeenCalled()
-      expect(screen.getByTestId('key-contact-card')).toHaveFocus()
+      const card = screen.getByTestId('key-contact-card')
+      expect(card).toHaveFocus()
+      expect(card).toHaveAttribute('data-owner-link-highlight', 'true')
     } finally {
       Element.prototype.scrollIntoView = originalScroll
     }

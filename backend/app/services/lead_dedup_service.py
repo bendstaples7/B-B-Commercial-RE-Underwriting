@@ -256,6 +256,100 @@ def _prefer_newer_sale_onto_winner(winner: Lead, loser: Lead) -> None:
             winner.acquisition_date = l_sale
 
 
+def _owner_name_street_conflict(
+    lead: Lead,
+    first_name: str | None,
+    last_name: str | None,
+) -> bool:
+    """True when rewriting primary owner would hit uq_leads_owner_normalized_street."""
+    key = getattr(lead, 'normalized_street', None) or dedup_street_key(
+        getattr(lead, 'property_street', None),
+    )
+    owner_user_id = getattr(lead, 'owner_user_id', None)
+    first = (first_name or '').strip()
+    last = (last_name or '').strip()
+    if not (key and owner_user_id and first and last):
+        return False
+    ignore = {lead.id} if isinstance(lead.id, int) else set()
+    query = Lead.query.filter(
+        Lead.owner_user_id == owner_user_id,
+        func.lower(func.trim(Lead.owner_first_name)) == first.lower(),
+        func.lower(func.trim(Lead.owner_last_name)) == last.lower(),
+        Lead.normalized_street == key,
+    )
+    if ignore:
+        query = query.filter(~Lead.id.in_(ignore))
+    return bool(db.session.query(query.exists()).scalar())
+
+
+def _merge_flat_owner_people(winner: Lead, loser: Lead) -> None:
+    """Union flat owners from both sides; split joint names like ``A and B``.
+
+    Never renames primary when that would collide with the owner+street unique
+    index — fills empty ``owner_2_*`` instead so co-owners are not silently lost.
+    """
+    from app.services.plugins.owner_name_utils import (
+        apply_joint_owner_split_to_lead_flats,
+        collect_flat_owner_people,
+        owner_names_equivalent,
+    )
+
+    people: list[tuple[str | None, str | None]] = []
+    for source in (winner, loser):
+        for person in collect_flat_owner_people(source):
+            duplicate = False
+            for existing in people:
+                if owner_names_equivalent(
+                    person[0], person[1], existing[0], existing[1],
+                ):
+                    duplicate = True
+                    break
+            if not duplicate:
+                people.append(person)
+
+    if not people:
+        apply_joint_owner_split_to_lead_flats(winner)
+        return
+
+    primary = people[0]
+    can_rewrite_primary = not _owner_name_street_conflict(
+        winner, primary[0], primary[1],
+    )
+    if can_rewrite_primary:
+        winner.owner_first_name = primary[0]
+        winner.owner_last_name = primary[1]
+        secondary_candidates = people[1:]
+    else:
+        logger.info(
+            'merge keeping primary owner flats on winner=%s; rename would collide',
+            getattr(winner, 'id', None),
+        )
+        secondary_candidates = [
+            person for person in people
+            if not owner_names_equivalent(
+                person[0], person[1],
+                winner.owner_first_name, winner.owner_last_name,
+            )
+        ]
+
+    if secondary_candidates:
+        second = secondary_candidates[0]
+        o2_empty = not (
+            (getattr(winner, 'owner_2_first_name', None) or '').strip()
+            or (getattr(winner, 'owner_2_last_name', None) or '').strip()
+        )
+        if o2_empty or owner_names_equivalent(
+            getattr(winner, 'owner_2_first_name', None),
+            getattr(winner, 'owner_2_last_name', None),
+            second[0],
+            second[1],
+        ):
+            winner.owner_2_first_name = second[0]
+            winner.owner_2_last_name = second[1]
+    elif can_rewrite_primary:
+        apply_joint_owner_split_to_lead_flats(winner)
+
+
 def _prefer_cleaner_property_street(winner: Lead, loser: Lead) -> None:
     """Prefer cleaner / more specific street when both normalize to one building."""
     w_street = (winner.property_street or '').strip()
@@ -349,6 +443,8 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
 
     _prefer_newer_sale_onto_winner(winner, loser)
     _prefer_cleaner_property_street(winner, loser)
+    # Fail closed: co-owner split must not be swallowed (silent loss of people).
+    _merge_flat_owner_people(winner, loser)
     people_before = 0
     try:
         from app.models.property_contact import PropertyContact
@@ -360,6 +456,14 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
     contacts_combined = 0
     try:
         from app.services.contact_service import ContactService
+        # Materialize flat owner_1 / owner_2 (incl. split joint names) as contacts
+        # before same-person combine — otherwise jammed "Edwin and Yoyko" is lost.
+        ContactService().upsert_owners_from_lead(
+            winner,
+            phone_source='flat_backfill',
+            commit=False,
+            refresh_scoring=False,
+        )
         contacts_combined = ContactService().unlink_duplicate_person_owners(winner_id)
     except Exception as exc:
         logger.warning(
