@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { SameAddressMergeBanner } from '@/components/lead-detail/SameAddressMergeBanner'
 import { commandCenterService } from '@/services/api'
 import type { SameAddressLeadSummary } from '@/types'
+import { AppSnackbar } from '@/components/AppSnackbar'
 import {
   afterCommandCenterMutation,
   commandCenterQueryKey,
@@ -104,31 +105,47 @@ describe('SameAddressMergeBanner', () => {
     })
   })
 
-  it('still shows success snack if onMerged refresh throws after merge', async () => {
+  it('lets parent-owned success feedback survive an onMerged refresh failure', async () => {
     const user = userEvent.setup()
     vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
       winner_id: 100,
       loser_id: 200,
       merged: true,
     })
+
+    function Harness() {
+      const [snack, setSnack] = useState<string | null>(null)
+      return (
+        <>
+          <SameAddressMergeBanner
+            leadId={100}
+            currentOwnerLabel="Current"
+            currentPeopleNames={['Current']}
+            twins={[
+              {
+                id: 200,
+                property_street: '1 Main',
+                owner_display_name: 'Twin',
+                people_names: ['Twin'],
+              },
+            ]}
+            onMerged={async () => {
+              setSnack('Records combined.')
+              throw new Error('invalidate failed')
+            }}
+          />
+          <AppSnackbar
+            open={Boolean(snack)}
+            onClose={() => setSnack(null)}
+            message={snack ?? ''}
+          />
+        </>
+      )
+    }
+
     render(
       <MemoryRouter>
-        <SameAddressMergeBanner
-          leadId={100}
-          currentOwnerLabel="Current"
-          currentPeopleNames={['Current']}
-          twins={[
-            {
-              id: 200,
-              property_street: '1 Main',
-              owner_display_name: 'Twin',
-              people_names: ['Twin'],
-            },
-          ]}
-          onMerged={async () => {
-            throw new Error('invalidate failed')
-          }}
-        />
+        <Harness />
       </MemoryRouter>,
     )
     await user.click(screen.getByTestId('same-address-merge-open'))
@@ -189,16 +206,25 @@ describe('SameAddressMergeBanner', () => {
           people_names: ['Twin'],
         },
       ])
+      const [snack, setSnack] = useState<string | null>(null)
       return (
-        <SameAddressMergeBanner
-          leadId={100}
-          currentOwnerLabel="Current"
-          currentPeopleNames={['Current']}
-          twins={twins}
-          onMerged={async () => {
-            setTwins([])
-          }}
-        />
+        <>
+          <SameAddressMergeBanner
+            leadId={100}
+            currentOwnerLabel="Current"
+            currentPeopleNames={['Current']}
+            twins={twins}
+            onMerged={async () => {
+              setSnack('Records combined.')
+              setTwins([])
+            }}
+          />
+          <AppSnackbar
+            open={Boolean(snack)}
+            onClose={() => setSnack(null)}
+            message={snack ?? ''}
+          />
+        </>
       )
     }
 
@@ -213,6 +239,7 @@ describe('SameAddressMergeBanner', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('same-address-merge-banner')).not.toBeInTheDocument()
     })
+    expect(screen.getByText('Records combined.')).toBeInTheDocument()
   })
 
   it('lets you pick which twin to remove when several share the address', async () => {

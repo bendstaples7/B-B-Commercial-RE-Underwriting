@@ -20,7 +20,6 @@ import {
 } from '@mui/material'
 import { commandCenterService } from '@/services/api'
 import type { SameAddressLeadSummary } from '@/types'
-import { AppSnackbar } from '@/components/AppSnackbar'
 
 export type SameAddressMergedPayload = {
   winnerId: number
@@ -61,7 +60,6 @@ export function SameAddressMergeBanner({
   const [validatedPasteId, setValidatedPasteId] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [snack, setSnack] = useState<string | null>(null)
   const removeIdRef = useRef<number | null>(null)
   const pasteIdRef = useRef('')
   const pasteLookupPromise = useRef<Promise<boolean> | null>(null)
@@ -207,10 +205,9 @@ export function SameAddressMergeBanner({
           loserId: mergedLoserId,
         })
       } catch {
-        // Swallow: snack below still reports success.
+        // Swallow: merge already committed; parent-owned feedback reports success.
       }
       setOpen(false)
-      setSnack('Records combined.')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not combine those records.')
     } finally {
@@ -374,11 +371,6 @@ export function SameAddressMergeBanner({
           </Button>
         </DialogActions>
       </Dialog>
-      <AppSnackbar
-        open={Boolean(snack)}
-        onClose={() => setSnack(null)}
-        message={snack ?? ''}
-      />
     </>
   )
 }
