@@ -550,13 +550,17 @@ _JOINT_BUSINESS_SINGLE_PART_TOKENS = {
 }
 
 
-def _joint_split_part_is_business_token(part: str) -> bool:
+def _joint_split_part_is_business_token(
+    part: str,
+    *,
+    single_part_tokens: set[str] | None = None,
+) -> bool:
     normalized = re.sub(r"[^A-Z0-9\s]", "", (part or "").upper()).strip()
     if not normalized:
         return False
     words = [word for word in normalized.split() if word]
     if len(words) == 1:
-        return words[0] in _JOINT_BUSINESS_SINGLE_PART_TOKENS
+        return words[0] in (single_part_tokens or _JOINT_BUSINESS_SINGLE_PART_TOKENS)
     return words[-1] in _JOINT_BUSINESS_SUFFIX_TOKENS
 
 
@@ -584,7 +588,10 @@ def split_joint_person_owner_name(
     parts = [p.strip() for p in _JOINT_PERSON_SPLIT_RE.split(first) if p.strip()]
     if len(parts) < 2:
         return [(first, last)]
-    if _joint_split_part_is_business_token(last or '') or any(
+    if _joint_split_part_is_business_token(
+        last or '',
+        single_part_tokens=_JOINT_BUSINESS_SUFFIX_TOKENS,
+    ) or any(
         _joint_split_part_is_business_token(part) for part in parts
     ):
         return [(first, last)]

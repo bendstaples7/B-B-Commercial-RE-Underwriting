@@ -47,6 +47,12 @@ class TestSplitJointPersonOwnerName:
         assert split_joint_person_owner_name('SMITH and JONES', 'ASSOCIATES') == [
             ('SMITH and JONES', 'ASSOCIATES'),
         ]
+        assert split_joint_person_owner_name('SMITH and JONES', 'BROS') == [
+            ('SMITH and JONES', 'BROS'),
+        ]
+        assert split_joint_person_owner_name('SMITH and JONES', 'CO') == [
+            ('SMITH and JONES', 'CO'),
+        ]
 
     def test_common_token_person_part_can_still_split(self):
         assert split_joint_person_owner_name('Alex and Son', 'Kim') == [
