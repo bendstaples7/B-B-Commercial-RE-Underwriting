@@ -71,10 +71,28 @@ describe('first-paint settle — CC packing / KPI / condo pending / no_sale', ()
       resolve(__dirname, '../LeadCategorySelector.tsx'),
       'utf8',
     )
+    const kpiEditor = readFileSync(
+      resolve(__dirname, './PropertyOverviewKpiEditor.tsx'),
+      'utf8',
+    )
     expect(ulcc).toContain('data-testid="property-overview-address-line"')
     expect(ulcc).toContain('SameAddressMergeBanner')
+    expect(ulcc).toContain('data-owner-link-highlight')
     expect(stats).toContain('LeadCategorySelector')
+    expect(stats).toContain('PropertyOverviewKpiEditor')
     expect(selector).toContain('data-testid="lead-category-selector"')
+    expect(kpiEditor).toContain('quick-stat-${kind}-edit-trigger')
+    expect(kpiEditor).toContain("kind === 'est-value'")
+    expect(kpiEditor).toContain("kind === 'last-sale'")
+    expect(kpiEditor).toContain("kind === 'units-details'")
+  })
+
+  it('KPI edit affordances settle when leadId is wired (primary title unique)', () => {
+    render(<PropertyOverviewQuickStats commandCenterData={payload()} leadId={1} />)
+    expect(screen.getByTestId('quick-stat-est-value-edit-trigger')).toBeInTheDocument()
+    expect(screen.getByTestId('quick-stat-last-sale-edit-trigger')).toBeInTheDocument()
+    expect(screen.getByTestId('quick-stat-units-details-edit-trigger')).toBeInTheDocument()
+    expect(screen.getByTestId('lead-category-selector')).toBeInTheDocument()
   })
 
   it('category selector settles in the Category KPI cell when leadId is wired', () => {

@@ -977,6 +977,56 @@ class TestUpdateCategory:
             assert lead.lead_category == 'residential'
 
 
+class TestUpdatePropertyOverview:
+    def test_updates_units_type_value_and_sale(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '12 Overview St', lead_category='residential')
+            response = client.patch(
+                f'/api/leads/{lead.id}/property-overview',
+                data=json.dumps({
+                    'assessed_value': 425000,
+                    'most_recent_sale': '2015-06-01',
+                    'acquisition_date': '2015-06-01',
+                    'most_recent_sale_price': 390000,
+                    'units': 1,
+                    'property_type': 'Single Family',
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            assert body['assessed_value'] == 425000
+            assert body['most_recent_sale'] == '2015-06-01'
+            assert body['acquisition_date'] == '2015-06-01'
+            assert body['most_recent_sale_price'] == 390000
+            assert body['units'] == 1
+            assert body['property_type'] == 'Single Family'
+            assert body['timeline_entry'] is not None
+            db.session.refresh(lead)
+            assert lead.acquisition_date == date(2015, 6, 1)
+            assert lead.property_type == 'Single Family'
+            entry = LeadTimelineEntry.query.filter_by(
+                lead_id=lead.id, event_type='property_overview_changed',
+            ).first()
+            assert entry is not None
+            assert entry.summary == (
+                'Updated Est. value, Last sale date, Last sale price, Units, '
+                'Property type'
+            )
+
+    def test_rejects_empty_body(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '13 Overview St')
+            response = client.patch(
+                f'/api/leads/{lead.id}/property-overview',
+                data=json.dumps({}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 400
+
+
 class TestSameAddressLeadsPayload:
     def test_command_center_includes_same_street_twin(self, client, app):
         from app.services.lead_dedup_service import refresh_lead_dedup_fields

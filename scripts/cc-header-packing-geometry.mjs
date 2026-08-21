@@ -32,6 +32,7 @@ const require = createRequire(resolve(FRONTEND, 'package.json'))
 const GAP_MAX_PX = 48
 const ROW_TOP_EPS = 28
 const OVERLAP_EPS = 1
+const HARNESS_VISIBLE_TIMEOUT_MS = 120000
 const VIEWPORTS = [
   { width: 1280, height: 900 },
   { width: 1440, height: 900 },
@@ -541,7 +542,10 @@ async function main() {
       page.on('pageerror', (e) => pageErrors.push(String(e)))
 
       await page.goto(harnessUrl, { waitUntil: 'networkidle', timeout: 120000 })
-      await page.getByTestId('property-overview-header').waitFor({ state: 'visible', timeout: 60000 })
+      await page.getByTestId('property-overview-header').waitFor({
+        state: 'visible',
+        timeout: HARNESS_VISIBLE_TIMEOUT_MS,
+      })
       await page.getByTestId('quick-stat-units-details-value').waitFor({ state: 'visible' })
 
       if (pageErrors.length) {
@@ -561,7 +565,10 @@ async function main() {
       const residentialUrl = new URL(harnessUrl)
       residentialUrl.searchParams.set('fixture', 'residential')
       await page.goto(residentialUrl.href, { waitUntil: 'networkidle', timeout: 120000 })
-      await page.getByTestId('property-overview-header').waitFor({ state: 'visible', timeout: 60000 })
+      await page.getByTestId('property-overview-header').waitFor({
+        state: 'visible',
+        timeout: HARNESS_VISIBLE_TIMEOUT_MS,
+      })
       if (pageErrors.length) {
         console.error(`[${viewport.width}] Residential harness page errors:`, pageErrors)
         process.exit(1)

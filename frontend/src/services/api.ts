@@ -10,8 +10,6 @@ import type {
   PropertyScoreResponse,
   RecalculateRequest,
   RecalculateResponse,
-  SearchResponse,
-  SearchParams,
   RuntimeHealthResponse,
   HealthCheckResponse,
   SameAddressLeadSummary,
@@ -1394,6 +1392,27 @@ export const commandCenterService = {
     timeline_entry: LeadTimelineEntry
   }> =>
     api.patch(`/leads/${leadId}/category`, { lead_category: leadCategory }).then(r => r.data),
+  updatePropertyOverview: (
+    leadId: number,
+    data: {
+      assessed_value?: number | null
+      most_recent_sale?: string | null
+      acquisition_date?: string | null
+      most_recent_sale_price?: number | null
+      units?: number | null
+      property_type?: string | null
+    },
+  ): Promise<{
+    assessed_value: number | null
+    most_recent_sale: string | null
+    acquisition_date: string | null
+    most_recent_sale_price: number | null
+    units: number | null
+    property_type: string | null
+    lead_score: number | null
+    timeline_entry: LeadTimelineEntry | null
+  }> =>
+    api.patch(`/leads/${leadId}/property-overview`, data).then(r => r.data),
   dismissDuplicateReview: (
     leadId: number,
   ): Promise<{ lead_id: number; dismissed: boolean }> =>
@@ -1560,41 +1579,5 @@ export const pipelineConfigService = {
   },
 }
 
-// ---------------------------------------------------------------------------
-// Lead Kanban Service (reads from leads table)
-// ---------------------------------------------------------------------------
-import type { LeadKanbanResponse } from '@/types'
-
-export const leadKanbanService = {
-  /** GET /api/kanban/leads — fetch kanban columns with leads grouped by lead_status */
-  getKanbanLeads: async (params?: {
-    limit?: number
-    column_id?: string
-  }): Promise<LeadKanbanResponse> => {
-    const response = await api.get<LeadKanbanResponse>('/kanban/leads', { params })
-    return response.data
-  },
-
-  /** PATCH /api/kanban/leads/:id/move — move a lead to a different lead_status column */
-  moveKanbanLead: async (leadId: number, targetAction: string): Promise<void> => {
-    await api.patch(`/kanban/leads/${leadId}/move`, { target_action: targetAction })
-  },
-}
-
-// ---------------------------------------------------------------------------
-// Search Service
-// ---------------------------------------------------------------------------
-
-export const searchService = {
-  search: async ({ q, page = 1, per_page = 25, signal }: SearchParams): Promise<SearchResponse> => {
-    const response = await api.get<SearchResponse>('/search', {
-      params: { q, page, per_page },
-      signal,
-    })
-    return response.data
-  },
-}
-
-// ---------------------------------------------------------------------------
-// Admin Panel API Service
-// ---------------------------------------------------------------------------
+export { leadKanbanService } from '@/services/leadKanbanApi'
+export { searchService } from '@/services/searchApi'

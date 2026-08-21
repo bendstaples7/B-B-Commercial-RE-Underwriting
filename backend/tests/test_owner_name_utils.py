@@ -12,7 +12,58 @@ from app.services.plugins.owner_name_utils import (
     is_matchable_person_name,
     owner_names_equivalent,
     same_person_name_alias,
+    split_joint_person_owner_name,
 )
+
+
+class TestSplitJointPersonOwnerName:
+    def test_edwin_and_yoyko_shared_last(self):
+        assert split_joint_person_owner_name('Edwin and Yoyko', 'Miller') == [
+            ('Edwin', 'Miller'),
+            ('Yoyko', 'Miller'),
+        ]
+
+    def test_ampersand_split(self):
+        assert split_joint_person_owner_name('TOMAS & RITA', 'RYAN') == [
+            ('TOMAS', 'RYAN'),
+            ('RITA', 'RYAN'),
+        ]
+
+    def test_no_joint_unchanged(self):
+        assert split_joint_person_owner_name('Yoko', 'Miller') == [('Yoko', 'Miller')]
+
+    def test_entity_not_split(self):
+        assert split_joint_person_owner_name('Smith and Jones LLC', None) == [
+            ('Smith and Jones LLC', None),
+        ]
+
+    def test_family_business_token_not_split(self):
+        assert split_joint_person_owner_name('SMITH & SONS', 'ROOFING') == [
+            ('SMITH & SONS', 'ROOFING'),
+        ]
+        assert split_joint_person_owner_name('SMITH and ASSOCIATES', 'REALTY') == [
+            ('SMITH and ASSOCIATES', 'REALTY'),
+        ]
+        assert split_joint_person_owner_name('SMITH and JONES', 'ASSOCIATES') == [
+            ('SMITH and JONES', 'ASSOCIATES'),
+        ]
+        assert split_joint_person_owner_name('SMITH and JONES', 'BROS') == [
+            ('SMITH and JONES', 'BROS'),
+        ]
+        assert split_joint_person_owner_name('SMITH and JONES', 'CO') == [
+            ('SMITH and JONES', 'CO'),
+        ]
+
+    def test_common_token_person_part_can_still_split(self):
+        assert split_joint_person_owner_name('Alex and Son', 'Kim') == [
+            ('Alex', 'Kim'),
+            ('Son', 'Kim'),
+        ]
+
+    def test_joint_without_last_not_split(self):
+        assert split_joint_person_owner_name('Edwin and Yoyko', None) == [
+            ('Edwin and Yoyko', None),
+        ]
 
 
 class TestExpandOwnerNameParts:

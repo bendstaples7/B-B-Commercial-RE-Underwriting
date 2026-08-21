@@ -23,6 +23,7 @@ class LeadTimelineEntry(db.Model):
         'contact_kept',
         'category_changed',
         'leads_merged',
+        'property_overview_changed',
         name='timeline_event_type_enum'
     ), nullable=False, index=True)
 

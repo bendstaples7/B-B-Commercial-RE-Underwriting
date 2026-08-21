@@ -543,6 +543,7 @@ class ContactService:
         lead: Property,
         *,
         phone_source: str | None = 'flat_backfill',
+        preserve_unmatched_owner_ids: set[int] | None = None,
         commit: bool = True,
         refresh_scoring: bool = False,
     ) -> list[tuple[Contact, PropertyContact]]:
@@ -639,7 +640,8 @@ class ContactService:
         # archive the unmatched ones so Past owners history is preserved.
         if results or promoted_any_org:
             kept_ids = {contact.id for contact, _link in results}
-            archive_ids = outgoing_owner_ids - kept_ids
+            preserve_ids = preserve_unmatched_owner_ids or set()
+            archive_ids = outgoing_owner_ids - kept_ids - preserve_ids
             if archive_ids:
                 self._archive_unmatched_owners(
                     property_id,

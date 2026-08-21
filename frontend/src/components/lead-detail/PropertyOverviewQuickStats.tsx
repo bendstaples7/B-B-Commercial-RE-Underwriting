@@ -19,6 +19,10 @@ import {
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
 import { formatNoteUnitMixLabel } from '@/utils/notePropertyFacts'
 import { LeadCategorySelector } from '@/components/LeadCategorySelector'
+import {
+  PropertyOverviewKpiEditor,
+  type PropertyOverviewSaleDateField,
+} from '@/components/lead-detail/PropertyOverviewKpiEditor'
 
 const EM_DASH = '—'
 
@@ -78,6 +82,57 @@ export function resolveLastSaleCell(commandCenterData: CommandCenterPayload): st
   }
 
   return formatLastSaleCell(price, display)
+}
+
+function normalizedSaleDateKey(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const s = String(raw).trim()
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
+  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+  if (us) {
+    return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`
+  }
+  return null
+}
+
+export function resolveLastSaleEditorFields(commandCenterData: CommandCenterPayload): {
+  mostRecentSale: string | null
+  mostRecentSalePrice: number | null
+  saleDateField: PropertyOverviewSaleDateField
+} {
+  let price = commandCenterData.most_recent_sale_price ?? null
+  let display =
+    commandCenterData.most_recent_sale_display
+    ?? commandCenterData.most_recent_sale
+    ?? null
+
+  const history = commandCenterData.sale_history
+  if (Array.isArray(history) && history.length > 0) {
+    const newest = history[0]
+    if (price == null && newest?.sale_price != null) {
+      price = newest.sale_price
+    }
+    if (!display && newest?.sale_date) {
+      display = newest.sale_date
+    }
+  }
+
+  const displayKey = normalizedSaleDateKey(display)
+  const acquisitionKey = normalizedSaleDateKey(commandCenterData.acquisition_date)
+  const importedKey = normalizedSaleDateKey(commandCenterData.most_recent_sale)
+  const saleDateField =
+    acquisitionKey
+    && displayKey === acquisitionKey
+    && (!importedKey || acquisitionKey >= importedKey)
+      ? 'acquisition_date'
+      : 'most_recent_sale'
+
+  return {
+    mostRecentSale: display,
+    mostRecentSalePrice: price,
+    saleDateField,
+  }
 }
 
 /**
@@ -205,6 +260,7 @@ export interface PropertyOverviewQuickStatsProps {
   centerInGap?: boolean
   leadId?: number
   onCategoryChanged?: (next: 'residential' | 'commercial') => void | Promise<void>
+  onPropertyOverviewChanged?: () => void | Promise<void>
 }
 
 export function PropertyOverviewQuickStats({
@@ -212,9 +268,11 @@ export function PropertyOverviewQuickStats({
   centerInGap = false,
   leadId,
   onCategoryChanged,
+  onPropertyOverviewChanged,
 }: PropertyOverviewQuickStatsProps) {
   const estValue = formatMoneyValue(commandCenterData.assessed_value ?? null)
   const lastSale = resolveLastSaleCell(commandCenterData)
+  const lastSaleEditor = resolveLastSaleEditorFields(commandCenterData)
   const noSaleCopy = lastSale ? null : resolveNoSaleCopy(commandCenterData)
   const unitsDetails = formatUnitsDetailsCell(
     commandCenterData.units ?? null,
@@ -266,6 +324,9 @@ export function PropertyOverviewQuickStats({
     },
   ]
 
+  const editableKinds = new Set(['est-value', 'last-sale', 'units-details'])
+  const canEdit = typeof leadId === 'number'
+
   return (
     <Box
       data-testid="property-overview-quick-stats"
@@ -273,7 +334,8 @@ export function PropertyOverviewQuickStats({
       sx={centerInGap ? ccHeaderQuickStatsCenteredSx : ccHeaderQuickStatsSx}
     >
       {cells.map((cell) => {
-        const isCategoryControl = cell.id === 'category' && typeof leadId === 'number'
+        const isCategoryControl = cell.id === 'category' && canEdit
+        const isKpiEditor = canEdit && editableKinds.has(cell.id)
         const body = (
           <Box
             data-testid={`quick-stat-${cell.id}`}
@@ -291,6 +353,20 @@ export function PropertyOverviewQuickStats({
                 leadId={leadId}
                 category={commandCenterData.lead_category}
                 onChanged={onCategoryChanged}
+              />
+            ) : isKpiEditor ? (
+              <PropertyOverviewKpiEditor
+                leadId={leadId}
+                kind={cell.id as 'est-value' | 'last-sale' | 'units-details'}
+                displayValue={cell.value}
+                assessedValue={commandCenterData.assessed_value}
+                mostRecentSale={lastSaleEditor.mostRecentSale}
+                saleDateField={lastSaleEditor.saleDateField}
+                mostRecentSalePrice={lastSaleEditor.mostRecentSalePrice}
+                units={commandCenterData.units}
+                propertyType={commandCenterData.property_type}
+                allowWrap={Boolean(cell.allowWrap)}
+                onSaved={onPropertyOverviewChanged}
               />
             ) : (
               <Typography
