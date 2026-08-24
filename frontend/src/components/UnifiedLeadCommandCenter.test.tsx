@@ -383,7 +383,6 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
   })
 
   it('focuses Key Contact from the owner link', async () => {
-    const user = userEvent.setup()
     const scrollIntoView = vi.fn()
     const originalScroll = Element.prototype.scrollIntoView
     Element.prototype.scrollIntoView = scrollIntoView as typeof Element.prototype.scrollIntoView
@@ -398,11 +397,26 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
       await waitFor(() => {
         expect(screen.getByTestId('key-contact-card')).toBeInTheDocument()
       })
+      vi.useFakeTimers()
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
       await user.click(screen.getByTestId('property-overview-owner-link'))
       expect(scrollIntoView).toHaveBeenCalled()
-      expect(screen.getByTestId('key-contact-card')).toHaveFocus()
+      const card = screen.getByTestId('key-contact-card')
+      expect(card).toHaveFocus()
+      expect(card).toHaveAttribute('data-owner-link-highlight', 'true')
+      const firstToken = card.getAttribute('data-owner-link-highlight-token')
+      vi.advanceTimersByTime(1000)
+      await user.click(screen.getByTestId('property-overview-owner-link'))
+      const secondToken = card.getAttribute('data-owner-link-highlight-token')
+      expect(secondToken).toBeTruthy()
+      expect(secondToken).not.toBe(firstToken)
+      vi.advanceTimersByTime(1100)
+      expect(card).toHaveAttribute('data-owner-link-highlight', 'true')
+      vi.advanceTimersByTime(900)
+      expect(card).not.toHaveAttribute('data-owner-link-highlight')
     } finally {
       Element.prototype.scrollIntoView = originalScroll
+      vi.useRealTimers()
     }
   })
 

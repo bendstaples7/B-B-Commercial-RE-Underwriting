@@ -72,6 +72,7 @@ Update this doc when ownership changes.
 | Lead detail (command center) | `GET /api/leads/:id/command-center` | command center controller |
 | Lead activity timeline | `GET /api/leads/:id/timeline` | command center → `{ entries, total, page }` |
 | Lead category | `PATCH /api/leads/:id/category` | command center → `{ lead_category, lead_category_locked }` |
+| Lead property overview (header KPIs) | `PATCH /api/leads/:id/property-overview` | command center → assessed value, last sale, units, property type |
 | Same-address merge preview | `GET /api/leads/:id/merge-preview/:otherId` | lead_dedup_service |
 | Lead quick briefing | `POST /api/leads/:id/briefing` | LeadBriefingService → persist `leads.quick_briefing`; `{ bullets[5], mode, generated_at, updated_at, ... }` (revise when saved exists) |
 | CRM interaction timeline | `GET /api/leads/:id/interaction-timeline` | interaction controller → `{ timeline }` |

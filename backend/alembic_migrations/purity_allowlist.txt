@@ -9,3 +9,5 @@ f8a9b0c1d2e3_add_leads_normalized_street_dedup.py
 i3j4k5l6m7n8_backfill_contacts_from_flat_fields.py
 note_pf_20260812_note_property_facts.py
 t9u0v1w2x3y4_add_mail_enqueue_attempts.py
+# Joint-name class heal: imports split_joint_person_owner_name only (no create_app).
+joint_own_20260821_heal_joint_owners.py

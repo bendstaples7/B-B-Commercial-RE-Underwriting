@@ -316,6 +316,11 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
               zIndex: 2,
             }
           : {}),
+        '&[data-owner-link-highlight="true"]': {
+          outline: '2px solid',
+          outlineColor: 'primary.main',
+          outlineOffset: 2,
+        },
       }}
     >
       <Box
