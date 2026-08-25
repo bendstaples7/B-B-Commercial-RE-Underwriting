@@ -108,14 +108,6 @@ async function startViteHarness() {
         clientFiles: [resolve(FRONTEND, 'src/harness/ccHeaderPackingMain.tsx')],
       },
     },
-    optimizeDeps: {
-      include: [
-        'react',
-        'react-dom/client',
-        '@mui/material',
-        '@mui/icons-material/ArrowBack',
-      ],
-    },
     logLevel: 'error',
   })
   await server.listen()
