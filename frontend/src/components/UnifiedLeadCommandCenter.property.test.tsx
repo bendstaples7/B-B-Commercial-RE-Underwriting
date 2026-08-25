@@ -18,7 +18,6 @@ import { MemoryRouter, Routes, Route, Navigate, useParams, useLocation } from 'r
 import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { UnifiedLeadCommandCenter, ALL_LEAD_STATUSES } from './UnifiedLeadCommandCenter'
 import { TIMELINE_PREVIEW_COUNT } from './LeadTimeline'
-import { sortTimelineEntriesDesc } from '@/utils/timelineSort'
 import { partitionRowsByLead } from '@/utils/leadScopedRows'
 import { QueueTable } from './QueueTable'
 import GlobalSearchBar from './GlobalSearchBar'
@@ -63,7 +62,7 @@ vi.mock('@/services/leadApi', async (importOriginal) => {
   }
 })
 
-import type { PropertyDetail } from '@/types'
+import type { LeadTimelineEntry, PropertyDetail } from '@/types'
 
 function cleanAddressPart(value?: string | null): string {
   return (value || '').trim().replace(/^,+|,+$/g, '').trim()
@@ -284,6 +283,29 @@ const timelineEntryArb = fc.record({
   is_deleted: fc.constant(false),
   created_at: fc.constant(new Date().toISOString()),
 })
+
+const EXPECTED_TIMELINE_EVENT_PRIORITY: Record<string, number> = {
+  note_added: 3,
+  call_logged: 3,
+  email_logged: 3,
+  task_completed: 2,
+  task_created: 1,
+}
+
+function expectedTimelineOrder(entries: readonly LeadTimelineEntry[]): LeadTimelineEntry[] {
+  return [...entries].sort((a, b) => {
+    const timeDiff =
+      (Date.parse(b.occurred_at || '') || 0) - (Date.parse(a.occurred_at || '') || 0)
+    if (timeDiff !== 0) return timeDiff
+
+    const priorityDiff =
+      (EXPECTED_TIMELINE_EVENT_PRIORITY[b.event_type] ?? 0) -
+      (EXPECTED_TIMELINE_EVENT_PRIORITY[a.event_type] ?? 0)
+    if (priorityDiff !== 0) return priorityDiff
+
+    return b.id - a.id
+  })
+}
 
 // Queue row arbitrary — matches QueueRow interface
 const queueRowArb = fc.record({
@@ -1346,7 +1368,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
 
           // If there were existing entries, the next row follows canonical timeline sort.
           if (scopedEntries.length > 0) {
-            const sortedExisting = sortTimelineEntriesDesc(scopedEntries)
+            const sortedExisting = expectedTimelineOrder(scopedEntries)
             const secondTestId = entryNodes[1].getAttribute('data-testid')
             expect(secondTestId).toBe(`timeline-entry-${sortedExisting[0].id}`)
           }
