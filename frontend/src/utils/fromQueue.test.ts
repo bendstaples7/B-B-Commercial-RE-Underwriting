@@ -1,6 +1,8 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import {
+  buildLeadQueueSearch,
   clearAllQueueSessionHistory,
+  fromQueueFromKey,
   mergeQueueSessionHistory,
   readQueueSessionHistory,
   writeQueueSessionHistory,
@@ -38,6 +40,29 @@ describe('queue session history', () => {
     }, 99)).toEqual({
       key: 'todays-action',
       label: "Today's Action",
+    })
+  })
+
+  it('trims only the current lead from restored history', () => {
+    writeQueueSessionHistory('todays-action', {
+      visitedHistory: [1, 99],
+      forwardStack: [100],
+    })
+
+    expect(readQueueSessionHistory('todays-action', undefined, 99)).toEqual({
+      visitedHistory: [1],
+      forwardStack: [100],
+    })
+  })
+
+  it('round-trips outreach through queue URL params', () => {
+    expect(buildLeadQueueSearch('todays-action', 'call_now')).toBe(
+      '?queue=todays-action&outreach=call_now',
+    )
+    expect(fromQueueFromKey('todays-action', 'call_now')).toEqual({
+      key: 'todays-action',
+      label: "Today's Action",
+      outreach: 'call_now',
     })
   })
 

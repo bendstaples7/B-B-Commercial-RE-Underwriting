@@ -611,6 +611,7 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     await waitFor(() => {
       expect(api.commandCenterService.getTimeline).toHaveBeenCalledWith(1, 2)
       expect(screen.queryByText(/Recommended action changed/i)).not.toBeInTheDocument()
+      expect(screen.queryByTestId('load-more-btn')).not.toBeInTheDocument()
     })
   })
 
@@ -1463,13 +1464,13 @@ describe('UnifiedLeadCommandCenter — queue advance', () => {
       next_id: 99,
     })
 
-    const fromQueue = { key: 'todays-action', label: "Today's Action" }
+    const fromQueue = { key: 'todays-action', label: "Today's Action", outreach: 'call_now' }
     render(
       <MemoryRouter
         initialEntries={[
           {
             pathname: '/leads/1',
-            search: '?queue=todays-action',
+            search: '?queue=todays-action&outreach=call_now',
             state: { fromQueue },
           },
         ]}
@@ -1564,13 +1565,13 @@ describe('UnifiedLeadCommandCenter — queue advance', () => {
       next_id: 4405,
     })
 
-    const fromQueue = { key: 'todays-action', label: "Today's Action" }
+    const fromQueue = { key: 'todays-action', label: "Today's Action", outreach: 'call_now' }
     render(
       <MemoryRouter
         initialEntries={[
           {
             pathname: '/leads/1',
-            search: '?queue=todays-action',
+            search: '?queue=todays-action&outreach=call_now',
             state: { fromQueue },
           },
         ]}
@@ -1590,7 +1591,7 @@ describe('UnifiedLeadCommandCenter — queue advance', () => {
     await vi.advanceTimersByTimeAsync(QUEUE_ADVANCE_HOLD_MS + 50)
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith(
-        '/leads/4405?queue=todays-action',
+        '/leads/4405?queue=todays-action&outreach=call_now',
         { state: { fromQueue: { ...fromQueue, visitedHistory: [1], forwardStack: [] } } },
       )
     })

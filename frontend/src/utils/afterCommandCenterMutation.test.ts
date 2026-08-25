@@ -64,7 +64,7 @@ describe('afterCommandCenterMutation', () => {
       flashSnackbar,
     })
 
-    expect(navigate).toHaveBeenCalledWith('/leads/11130?queue=todays-action', {
+    expect(navigate).toHaveBeenCalledWith('/leads/11130?queue=todays-action&outreach=call_now', {
       state: {
         fromQueue,
         flashSnackbar,

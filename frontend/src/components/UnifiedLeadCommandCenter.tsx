@@ -915,6 +915,15 @@ function isDefaultFeedEntry(entry: LeadTimelineEntry): boolean {
   return entry.event_type !== 'recommended_action_changed'
 }
 
+function filterEntriesForFeed(
+  entries: readonly LeadTimelineEntry[],
+  feedFilter: ActivityFeedFilter,
+): LeadTimelineEntry[] {
+  return feedFilter === 'mail'
+    ? entries.filter(isMailTimelineEntry)
+    : entries.filter(isDefaultFeedEntry)
+}
+
 function mergeTimelineEntrySets(
   current: readonly LeadTimelineEntry[],
   incoming: readonly LeadTimelineEntry[],
@@ -1044,36 +1053,37 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
         'timeline',
         result.total,
       )
-      const rows =
-        feedFilter === 'mail'
-          ? scoped.rows.filter(isMailTimelineEntry)
-          : scoped.rows.filter(isDefaultFeedEntry)
-      setTimelineEntries((prev) =>
-        mergeTimelineEntrySets(
-          scopeRowsToLead(prev, requestedLeadId, 'timeline'),
-          scoped.rows,
-        ),
+      const previousRaw = scopeRowsToLead(
+        timelineEntriesRef.current,
+        requestedLeadId,
+        'timeline',
       )
+      const mergedRaw = mergeTimelineEntrySets(previousRaw, scoped.rows)
+      const rows = filterEntriesForFeed(scoped.rows, feedFilter)
+      const visibleLoaded = filterEntriesForFeed(mergedRaw, feedFilter).length
+      const rawExhausted = mergedRaw.length >= scoped.total || scoped.rows.length === 0
+      setTimelineEntries(mergedRaw)
       return {
         entries: rows,
-        total: scoped.total,
+        total: rawExhausted
+          ? visibleLoaded
+          : Math.max(visibleLoaded + 1, scoped.total),
       }
     }
 
     const visibleEntries = useMemo(
       () => sortTimelineEntriesDesc(
-        feedFilter === 'mail'
-          ? timelineEntries.filter(isMailTimelineEntry)
-          : timelineEntries.filter(isDefaultFeedEntry),
+        filterEntriesForFeed(timelineEntries, feedFilter),
       ),
       [feedFilter, timelineEntries],
     )
-    // Mail filter is client-side over loaded pages — keep load-more so older
-    // mailers on later pages remain reachable; total is at least visible count.
+    // Feed filters are client-side over loaded pages — keep load-more until
+    // raw server pages are exhausted, then collapse to the visible count.
+    const rawTimelineExhausted = timelineEntries.length >= timelineTotal
     const visibleTotal =
-      feedFilter === 'mail'
-        ? Math.max(visibleEntries.length, timelineTotal)
-        : timelineTotal
+      rawTimelineExhausted
+        ? visibleEntries.length
+        : Math.max(visibleEntries.length + 1, timelineTotal)
 
     const timeline = (
       <LeadTimeline
@@ -1210,7 +1220,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const fromQueue = useMemo(() => {
     const state = location.state as { fromQueue?: unknown } | null
     if (isFromQueueState(state?.fromQueue)) return mergeQueueSessionHistory(state.fromQueue, leadId)
-    const fromKey = fromQueueFromKey(searchParams.get('queue'))
+    const fromKey = fromQueueFromKey(searchParams.get('queue'), searchParams.get('outreach'))
     return fromKey ? mergeQueueSessionHistory(fromKey, leadId) : null
   }, [leadId, location.state, searchParams])
   const visitedHistory = fromQueue?.visitedHistory ?? []
@@ -1471,7 +1481,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         visitedHistory: nextQueueState.visitedHistory,
         forwardStack: nextQueueState.forwardStack,
       }, fromQueue.outreach)
-      navigate(buildLeadUrl(nextLeadId, fromQueue.key), {
+      navigate(buildLeadUrl(nextLeadId, fromQueue.key, fromQueue.outreach), {
         state: {
           fromQueue: nextQueueState,
           ...(flash ? { flashSnackbar: flash } : {}),

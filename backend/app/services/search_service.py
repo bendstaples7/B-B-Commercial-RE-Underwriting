@@ -179,39 +179,6 @@ def _token_matches_text(token: str, text_value: str, fuzzy: bool = False) -> boo
     return False
 
 
-def _get_primary_contact_names(session, lead_id: int) -> tuple[Optional[str], Optional[str]]:
-    """Load primary contact first/last name for label and token matching."""
-    from app.models.contact import Contact
-    from app.models.property_contact import PropertyContact
-
-    row = (
-        session.query(Contact.first_name, Contact.last_name)
-        .join(PropertyContact, PropertyContact.contact_id == Contact.id)
-        .filter(
-            PropertyContact.property_id == lead_id,
-            PropertyContact.is_primary.is_(True),
-        )
-        .first()
-    )
-    if not row:
-        return None, None
-    return row.first_name, row.last_name
-
-
-def _get_linked_contact_names(session, lead_id: int) -> list[tuple[str, str]]:
-    """Load all linked contact first/last names (any role, including family)."""
-    from app.models.contact import Contact
-    from app.models.property_contact import PropertyContact
-
-    rows = (
-        session.query(Contact.first_name, Contact.last_name)
-        .join(PropertyContact, PropertyContact.contact_id == Contact.id)
-        .filter(PropertyContact.property_id == lead_id)
-        .all()
-    )
-    return [(r.first_name or '', r.last_name or '') for r in rows]
-
-
 def _get_primary_contact_names_by_lead_ids(
     session,
     lead_ids: Sequence[int],

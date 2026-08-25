@@ -45,11 +45,18 @@ export function isFromQueueState(value: unknown): value is FromQueueState {
   return true
 }
 
-export function fromQueueFromKey(key: string | null | undefined): FromQueueState | null {
+export function fromQueueFromKey(
+  key: string | null | undefined,
+  outreach?: string | null,
+): FromQueueState | null {
   if (!key) return null
   const meta = WORK_QUEUE_META[key]
   if (!meta) return null
-  return { key, label: meta.label }
+  return {
+    key,
+    label: meta.label,
+    ...(outreach ? { outreach } : {}),
+  }
 }
 
 export function queuePath(key: string): string {
@@ -84,7 +91,11 @@ export function readQueueSessionHistory(
     // Browser Back restores the original route state. If persisted history says
     // the current lead is the previous lead, treating it as restored state would
     // make the lead its own "Go back" target.
-    if (currentLeadId != null && visitedHistory.at(-1) === currentLeadId) return null
+    if (currentLeadId != null && visitedHistory.at(-1) === currentLeadId) {
+      const priorHistory = visitedHistory.slice(0, -1)
+      if (!priorHistory.length && !forwardStack.length) return null
+      return { visitedHistory: priorHistory, forwardStack }
+    }
     return { visitedHistory, forwardStack }
   } catch {
     return null
@@ -155,9 +166,14 @@ export function mergeQueueSessionHistory(
   }
 }
 
-export function buildLeadQueueSearch(queueKey: string | undefined): string {
+export function buildLeadQueueSearch(
+  queueKey: string | undefined,
+  outreach?: string | null,
+): string {
   if (!queueKey || !WORK_QUEUE_META[queueKey]) return ''
-  return `?queue=${encodeURIComponent(queueKey)}`
+  const params = new URLSearchParams({ queue: queueKey })
+  if (outreach) params.set('outreach', outreach)
+  return `?${params.toString()}`
 }
 
 /** Add days to today as YYYY-MM-DD (local). */

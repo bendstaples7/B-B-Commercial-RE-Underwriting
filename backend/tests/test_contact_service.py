@@ -118,18 +118,6 @@ class TestCreateContact:
             assert phone.last_outcome is None
             assert phone.last_called_at is None
 
-    def test_create_non_string_phone_source_defaults_manual(self, app):
-        """Malformed source values should not raise and should fall back."""
-        with app.app_context():
-            service = ContactService()
-            contact = service.create_contact({
-                "first_name": "Manual",
-                "last_name": "Phone",
-                "phones": [{"value": "7734697609", "source": []}],
-            })
-            phone = ContactPhone.query.filter_by(contact_id=contact.id).one()
-            assert phone.source == 'manual'
-
     def test_create_both_names_empty_raises_validation_error(self, app):
         """create_contact with both names empty/null raises ValidationException."""
         with app.app_context():
@@ -255,6 +243,16 @@ class TestUpdateContact:
             assert phones["111-1111"].confidence_score == 90
             assert phones["222-2222"].confidence_score == 90
             assert phones["222-2222"].source == 'manual'
+
+    def test_phone_payload_helper_non_string_prior_source_defaults_manual(self, app):
+        """Malformed carried-forward source values should not raise."""
+        with app.app_context():
+            phone = ContactService._contact_phone_from_payload(
+                123,
+                {"value": "7734697609"},
+                prior={"source": []},
+            )
+            assert phone.source == 'manual'
 
     def test_update_clears_phones_when_empty_list_provided(self, app):
         """update_contact with phones=[] removes all existing phones."""
