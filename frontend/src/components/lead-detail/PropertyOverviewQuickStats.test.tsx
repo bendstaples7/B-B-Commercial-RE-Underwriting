@@ -1,5 +1,5 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   formatLastSaleCell,
@@ -225,8 +225,7 @@ describe('PropertyOverviewQuickStats', () => {
 
     await user.click(screen.getByTestId('quick-stat-last-sale-edit-trigger'))
     const dateInput = screen.getByTestId('quick-stat-last-sale-date-input')
-    await user.clear(dateInput)
-    await user.type(dateInput, '2021-03-04')
+    fireEvent.change(dateInput, { target: { value: '2021-03-04' } })
     await user.click(screen.getByTestId('quick-stat-last-sale-save'))
 
     await waitFor(() => {
@@ -354,8 +353,8 @@ describe('PropertyOverviewQuickStats', () => {
 
     await user.click(screen.getByTestId('quick-stat-last-sale-edit-trigger'))
     const dateInput = screen.getByTestId('quick-stat-last-sale-date-input')
-    await user.type(dateInput, '2020-01-01')
-    await user.clear(dateInput)
+    fireEvent.change(dateInput, { target: { value: '2020-01-01' } })
+    fireEvent.change(dateInput, { target: { value: '' } })
     await user.click(screen.getByTestId('quick-stat-last-sale-save'))
 
     await waitFor(() => {
