@@ -17,13 +17,15 @@ export default defineConfig(({ command, mode }) => {
     }
   }
 
+  const isPackingHarness = process.env.CC_PACKING_HARNESS === '1'
+
   return {
     envDir: rootDir,
     plugins: [
       react(),
       // Packing-geometry harness starts its own Vite server; skip live-ui middleware
       // so HMR/capture hooks cannot keep networkidle from settling in CI.
-      ...(command === 'serve' && process.env.CC_PACKING_HARNESS !== '1'
+      ...(command === 'serve' && !isPackingHarness
         ? [liveUiCapturePlugin()]
         : []),
     ],
@@ -32,6 +34,25 @@ export default defineConfig(({ command, mode }) => {
         '@': path.resolve(__dirname, './src'),
       },
     },
+    ...(isPackingHarness
+      ? {
+          optimizeDeps: {
+            include: [
+              'react',
+              'react-dom',
+              'react-dom/client',
+              'react/jsx-runtime',
+              'react/jsx-dev-runtime',
+              '@emotion/react',
+              '@emotion/styled',
+              '@mui/material',
+              '@mui/material/styles',
+              '@mui/system',
+              '@mui/icons-material/ArrowBack',
+            ],
+          },
+        }
+      : {}),
     build: {
       rollupOptions: {
         output: {
