@@ -45,20 +45,135 @@ export function isFromQueueState(value: unknown): value is FromQueueState {
   return true
 }
 
-export function fromQueueFromKey(key: string | null | undefined): FromQueueState | null {
+export function fromQueueFromKey(
+  key: string | null | undefined,
+  outreach?: string | null,
+): FromQueueState | null {
   if (!key) return null
   const meta = WORK_QUEUE_META[key]
   if (!meta) return null
-  return { key, label: meta.label }
+  return {
+    key,
+    label: meta.label,
+    ...(outreach ? { outreach } : {}),
+  }
 }
 
 export function queuePath(key: string): string {
   return `/queues/${key}`
 }
 
-export function buildLeadQueueSearch(queueKey: string | undefined): string {
+const QUEUE_SESSION_STORAGE_PREFIX = 'bb-queue-session:'
+
+export type QueueSessionHistory = Pick<FromQueueState, 'visitedHistory' | 'forwardStack'>
+
+function queueSessionStorageKey(queueKey: string, outreach?: string): string {
+  return `${QUEUE_SESSION_STORAGE_PREFIX}${queueKey}:${outreach || 'all'}`
+}
+
+export function readQueueSessionHistory(
+  queueKey: string,
+  outreach?: string,
+  currentLeadId?: number,
+): QueueSessionHistory | null {
+  if (typeof sessionStorage === 'undefined') return null
+  try {
+    const raw = sessionStorage.getItem(queueSessionStorageKey(queueKey, outreach))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as QueueSessionHistory
+    const visitedHistory = Array.isArray(parsed.visitedHistory)
+      ? parsed.visitedHistory.filter((id) => Number.isInteger(id))
+      : []
+    const forwardStack = Array.isArray(parsed.forwardStack)
+      ? parsed.forwardStack.filter((id) => Number.isInteger(id))
+      : []
+    if (!visitedHistory.length && !forwardStack.length) return null
+    // Browser Back restores the original route state. If persisted history says
+    // the current lead is the previous lead, treating it as restored state would
+    // make the lead its own "Go back" target.
+    if (currentLeadId != null && visitedHistory.at(-1) === currentLeadId) {
+      const priorHistory = visitedHistory.slice(0, -1)
+      if (!priorHistory.length && !forwardStack.length) return null
+      return { visitedHistory: priorHistory, forwardStack }
+    }
+    return { visitedHistory, forwardStack }
+  } catch {
+    return null
+  }
+}
+
+export function writeQueueSessionHistory(
+  queueKey: string,
+  history: QueueSessionHistory,
+  outreach?: string,
+): void {
+  if (typeof sessionStorage === 'undefined') return
+  const visitedHistory = history.visitedHistory ?? []
+  const forwardStack = history.forwardStack ?? []
+  try {
+    const storageKey = queueSessionStorageKey(queueKey, outreach)
+    if (!visitedHistory.length && !forwardStack.length) {
+      sessionStorage.removeItem(storageKey)
+      return
+    }
+    sessionStorage.setItem(
+      storageKey,
+      JSON.stringify({ visitedHistory, forwardStack }),
+    )
+  } catch {
+    // Queue navigation should not fail just because browser storage is blocked.
+  }
+}
+
+export function clearQueueSessionHistory(queueKey: string, outreach?: string): void {
+  if (typeof sessionStorage === 'undefined') return
+  try {
+    sessionStorage.removeItem(queueSessionStorageKey(queueKey, outreach))
+  } catch {
+    // Ignore unavailable storage.
+  }
+}
+
+export function clearAllQueueSessionHistory(): void {
+  if (typeof sessionStorage === 'undefined') return
+  try {
+    for (let i = sessionStorage.length - 1; i >= 0; i -= 1) {
+      const key = sessionStorage.key(i)
+      if (key?.startsWith(QUEUE_SESSION_STORAGE_PREFIX)) {
+        sessionStorage.removeItem(key)
+      }
+    }
+  } catch {
+    // Ignore unavailable storage.
+  }
+}
+
+/** Merge router state with session-persisted back/forward stacks when state was dropped. */
+export function mergeQueueSessionHistory(
+  fromQueue: FromQueueState,
+  currentLeadId?: number,
+): FromQueueState {
+  const stored = readQueueSessionHistory(fromQueue.key, fromQueue.outreach, currentLeadId)
+  if (!stored) return fromQueue
+  return {
+    ...fromQueue,
+    visitedHistory: fromQueue.visitedHistory?.length
+      ? fromQueue.visitedHistory
+      : stored.visitedHistory,
+    forwardStack: fromQueue.forwardStack?.length
+      ? fromQueue.forwardStack
+      : stored.forwardStack,
+  }
+}
+
+export function buildLeadQueueSearch(
+  queueKey: string | undefined,
+  outreach?: string | null,
+): string {
   if (!queueKey || !WORK_QUEUE_META[queueKey]) return ''
-  return `?queue=${encodeURIComponent(queueKey)}`
+  const params = new URLSearchParams({ queue: queueKey })
+  if (outreach) params.set('outreach', outreach)
+  return `?${params.toString()}`
 }
 
 /** Add days to today as YYYY-MM-DD (local). */

@@ -14,13 +14,15 @@ export function buildLeadLogUrl(
   leadId: number,
   log: LogActivityType,
   queueKey?: string,
+  outreach?: string | null,
 ): string {
   const params = new URLSearchParams()
   params.set('log', log)
   if (queueKey) params.set('queue', queueKey)
+  if (outreach) params.set('outreach', outreach)
   return `/leads/${leadId}?${params.toString()}`
 }
 
-export function buildLeadUrl(leadId: number, queueKey?: string): string {
-  return `/leads/${leadId}${buildLeadQueueSearch(queueKey)}`
+export function buildLeadUrl(leadId: number, queueKey?: string, outreach?: string | null): string {
+  return `/leads/${leadId}${buildLeadQueueSearch(queueKey, outreach)}`
 }

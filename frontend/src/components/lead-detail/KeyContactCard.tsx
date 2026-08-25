@@ -283,7 +283,7 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
                         <PhoneRow
                           key={`${phone.value}-${index}`}
                           phone={phone}
-                          dense
+                          dense={false}
                           actionable={!contactsUntrusted}
                           valueTestId={
                             index === 0

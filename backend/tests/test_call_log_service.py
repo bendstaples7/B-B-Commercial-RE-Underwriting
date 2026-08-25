@@ -479,3 +479,87 @@ def test_log_call_follow_up_only_without_complete_task(app):
         assert entry.event_metadata.get('follow_up_task_id') == follow.id
         assert entry.event_metadata.get('completed_task_id') is None
 
+
+def test_log_note_occurred_at_after_task_side_effects(app):
+    """Primary note row sorts above task_completed / task_created from same save."""
+    from app.models import LeadTask, LeadTimelineEntry
+    from datetime import timedelta
+
+    with app.app_context():
+        lead = _make_lead(app, '15 Note St')
+        task = LeadTask(
+            lead_id=lead.id,
+            task_type='call_owner_today',
+            title='Call owner',
+            status='open',
+            created_by='test',
+        )
+        from app import db
+        db.session.add(task)
+        db.session.commit()
+
+        follow_due = date.today() + timedelta(days=1)
+        svc = CallLogService()
+        with patch(_REFRESH_PATCH):
+            entry = svc.log_note(
+                lead.id,
+                body='Spoke with Nicholas about cleaning crew and $1.25M ask.',
+                complete_task_id=task.id,
+                follow_up={
+                    'title': 'Follow up call',
+                    'due_date': follow_due,
+                    'task_type': 'call_owner_today',
+                },
+            )
+
+        task_rows = LeadTimelineEntry.query.filter(
+            LeadTimelineEntry.lead_id == lead.id,
+            LeadTimelineEntry.event_type.in_(['task_completed', 'task_created']),
+        ).all()
+        assert len(task_rows) == 2
+        for task_row in task_rows:
+            assert entry.occurred_at >= task_row.occurred_at
+
+
+def test_log_call_occurred_at_after_task_side_effects(app):
+    """Primary call row sorts above task_completed / task_created from same save."""
+    from app.models import LeadTask, LeadTimelineEntry
+    from datetime import timedelta
+
+    with app.app_context():
+        lead = _make_lead(app, '16 Call St')
+        task = LeadTask(
+            lead_id=lead.id,
+            task_type='call_owner_today',
+            title='Call owner',
+            status='open',
+            created_by='test',
+        )
+        from app import db
+        db.session.add(task)
+        db.session.commit()
+
+        follow_due = date.today() + timedelta(days=1)
+        svc = CallLogService()
+        with patch(_REFRESH_PATCH):
+            entry = svc.log_call(
+                lead.id,
+                outcome='answered',
+                duration_minutes=3,
+                notes='Owner asked for follow-up next week.',
+                complete_task_id=task.id,
+                follow_up={
+                    'title': 'Follow up call',
+                    'due_date': follow_due,
+                    'task_type': 'call_owner_today',
+                },
+            )
+
+        task_rows = LeadTimelineEntry.query.filter(
+            LeadTimelineEntry.lead_id == lead.id,
+            LeadTimelineEntry.event_type.in_(['task_completed', 'task_created']),
+        ).all()
+        assert len(task_rows) == 2
+        for task_row in task_rows:
+            assert entry.occurred_at >= task_row.occurred_at
+

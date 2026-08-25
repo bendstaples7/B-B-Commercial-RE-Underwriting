@@ -53,7 +53,7 @@ export async function afterCommandCenterMutation(
     ...(fromQueue ? { fromQueue } : {}),
     ...(flashSnackbar ? { flashSnackbar } : {}),
   }
-  const target = buildLeadUrl(winnerId, fromQueue?.key)
+  const target = buildLeadUrl(winnerId, fromQueue?.key, fromQueue?.outreach)
   if (Object.keys(state).length) {
     navigate(target, { state })
   } else {

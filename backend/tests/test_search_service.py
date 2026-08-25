@@ -103,6 +103,28 @@ class TestPostgresRelevanceSql:
         assert "strpos(" in sql
         assert "LIKE :q_normalized" not in sql
 
+    def test_token_predicates_escape_like_wildcards(self):
+        from app.services.search_service import SearchService
+
+        params = {'token_threshold': 0.25}
+        sql = SearchService(session=object())._build_token_predicates(['%%', 'A_B'], params)
+
+        assert params['token_like_0'] == r'\%\%'
+        assert params['token_like_1'] == r'a\_b'
+        assert "ESCAPE '\\'" in sql
+
+    def test_matched_contact_lateral_uses_similarity_and_escaped_like(self):
+        from app.services.search_service import SearchService
+
+        params = {'q_normalized': 'yumi miller', 'token_threshold': 0.25}
+        sql = SearchService(session=object())._matched_contact_name_lateral_sql(['Yumi'], params)
+
+        assert 'LEFT JOIN LATERAL' in sql
+        assert 'matched_contact ON TRUE' in sql
+        assert 'similarity(' in sql
+        assert "ESCAPE '\\'" in sql
+        assert params['mctoken_like_0'] == 'yumi'
+
 
 class TestBuildSearchDocument:
     def test_concatenates_fields(self):
@@ -224,3 +246,66 @@ class TestPythonRelevanceScore:
             'type': 'address',
             'value': '3208 W Wabansia Ave',
         }
+
+    def test_linked_contact_name_scores_python_fallback(self):
+        query = 'Yumi Miller'
+        tokens = tokenize_query(query)
+        without_contact = compute_python_relevance_score(
+            FakeRow(
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+                property_street='915 W Lawrence Ave',
+                lead_score=0,
+                is_warm=False,
+                lead_status='skip_trace',
+            ),
+            query,
+            tokens,
+            contact_names=[],
+            fuzzy=True,
+        )
+        with_contact = compute_python_relevance_score(
+            FakeRow(
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+                property_street='915 W Lawrence Ave',
+                lead_score=0,
+                is_warm=False,
+                lead_status='skip_trace',
+            ),
+            query,
+            tokens,
+            contact_names=[('Yumi', 'Miller')],
+            fuzzy=True,
+        )
+
+        assert with_contact > without_contact
+
+    def test_family_member_match_context_uses_matched_contact_name(self):
+        """Secondary/family hits surface Name: Yumi even when primary is Yoko."""
+        row = FakeRow(
+            property_street='915 W Lawrence Ave',
+            owner_first_name='Yoko',
+            owner_last_name='Miller',
+            primary_contact_first_name='Yoko',
+            primary_contact_last_name='Miller',
+            matched_contact_name='Yumi Miller',
+            matched_phone=None,
+            matched_email=None,
+        )
+        assert build_match_context(row, 'Yumi Miller', '') == {
+            'type': 'name',
+            'value': 'Yumi Miller',
+        }
+
+
+class TestBestMatchedContactName:
+    def test_picks_family_over_owner_when_query_is_family(self):
+        from app.services.search_service import _best_matched_contact_name
+
+        name = _best_matched_contact_name(
+            [('Yoko', 'Miller'), ('Yumi', 'Miller')],
+            'Yumi Miller',
+            ['Yumi', 'Miller'],
+        )
+        assert name == 'Yumi Miller'

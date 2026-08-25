@@ -40,7 +40,10 @@ export function createLogCallRowAction({
     testId: 'action-log-call',
     onClick: async (row) => {
       onAfterAction?.()
-      navigate(buildLeadLogUrl(row.id, 'call', fromQueue?.key), fromQueue ? { state: { fromQueue } } : undefined)
+      navigate(
+        buildLeadLogUrl(row.id, 'call', fromQueue?.key, fromQueue?.outreach),
+        fromQueue ? { state: { fromQueue } } : undefined,
+      )
     },
   }
 }
@@ -56,7 +59,10 @@ export function createLogNoteRowAction({
     testId: 'action-log-note',
     onClick: async (row) => {
       onAfterAction?.()
-      navigate(buildLeadLogUrl(row.id, 'note', fromQueue?.key), fromQueue ? { state: { fromQueue } } : undefined)
+      navigate(
+        buildLeadLogUrl(row.id, 'note', fromQueue?.key, fromQueue?.outreach),
+        fromQueue ? { state: { fromQueue } } : undefined,
+      )
     },
   }
 }

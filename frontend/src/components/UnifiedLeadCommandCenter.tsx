@@ -37,6 +37,7 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import CloseIcon from '@mui/icons-material/Close'
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted'
+import UndoIcon from '@mui/icons-material/Undo'
 import OpenInFullIcon from '@mui/icons-material/OpenInFull'
 import { commandCenterService, leadTaskService, leadScoreService, queueService } from '@/services/api'
 import { entityResolutionApi } from '@/services/entityResolutionApi'
@@ -45,7 +46,7 @@ import { multifamilyService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
 import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { parseLogActivityParam, buildLeadUrl } from '@/utils/queueLogNavigation'
-import { isFromQueueState, fromQueueFromKey, queuePath, SKIP_TRACE_AUTO_ADVANCE_QUEUE_KEYS, type FromQueueState } from '@/utils/fromQueue'
+import { isFromQueueState, fromQueueFromKey, queuePath, SKIP_TRACE_AUTO_ADVANCE_QUEUE_KEYS, mergeQueueSessionHistory, writeQueueSessionHistory, clearQueueSessionHistory, type FromQueueState } from '@/utils/fromQueue'
 import { scopeRowsToLead, scopeRowsToLeadWithTotal } from '@/utils/leadScopedRows'
 import {
   LEAD_WORKSPACE_STALE_MS,
@@ -66,6 +67,7 @@ import { ScoreBreakdownDialog } from '@/components/ScoreBreakdownDialog'
 import { RecommendedActionPanel } from '@/components/RecommendedActionPanel'
 import { resolveOutreachContactFromCommandCenter } from '@/utils/outreachContact'
 import { outreachContactPlacement } from '@/utils/outreachContactPlacement'
+import { sortTimelineEntriesDesc } from '@/utils/timelineSort'
 import { LeadDetailTabPanel } from '@/components/lead-detail/LeadDetailTabPanel'
 import { PropertySidebar } from '@/components/lead-detail/PropertySidebar'
 import { BuildingOwnershipSection } from '@/components/BuildingOwnershipSection'
@@ -487,7 +489,10 @@ interface QueueWorkHeaderProps {
   fromQueue: FromQueueState
   navigation: QueueNavigation | undefined
   isLoading: boolean
+  /** Last lead viewed in this queue session (e.g. before auto-advance). */
+  sessionBackLeadId?: number | null
   onAdvance: (leadId: number) => void
+  onBackToQueue: () => void
   onPrefetchLead?: (leadId: number) => void
 }
 
@@ -495,10 +500,11 @@ function QueueWorkHeader({
   fromQueue,
   navigation,
   isLoading,
+  sessionBackLeadId,
   onAdvance,
+  onBackToQueue,
   onPrefetchLead,
 }: QueueWorkHeaderProps) {
-  const navigate = useNavigate()
   const theme = useTheme()
   const isXs = useMediaQuery(theme.breakpoints.down('sm'))
   const positionLabel =
@@ -540,10 +546,37 @@ function QueueWorkHeader({
         </Typography>
       </Typography>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, ml: 'auto', flexShrink: 0 }}>
+        {sessionBackLeadId != null ? (
+          isXs ? (
+            <IconButton
+              size="small"
+              onClick={() => onAdvance(sessionBackLeadId)}
+              onMouseEnter={() => onPrefetchLead?.(sessionBackLeadId)}
+              onFocus={() => onPrefetchLead?.(sessionBackLeadId)}
+              aria-label="Go back to previous lead"
+              data-testid="queue-go-back-btn"
+            >
+              <UndoIcon fontSize="small" />
+            </IconButton>
+          ) : (
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<UndoIcon fontSize="small" />}
+              onClick={() => onAdvance(sessionBackLeadId)}
+              onMouseEnter={() => onPrefetchLead?.(sessionBackLeadId)}
+              onFocus={() => onPrefetchLead?.(sessionBackLeadId)}
+              data-testid="queue-go-back-btn"
+              sx={{ cursor: 'pointer' }}
+            >
+              Go back
+            </Button>
+          )
+        ) : null}
         {isXs ? (
           <IconButton
             size="small"
-            onClick={() => navigate(queuePath(fromQueue.key))}
+            onClick={onBackToQueue}
             aria-label="Back to queue"
             data-testid="queue-back-to-list"
           >
@@ -552,7 +585,7 @@ function QueueWorkHeader({
         ) : (
           <Button
             size="small"
-            onClick={() => navigate(queuePath(fromQueue.key))}
+            onClick={onBackToQueue}
             data-testid="queue-back-to-list"
           >
             Back to queue
@@ -635,6 +668,7 @@ function WorkQueueMembershipStrip({ commandCenterData }: WorkQueueMembershipStri
 interface TasksPanelProps {
   leadId: number
   initialTasks: LeadTask[]
+  activityEntries?: LeadTimelineEntry[]
   outreachContact?: OutreachContact | null
   showOutreachContactOnPrimaryTask?: boolean
   missingOutreachChannel?: OutreachContact['channel'] | null
@@ -656,6 +690,7 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
   {
     leadId,
     initialTasks,
+    activityEntries = [],
     outreachContact,
     showOutreachContactOnPrimaryTask = false,
     missingOutreachChannel = null,
@@ -793,6 +828,7 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
           ref={taskListRef}
           leadId={leadId}
           tasks={tasks}
+          activityEntries={activityEntries}
           outreachContact={outreachContact}
           showOutreachContactOnPrimaryTask={showOutreachContactOnPrimaryTask}
           missingOutreachChannel={missingOutreachChannel}
@@ -811,6 +847,7 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
             ref={taskListRef}
             leadId={leadId}
             tasks={tasks}
+            activityEntries={activityEntries}
             outreachContact={outreachContact}
             showOutreachContactOnPrimaryTask={showOutreachContactOnPrimaryTask}
             missingOutreachChannel={missingOutreachChannel}
@@ -839,6 +876,7 @@ interface ActivityPanelProps {
   highlightEntryId: number | null
   variant?: 'accordion' | 'feed'
   embedded?: boolean
+  onEntriesChanged?: (entries: LeadTimelineEntry[]) => void
 }
 
 export interface ActivityPanelHandle {
@@ -873,9 +911,40 @@ function isMailTimelineEntry(entry: LeadTimelineEntry): boolean {
   )
 }
 
+function isDefaultFeedEntry(entry: LeadTimelineEntry): boolean {
+  return entry.event_type !== 'recommended_action_changed'
+}
+
+function filterEntriesForFeed(
+  entries: readonly LeadTimelineEntry[],
+  feedFilter: ActivityFeedFilter,
+): LeadTimelineEntry[] {
+  return feedFilter === 'mail'
+    ? entries.filter(isMailTimelineEntry)
+    : entries.filter(isDefaultFeedEntry)
+}
+
+function mergeTimelineEntrySets(
+  current: readonly LeadTimelineEntry[],
+  incoming: readonly LeadTimelineEntry[],
+): LeadTimelineEntry[] {
+  const byId = new Map<number, LeadTimelineEntry>()
+  for (const entry of current) byId.set(entry.id, entry)
+  for (const entry of incoming) byId.set(entry.id, entry)
+  return sortTimelineEntriesDesc(Array.from(byId.values()))
+}
+
 const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
   function ActivityPanel(
-    { leadId, initialEntries, initialTotal, highlightEntryId, variant = 'accordion', embedded = false },
+    {
+      leadId,
+      initialEntries,
+      initialTotal,
+      highlightEntryId,
+      variant = 'accordion',
+      embedded = false,
+      onEntriesChanged,
+    },
     ref,
   ) {
     const panelRef = useRef<HTMLDivElement>(null)
@@ -904,6 +973,10 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
       setFeedFilter('all')
     }, [leadId])
 
+    React.useEffect(() => {
+      onEntriesChanged?.(timelineEntries)
+    }, [onEntriesChanged, timelineEntries])
+
     // Drop prior-lead rows entirely when navigating. Only keep optimistic
     // prepends that belong to the *current* lead (same lead_id), then
     // fail-closed filter anything foreign before paint. LeadTimeline is a
@@ -929,7 +1002,7 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
       )
       const optimisticOnly = [...stillPending, ...localOptimistic]
       const scoped = scopeRowsToLeadWithTotal(
-        [...optimisticOnly, ...serverEntries],
+        sortTimelineEntriesDesc([...optimisticOnly, ...serverEntries]),
         leadId,
         'timeline',
         initialTotal,
@@ -960,7 +1033,9 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
           pendingPrependsRef.current.delete(normalized.id)
         }, 60000)
         setTimelineEntries((prev) =>
-          scopeRowsToLead([normalized, ...prev], activeLeadId, 'timeline'),
+          sortTimelineEntriesDesc(
+            scopeRowsToLead([normalized, ...prev], activeLeadId, 'timeline'),
+          ),
         )
         setTimelineTotal((prev) => prev + 1)
       },
@@ -978,30 +1053,37 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
         'timeline',
         result.total,
       )
-      const rows =
-        feedFilter === 'mail'
-          ? scoped.rows.filter(isMailTimelineEntry)
-          : scoped.rows
+      const previousRaw = scopeRowsToLead(
+        timelineEntriesRef.current,
+        requestedLeadId,
+        'timeline',
+      )
+      const mergedRaw = mergeTimelineEntrySets(previousRaw, scoped.rows)
+      const rows = filterEntriesForFeed(scoped.rows, feedFilter)
+      const visibleLoaded = filterEntriesForFeed(mergedRaw, feedFilter).length
+      const rawExhausted = mergedRaw.length >= scoped.total || scoped.rows.length === 0
+      setTimelineEntries(mergedRaw)
       return {
         entries: rows,
-        total: scoped.total,
+        total: rawExhausted
+          ? visibleLoaded
+          : Math.max(visibleLoaded + 1, scoped.total),
       }
     }
 
     const visibleEntries = useMemo(
-      () => (
-        feedFilter === 'mail'
-          ? timelineEntries.filter(isMailTimelineEntry)
-          : timelineEntries
+      () => sortTimelineEntriesDesc(
+        filterEntriesForFeed(timelineEntries, feedFilter),
       ),
       [feedFilter, timelineEntries],
     )
-    // Mail filter is client-side over loaded pages — keep load-more so older
-    // mailers on later pages remain reachable; total is at least visible count.
+    // Feed filters are client-side over loaded pages — keep load-more until
+    // raw server pages are exhausted, then collapse to the visible count.
+    const rawTimelineExhausted = timelineEntries.length >= timelineTotal
     const visibleTotal =
-      feedFilter === 'mail'
-        ? Math.max(visibleEntries.length, timelineTotal)
-        : timelineTotal
+      rawTimelineExhausted
+        ? visibleEntries.length
+        : Math.max(visibleEntries.length + 1, timelineTotal)
 
     const timeline = (
       <LeadTimeline
@@ -1137,9 +1219,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const [searchParams] = useSearchParams()
   const fromQueue = useMemo(() => {
     const state = location.state as { fromQueue?: unknown } | null
-    if (isFromQueueState(state?.fromQueue)) return state.fromQueue
-    return fromQueueFromKey(searchParams.get('queue'))
-  }, [location.state, searchParams])
+    if (isFromQueueState(state?.fromQueue)) return mergeQueueSessionHistory(state.fromQueue, leadId)
+    const fromKey = fromQueueFromKey(searchParams.get('queue'), searchParams.get('outreach'))
+    return fromKey ? mergeQueueSessionHistory(fromKey, leadId) : null
+  }, [leadId, location.state, searchParams])
   const visitedHistory = fromQueue?.visitedHistory ?? []
   const forwardStack = fromQueue?.forwardStack ?? []
 
@@ -1159,6 +1242,27 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     () => commandCenterData?.open_tasks ?? [],
     [commandCenterData?.open_tasks],
   )
+  const [taskActivityEntries, setTaskActivityEntries] = useState<LeadTimelineEntry[]>([])
+
+  useEffect(() => {
+    const entries = commandCenterData?.timeline.entries ?? []
+    setTaskActivityEntries(
+      scopeRowsToLead(
+        normalizeTimelineEntriesForLead(entries, leadId),
+        leadId,
+        'timeline',
+      ),
+    )
+  }, [commandCenterData?.timeline.entries, leadId])
+
+  const handleActivityEntriesChanged = useCallback((entries: LeadTimelineEntry[]) => {
+    setTaskActivityEntries((prev) =>
+      mergeTimelineEntrySets(
+        prev,
+        scopeRowsToLead(entries, leadId, 'timeline'),
+      ),
+    )
+  }, [leadId])
 
   const {
     data: queueNavigation,
@@ -1373,7 +1477,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             ? forwardStack.slice(0, -1)
             : [],
       }
-      navigate(buildLeadUrl(nextLeadId, fromQueue.key), {
+      writeQueueSessionHistory(fromQueue.key, {
+        visitedHistory: nextQueueState.visitedHistory,
+        forwardStack: nextQueueState.forwardStack,
+      }, fromQueue.outreach)
+      navigate(buildLeadUrl(nextLeadId, fromQueue.key, fromQueue.outreach), {
         state: {
           fromQueue: nextQueueState,
           ...(flash ? { flashSnackbar: flash } : {}),
@@ -1385,6 +1493,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
 
   const exitQueueCaughtUp = useCallback((flash?: QueueFlashSnackbar) => {
     if (!fromQueue) return
+    clearQueueSessionHistory(fromQueue.key, fromQueue.outreach)
     navigate(queuePath(fromQueue.key), {
       state: flash ? { flashSnackbar: flash } : undefined,
     })
@@ -1396,6 +1505,12 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         message: 'Queue caught up.',
       })
     }
+  }, [fromQueue, navigate])
+
+  const returnToQueue = useCallback(() => {
+    if (!fromQueue) return
+    clearQueueSessionHistory(fromQueue.key, fromQueue.outreach)
+    navigate(queuePath(fromQueue.key))
   }, [fromQueue, navigate])
 
   const advanceAfterTaskComplete = useCallback(async (
@@ -1557,7 +1672,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           ...current,
           timeline: {
             ...current.timeline,
-            entries: [normalized, ...current.timeline.entries],
+            entries: sortTimelineEntriesDesc([normalized, ...current.timeline.entries]),
             total: current.timeline.total + 1,
           },
         }
@@ -2105,7 +2220,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             fromQueue={fromQueue}
             navigation={sessionQueueNavigation}
             isLoading={queueNavLoading}
+            sessionBackLeadId={visitedHistory.at(-1) ?? null}
             onAdvance={handleManualQueueAdvance}
+            onBackToQueue={returnToQueue}
             onPrefetchLead={prefetchQueueLead}
           />
         )}
@@ -2258,6 +2375,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 ref={tasksPanelRef}
                 leadId={leadId}
                 initialTasks={openTasks}
+                activityEntries={taskActivityEntries}
                 outreachContact={outreachContact}
                 showOutreachContactOnPrimaryTask={placement === 'primary_task'}
                 missingOutreachChannel={missingOutreachChannel}
@@ -2313,6 +2431,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 highlightEntryId={highlightEntryId}
                 variant="feed"
                 embedded
+                onEntriesChanged={handleActivityEntriesChanged}
               />
             )}
 
@@ -2361,6 +2480,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                   highlightEntryId={highlightEntryId}
                   variant="feed"
                   embedded
+                  onEntriesChanged={handleActivityEntriesChanged}
                 />
                 <PropertySidebar
                   commandCenterData={commandCenterData}

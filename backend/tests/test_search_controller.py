@@ -1150,6 +1150,70 @@ def test_search_returns_relevance_score(client, app):
             db.session.commit()
 
 
+def test_search_family_member_name_returns_match_context(client, app):
+    """Searching a non-primary family contact surfaces Name: <person> in results."""
+    from app.models.contact import Contact
+    from app.models.contact_phone import ContactPhone
+    from app.models.property_contact import PropertyContact
+    from app.services.contact_service import ContactService
+
+    with app.app_context():
+        lead = Lead(
+            owner_first_name='Yoko',
+            owner_last_name='Miller',
+            property_street='915 Family Search Ave',
+            owner_user_id=_TEST_USER_ID,
+            lead_status='skip_trace',
+        )
+        db.session.add(lead)
+        db.session.flush()
+        service = ContactService()
+        owner = service.create_contact({
+            'first_name': 'Yoko',
+            'last_name': 'Miller',
+            'phones': [{'value': '7735616940'}],
+        })
+        family = service.create_contact({
+            'first_name': 'Yumi',
+            'last_name': 'Miller',
+            'role': 'family_member',
+            'phones': [{'value': '7734697609'}],
+        })
+        service.link_contact_to_property(
+            lead.id, owner.id, role='owner', is_primary=True,
+        )
+        service.link_contact_to_property(
+            lead.id, family.id, role='family_member', is_primary=False,
+        )
+        lead_id = lead.id
+        family_id = family.id
+        owner_id = owner.id
+
+    try:
+        q = urllib.parse.quote('Yumi Miller', safe='')
+        response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+        assert response.status_code == 200
+        matching = [l for l in response.get_json()['leads'] if l['id'] == lead_id]
+        assert matching, 'lead with family member should appear for Yumi Miller search'
+        assert matching[0].get('match_context') == {
+            'type': 'name',
+            'value': 'Yumi Miller',
+        }
+    finally:
+        with app.app_context():
+            ContactPhone.query.filter(
+                ContactPhone.contact_id.in_([owner_id, family_id]),
+            ).delete(synchronize_session=False)
+            PropertyContact.query.filter_by(property_id=lead_id).delete(
+                synchronize_session=False,
+            )
+            Contact.query.filter(Contact.id.in_([owner_id, family_id])).delete(
+                synchronize_session=False,
+            )
+            Lead.query.filter_by(id=lead_id).delete()
+            db.session.commit()
+
+
 # ---------------------------------------------------------------------------
 # PostgreSQL ranked search SQL syntax guard
 # ---------------------------------------------------------------------------

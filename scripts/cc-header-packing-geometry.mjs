@@ -33,6 +33,8 @@ const GAP_MAX_PX = 48
 const ROW_TOP_EPS = 28
 const OVERLAP_EPS = 1
 const HARNESS_VISIBLE_TIMEOUT_MS = 120000
+const HARNESS_READY_ATTEMPT_TIMEOUT_MS = 40000
+const HARNESS_READY_ATTR = 'data-cc-harness-ready'
 const VIEWPORTS = [
   { width: 1280, height: 900 },
   { width: 1440, height: 900 },
@@ -62,21 +64,186 @@ function assertScreenshot(viewport, path, label) {
   return bytes
 }
 
+async function resolveHarnessBaseUrl(server) {
+  const addr = server.httpServer?.address()
+  const port =
+    typeof addr === 'object' && addr && typeof addr.port === 'number'
+      ? addr.port
+      : server.config.server.port
+  if (!port || port <= 0) {
+    throw new Error(`Vite harness server has no listening port (addr=${JSON.stringify(addr)})`)
+  }
+  return `http://127.0.0.1:${port}/`
+}
+
+async function warmupHarnessServer(base) {
+  const harnessUrl = new URL('cc-header-packing-harness.html', base).href
+  const moduleUrl = new URL('src/harness/ccHeaderPackingMain.tsx', base).href
+  const htmlRes = await fetch(harnessUrl)
+  if (!htmlRes.ok) {
+    throw new Error(`Harness HTML fetch failed (${htmlRes.status}) ${harnessUrl}`)
+  }
+  await htmlRes.text()
+  const modRes = await fetch(moduleUrl, {
+    headers: { Accept: 'application/javascript,text/javascript,*/*' },
+  })
+  if (!modRes.ok) {
+    throw new Error(`Harness module fetch failed (${modRes.status}) ${moduleUrl}`)
+  }
+  await modRes.text()
+}
+
 async function startViteHarness() {
   const vitePath = resolve(FRONTEND, 'node_modules/vite/dist/node/index.js')
   const { createServer } = await import(pathToFileURL(vitePath).href)
+  process.env.CC_PACKING_HARNESS = '1'
   const server = await createServer({
     configFile: resolve(FRONTEND, 'vite.config.ts'),
     root: FRONTEND,
-    server: { port: 0, strictPort: false, host: '127.0.0.1' },
+    server: {
+      port: 0,
+      strictPort: false,
+      host: '127.0.0.1',
+      warmup: {
+        clientFiles: [resolve(FRONTEND, 'src/harness/ccHeaderPackingMain.tsx')],
+      },
+    },
     logLevel: 'error',
   })
   await server.listen()
-  const urls = server.resolvedUrls?.local
-  const base = urls?.[0] || `http://127.0.0.1:${server.config.server.port}/`
+  const base = await resolveHarnessBaseUrl(server)
+  try {
+    await warmupHarnessServer(base)
+  } catch (err) {
+    await server.close()
+    throw err
+  }
   return {
     server,
-    harnessUrl: new URL('/cc-header-packing-harness.html', base).href,
+    harnessUrl: new URL('cc-header-packing-harness.html', base).href,
+  }
+}
+
+function watchPageIssues(page) {
+  const consoleErrors = []
+  const pageErrors = []
+  const requestFailures = []
+  const responseErrors = []
+  const onConsole = (msg) => {
+    if (msg.type() === 'error') {
+      consoleErrors.push(msg.text())
+    }
+  }
+  page.on('console', onConsole)
+  const onPageError = (e) => pageErrors.push(String(e))
+  page.on('pageerror', onPageError)
+  const onRequestFailed = (request) => {
+    requestFailures.push(`${request.method()} ${request.url()} ${request.failure()?.errorText || ''}`.trim())
+  }
+  page.on('requestfailed', onRequestFailed)
+  const onResponse = (response) => {
+    let pathname = ''
+    try {
+      pathname = new URL(response.url()).pathname
+    } catch {
+      pathname = ''
+    }
+    if (response.status() >= 400 && pathname !== '/favicon.ico') {
+      responseErrors.push(`${response.status()} ${response.url()}`)
+    }
+  }
+  page.on('response', onResponse)
+  return {
+    consoleErrors,
+    pageErrors,
+    requestFailures,
+    responseErrors,
+    dispose: () => {
+      page.off('console', onConsole)
+      page.off('pageerror', onPageError)
+      page.off('requestfailed', onRequestFailed)
+      page.off('response', onResponse)
+    },
+  }
+}
+
+function hasPageIssues(issues) {
+  return Boolean(
+    issues.consoleErrors.length
+    || issues.pageErrors.length
+    || issues.requestFailures.length
+    || issues.responseErrors.length
+  )
+}
+
+async function waitForHarnessReady(page, viewport, issues) {
+  const startedAt = Date.now()
+  let lastError = null
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const remaining = HARNESS_VISIBLE_TIMEOUT_MS - (Date.now() - startedAt)
+    if (remaining <= 0) break
+    const timeout = Math.min(HARNESS_READY_ATTEMPT_TIMEOUT_MS, remaining)
+    try {
+      await page.locator(`[${HARNESS_READY_ATTR}="true"]`).waitFor({
+        state: 'attached',
+        timeout,
+      })
+      await page.getByTestId('property-overview-header').waitFor({
+        state: 'visible',
+        timeout,
+      })
+      await page
+        .locator(
+          '[data-testid="quick-stat-units-details-value"], [data-testid="quick-stat-units-details"]',
+        )
+        .first()
+        .waitFor({ state: 'visible', timeout })
+      if (hasPageIssues(issues)) {
+        fail(viewport, 'Harness page/console errors', issues)
+      }
+      return
+    } catch (err) {
+      lastError = err
+      if (hasPageIssues(issues) || attempt === 3) break
+      // CI occasionally serves the shell but leaves the root empty on the first
+      // request. A reload gives Vite one more chance without masking real errors.
+      const reloadTimeout = Math.max(
+        1,
+        HARNESS_VISIBLE_TIMEOUT_MS - (Date.now() - startedAt),
+      )
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: reloadTimeout })
+      await page.waitForTimeout(
+        Math.min(500, Math.max(0, HARNESS_VISIBLE_TIMEOUT_MS - (Date.now() - startedAt))),
+      )
+    }
+  }
+
+  const bodyText = await page.locator('body').innerText().catch(() => '(unreadable)')
+  const html = await page.content().catch(() => '(unreadable)')
+  const url = page.url()
+  fail(viewport, 'Harness never became ready', {
+    url,
+    bodyText: bodyText.slice(0, 500),
+    html: html.slice(0, 500),
+    issues,
+    error: String(lastError),
+  })
+}
+
+async function gotoHarnessAndWait(page, url, viewport, issues) {
+  try {
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: HARNESS_VISIBLE_TIMEOUT_MS,
+    })
+    await waitForHarnessReady(page, viewport, issues)
+  } catch (err) {
+    fail(viewport, 'Harness navigation failed', {
+      targetUrl: url,
+      finalUrl: page.url(),
+      issues,
+      error: String(err),
+    })
   }
 }
 
@@ -538,44 +705,31 @@ async function main() {
   try {
     for (const viewport of VIEWPORTS) {
       const page = await browser.newPage({ viewport })
-      const pageErrors = []
-      page.on('pageerror', (e) => pageErrors.push(String(e)))
+      const issues = watchPageIssues(page)
+      try {
+        await gotoHarnessAndWait(page, harnessUrl, viewport, issues)
 
-      await page.goto(harnessUrl, { waitUntil: 'networkidle', timeout: 120000 })
-      await page.getByTestId('property-overview-header').waitFor({
-        state: 'visible',
-        timeout: HARNESS_VISIBLE_TIMEOUT_MS,
-      })
-      await page.getByTestId('quick-stat-units-details-value').waitFor({ state: 'visible' })
-
-      if (pageErrors.length) {
-        console.error(`[${viewport.width}] Harness page errors:`, pageErrors)
-        process.exit(1)
+        const result = await assertViewport(page, viewport)
+        results.push(result)
+      } finally {
+        issues.dispose()
+        await page.close()
       }
-
-      const result = await assertViewport(page, viewport)
-      results.push(result)
-      await page.close()
     }
 
     for (const viewport of VIEWPORTS) {
       const page = await browser.newPage({ viewport })
-      const pageErrors = []
-      page.on('pageerror', (e) => pageErrors.push(String(e)))
-      const residentialUrl = new URL(harnessUrl)
-      residentialUrl.searchParams.set('fixture', 'residential')
-      await page.goto(residentialUrl.href, { waitUntil: 'networkidle', timeout: 120000 })
-      await page.getByTestId('property-overview-header').waitFor({
-        state: 'visible',
-        timeout: HARNESS_VISIBLE_TIMEOUT_MS,
-      })
-      if (pageErrors.length) {
-        console.error(`[${viewport.width}] Residential harness page errors:`, pageErrors)
-        process.exit(1)
+      const issues = watchPageIssues(page)
+      try {
+        const residentialUrl = new URL(harnessUrl)
+        residentialUrl.searchParams.set('fixture', 'residential')
+        await gotoHarnessAndWait(page, residentialUrl.href, viewport, issues)
+        const resResult = await assertResidentialViewport(page, viewport)
+        residentialResults.push(resResult)
+      } finally {
+        issues.dispose()
+        await page.close()
       }
-      const resResult = await assertResidentialViewport(page, viewport)
-      residentialResults.push(resResult)
-      await page.close()
     }
 
     console.log(

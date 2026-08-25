@@ -161,7 +161,7 @@ export function QueueTable({
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
   const leadNavState = fromQueue ? { fromQueue } : undefined
-  const leadTo = (id: number) => buildLeadUrl(id, fromQueue?.key)
+  const leadTo = (id: number) => buildLeadUrl(id, fromQueue?.key, fromQueue?.outreach)
 
   // ---------------------------------------------------------------------------
   // Selection helpers

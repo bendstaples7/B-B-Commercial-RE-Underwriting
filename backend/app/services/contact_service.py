@@ -24,6 +24,10 @@ from sqlalchemy.orm import selectinload
 
 logger = logging.getLogger(__name__)
 
+# Manual contact form / API creates treat typed-in numbers as confirmed.
+MANUAL_PHONE_CONFIDENCE = 90
+_VALID_PHONE_SOURCES = frozenset({'manual', 'hubspot_import', 'flat_backfill'})
+
 
 def _contact_display_name(first: str | None, last: str | None) -> str:
     return ' '.join(
@@ -102,12 +106,9 @@ class ContactService:
         db.session.flush()  # populate contact.id before inserting children
 
         for phone_data in data.get('phones', []):
-            phone = ContactPhone(
-                contact_id=contact.id,
-                value=phone_data['value'],
-                label=phone_data.get('label', 'other'),
+            db.session.add(
+                self._contact_phone_from_payload(contact.id, phone_data),
             )
-            db.session.add(phone)
 
         for email_data in data.get('emails', []):
             email = ContactEmail(
@@ -178,16 +179,32 @@ class ContactService:
                 actor=_request_actor(),
             )
 
-        # Replace phones atomically
+        # Replace phones atomically (preserve confidence/call metadata by digits)
         if 'phones' in data:
+            existing_phones = ContactPhone.query.filter_by(
+                contact_id=contact.id,
+            ).all()
+            prior_by_digits: dict[str, dict] = {}
+            for existing in existing_phones:
+                digits = phone_digits(existing.value)
+                if not digits or digits in prior_by_digits:
+                    continue
+                prior_by_digits[digits] = {
+                    'confidence_score': existing.confidence_score,
+                    'notes': existing.notes,
+                    'last_outcome': existing.last_outcome,
+                    'last_called_at': existing.last_called_at,
+                    'source': existing.source,
+                }
             ContactPhone.query.filter_by(contact_id=contact.id).delete()
             for phone_data in data['phones']:
-                phone = ContactPhone(
-                    contact_id=contact.id,
-                    value=phone_data['value'],
-                    label=phone_data.get('label', 'other'),
+                digits = phone_digits(phone_data.get('value'))
+                prior = prior_by_digits.get(digits) if digits else None
+                db.session.add(
+                    self._contact_phone_from_payload(
+                        contact.id, phone_data, prior=prior,
+                    ),
                 )
-                db.session.add(phone)
 
         # Replace emails atomically
         if 'emails' in data:
@@ -2231,6 +2248,58 @@ class ContactService:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _contact_phone_from_payload(
+        contact_id: int,
+        phone_data: dict,
+        *,
+        prior: dict | None = None,
+    ) -> ContactPhone:
+        """Build a ContactPhone for manual create/update payloads.
+
+        Manual payloads may come from raw JSON. Only trusted existing rows can
+        carry confidence/source/call metadata forward; new manual numbers get
+        confirmed manual defaults.
+        """
+        prior = prior or {}
+
+        if prior.get('confidence_score') is not None:
+            confidence = prior['confidence_score']
+        else:
+            confidence = MANUAL_PHONE_CONFIDENCE
+
+        if 'notes' in phone_data:
+            notes = phone_data.get('notes')
+        else:
+            notes = prior.get('notes')
+
+        last_outcome = prior.get('last_outcome')
+
+        last_called_at = prior.get('last_called_at')
+
+        if prior.get('source') is not None:
+            raw_source = prior['source']
+        else:
+            raw_source = 'manual'
+        if hasattr(raw_source, 'value'):
+            raw_source = raw_source.value
+        source = (
+            raw_source
+            if isinstance(raw_source, str) and raw_source in _VALID_PHONE_SOURCES
+            else 'manual'
+        )
+
+        return ContactPhone(
+            contact_id=contact_id,
+            value=phone_data['value'],
+            label=phone_data.get('label', 'other'),
+            notes=notes,
+            confidence_score=confidence,
+            last_outcome=last_outcome,
+            last_called_at=last_called_at,
+            source=source,
+        )
 
     def _get_contact_or_raise(self, contact_id: int) -> Contact:
         """Fetch a Contact by id or raise ResourceNotFoundError."""

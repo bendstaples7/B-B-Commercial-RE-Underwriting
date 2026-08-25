@@ -152,13 +152,9 @@ jobs:
           npx vitest run src/components/LeadTimeline.test.tsx --testNamePattern='fail-closed lead scope'
         working-directory: frontend
 
-      - name: Run tests (includes App shell smoke test)
-        run: npm test
-        working-directory: frontend
-
       - name: CC header packing geometry (Playwright)
-        # Hostile Chromium layout — real React/MUI harness (not static HTML twin).
-        # Forbids jsdom-only ALIGNED theater for Property Overview packing.
+        # Run before the full vitest suite so the harness Vite server cold-starts
+        # on a fresh runner (avoids 120s blank-page timeouts after npm test).
         run: |
           npx playwright install chromium \
             || { sleep 5; npx playwright install chromium; }
@@ -172,6 +168,10 @@ jobs:
           name: cc-header-packing-geometry
           path: artifacts/cc-header-packing.png
           if-no-files-found: ignore
+
+      - name: Run tests (includes App shell smoke test)
+        run: npm test
+        working-directory: frontend
 
       - name: Production build
         run: npm run build

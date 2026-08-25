@@ -70,10 +70,53 @@ class TestCreateContact:
             phone_values = {p.value for p in phones}
             assert "555-1234" in phone_values
             assert "555-5678" in phone_values
+            for phone in phones:
+                assert phone.confidence_score == 90
+                assert phone.source == 'manual'
 
             emails = ContactEmail.query.filter_by(contact_id=contact.id).all()
             assert len(emails) == 1
             assert emails[0].value == "jane@example.com"
+
+    def test_create_manual_phone_defaults_confidence_90(self, app):
+        """Manual create stores confidence 90 and source manual when omitted."""
+        with app.app_context():
+            service = ContactService()
+            contact = service.create_contact({
+                "first_name": "Manual",
+                "last_name": "Phone",
+                "phones": [{"value": "7734697609", "label": "mobile"}],
+            })
+            phone = ContactPhone.query.filter_by(contact_id=contact.id).one()
+            assert phone.confidence_score == 90
+            assert phone.source == 'manual'
+
+            from app.services.phone_confidence_service import PhoneConfidenceService
+            payload = PhoneConfidenceService.serialize_contact_phones([phone])
+            assert payload[0]['confidence_score'] == 90
+            assert payload[0]['source'] == 'manual'
+
+    def test_create_ignores_client_supplied_phone_metadata(self, app):
+        """Manual JSON cannot spoof confidence/source/call-history metadata."""
+        with app.app_context():
+            service = ContactService()
+            contact = service.create_contact({
+                "first_name": "Manual",
+                "last_name": "Phone",
+                "phones": [{
+                    "value": "7734697609",
+                    "label": "mobile",
+                    "confidence_score": 5,
+                    "source": "hubspot_import",
+                    "last_outcome": "bad_number",
+                    "last_called_at": "2026-08-25T15:42:00Z",
+                }],
+            })
+            phone = ContactPhone.query.filter_by(contact_id=contact.id).one()
+            assert phone.confidence_score == 90
+            assert phone.source == 'manual'
+            assert phone.last_outcome is None
+            assert phone.last_called_at is None
 
     def test_create_both_names_empty_raises_validation_error(self, app):
         """create_contact with both names empty/null raises ValidationException."""
@@ -149,6 +192,67 @@ class TestUpdateContact:
             assert "new2@example.com" in email_values
             # Old email must be gone
             assert "old@example.com" not in email_values
+
+    def test_update_preserves_phone_confidence_by_digits(self, app):
+        """Replacing phones keeps score/notes/outcome when the number matches."""
+        with app.app_context():
+            from app import db
+            from datetime import datetime, timezone
+
+            service = ContactService()
+            contact = service.create_contact({
+                "first_name": "Yumi",
+                "phones": [{"value": "(773) 469-7609", "label": "mobile"}],
+            })
+            phone = ContactPhone.query.filter_by(contact_id=contact.id).one()
+            phone.confidence_score = 35
+            phone.notes = None
+            phone.last_outcome = 'voicemail'
+            phone.last_called_at = datetime(2026, 8, 25, 15, 42, tzinfo=timezone.utc)
+            phone.source = 'manual'
+            db.session.commit()
+
+            service.update_contact(contact.id, {
+                "phones": [{"value": "7734697609", "label": "mobile"}],
+            })
+            kept = ContactPhone.query.filter_by(contact_id=contact.id).one()
+            assert kept.value == "7734697609"
+            assert kept.confidence_score == 35
+            assert kept.last_outcome == 'voicemail'
+            assert kept.source == 'manual'
+            assert kept.last_called_at is not None
+
+    def test_update_new_phone_defaults_confidence_90(self, app):
+        """A newly added number on update gets confirmed manual defaults."""
+        with app.app_context():
+            service = ContactService()
+            contact = service.create_contact({
+                "first_name": "Alice",
+                "phones": [{"value": "111-1111"}],
+            })
+            service.update_contact(contact.id, {
+                "phones": [
+                    {"value": "111-1111"},
+                    {"value": "222-2222", "label": "work"},
+                ],
+            })
+            phones = {
+                p.value: p
+                for p in ContactPhone.query.filter_by(contact_id=contact.id).all()
+            }
+            assert phones["111-1111"].confidence_score == 90
+            assert phones["222-2222"].confidence_score == 90
+            assert phones["222-2222"].source == 'manual'
+
+    def test_phone_payload_helper_non_string_prior_source_defaults_manual(self, app):
+        """Malformed carried-forward source values should not raise."""
+        with app.app_context():
+            phone = ContactService._contact_phone_from_payload(
+                123,
+                {"value": "7734697609"},
+                prior={"source": []},
+            )
+            assert phone.source == 'manual'
 
     def test_update_clears_phones_when_empty_list_provided(self, app):
         """update_contact with phones=[] removes all existing phones."""
