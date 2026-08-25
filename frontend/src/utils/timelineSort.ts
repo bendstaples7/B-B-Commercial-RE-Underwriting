@@ -5,6 +5,8 @@ const EVENT_SORT_PRIORITY: Record<string, number> = {
   note_added: 3,
   call_logged: 3,
   email_logged: 3,
+  hubspot_call: 3,
+  hubspot_note: 3,
   task_completed: 2,
   task_created: 1,
 }

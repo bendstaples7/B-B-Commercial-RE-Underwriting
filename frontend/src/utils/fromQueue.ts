@@ -60,10 +60,18 @@ const QUEUE_SESSION_STORAGE_PREFIX = 'bb-queue-session:'
 
 export type QueueSessionHistory = Pick<FromQueueState, 'visitedHistory' | 'forwardStack'>
 
-export function readQueueSessionHistory(queueKey: string): QueueSessionHistory | null {
+function queueSessionStorageKey(queueKey: string, outreach?: string): string {
+  return `${QUEUE_SESSION_STORAGE_PREFIX}${queueKey}:${outreach || 'all'}`
+}
+
+export function readQueueSessionHistory(
+  queueKey: string,
+  outreach?: string,
+  currentLeadId?: number,
+): QueueSessionHistory | null {
   if (typeof sessionStorage === 'undefined') return null
   try {
-    const raw = sessionStorage.getItem(`${QUEUE_SESSION_STORAGE_PREFIX}${queueKey}`)
+    const raw = sessionStorage.getItem(queueSessionStorageKey(queueKey, outreach))
     if (!raw) return null
     const parsed = JSON.parse(raw) as QueueSessionHistory
     const visitedHistory = Array.isArray(parsed.visitedHistory)
@@ -73,34 +81,68 @@ export function readQueueSessionHistory(queueKey: string): QueueSessionHistory |
       ? parsed.forwardStack.filter((id) => Number.isInteger(id))
       : []
     if (!visitedHistory.length && !forwardStack.length) return null
+    // Browser Back restores the original route state. If persisted history says
+    // the current lead is the previous lead, treating it as restored state would
+    // make the lead its own "Go back" target.
+    if (currentLeadId != null && visitedHistory.at(-1) === currentLeadId) return null
     return { visitedHistory, forwardStack }
   } catch {
     return null
   }
 }
 
-export function writeQueueSessionHistory(queueKey: string, history: QueueSessionHistory): void {
+export function writeQueueSessionHistory(
+  queueKey: string,
+  history: QueueSessionHistory,
+  outreach?: string,
+): void {
   if (typeof sessionStorage === 'undefined') return
   const visitedHistory = history.visitedHistory ?? []
   const forwardStack = history.forwardStack ?? []
-  if (!visitedHistory.length && !forwardStack.length) {
-    sessionStorage.removeItem(`${QUEUE_SESSION_STORAGE_PREFIX}${queueKey}`)
-    return
+  try {
+    const storageKey = queueSessionStorageKey(queueKey, outreach)
+    if (!visitedHistory.length && !forwardStack.length) {
+      sessionStorage.removeItem(storageKey)
+      return
+    }
+    sessionStorage.setItem(
+      storageKey,
+      JSON.stringify({ visitedHistory, forwardStack }),
+    )
+  } catch {
+    // Queue navigation should not fail just because browser storage is blocked.
   }
-  sessionStorage.setItem(
-    `${QUEUE_SESSION_STORAGE_PREFIX}${queueKey}`,
-    JSON.stringify({ visitedHistory, forwardStack }),
-  )
 }
 
-export function clearQueueSessionHistory(queueKey: string): void {
+export function clearQueueSessionHistory(queueKey: string, outreach?: string): void {
   if (typeof sessionStorage === 'undefined') return
-  sessionStorage.removeItem(`${QUEUE_SESSION_STORAGE_PREFIX}${queueKey}`)
+  try {
+    sessionStorage.removeItem(queueSessionStorageKey(queueKey, outreach))
+  } catch {
+    // Ignore unavailable storage.
+  }
+}
+
+export function clearAllQueueSessionHistory(): void {
+  if (typeof sessionStorage === 'undefined') return
+  try {
+    for (let i = sessionStorage.length - 1; i >= 0; i -= 1) {
+      const key = sessionStorage.key(i)
+      if (key?.startsWith(QUEUE_SESSION_STORAGE_PREFIX)) {
+        sessionStorage.removeItem(key)
+      }
+    }
+  } catch {
+    // Ignore unavailable storage.
+  }
 }
 
 /** Merge router state with session-persisted back/forward stacks when state was dropped. */
-export function mergeQueueSessionHistory(fromQueue: FromQueueState): FromQueueState {
-  const stored = readQueueSessionHistory(fromQueue.key)
+export function mergeQueueSessionHistory(
+  fromQueue: FromQueueState,
+  currentLeadId?: number,
+): FromQueueState {
+  const stored = readQueueSessionHistory(fromQueue.key, fromQueue.outreach, currentLeadId)
   if (!stored) return fromQueue
   return {
     ...fromQueue,

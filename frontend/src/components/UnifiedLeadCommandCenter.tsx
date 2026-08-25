@@ -876,6 +876,7 @@ interface ActivityPanelProps {
   highlightEntryId: number | null
   variant?: 'accordion' | 'feed'
   embedded?: boolean
+  onEntriesChanged?: (entries: LeadTimelineEntry[]) => void
 }
 
 export interface ActivityPanelHandle {
@@ -914,9 +915,27 @@ function isDefaultFeedEntry(entry: LeadTimelineEntry): boolean {
   return entry.event_type !== 'recommended_action_changed'
 }
 
+function mergeTimelineEntrySets(
+  current: readonly LeadTimelineEntry[],
+  incoming: readonly LeadTimelineEntry[],
+): LeadTimelineEntry[] {
+  const byId = new Map<number, LeadTimelineEntry>()
+  for (const entry of current) byId.set(entry.id, entry)
+  for (const entry of incoming) byId.set(entry.id, entry)
+  return sortTimelineEntriesDesc(Array.from(byId.values()))
+}
+
 const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
   function ActivityPanel(
-    { leadId, initialEntries, initialTotal, highlightEntryId, variant = 'accordion', embedded = false },
+    {
+      leadId,
+      initialEntries,
+      initialTotal,
+      highlightEntryId,
+      variant = 'accordion',
+      embedded = false,
+      onEntriesChanged,
+    },
     ref,
   ) {
     const panelRef = useRef<HTMLDivElement>(null)
@@ -944,6 +963,10 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
       setFullscreenOpen(false)
       setFeedFilter('all')
     }, [leadId])
+
+    React.useEffect(() => {
+      onEntriesChanged?.(timelineEntries)
+    }, [onEntriesChanged, timelineEntries])
 
     // Drop prior-lead rows entirely when navigating. Only keep optimistic
     // prepends that belong to the *current* lead (same lead_id), then
@@ -1024,7 +1047,13 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
       const rows =
         feedFilter === 'mail'
           ? scoped.rows.filter(isMailTimelineEntry)
-          : scoped.rows
+          : scoped.rows.filter(isDefaultFeedEntry)
+      setTimelineEntries((prev) =>
+        mergeTimelineEntrySets(
+          scopeRowsToLead(prev, requestedLeadId, 'timeline'),
+          scoped.rows,
+        ),
+      )
       return {
         entries: rows,
         total: scoped.total,
@@ -1180,10 +1209,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const [searchParams] = useSearchParams()
   const fromQueue = useMemo(() => {
     const state = location.state as { fromQueue?: unknown } | null
-    if (isFromQueueState(state?.fromQueue)) return mergeQueueSessionHistory(state.fromQueue)
+    if (isFromQueueState(state?.fromQueue)) return mergeQueueSessionHistory(state.fromQueue, leadId)
     const fromKey = fromQueueFromKey(searchParams.get('queue'))
-    return fromKey ? mergeQueueSessionHistory(fromKey) : null
-  }, [location.state, searchParams])
+    return fromKey ? mergeQueueSessionHistory(fromKey, leadId) : null
+  }, [leadId, location.state, searchParams])
   const visitedHistory = fromQueue?.visitedHistory ?? []
   const forwardStack = fromQueue?.forwardStack ?? []
 
@@ -1203,6 +1232,27 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     () => commandCenterData?.open_tasks ?? [],
     [commandCenterData?.open_tasks],
   )
+  const [taskActivityEntries, setTaskActivityEntries] = useState<LeadTimelineEntry[]>([])
+
+  useEffect(() => {
+    const entries = commandCenterData?.timeline.entries ?? []
+    setTaskActivityEntries(
+      scopeRowsToLead(
+        normalizeTimelineEntriesForLead(entries, leadId),
+        leadId,
+        'timeline',
+      ),
+    )
+  }, [commandCenterData?.timeline.entries, leadId])
+
+  const handleActivityEntriesChanged = useCallback((entries: LeadTimelineEntry[]) => {
+    setTaskActivityEntries((prev) =>
+      mergeTimelineEntrySets(
+        prev,
+        scopeRowsToLead(entries, leadId, 'timeline'),
+      ),
+    )
+  }, [leadId])
 
   const {
     data: queueNavigation,
@@ -1420,7 +1470,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       writeQueueSessionHistory(fromQueue.key, {
         visitedHistory: nextQueueState.visitedHistory,
         forwardStack: nextQueueState.forwardStack,
-      })
+      }, fromQueue.outreach)
       navigate(buildLeadUrl(nextLeadId, fromQueue.key), {
         state: {
           fromQueue: nextQueueState,
@@ -1433,7 +1483,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
 
   const exitQueueCaughtUp = useCallback((flash?: QueueFlashSnackbar) => {
     if (!fromQueue) return
-    clearQueueSessionHistory(fromQueue.key)
+    clearQueueSessionHistory(fromQueue.key, fromQueue.outreach)
     navigate(queuePath(fromQueue.key), {
       state: flash ? { flashSnackbar: flash } : undefined,
     })
@@ -1449,7 +1499,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
 
   const returnToQueue = useCallback(() => {
     if (!fromQueue) return
-    clearQueueSessionHistory(fromQueue.key)
+    clearQueueSessionHistory(fromQueue.key, fromQueue.outreach)
     navigate(queuePath(fromQueue.key))
   }, [fromQueue, navigate])
 
@@ -2315,7 +2365,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 ref={tasksPanelRef}
                 leadId={leadId}
                 initialTasks={openTasks}
-                activityEntries={commandCenterData.timeline.entries}
+                activityEntries={taskActivityEntries}
                 outreachContact={outreachContact}
                 showOutreachContactOnPrimaryTask={placement === 'primary_task'}
                 missingOutreachChannel={missingOutreachChannel}
@@ -2371,6 +2421,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 highlightEntryId={highlightEntryId}
                 variant="feed"
                 embedded
+                onEntriesChanged={handleActivityEntriesChanged}
               />
             )}
 
@@ -2419,6 +2470,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                   highlightEntryId={highlightEntryId}
                   variant="feed"
                   embedded
+                  onEntriesChanged={handleActivityEntriesChanged}
                 />
                 <PropertySidebar
                   commandCenterData={commandCenterData}

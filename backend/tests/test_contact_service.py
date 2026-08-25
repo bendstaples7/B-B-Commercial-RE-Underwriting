@@ -96,6 +96,40 @@ class TestCreateContact:
             assert payload[0]['confidence_score'] == 90
             assert payload[0]['source'] == 'manual'
 
+    def test_create_ignores_client_supplied_phone_metadata(self, app):
+        """Manual JSON cannot spoof confidence/source/call-history metadata."""
+        with app.app_context():
+            service = ContactService()
+            contact = service.create_contact({
+                "first_name": "Manual",
+                "last_name": "Phone",
+                "phones": [{
+                    "value": "7734697609",
+                    "label": "mobile",
+                    "confidence_score": 5,
+                    "source": "hubspot_import",
+                    "last_outcome": "bad_number",
+                    "last_called_at": "2026-08-25T15:42:00Z",
+                }],
+            })
+            phone = ContactPhone.query.filter_by(contact_id=contact.id).one()
+            assert phone.confidence_score == 90
+            assert phone.source == 'manual'
+            assert phone.last_outcome is None
+            assert phone.last_called_at is None
+
+    def test_create_non_string_phone_source_defaults_manual(self, app):
+        """Malformed source values should not raise and should fall back."""
+        with app.app_context():
+            service = ContactService()
+            contact = service.create_contact({
+                "first_name": "Manual",
+                "last_name": "Phone",
+                "phones": [{"value": "7734697609", "source": []}],
+            })
+            phone = ContactPhone.query.filter_by(contact_id=contact.id).one()
+            assert phone.source == 'manual'
+
     def test_create_both_names_empty_raises_validation_error(self, app):
         """create_contact with both names empty/null raises ValidationException."""
         with app.app_context():

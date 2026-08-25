@@ -27,6 +27,7 @@ import {
 } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '@/services/api'
+import { clearAllQueueSessionHistory } from '@/utils/fromQueue'
 import type { AuthUser, AuthContextValue } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -203,6 +204,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const logout = useCallback(() => {
     localStorage.removeItem('session_token')
     localStorage.removeItem('user_id')
+    clearAllQueueSessionHistory()
     setToken(null)
     setUser(null)
     navigate('/login')

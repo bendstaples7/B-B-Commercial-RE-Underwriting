@@ -143,6 +143,10 @@ function getFullNoteBody(entry: LeadTimelineEntry): string {
   if (typeof body === 'string' && body.trim()) {
     return stripHtmlTags(body, { preserveNewlines: true })
   }
+  const notes = entry.metadata?.notes
+  if (typeof notes === 'string' && notes.trim()) {
+    return stripHtmlTags(notes, { preserveNewlines: true })
+  }
   return stripHtmlTags(entry.summary?.trim() ?? '', { preserveNewlines: true })
 }
 
@@ -274,6 +278,18 @@ function getNoteInlineText(entry: LeadTimelineEntry): string {
   return getFullNoteBody(entry)
 }
 
+function getCallInlineText(entry: LeadTimelineEntry): string {
+  const notes = entry.metadata?.notes
+  if (typeof notes === 'string' && notes.trim()) {
+    return stripHtmlTags(notes, { preserveNewlines: true })
+  }
+  const body = entry.metadata?.body
+  if (typeof body === 'string' && body.trim()) {
+    return stripHtmlTags(body, { preserveNewlines: true })
+  }
+  return getEntryDisplayText(entry)
+}
+
 function getPreviewText(entry: LeadTimelineEntry): string {
   const fullText = getEntryDisplayText(entry)
   if (fullText.length <= SUMMARY_COLLAPSE_THRESHOLD) return fullText
@@ -364,13 +380,22 @@ interface TimelineEntryRowProps {
 function TimelineEntryRow({ entry, highlighted = false }: TimelineEntryRowProps) {
   const isHubSpot = entry.source === 'hubspot' || entry.source === 'hubspot_import'
   const isInlineNote = entry.event_type === 'note_added' && !entryHasExpandableDetails(entry)
+  const callInlineText = entry.event_type === 'call_logged' ? getCallInlineText(entry) : ''
   const summaryText = isInlineNote ? getNoteInlineText(entry) : getEntryDisplayText(entry)
   const contactContextLine = getContactContextLine(entry)
   const hasExpandableDetails = entryHasExpandableDetails(entry)
   const detailRows = buildTimelineDetailRows(entry)
   const [detailsExpanded, setDetailsExpanded] = useState(false)
 
-  const previewText = hasExpandableDetails ? getPreviewText(entry) : summaryText
+  const previewText =
+    hasExpandableDetails
+    && entry.event_type === 'call_logged'
+    && callInlineText
+    && callInlineText.length <= NOTE_INLINE_THRESHOLD
+      ? callInlineText
+      : hasExpandableDetails
+        ? getPreviewText(entry)
+        : summaryText
 
   const handleToggleDetails = (event: MouseEvent | KeyboardEvent) => {
     event.stopPropagation()

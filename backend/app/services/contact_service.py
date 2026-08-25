@@ -2258,14 +2258,13 @@ class ContactService:
     ) -> ContactPhone:
         """Build a ContactPhone for manual create/update payloads.
 
-        When the client omits confidence/source/call fields, reuse matching
-        prior-row metadata (by digits) or default to confirmed manual (90).
+        Manual payloads may come from raw JSON. Only trusted existing rows can
+        carry confidence/source/call metadata forward; new manual numbers get
+        confirmed manual defaults.
         """
         prior = prior or {}
 
-        if 'confidence_score' in phone_data:
-            confidence = phone_data.get('confidence_score')
-        elif prior.get('confidence_score') is not None:
+        if prior.get('confidence_score') is not None:
             confidence = prior['confidence_score']
         else:
             confidence = MANUAL_PHONE_CONFIDENCE
@@ -2275,25 +2274,21 @@ class ContactService:
         else:
             notes = prior.get('notes')
 
-        if 'last_outcome' in phone_data:
-            last_outcome = phone_data.get('last_outcome')
-        else:
-            last_outcome = prior.get('last_outcome')
+        last_outcome = prior.get('last_outcome')
 
-        if 'last_called_at' in phone_data:
-            last_called_at = phone_data.get('last_called_at')
-        else:
-            last_called_at = prior.get('last_called_at')
+        last_called_at = prior.get('last_called_at')
 
-        if 'source' in phone_data:
-            raw_source = phone_data.get('source')
-        elif prior.get('source') is not None:
+        if prior.get('source') is not None:
             raw_source = prior['source']
         else:
             raw_source = 'manual'
         if hasattr(raw_source, 'value'):
             raw_source = raw_source.value
-        source = raw_source if raw_source in _VALID_PHONE_SOURCES else 'manual'
+        source = (
+            raw_source
+            if isinstance(raw_source, str) and raw_source in _VALID_PHONE_SOURCES
+            else 'manual'
+        )
 
         return ContactPhone(
             contact_id=contact_id,

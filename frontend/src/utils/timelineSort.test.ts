@@ -27,10 +27,12 @@ describe('sortTimelineEntriesDesc', () => {
     const ts = '2026-08-25T18:01:19.000Z'
     const sorted = sortTimelineEntriesDesc([
       makeEntry(3, 'task_created', ts),
+      makeEntry(4, 'hubspot_note', ts),
       makeEntry(2, 'task_completed', ts),
       makeEntry(1, 'note_added', ts),
     ])
     expect(sorted.map((e) => e.event_type)).toEqual([
+      'hubspot_note',
       'note_added',
       'task_completed',
       'task_created',

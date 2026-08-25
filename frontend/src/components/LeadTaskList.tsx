@@ -650,6 +650,12 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
               index === 0 && typeof task.id === 'number'
                 ? findActivityContextForTask(task.id, activityEntries)
                 : null
+            const activityContextPrefix =
+              activityContext?.eventType === 'call_logged'
+                ? 'With'
+                : activityContext?.eventType === 'email_logged'
+                  ? 'To'
+                  : 'Re'
 
             return (
               <Box key={task.id}>
@@ -898,7 +904,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                                 color="text.secondary"
                                 display="block"
                               >
-                                Re: {activityContext.contactName}
+                                {activityContextPrefix}: {activityContext.contactName}
                               </Typography>
                             )}
                             <Typography

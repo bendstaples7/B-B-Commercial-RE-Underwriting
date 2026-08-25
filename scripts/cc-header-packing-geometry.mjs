@@ -82,29 +82,43 @@ async function startViteHarness() {
   }
 }
 
-async function waitForHarnessReady(page, viewport) {
+function watchPageIssues(page) {
   const consoleErrors = []
+  const pageErrors = []
   const onConsole = (msg) => {
     if (msg.type() === 'error') {
       consoleErrors.push(msg.text())
     }
   }
   page.on('console', onConsole)
+  const onPageError = (e) => pageErrors.push(String(e))
+  page.on('pageerror', onPageError)
+  return {
+    consoleErrors,
+    pageErrors,
+    dispose: () => {
+      page.off('console', onConsole)
+      page.off('pageerror', onPageError)
+    },
+  }
+}
+
+async function waitForHarnessReady(page, viewport, consoleErrors = []) {
   try {
-  await page.locator(`[${HARNESS_READY_ATTR}="true"]`).waitFor({
-    state: 'attached',
-    timeout: HARNESS_VISIBLE_TIMEOUT_MS,
-  })
-  await page.getByTestId('property-overview-header').waitFor({
-    state: 'visible',
-    timeout: HARNESS_VISIBLE_TIMEOUT_MS,
-  })
-  await page
-    .locator(
-      '[data-testid="quick-stat-units-details-value"], [data-testid="quick-stat-units-details"]',
-    )
-    .first()
-    .waitFor({ state: 'visible', timeout: HARNESS_VISIBLE_TIMEOUT_MS })
+    await page.locator(`[${HARNESS_READY_ATTR}="true"]`).waitFor({
+      state: 'attached',
+      timeout: HARNESS_VISIBLE_TIMEOUT_MS,
+    })
+    await page.getByTestId('property-overview-header').waitFor({
+      state: 'visible',
+      timeout: HARNESS_VISIBLE_TIMEOUT_MS,
+    })
+    await page
+      .locator(
+        '[data-testid="quick-stat-units-details-value"], [data-testid="quick-stat-units-details"]',
+      )
+      .first()
+      .waitFor({ state: 'visible', timeout: HARNESS_VISIBLE_TIMEOUT_MS })
   } catch (err) {
     const bodyText = await page.locator('body').innerText().catch(() => '(unreadable)')
     const url = page.url()
@@ -114,8 +128,6 @@ async function waitForHarnessReady(page, viewport) {
       consoleErrors,
       error: String(err),
     })
-  } finally {
-    page.off('console', onConsole)
   }
   if (consoleErrors.length) {
     fail(viewport, 'Harness console errors', consoleErrors)
@@ -580,37 +592,42 @@ async function main() {
   try {
     for (const viewport of VIEWPORTS) {
       const page = await browser.newPage({ viewport })
-      const pageErrors = []
-      page.on('pageerror', (e) => pageErrors.push(String(e)))
+      const issues = watchPageIssues(page)
+      try {
+        await page.goto(harnessUrl, { waitUntil: 'load', timeout: HARNESS_VISIBLE_TIMEOUT_MS })
+        await waitForHarnessReady(page, viewport, issues.consoleErrors)
 
-      await page.goto(harnessUrl, { waitUntil: 'load', timeout: HARNESS_VISIBLE_TIMEOUT_MS })
-      await waitForHarnessReady(page, viewport)
+        if (issues.pageErrors.length) {
+          console.error(`[${viewport.width}] Harness page errors:`, issues.pageErrors)
+          process.exit(1)
+        }
 
-      if (pageErrors.length) {
-        console.error(`[${viewport.width}] Harness page errors:`, pageErrors)
-        process.exit(1)
+        const result = await assertViewport(page, viewport)
+        results.push(result)
+      } finally {
+        issues.dispose()
+        await page.close()
       }
-
-      const result = await assertViewport(page, viewport)
-      results.push(result)
-      await page.close()
     }
 
     for (const viewport of VIEWPORTS) {
       const page = await browser.newPage({ viewport })
-      const pageErrors = []
-      page.on('pageerror', (e) => pageErrors.push(String(e)))
-      const residentialUrl = new URL(harnessUrl)
-      residentialUrl.searchParams.set('fixture', 'residential')
-      await page.goto(residentialUrl.href, { waitUntil: 'load', timeout: HARNESS_VISIBLE_TIMEOUT_MS })
-      await waitForHarnessReady(page, viewport)
-      if (pageErrors.length) {
-        console.error(`[${viewport.width}] Residential harness page errors:`, pageErrors)
-        process.exit(1)
+      const issues = watchPageIssues(page)
+      try {
+        const residentialUrl = new URL(harnessUrl)
+        residentialUrl.searchParams.set('fixture', 'residential')
+        await page.goto(residentialUrl.href, { waitUntil: 'load', timeout: HARNESS_VISIBLE_TIMEOUT_MS })
+        await waitForHarnessReady(page, viewport, issues.consoleErrors)
+        if (issues.pageErrors.length) {
+          console.error(`[${viewport.width}] Residential harness page errors:`, issues.pageErrors)
+          process.exit(1)
+        }
+        const resResult = await assertResidentialViewport(page, viewport)
+        residentialResults.push(resResult)
+      } finally {
+        issues.dispose()
+        await page.close()
       }
-      const resResult = await assertResidentialViewport(page, viewport)
-      residentialResults.push(resResult)
-      await page.close()
     }
 
     console.log(

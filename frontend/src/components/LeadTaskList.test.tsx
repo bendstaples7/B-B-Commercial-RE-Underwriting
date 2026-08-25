@@ -862,7 +862,7 @@ describe('LeadTaskList', () => {
               occurred_at: '2026-08-25T18:01:19Z',
               source: 'manual',
               actor: 'Ben',
-              summary: 'Spoke with Nicholas about cleaning crew and $1.25M ask.',
+              summary: 'Short note subject',
               metadata: {
                 body: 'Spoke with Nicholas about cleaning crew and $1.25M ask.',
                 contact_name: 'Nicholas',
@@ -880,6 +880,58 @@ describe('LeadTaskList', () => {
       const context = screen.getByTestId('task-activity-context-12798')
       expect(context).toHaveTextContent('Re: Nicholas')
       expect(context).toHaveTextContent('Spoke with Nicholas about cleaning crew and $1.25M ask.')
+      expect(context).not.toHaveTextContent('Short note subject')
+    })
+
+    it('labels linked call context with With', () => {
+      const tomorrow = new Date()
+      tomorrow.setDate(tomorrow.getDate() + 1)
+      const due = tomorrow.toISOString().slice(0, 10)
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[
+            {
+              id: 12799,
+              lead_id: 1,
+              task_type: 'call_owner_today',
+              title: 'Follow up call',
+              status: 'open',
+              due_date: due,
+              created_at: '2026-08-25T18:01:19Z',
+              completed_at: null,
+              created_by: 'test',
+              source: 'native',
+              hubspot_task_id: null,
+            },
+          ]}
+          activityEntries={[
+            {
+              id: 290808,
+              lead_id: 1,
+              event_type: 'call_logged',
+              occurred_at: '2026-08-25T18:01:19Z',
+              source: 'manual',
+              actor: 'Ben',
+              summary: 'Call summary',
+              metadata: {
+                notes: 'Call body from metadata notes.',
+                contact_name: 'Nicholas',
+                follow_up_task_id: 12799,
+              },
+              hubspot_activity_id: null,
+              is_deleted: false,
+              created_at: '2026-08-25T18:01:19Z',
+            },
+          ]}
+          onTaskCreated={vi.fn()}
+        />,
+      )
+
+      const context = screen.getByTestId('task-activity-context-12799')
+      expect(context).toHaveTextContent('With: Nicholas')
+      expect(context).toHaveTextContent('Call body from metadata notes.')
     })
   })
 

@@ -554,6 +554,143 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     })
   })
 
+  it('hides recommended_action_changed rows loaded from older default activity pages', async () => {
+    const api = await import('@/services/api')
+    vi.mocked(api.commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        timeline: {
+          entries: [
+            {
+              id: 10,
+              lead_id: 1,
+              event_type: 'note_added',
+              occurred_at: '2026-08-25T18:01:19Z',
+              source: 'manual',
+              actor: 'Ben',
+              summary: 'Visible note body',
+              metadata: { body: 'Visible note body' },
+              hubspot_activity_id: null,
+              is_deleted: false,
+              created_at: '2026-08-25T18:01:19Z',
+            },
+          ],
+          total: 2,
+          page: 1,
+          per_page: 1,
+        },
+      }),
+    )
+    vi.mocked(api.commandCenterService.getTimeline).mockResolvedValue({
+      entries: [
+        {
+          id: 11,
+          lead_id: 1,
+          event_type: 'recommended_action_changed',
+          occurred_at: '2026-08-20T12:00:00Z',
+          source: 'system',
+          actor: 'System',
+          summary: "Recommended action changed from 'analyze_property' to 'call_ready'.",
+          metadata: null,
+          hubspot_activity_id: null,
+          is_deleted: false,
+          created_at: '2026-08-20T12:00:00Z',
+        },
+      ],
+      total: 2,
+      page: 2,
+      per_page: 1,
+    })
+
+    renderComponent()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('entry-summary-10')).toHaveTextContent('Visible note body')
+    })
+    await userEvent.click(screen.getByTestId('load-more-btn'))
+
+    await waitFor(() => {
+      expect(api.commandCenterService.getTimeline).toHaveBeenCalledWith(1, 2)
+      expect(screen.queryByText(/Recommended action changed/i)).not.toBeInTheDocument()
+    })
+  })
+
+  it('uses loaded older activity pages for primary task context', async () => {
+    const api = await import('@/services/api')
+    vi.mocked(api.commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        open_tasks: [{
+          id: 12798,
+          lead_id: 1,
+          task_type: 'call_owner_today',
+          title: 'Follow up with Nicholas',
+          status: 'open',
+          due_date: '2026-08-26',
+          created_at: '2026-08-25T18:01:19Z',
+          completed_at: null,
+          created_by: 'test',
+          source: 'native',
+          hubspot_task_id: null,
+        }],
+        timeline: {
+          entries: [
+            {
+              id: 10,
+              lead_id: 1,
+              event_type: 'note_added',
+              occurred_at: '2026-08-25T18:01:19Z',
+              source: 'manual',
+              actor: 'Ben',
+              summary: 'Unrelated note',
+              metadata: { body: 'Unrelated note' },
+              hubspot_activity_id: null,
+              is_deleted: false,
+              created_at: '2026-08-25T18:01:19Z',
+            },
+          ],
+          total: 2,
+          page: 1,
+          per_page: 1,
+        },
+      }),
+    )
+    vi.mocked(api.commandCenterService.getTimeline).mockResolvedValue({
+      entries: [
+        {
+          id: 11,
+          lead_id: 1,
+          event_type: 'note_added',
+          occurred_at: '2026-08-20T12:00:00Z',
+          source: 'manual',
+          actor: 'Ben',
+          summary: 'Short subject',
+          metadata: {
+            body: 'Full linked note from older activity page.',
+            contact_name: 'Nicholas',
+            follow_up_task_id: 12798,
+          },
+          hubspot_activity_id: null,
+          is_deleted: false,
+          created_at: '2026-08-20T12:00:00Z',
+        },
+      ],
+      total: 2,
+      page: 2,
+      per_page: 1,
+    })
+
+    renderComponent()
+
+    const loadMore = await screen.findByTestId('load-more-btn')
+    expect(screen.queryByTestId('task-activity-context-12798')).not.toBeInTheDocument()
+    await userEvent.click(loadMore)
+
+    await waitFor(() => {
+      const context = screen.getByTestId('task-activity-context-12798')
+      expect(context).toHaveTextContent('Re: Nicholas')
+      expect(context).toHaveTextContent('Full linked note from older activity page.')
+    })
+  })
+
   it('opens activity in a full-screen dialog from the Activity header', async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 })
     renderComponent()
@@ -1935,7 +2072,7 @@ describe('UnifiedLeadCommandCenter — queue go back', () => {
   it('restores visited history from session storage when router state was dropped', async () => {
     const api = await import('@/services/api')
     sessionStorage.setItem(
-      'bb-queue-session:todays-action',
+      'bb-queue-session:todays-action:all',
       JSON.stringify({ visitedHistory: [11130], forwardStack: [] }),
     )
 

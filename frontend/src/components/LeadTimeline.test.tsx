@@ -828,6 +828,50 @@ describe('LeadTimeline', () => {
       expect(screen.getByTestId('entry-summary-1')).toHaveTextContent(shortNote)
     })
 
+    it('shows note metadata.notes inline when metadata.body is absent', () => {
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              summary: 'Short note subject',
+              metadata: { notes: 'Full note stored in metadata.notes' },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      expect(screen.getByTestId('entry-summary-1')).toHaveTextContent(
+        'Full note stored in metadata.notes',
+      )
+    })
+
+    it('shows short call notes inline while retaining expandable metadata details', () => {
+      const notes = 'Talked through the cleaning crew issue and confirmed the $1.25M ask.'
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              event_type: 'call_logged',
+              summary: 'Call with Nicholas: answered',
+              metadata: {
+                outcome: 'answered',
+                contact_name: 'Nicholas',
+                phone_number: '5551234567',
+                notes,
+              },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      expect(screen.getByTestId('entry-summary-1')).toHaveTextContent(notes)
+      expect(screen.getByTestId('entry-details-toggle-1')).toBeInTheDocument()
+    })
+
     it('expands a note entry to show the full note body from metadata', async () => {
       const longNote = 'A'.repeat(501)
       render(
