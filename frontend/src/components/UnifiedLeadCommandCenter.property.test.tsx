@@ -18,6 +18,7 @@ import { MemoryRouter, Routes, Route, Navigate, useParams, useLocation } from 'r
 import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { UnifiedLeadCommandCenter, ALL_LEAD_STATUSES } from './UnifiedLeadCommandCenter'
 import { TIMELINE_PREVIEW_COUNT } from './LeadTimeline'
+import { sortTimelineEntriesDesc } from '@/utils/timelineSort'
 import { partitionRowsByLead } from '@/utils/leadScopedRows'
 import { QueueTable } from './QueueTable'
 import GlobalSearchBar from './GlobalSearchBar'
@@ -1343,10 +1344,11 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           const firstTestId = entryNodes[0].getAttribute('data-testid')
           expect(firstTestId).toBe('timeline-entry-999999')
 
-          // If there were existing entries, the original first entry must now be at index 1
+          // If there were existing entries, the next row follows canonical timeline sort.
           if (scopedEntries.length > 0) {
+            const sortedExisting = sortTimelineEntriesDesc(scopedEntries)
             const secondTestId = entryNodes[1].getAttribute('data-testid')
-            expect(secondTestId).toBe(`timeline-entry-${scopedEntries[0].id}`)
+            expect(secondTestId).toBe(`timeline-entry-${sortedExisting[0].id}`)
           }
 
           unmount()
