@@ -64,6 +64,35 @@ function assertScreenshot(viewport, path, label) {
   return bytes
 }
 
+async function resolveHarnessBaseUrl(server) {
+  const addr = server.httpServer?.address()
+  const port =
+    typeof addr === 'object' && addr && typeof addr.port === 'number'
+      ? addr.port
+      : server.config.server.port
+  if (!port || port <= 0) {
+    throw new Error(`Vite harness server has no listening port (addr=${JSON.stringify(addr)})`)
+  }
+  return `http://127.0.0.1:${port}/`
+}
+
+async function warmupHarnessServer(base) {
+  const harnessUrl = new URL('cc-header-packing-harness.html', base).href
+  const moduleUrl = new URL('src/harness/ccHeaderPackingMain.tsx', base).href
+  const htmlRes = await fetch(harnessUrl)
+  if (!htmlRes.ok) {
+    throw new Error(`Harness HTML fetch failed (${htmlRes.status}) ${harnessUrl}`)
+  }
+  await htmlRes.text()
+  const modRes = await fetch(moduleUrl, {
+    headers: { Accept: 'application/javascript,text/javascript,*/*' },
+  })
+  if (!modRes.ok) {
+    throw new Error(`Harness module fetch failed (${modRes.status}) ${moduleUrl}`)
+  }
+  await modRes.text()
+}
+
 async function startViteHarness() {
   const vitePath = resolve(FRONTEND, 'node_modules/vite/dist/node/index.js')
   const { createServer } = await import(pathToFileURL(vitePath).href)
@@ -71,15 +100,35 @@ async function startViteHarness() {
   const server = await createServer({
     configFile: resolve(FRONTEND, 'vite.config.ts'),
     root: FRONTEND,
-    server: { port: 0, strictPort: false, host: '127.0.0.1' },
+    server: {
+      port: 0,
+      strictPort: false,
+      host: '127.0.0.1',
+      warmup: {
+        clientFiles: [resolve(FRONTEND, 'src/harness/ccHeaderPackingMain.tsx')],
+      },
+    },
+    optimizeDeps: {
+      include: [
+        'react',
+        'react-dom/client',
+        '@mui/material',
+        '@mui/icons-material/ArrowBack',
+      ],
+    },
     logLevel: 'error',
   })
   await server.listen()
-  const urls = server.resolvedUrls?.local
-  const base = urls?.[0] || `http://127.0.0.1:${server.config.server.port}/`
+  const base = await resolveHarnessBaseUrl(server)
+  try {
+    await warmupHarnessServer(base)
+  } catch (err) {
+    await server.close()
+    throw err
+  }
   return {
     server,
-    harnessUrl: new URL('/cc-header-packing-harness.html', base).href,
+    harnessUrl: new URL('cc-header-packing-harness.html', base).href,
   }
 }
 
