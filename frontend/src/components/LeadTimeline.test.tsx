@@ -78,6 +78,46 @@ describe('LeadTimeline', () => {
       expect(screen.getByTestId('timeline-empty')).toBeInTheDocument()
     })
 
+    it('renders contact context for a note with contact metadata', () => {
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              event_type: 'note_added',
+              summary: 'Spoke with Nicholas about cleaning crew.',
+              metadata: {
+                body: 'Spoke with Nicholas about cleaning crew.',
+                contact_name: 'Nicholas',
+              },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      expect(screen.getByTestId('entry-contact-context-1')).toHaveTextContent('Re: Nicholas')
+    })
+
+    it('shows the full note body inline for notes at or below 500 characters', () => {
+      const body = 'A'.repeat(173)
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              summary: body,
+              metadata: { body },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      expect(screen.getByTestId('entry-summary-1')).toHaveTextContent(body)
+      expect(screen.queryByTestId('entry-details-toggle-1')).not.toBeInTheDocument()
+    })
+
     it('renders each entry with event type, timestamp, actor, and summary', () => {
       const entries = [
         makeEntry(1, {
@@ -332,9 +372,9 @@ describe('LeadTimeline', () => {
       )
 
       expect(screen.getByTestId('timeline-accordion')).toBeInTheDocument()
-      expect(screen.getByTestId('timeline-entry-1')).toBeInTheDocument()
-      expect(screen.getByTestId('timeline-entry-5')).toBeInTheDocument()
-      expect(screen.queryByTestId('timeline-entry-6')).not.toBeInTheDocument()
+      expect(screen.getByTestId('timeline-entry-8')).toBeInTheDocument()
+      expect(screen.getByTestId('timeline-entry-4')).toBeInTheDocument()
+      expect(screen.queryByTestId('timeline-entry-3')).not.toBeInTheDocument()
       expect(screen.getByTestId('timeline-show-older-btn')).toHaveTextContent('3 more')
       expect(screen.getByTestId('timeline-showing')).toHaveTextContent('Showing 5 of 8')
       expect(screen.queryByTestId('load-more-btn')).not.toBeInTheDocument()
@@ -550,6 +590,59 @@ describe('LeadTimeline', () => {
       })
     })
 
+    it('re-sorts merged entries newest-first after refresh', async () => {
+      const onLoadMore = vi.fn().mockResolvedValue({
+        entries: [
+          makeEntry(3, {
+            summary: 'May activity',
+            occurred_at: '2026-05-20T19:57:24.827630Z',
+          }),
+          makeEntry(4, {
+            summary: 'Feb HubSpot import',
+            occurred_at: '2026-02-23T17:16:07.265000Z',
+          }),
+        ],
+        total: 4,
+      })
+
+      const { rerender } = render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, { summary: 'Newest', occurred_at: '2026-08-25T18:01:19Z' }),
+            makeEntry(2, { summary: 'Second', occurred_at: '2026-08-20T12:00:00Z' }),
+          ]}
+          initialTotal={4}
+          onLoadMore={onLoadMore}
+        />,
+      )
+
+      await user.click(screen.getByTestId('load-more-btn'))
+      await waitFor(() => {
+        expect(screen.getByTestId('entry-summary-3')).toHaveTextContent('May activity')
+      })
+
+      rerender(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(5, { summary: 'Fresh note', occurred_at: '2026-08-26T10:00:00Z' }),
+            makeEntry(1, { summary: 'Newest refreshed', occurred_at: '2026-08-25T18:01:19Z' }),
+          ]}
+          initialTotal={4}
+          onLoadMore={onLoadMore}
+        />,
+      )
+
+      await waitFor(() => {
+        const summaries = screen.getAllByTestId(/entry-summary-/)
+        expect(summaries[0]).toHaveTextContent('Fresh note')
+        expect(summaries[1]).toHaveTextContent('Newest refreshed')
+        expect(summaries[2]).toHaveTextContent('May activity')
+        expect(summaries[3]).toHaveTextContent('Feb HubSpot import')
+      })
+    })
+
     it('clears pending load-more state on lead change', async () => {
       let resolveLoad!: (value: { entries: LeadTimelineEntry[]; total: number }) => void
       const onLoadMore = vi.fn().mockReturnValue(
@@ -716,8 +809,27 @@ describe('LeadTimeline', () => {
       )
     })
 
+    it('shows short notes inline without an expand toggle', () => {
+      const shortNote = 'A'.repeat(200)
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              summary: shortNote.slice(0, 80),
+              metadata: { body: shortNote },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      expect(screen.queryByTestId('entry-details-toggle-1')).not.toBeInTheDocument()
+      expect(screen.getByTestId('entry-summary-1')).toHaveTextContent(shortNote)
+    })
+
     it('expands a note entry to show the full note body from metadata', async () => {
-      const longNote = 'A'.repeat(200)
+      const longNote = 'A'.repeat(501)
       render(
         <LeadTimeline
           leadId={1}
@@ -737,7 +849,7 @@ describe('LeadTimeline', () => {
     })
 
     it('expands when the note preview text is clicked', async () => {
-      const longNote = 'A'.repeat(200)
+      const longNote = 'A'.repeat(501)
       render(
         <LeadTimeline
           leadId={1}
@@ -760,7 +872,7 @@ describe('LeadTimeline', () => {
     })
 
     it('does not collapse when clicking expanded note body (allows text select/copy)', async () => {
-      const longNote = 'A'.repeat(200)
+      const longNote = 'A'.repeat(501)
       render(
         <LeadTimeline
           leadId={1}

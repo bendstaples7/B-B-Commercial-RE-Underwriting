@@ -32,11 +32,12 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import AddTaskIcon from '@mui/icons-material/AddTask'
 import HubIcon from '@mui/icons-material/Hub'
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted'
-import type { LeadTask, LeadTaskType, CRMRecommendedAction, OutreachContact } from '@/types'
+import type { LeadTask, LeadTaskType, CRMRecommendedAction, OutreachContact, LeadTimelineEntry } from '@/types'
 import { leadTaskService, callLogService } from '@/services/api'
 import { OutreachContactInline, OutreachContactMissingHint } from '@/components/OutreachContactCallout'
 import { FollowUpHorizonControls } from '@/components/FollowUpHorizonControls'
 import { ccSectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
+import { findActivityContextForTask } from '@/utils/timelineTaskContext'
 import {
   type FollowUpPreset,
   formatFollowUpPresetLabel,
@@ -126,6 +127,8 @@ export interface LeadTaskListProps {
    *  placeholder task (id = 0) so the parent can remove it from the list.
    */
   onOptimisticTaskRevert?: (optimisticTask: LeadTask) => void
+  /** Timeline rows used to show note/call context on the primary open task. */
+  activityEntries?: LeadTimelineEntry[]
   outreachContact?: OutreachContact | null
   /** Show outreach contact inline on the primary (first sorted) open task only */
   showOutreachContactOnPrimaryTask?: boolean
@@ -155,6 +158,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     onHubSpotTaskDone,
     onOptimisticTaskCreate,
     onOptimisticTaskRevert,
+    activityEntries = [],
     outreachContact,
     showOutreachContactOnPrimaryTask = false,
     missingOutreachChannel = null,
@@ -642,6 +646,10 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
               showOutreachContactOnPrimaryTask
               && index === 0
               && (outreachContact || missingOutreachChannel)
+            const activityContext =
+              index === 0 && typeof task.id === 'number'
+                ? findActivityContextForTask(task.id, activityEntries)
+                : null
 
             return (
               <Box key={task.id}>
@@ -878,6 +886,37 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                         )}
                         {showContactOnTask && !outreachContact && missingOutreachChannel && (
                           <OutreachContactMissingHint channel={missingOutreachChannel} />
+                        )}
+                        {activityContext && (
+                          <Box
+                            sx={{ mt: 0.5 }}
+                            data-testid={`task-activity-context-${task.id}`}
+                          >
+                            {activityContext.contactName && (
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                display="block"
+                              >
+                                Re: {activityContext.contactName}
+                              </Typography>
+                            )}
+                            <Typography
+                              variant="body2"
+                              color="text.secondary"
+                              sx={{
+                                mt: activityContext.contactName ? 0.25 : 0,
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                                display: '-webkit-box',
+                                WebkitLineClamp: 3,
+                                WebkitBoxOrient: 'vertical',
+                                overflow: 'hidden',
+                              }}
+                            >
+                              {activityContext.body}
+                            </Typography>
+                          </Box>
                         )}
                         {task.source === 'hubspot' && (
                           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>

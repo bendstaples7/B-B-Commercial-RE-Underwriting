@@ -56,6 +56,63 @@ export function queuePath(key: string): string {
   return `/queues/${key}`
 }
 
+const QUEUE_SESSION_STORAGE_PREFIX = 'bb-queue-session:'
+
+export type QueueSessionHistory = Pick<FromQueueState, 'visitedHistory' | 'forwardStack'>
+
+export function readQueueSessionHistory(queueKey: string): QueueSessionHistory | null {
+  if (typeof sessionStorage === 'undefined') return null
+  try {
+    const raw = sessionStorage.getItem(`${QUEUE_SESSION_STORAGE_PREFIX}${queueKey}`)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as QueueSessionHistory
+    const visitedHistory = Array.isArray(parsed.visitedHistory)
+      ? parsed.visitedHistory.filter((id) => Number.isInteger(id))
+      : []
+    const forwardStack = Array.isArray(parsed.forwardStack)
+      ? parsed.forwardStack.filter((id) => Number.isInteger(id))
+      : []
+    if (!visitedHistory.length && !forwardStack.length) return null
+    return { visitedHistory, forwardStack }
+  } catch {
+    return null
+  }
+}
+
+export function writeQueueSessionHistory(queueKey: string, history: QueueSessionHistory): void {
+  if (typeof sessionStorage === 'undefined') return
+  const visitedHistory = history.visitedHistory ?? []
+  const forwardStack = history.forwardStack ?? []
+  if (!visitedHistory.length && !forwardStack.length) {
+    sessionStorage.removeItem(`${QUEUE_SESSION_STORAGE_PREFIX}${queueKey}`)
+    return
+  }
+  sessionStorage.setItem(
+    `${QUEUE_SESSION_STORAGE_PREFIX}${queueKey}`,
+    JSON.stringify({ visitedHistory, forwardStack }),
+  )
+}
+
+export function clearQueueSessionHistory(queueKey: string): void {
+  if (typeof sessionStorage === 'undefined') return
+  sessionStorage.removeItem(`${QUEUE_SESSION_STORAGE_PREFIX}${queueKey}`)
+}
+
+/** Merge router state with session-persisted back/forward stacks when state was dropped. */
+export function mergeQueueSessionHistory(fromQueue: FromQueueState): FromQueueState {
+  const stored = readQueueSessionHistory(fromQueue.key)
+  if (!stored) return fromQueue
+  return {
+    ...fromQueue,
+    visitedHistory: fromQueue.visitedHistory?.length
+      ? fromQueue.visitedHistory
+      : stored.visitedHistory,
+    forwardStack: fromQueue.forwardStack?.length
+      ? fromQueue.forwardStack
+      : stored.forwardStack,
+  }
+}
+
 export function buildLeadQueueSearch(queueKey: string | undefined): string {
   if (!queueKey || !WORK_QUEUE_META[queueKey]) return ''
   return `?queue=${encodeURIComponent(queueKey)}`

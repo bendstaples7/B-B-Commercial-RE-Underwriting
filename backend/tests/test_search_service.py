@@ -224,3 +224,32 @@ class TestPythonRelevanceScore:
             'type': 'address',
             'value': '3208 W Wabansia Ave',
         }
+
+    def test_family_member_match_context_uses_matched_contact_name(self):
+        """Secondary/family hits surface Name: Yumi even when primary is Yoko."""
+        row = FakeRow(
+            property_street='915 W Lawrence Ave',
+            owner_first_name='Yoko',
+            owner_last_name='Miller',
+            primary_contact_first_name='Yoko',
+            primary_contact_last_name='Miller',
+            matched_contact_name='Yumi Miller',
+            matched_phone=None,
+            matched_email=None,
+        )
+        assert build_match_context(row, 'Yumi Miller', '') == {
+            'type': 'name',
+            'value': 'Yumi Miller',
+        }
+
+
+class TestBestMatchedContactName:
+    def test_picks_family_over_owner_when_query_is_family(self):
+        from app.services.search_service import _best_matched_contact_name
+
+        name = _best_matched_contact_name(
+            [('Yoko', 'Miller'), ('Yumi', 'Miller')],
+            'Yumi Miller',
+            ['Yumi', 'Miller'],
+        )
+        assert name == 'Yumi Miller'

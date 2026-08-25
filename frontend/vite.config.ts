@@ -21,7 +21,11 @@ export default defineConfig(({ command, mode }) => {
     envDir: rootDir,
     plugins: [
       react(),
-      ...(command === 'serve' ? [liveUiCapturePlugin()] : []),
+      // Packing-geometry harness starts its own Vite server; skip live-ui middleware
+      // so HMR/capture hooks cannot keep networkidle from settling in CI.
+      ...(command === 'serve' && process.env.CC_PACKING_HARNESS !== '1'
+        ? [liveUiCapturePlugin()]
+        : []),
     ],
     resolve: {
       alias: {

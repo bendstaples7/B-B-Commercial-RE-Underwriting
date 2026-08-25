@@ -232,7 +232,10 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Box sx={{ p: 2, bgcolor: 'grey.50', minHeight: '100vh' }}>
+      <Box
+        sx={{ p: 2, bgcolor: 'grey.50', minHeight: '100vh' }}
+        data-cc-harness-ready="true"
+      >
         {fixture === 'residential' ? (
           <HarnessHeader
             payload={RESIDENTIAL_PAYLOAD}

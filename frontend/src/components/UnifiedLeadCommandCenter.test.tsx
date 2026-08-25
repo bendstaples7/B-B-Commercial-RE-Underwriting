@@ -203,6 +203,7 @@ let leadService: typeof import('@/services/leadApi')['leadService']
 beforeEach(async () => {
   vi.clearAllMocks()
   mockNavigate.mockClear()
+  sessionStorage.clear()
 
   const api = await import('@/services/api')
   commandCenterService = api.commandCenterService
@@ -503,6 +504,53 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     renderComponent()
     await waitFor(() => {
       expect(screen.getByTestId('activity-panel')).toBeInTheDocument()
+    })
+  })
+
+  it('hides recommended_action_changed rows from the default activity feed', async () => {
+    const api = await import('@/services/api')
+    vi.mocked(api.commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        timeline: {
+          entries: [
+            {
+              id: 10,
+              lead_id: 1,
+              event_type: 'note_added',
+              occurred_at: '2026-08-25T18:01:19Z',
+              source: 'manual',
+              actor: 'Ben',
+              summary: 'Visible note body',
+              metadata: { body: 'Visible note body' },
+              hubspot_activity_id: null,
+              is_deleted: false,
+              created_at: '2026-08-25T18:01:19Z',
+            },
+            {
+              id: 11,
+              lead_id: 1,
+              event_type: 'recommended_action_changed',
+              occurred_at: '2026-08-20T12:00:00Z',
+              source: 'system',
+              actor: 'System',
+              summary: "Recommended action changed from 'analyze_property' to 'call_ready'.",
+              metadata: null,
+              hubspot_activity_id: null,
+              is_deleted: false,
+              created_at: '2026-08-20T12:00:00Z',
+            },
+          ],
+          total: 2,
+          page: 1,
+          per_page: 25,
+        },
+      }),
+    )
+
+    renderComponent()
+    await waitFor(() => {
+      expect(screen.getByTestId('entry-summary-10')).toHaveTextContent('Visible note body')
+      expect(screen.queryByText(/Recommended action changed/i)).not.toBeInTheDocument()
     })
   })
 
@@ -1827,6 +1875,96 @@ describe('UnifiedLeadCommandCenter — mail stage advances queue', () => {
   })
 })
 
+describe('UnifiedLeadCommandCenter — queue go back', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+  })
+
+  it('shows Go back when the queue session has a previous lead and navigates there', async () => {
+    const api = await import('@/services/api')
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+
+    vi.mocked(api.queueService.getNavigation).mockResolvedValue({
+      queue_key: 'todays-action',
+      lead_id: 99,
+      position: 2,
+      total: 5,
+      prev_id: 50,
+      next_id: 100,
+    })
+
+    const fromQueue = {
+      key: 'todays-action',
+      label: "Today's Action",
+      visitedHistory: [11130],
+      forwardStack: [],
+    }
+
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: '/leads/99',
+            search: '?queue=todays-action',
+            state: { fromQueue },
+          },
+        ]}
+      >
+        <UnifiedLeadCommandCenter leadId={99} />
+      </MemoryRouter>,
+    )
+
+    const goBack = await screen.findByTestId('queue-go-back-btn')
+    expect(goBack).toBeInTheDocument()
+    mockNavigate.mockClear()
+    await user.click(goBack)
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/leads/11130?queue=todays-action',
+      {
+        state: {
+          fromQueue: {
+            ...fromQueue,
+            visitedHistory: [],
+            forwardStack: [99],
+          },
+        },
+      },
+    )
+  })
+
+  it('restores visited history from session storage when router state was dropped', async () => {
+    const api = await import('@/services/api')
+    sessionStorage.setItem(
+      'bb-queue-session:todays-action',
+      JSON.stringify({ visitedHistory: [11130], forwardStack: [] }),
+    )
+
+    vi.mocked(api.queueService.getNavigation).mockResolvedValue({
+      queue_key: 'todays-action',
+      lead_id: 99,
+      position: 2,
+      total: 5,
+      prev_id: 50,
+      next_id: 100,
+    })
+
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: '/leads/99',
+            search: '?queue=todays-action',
+          },
+        ]}
+      >
+        <UnifiedLeadCommandCenter leadId={99} />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByTestId('queue-go-back-btn')).toBeInTheDocument()
+  })
+})
+
 describe('UnifiedLeadCommandCenter — deprioritize queue hold', () => {
   afterEach(() => {
     vi.useRealTimers()
@@ -1960,11 +2098,11 @@ describe('UnifiedLeadCommandCenter — timeline does not bleed across leads', ()
             {
               id: 161610,
               lead_id: 4404,
-              event_type: 'recommended_action_changed',
+              event_type: 'call_logged',
               occurred_at: '2026-07-07T22:54:46.417209Z',
-              source: 'system',
-              actor: 'System',
-              summary: "Recommended action changed from 'analyze_property' to 'call_ready'.",
+              source: 'manual',
+              actor: 'Ben',
+              summary: 'Call with Andiamo ((312) 555-0100, mobile): no_answer',
               metadata: null,
               hubspot_activity_id: null,
               is_deleted: false,
@@ -2004,7 +2142,7 @@ describe('UnifiedLeadCommandCenter — timeline does not bleed across leads', ()
     )
 
     await waitFor(() => {
-      expect(screen.getByTestId('lead-timeline')).toHaveTextContent('call_ready')
+      expect(screen.getByTestId('lead-timeline')).toHaveTextContent('Andiamo')
     })
     expect(screen.getByTestId('lead-timeline')).not.toHaveTextContent('Gilberto Olivares')
   })

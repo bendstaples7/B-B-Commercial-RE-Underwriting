@@ -30,6 +30,7 @@ import type { LeadTimelineEntry } from '@/types'
 import { formatPhoneNumber } from '@/utils/phone'
 import { scopeRowsToLead, scopeRowsToLeadWithTotal } from '@/utils/leadScopedRows'
 import { stripHtmlTags } from '@/utils/helpers'
+import { sortTimelineEntriesDesc } from '@/utils/timelineSort'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -38,6 +39,9 @@ import { stripHtmlTags } from '@/utils/helpers'
 // Number of characters before the summary is considered "long" and gets a
 // collapse toggle.
 const SUMMARY_COLLAPSE_THRESHOLD = 120
+
+/** Notes at or below this length always show inline without expand. */
+const NOTE_INLINE_THRESHOLD = 500
 
 /** Entries shown before "Show older activity" inside the accordion. */
 export const TIMELINE_PREVIEW_COUNT = 5
@@ -93,6 +97,10 @@ function getContactContextLine(entry: LeadTimelineEntry): string | null {
       parts.push(emailLabel ? `${email} (${emailLabel})` : email)
     }
     return `To: ${parts.join(' · ')}`
+  }
+
+  if (entry.event_type === 'note_added' && contactName) {
+    return `Re: ${contactName}`
   }
 
   return null
@@ -219,7 +227,7 @@ export function buildTimelineDetailRows(entry: LeadTimelineEntry): TimelineDetai
 
   if (entry.event_type === 'note_added') {
     const body = getFullNoteBody(entry)
-    if (body && body.length > SUMMARY_COLLAPSE_THRESHOLD) {
+    if (body && body.length > NOTE_INLINE_THRESHOLD) {
       rows.push({ label: 'Note', value: body })
     }
     return rows
@@ -254,8 +262,16 @@ export function buildTimelineDetailRows(entry: LeadTimelineEntry): TimelineDetai
 }
 
 export function entryHasExpandableDetails(entry: LeadTimelineEntry): boolean {
+  if (entry.event_type === 'note_added' && !isEmailEntry(entry)) {
+    const body = getFullNoteBody(entry)
+    return body.length > NOTE_INLINE_THRESHOLD
+  }
   if (buildTimelineDetailRows(entry).length > 0) return true
   return getEntryDisplayText(entry).length > SUMMARY_COLLAPSE_THRESHOLD
+}
+
+function getNoteInlineText(entry: LeadTimelineEntry): string {
+  return getFullNoteBody(entry)
 }
 
 function getPreviewText(entry: LeadTimelineEntry): string {
@@ -347,7 +363,8 @@ interface TimelineEntryRowProps {
 
 function TimelineEntryRow({ entry, highlighted = false }: TimelineEntryRowProps) {
   const isHubSpot = entry.source === 'hubspot' || entry.source === 'hubspot_import'
-  const summaryText = getEntryDisplayText(entry)
+  const isInlineNote = entry.event_type === 'note_added' && !entryHasExpandableDetails(entry)
+  const summaryText = isInlineNote ? getNoteInlineText(entry) : getEntryDisplayText(entry)
   const contactContextLine = getContactContextLine(entry)
   const hasExpandableDetails = entryHasExpandableDetails(entry)
   const detailRows = buildTimelineDetailRows(entry)
@@ -565,7 +582,7 @@ function mergeTimelineEntries(
   }
   refreshedEntries.forEach(append)
   existingEntries.forEach(append)
-  return merged
+  return sortTimelineEntriesDesc(merged)
 }
 
 function timelineEntryIds(entries: readonly LeadTimelineEntry[]): Set<number> {
@@ -632,7 +649,7 @@ export function LeadTimeline({
       : scopeRowsToLead(entriesRef.current, leadId, 'timeline')
         .filter((entry) => !previousBaseIds.has(entry.id))
     const nextEntries = leadChanged
-      ? scoped.rows
+      ? sortTimelineEntriesDesc(scoped.rows)
       : mergeTimelineEntries(scoped.rows, preservedLoadedEntries)
 
     setEntries(nextEntries)
@@ -679,10 +696,10 @@ export function LeadTimeline({
       )
       // Append new entries (do NOT replace existing ones); re-scope prev in case
       // of a race, then adopt the adjusted total from this page response.
-      setEntries((prev) => [
+      setEntries((prev) => sortTimelineEntriesDesc([
         ...scopeRowsToLead(prev, requestedLeadId, 'timeline'),
         ...scoped.rows,
-      ])
+      ]))
       setTotal(scoped.total)
       setPage(nextPage)
       setShowAllLoaded(true)

@@ -188,6 +188,58 @@ def _get_primary_contact_names(session, lead_id: int) -> tuple[Optional[str], Op
     return row.first_name, row.last_name
 
 
+def _get_linked_contact_names(session, lead_id: int) -> list[tuple[str, str]]:
+    """Load all linked contact first/last names (any role, including family)."""
+    from app.models.contact import Contact
+    from app.models.property_contact import PropertyContact
+
+    rows = (
+        session.query(Contact.first_name, Contact.last_name)
+        .join(PropertyContact, PropertyContact.contact_id == Contact.id)
+        .filter(PropertyContact.property_id == lead_id)
+        .all()
+    )
+    return [(r.first_name or '', r.last_name or '') for r in rows]
+
+
+def _format_contact_full_name(first: str | None, last: str | None) -> str:
+    return ' '.join(
+        part for part in ((first or '').strip(), (last or '').strip()) if part
+    )
+
+
+def _best_matched_contact_name(
+    contact_names: Sequence[tuple[str, str]],
+    q_trimmed: str,
+    tokens: Sequence[str],
+) -> str | None:
+    """Pick the linked contact whose name best explains the query tokens."""
+    query = _normalize_search_text(q_trimmed)
+    best: str | None = None
+    best_rank = -1
+    for first, last in contact_names:
+        full = _format_contact_full_name(first, last)
+        if not full:
+            continue
+        norm = _normalize_search_text(full)
+        if tokens and not all(
+            _token_matches_text(token, norm, fuzzy=True) for token in tokens
+        ):
+            continue
+        if query and query == norm:
+            rank = 3
+        elif query and query in norm:
+            rank = 2
+        else:
+            rank = 1
+        if rank > best_rank:
+            best_rank = rank
+            best = full
+            if rank == 3:
+                break
+    return best
+
+
 def _token_matches_lead(
     token: str,
     row: Any,
@@ -369,6 +421,11 @@ def build_match_context(row: Any, q_trimmed: str, q_digits: str) -> dict | None:
         or (tokens and all(_token_matches_text(token, normalized_street) for token in tokens))
     ):
         return {'type': 'address', 'value': street}
+
+    # Prefer an explicit contact-name hit (family / secondary) over primary-only.
+    matched_contact = (getattr(row, 'matched_contact_name', None) or '').strip()
+    if matched_contact:
+        return {'type': 'name', 'value': matched_contact}
 
     name = ' '.join(
         part for part in (
@@ -600,6 +657,37 @@ class SearchService:
             )""")
         return ' AND '.join(clauses) if clauses else 'TRUE'
 
+    def _matched_contact_name_sql(self, tokens: Sequence[str], params: dict) -> str:
+        """Subquery: linked contact full name that matches every query token."""
+        token_ands: list[str] = []
+        for i, token in enumerate(tokens):
+            key = f'mctoken_{i}'
+            params[key] = token.lower()
+            token_ands.append(
+                f"""(
+                    ca.first_name ILIKE '%' || :{key} || '%'
+                    OR ca.last_name ILIKE '%' || :{key} || '%'
+                    OR lower(trim(coalesce(ca.first_name,'') || ' ' || coalesce(ca.last_name,'')))
+                        ILIKE '%' || :{key} || '%'
+                )"""
+            )
+        all_tokens = ' AND '.join(token_ands) if token_ands else 'TRUE'
+        return f"""(
+            SELECT NULLIF(
+                trim(both ' ' from coalesce(ca.first_name,'') || ' ' || coalesce(ca.last_name,'')),
+                ''
+            )
+            FROM property_contacts pca
+            JOIN contacts ca ON ca.id = pca.contact_id
+            WHERE pca.property_id = l.id
+              AND ({all_tokens})
+            ORDER BY similarity(
+                lower(trim(coalesce(ca.first_name,'') || ' ' || coalesce(ca.last_name,''))),
+                :q_normalized
+            ) DESC NULLS LAST
+            LIMIT 1
+        )"""
+
     def _phone_email_predicate(self) -> str:
         return """
             (
@@ -631,7 +719,7 @@ class SearchService:
             )
         """
 
-    def _relevance_score_sql(self) -> str:
+    def _relevance_score_sql(self, matched_contact_name_expr: str | None = None) -> str:
         doc = self._document_sql()
         contacted = ', '.join(f"'{s}'" for s in CONTACTED_STATUSES)
         normalized_street = (
@@ -640,6 +728,12 @@ class SearchService:
         normalized_name = (
             f"lower(regexp_replace(trim({FULL_NAME_EXPR.strip()}), '\\s+', ' ', 'g'))"
         )
+        contact_boost = ''
+        if matched_contact_name_expr:
+            contact_boost = (
+                f"+ CASE WHEN ({matched_contact_name_expr}) IS NOT NULL "
+                f"THEN {WEIGHT_CONTAINS_FIELD_MATCH} ELSE 0 END"
+            )
         return f"""
         (
             CASE
@@ -685,6 +779,7 @@ class SearchService:
                     OR l.email_3 ILIKE :pattern OR l.email_4 ILIKE :pattern
                     OR l.email_5 ILIKE :pattern
                    THEN {WEIGHT_PHONE_EMAIL_BOOST} ELSE 0 END
+            {contact_boost}
         )
         """
 
@@ -717,7 +812,8 @@ class SearchService:
         }
         token_pred = self._build_token_predicates(tokens, params)
         phone_email = self._phone_email_predicate()
-        relevance = self._relevance_score_sql()
+        matched_contact_name_expr = self._matched_contact_name_sql(tokens, params)
+        relevance = self._relevance_score_sql(matched_contact_name_expr)
         doc = self._document_sql()
 
         sql = text(f"""
@@ -736,6 +832,7 @@ class SearchService:
                 l.email_1, l.email_2, l.email_3, l.email_4, l.email_5,
                 primary_c.first_name AS primary_contact_first_name,
                 primary_c.last_name AS primary_contact_last_name,
+                {matched_contact_name_expr} AS matched_contact_name,
                 {relevance} AS relevance_score,
                 COUNT(*) OVER() AS leads_total,
                 CASE
@@ -879,11 +976,7 @@ class SearchService:
 
         for lead in candidates:
             primary_first, primary_last = _get_primary_contact_names(self.session, lead.id)
-            contact_names = (
-                [(primary_first or '', primary_last or '')]
-                if primary_first or primary_last
-                else None
-            )
+            contact_names = _get_linked_contact_names(self.session, lead.id)
             exact_id = lead_id_query(q_trimmed)
             requested_id = lead_id_search_text(q_trimmed)
             if exact_id is not None and exact_id == lead.id:
@@ -905,6 +998,9 @@ class SearchService:
             )
             lead.primary_contact_first_name = primary_first  # type: ignore[attr-defined]
             lead.primary_contact_last_name = primary_last  # type: ignore[attr-defined]
+            lead.matched_contact_name = _best_matched_contact_name(  # type: ignore[attr-defined]
+                contact_names, q_trimmed, tokens,
+            )
             lead.relevance_score = score  # type: ignore[attr-defined]
             lead.matched_phone = None  # type: ignore[attr-defined]
             lead.matched_email = None  # type: ignore[attr-defined]
@@ -924,6 +1020,7 @@ class SearchService:
                     'owner_first_name', 'owner_last_name', 'property_street',
                     'lead_score', 'lead_status', 'relevance_score',
                     'primary_contact_first_name', 'primary_contact_last_name',
+                    'matched_contact_name',
                     'matched_phone', 'matched_email',
                     'phone_1', 'phone_2', 'phone_3', 'phone_4',
                     'phone_5', 'phone_6', 'phone_7',

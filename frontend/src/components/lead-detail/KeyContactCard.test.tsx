@@ -270,6 +270,10 @@ describe('KeyContactCard', () => {
     expect(screen.getByTestId('key-contact-other-2')).toHaveTextContent('Yumi Niece')
     expect(screen.getByTestId('key-contact-other-phone-2')).toHaveTextContent('(312) 555-0100')
     expect(screen.getByTestId('key-contact-other-phone-2-2')).toHaveTextContent('(773) 555-0101')
+    // Other-people phones match People / primary Key Contact (left-aligned, dense=false)
+    expect(screen.getByTestId('key-contact-other-phone-2').closest('div')).toHaveStyle({
+      justifyContent: 'flex-start',
+    })
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
   })
 

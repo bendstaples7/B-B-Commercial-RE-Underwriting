@@ -13,6 +13,13 @@ from app.exceptions import (
 logger = logging.getLogger(__name__)
 
 VALID_CALL_OUTCOMES = frozenset(['answered', 'voicemail', 'no_answer', 'busy', 'wrong_number', 'not_interested'])
+
+
+def _bump_activity_entry_timestamp(entry: LeadTimelineEntry) -> None:
+    """Refresh the primary call/note row so it sorts above task_* side effects."""
+    entry.occurred_at = datetime.now(timezone.utc)
+    db.session.add(entry)
+    db.session.commit()
 VALID_CALL_DIRECTIONS = frozenset(['outbound', 'inbound'])
 
 
@@ -375,6 +382,8 @@ class CallLogService:
                 db.session.add(entry)
                 db.session.commit()
 
+            _bump_activity_entry_timestamp(entry)
+
         # Always refresh scoring after the call (and any task side effects).
         try:
             from app.services.lead_refresh import refresh_lead_scoring
@@ -530,6 +539,8 @@ class CallLogService:
                 entry.event_metadata = dict(metadata)
                 db.session.add(entry)
                 db.session.commit()
+
+            _bump_activity_entry_timestamp(entry)
 
         try:
             from app.services.lead_refresh import refresh_lead_scoring

@@ -33,6 +33,7 @@ const GAP_MAX_PX = 48
 const ROW_TOP_EPS = 28
 const OVERLAP_EPS = 1
 const HARNESS_VISIBLE_TIMEOUT_MS = 120000
+const HARNESS_READY_ATTR = 'data-cc-harness-ready'
 const VIEWPORTS = [
   { width: 1280, height: 900 },
   { width: 1440, height: 900 },
@@ -65,6 +66,7 @@ function assertScreenshot(viewport, path, label) {
 async function startViteHarness() {
   const vitePath = resolve(FRONTEND, 'node_modules/vite/dist/node/index.js')
   const { createServer } = await import(pathToFileURL(vitePath).href)
+  process.env.CC_PACKING_HARNESS = '1'
   const server = await createServer({
     configFile: resolve(FRONTEND, 'vite.config.ts'),
     root: FRONTEND,
@@ -77,6 +79,46 @@ async function startViteHarness() {
   return {
     server,
     harnessUrl: new URL('/cc-header-packing-harness.html', base).href,
+  }
+}
+
+async function waitForHarnessReady(page, viewport) {
+  const consoleErrors = []
+  const onConsole = (msg) => {
+    if (msg.type() === 'error') {
+      consoleErrors.push(msg.text())
+    }
+  }
+  page.on('console', onConsole)
+  try {
+  await page.locator(`[${HARNESS_READY_ATTR}="true"]`).waitFor({
+    state: 'attached',
+    timeout: HARNESS_VISIBLE_TIMEOUT_MS,
+  })
+  await page.getByTestId('property-overview-header').waitFor({
+    state: 'visible',
+    timeout: HARNESS_VISIBLE_TIMEOUT_MS,
+  })
+  await page
+    .locator(
+      '[data-testid="quick-stat-units-details-value"], [data-testid="quick-stat-units-details"]',
+    )
+    .first()
+    .waitFor({ state: 'visible', timeout: HARNESS_VISIBLE_TIMEOUT_MS })
+  } catch (err) {
+    const bodyText = await page.locator('body').innerText().catch(() => '(unreadable)')
+    const url = page.url()
+    fail(viewport, 'Harness never became ready', {
+      url,
+      bodyText: bodyText.slice(0, 500),
+      consoleErrors,
+      error: String(err),
+    })
+  } finally {
+    page.off('console', onConsole)
+  }
+  if (consoleErrors.length) {
+    fail(viewport, 'Harness console errors', consoleErrors)
   }
 }
 
@@ -541,12 +583,8 @@ async function main() {
       const pageErrors = []
       page.on('pageerror', (e) => pageErrors.push(String(e)))
 
-      await page.goto(harnessUrl, { waitUntil: 'networkidle', timeout: 120000 })
-      await page.getByTestId('property-overview-header').waitFor({
-        state: 'visible',
-        timeout: HARNESS_VISIBLE_TIMEOUT_MS,
-      })
-      await page.getByTestId('quick-stat-units-details-value').waitFor({ state: 'visible' })
+      await page.goto(harnessUrl, { waitUntil: 'load', timeout: HARNESS_VISIBLE_TIMEOUT_MS })
+      await waitForHarnessReady(page, viewport)
 
       if (pageErrors.length) {
         console.error(`[${viewport.width}] Harness page errors:`, pageErrors)
@@ -564,11 +602,8 @@ async function main() {
       page.on('pageerror', (e) => pageErrors.push(String(e)))
       const residentialUrl = new URL(harnessUrl)
       residentialUrl.searchParams.set('fixture', 'residential')
-      await page.goto(residentialUrl.href, { waitUntil: 'networkidle', timeout: 120000 })
-      await page.getByTestId('property-overview-header').waitFor({
-        state: 'visible',
-        timeout: HARNESS_VISIBLE_TIMEOUT_MS,
-      })
+      await page.goto(residentialUrl.href, { waitUntil: 'load', timeout: HARNESS_VISIBLE_TIMEOUT_MS })
+      await waitForHarnessReady(page, viewport)
       if (pageErrors.length) {
         console.error(`[${viewport.width}] Residential harness page errors:`, pageErrors)
         process.exit(1)
