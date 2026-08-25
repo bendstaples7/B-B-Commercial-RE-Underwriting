@@ -150,7 +150,13 @@ function watchPageIssues(page) {
   }
   page.on('requestfailed', onRequestFailed)
   const onResponse = (response) => {
-    if (response.status() >= 400) {
+    let pathname = ''
+    try {
+      pathname = new URL(response.url()).pathname
+    } catch {
+      pathname = ''
+    }
+    if (response.status() >= 400 && pathname !== '/favicon.ico') {
       responseErrors.push(`${response.status()} ${response.url()}`)
     }
   }
@@ -209,8 +215,14 @@ async function waitForHarnessReady(page, viewport, issues) {
       if (hasPageIssues(issues) || attempt === 3) break
       // CI occasionally serves the shell but leaves the root empty on the first
       // request. A reload gives Vite one more chance without masking real errors.
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: HARNESS_VISIBLE_TIMEOUT_MS })
-      await page.waitForTimeout(500)
+      const reloadTimeout = Math.max(
+        1,
+        HARNESS_VISIBLE_TIMEOUT_MS - (Date.now() - startedAt),
+      )
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: reloadTimeout })
+      await page.waitForTimeout(
+        Math.min(500, Math.max(0, HARNESS_VISIBLE_TIMEOUT_MS - (Date.now() - startedAt))),
+      )
     }
   }
 
