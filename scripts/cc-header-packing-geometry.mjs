@@ -33,6 +33,7 @@ const GAP_MAX_PX = 48
 const ROW_TOP_EPS = 28
 const OVERLAP_EPS = 1
 const HARNESS_VISIBLE_TIMEOUT_MS = 120000
+const HARNESS_READY_ATTEMPT_TIMEOUT_MS = 40000
 const HARNESS_READY_ATTR = 'data-cc-harness-ready'
 const VIEWPORTS = [
   { width: 1280, height: 900 },
@@ -85,6 +86,8 @@ async function startViteHarness() {
 function watchPageIssues(page) {
   const consoleErrors = []
   const pageErrors = []
+  const requestFailures = []
+  const responseErrors = []
   const onConsole = (msg) => {
     if (msg.type() === 'error') {
       consoleErrors.push(msg.text())
@@ -93,44 +96,101 @@ function watchPageIssues(page) {
   page.on('console', onConsole)
   const onPageError = (e) => pageErrors.push(String(e))
   page.on('pageerror', onPageError)
+  const onRequestFailed = (request) => {
+    requestFailures.push(`${request.method()} ${request.url()} ${request.failure()?.errorText || ''}`.trim())
+  }
+  page.on('requestfailed', onRequestFailed)
+  const onResponse = (response) => {
+    if (response.status() >= 400) {
+      responseErrors.push(`${response.status()} ${response.url()}`)
+    }
+  }
+  page.on('response', onResponse)
   return {
     consoleErrors,
     pageErrors,
+    requestFailures,
+    responseErrors,
     dispose: () => {
       page.off('console', onConsole)
       page.off('pageerror', onPageError)
+      page.off('requestfailed', onRequestFailed)
+      page.off('response', onResponse)
     },
   }
 }
 
-async function waitForHarnessReady(page, viewport, consoleErrors = []) {
+function hasPageIssues(issues) {
+  return Boolean(
+    issues.consoleErrors.length
+    || issues.pageErrors.length
+    || issues.requestFailures.length
+    || issues.responseErrors.length
+  )
+}
+
+async function waitForHarnessReady(page, viewport, issues) {
+  const startedAt = Date.now()
+  let lastError = null
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const remaining = HARNESS_VISIBLE_TIMEOUT_MS - (Date.now() - startedAt)
+    if (remaining <= 0) break
+    const timeout = Math.min(HARNESS_READY_ATTEMPT_TIMEOUT_MS, remaining)
+    try {
+      await page.locator(`[${HARNESS_READY_ATTR}="true"]`).waitFor({
+        state: 'attached',
+        timeout,
+      })
+      await page.getByTestId('property-overview-header').waitFor({
+        state: 'visible',
+        timeout,
+      })
+      await page
+        .locator(
+          '[data-testid="quick-stat-units-details-value"], [data-testid="quick-stat-units-details"]',
+        )
+        .first()
+        .waitFor({ state: 'visible', timeout })
+      if (hasPageIssues(issues)) {
+        fail(viewport, 'Harness page/console errors', issues)
+      }
+      return
+    } catch (err) {
+      lastError = err
+      if (hasPageIssues(issues) || attempt === 3) break
+      // CI occasionally serves the shell but leaves the root empty on the first
+      // request. A reload gives Vite one more chance without masking real errors.
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: HARNESS_VISIBLE_TIMEOUT_MS })
+      await page.waitForTimeout(500)
+    }
+  }
+
+  const bodyText = await page.locator('body').innerText().catch(() => '(unreadable)')
+  const html = await page.content().catch(() => '(unreadable)')
+  const url = page.url()
+  fail(viewport, 'Harness never became ready', {
+    url,
+    bodyText: bodyText.slice(0, 500),
+    html: html.slice(0, 500),
+    issues,
+    error: String(lastError),
+  })
+}
+
+async function gotoHarnessAndWait(page, url, viewport, issues) {
   try {
-    await page.locator(`[${HARNESS_READY_ATTR}="true"]`).waitFor({
-      state: 'attached',
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded',
       timeout: HARNESS_VISIBLE_TIMEOUT_MS,
     })
-    await page.getByTestId('property-overview-header').waitFor({
-      state: 'visible',
-      timeout: HARNESS_VISIBLE_TIMEOUT_MS,
-    })
-    await page
-      .locator(
-        '[data-testid="quick-stat-units-details-value"], [data-testid="quick-stat-units-details"]',
-      )
-      .first()
-      .waitFor({ state: 'visible', timeout: HARNESS_VISIBLE_TIMEOUT_MS })
+    await waitForHarnessReady(page, viewport, issues)
   } catch (err) {
-    const bodyText = await page.locator('body').innerText().catch(() => '(unreadable)')
-    const url = page.url()
-    fail(viewport, 'Harness never became ready', {
-      url,
-      bodyText: bodyText.slice(0, 500),
-      consoleErrors,
+    fail(viewport, 'Harness navigation failed', {
+      targetUrl: url,
+      finalUrl: page.url(),
+      issues,
       error: String(err),
     })
-  }
-  if (consoleErrors.length) {
-    fail(viewport, 'Harness console errors', consoleErrors)
   }
 }
 
@@ -594,13 +654,7 @@ async function main() {
       const page = await browser.newPage({ viewport })
       const issues = watchPageIssues(page)
       try {
-        await page.goto(harnessUrl, { waitUntil: 'load', timeout: HARNESS_VISIBLE_TIMEOUT_MS })
-        await waitForHarnessReady(page, viewport, issues.consoleErrors)
-
-        if (issues.pageErrors.length) {
-          console.error(`[${viewport.width}] Harness page errors:`, issues.pageErrors)
-          process.exit(1)
-        }
+        await gotoHarnessAndWait(page, harnessUrl, viewport, issues)
 
         const result = await assertViewport(page, viewport)
         results.push(result)
@@ -616,12 +670,7 @@ async function main() {
       try {
         const residentialUrl = new URL(harnessUrl)
         residentialUrl.searchParams.set('fixture', 'residential')
-        await page.goto(residentialUrl.href, { waitUntil: 'load', timeout: HARNESS_VISIBLE_TIMEOUT_MS })
-        await waitForHarnessReady(page, viewport, issues.consoleErrors)
-        if (issues.pageErrors.length) {
-          console.error(`[${viewport.width}] Residential harness page errors:`, issues.pageErrors)
-          process.exit(1)
-        }
+        await gotoHarnessAndWait(page, residentialUrl.href, viewport, issues)
         const resResult = await assertResidentialViewport(page, viewport)
         residentialResults.push(resResult)
       } finally {
