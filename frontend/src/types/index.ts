@@ -2431,6 +2431,7 @@ export interface LogCallPayload {
   phone_number?: string | null;
   phone_label?: string | null;
   mail_campaign_id?: number | null;
+  facebook_campaign_id?: number | null;
   complete_task_id?: number | null;
   follow_up?: LogCallFollowUpPayload | null;
 }

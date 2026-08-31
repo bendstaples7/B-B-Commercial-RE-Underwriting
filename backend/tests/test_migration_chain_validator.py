@@ -115,8 +115,8 @@ class TestRealChainValidator:
         """The single head must be the latest migration revision."""
         from app.migration_utils import assert_single_head_and_root
         result = assert_single_head_and_root()
-        assert result["head_revisions"] == ["joint_own_20260821"], (
-            f"Expected head revision 'joint_own_20260821', got {result['head_revisions']}"
+        assert result["head_revisions"] == ["chan_roi_cascade_0831"], (
+            f"Expected head revision 'chan_roi_cascade_0831', got {result['head_revisions']}"
         )
 
     def test_real_chain_result_has_required_keys(self):
@@ -127,6 +127,17 @@ class TestRealChainValidator:
         assert isinstance(result["root_count"], int)
         assert isinstance(result["head_revisions"], list)
         assert isinstance(result["root_revisions"], list)
+
+    def test_channel_roi_singleton_migration_dedupes_before_unique_index(self):
+        """Existing duplicate config rows must be collapsed before uniqueness is enforced."""
+        text = (_VERSIONS_DIR / "chan_roi_fix_0831_singleton_attribution.py").read_text()
+
+        assert "DELETE FROM channel_roi_config" in text
+        assert "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC" in text
+        assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_roi_config_key" in text
+        assert text.index("DELETE FROM channel_roi_config") < text.index(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_roi_config_key"
+        )
 
 
 # ===========================================================================
@@ -265,8 +276,8 @@ class TestCheckMigrationChainScript:
         assert "000000000000" in output, (
             f"Expected root '000000000000' in script output, got: {output!r}"
         )
-        assert "joint_own_20260821" in output, (
-            f"Expected head 'joint_own_20260821' in script output, got: {output!r}"
+        assert "chan_roi_cascade_0831" in output, (
+            f"Expected head 'chan_roi_cascade_0831' in script output, got: {output!r}"
         )
 
 

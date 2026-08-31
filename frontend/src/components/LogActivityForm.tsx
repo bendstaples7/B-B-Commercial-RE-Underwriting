@@ -30,6 +30,7 @@ import {
 import type { LeadTask, LeadTimelineEntry, LogCallPayload, LogNotePayload, PropertyContact } from '@/types'
 import { callLogService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
+import channelRoiService from '@/services/channelRoiApi'
 import { useQuery } from '@tanstack/react-query'
 import {
   ContactMethodFields,
@@ -177,12 +178,35 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
     })
     const mailCampaignOptions = mode === 'call' ? (recentMailCampaigns?.campaigns ?? []) : []
 
+    const { data: channelRoiSettings } = useQuery({
+      queryKey: ['channel-roi-settings'],
+      queryFn: () => channelRoiService.getSettings(),
+      enabled: mode === 'call',
+      staleTime: 0,
+    })
+    const facebookAttributionEnabled =
+      mode === 'call' &&
+      Boolean(
+        channelRoiSettings?.meta_connected ||
+          channelRoiSettings?.has_meta_token ||
+          channelRoiSettings?.last_synced_at,
+      )
+    const { data: facebookCampaignsData, isLoading: facebookCampaignsLoading } = useQuery({
+      queryKey: ['facebook-campaigns-for-attribution'],
+      queryFn: () => channelRoiService.listFacebookCampaigns(),
+      enabled: facebookAttributionEnabled,
+    })
+    const facebookCampaignOptions = facebookAttributionEnabled
+      ? (facebookCampaignsData?.campaigns ?? [])
+      : []
+
     // Call-mode fields
     const [outcome, setOutcome] = useState<LogCallPayload['outcome'] | ''>('')
     const [direction, setDirection] = useState<NonNullable<LogCallPayload['direction']>>('outbound')
     const [duration, setDuration] = useState('')
     const [callNotes, setCallNotes] = useState('')
     const [mailCampaignId, setMailCampaignId] = useState<number | ''>('')
+    const [facebookCampaignId, setFacebookCampaignId] = useState<number | ''>('')
     const [completeTask, setCompleteTask] = useState(true)
 
     // Note/email shared body field
@@ -357,6 +381,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
         duration_minutes: duration !== '' ? Number(duration) : null,
         notes: callNotes.trim() || null,
         mail_campaign_id: mailCampaignId === '' ? null : mailCampaignId,
+        facebook_campaign_id: facebookCampaignId === '' ? null : facebookCampaignId,
         ...contactMethodToCallPayload(contactMethod),
         complete_task_id: completedTaskId,
         follow_up: buildFollowUpPayload(followUpDue),
@@ -399,6 +424,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
         setDuration('')
         setCallNotes('')
         setMailCampaignId('')
+        setFacebookCampaignId('')
         setContactMethod(EMPTY_CONTACT_METHOD)
         resetNextStepState(completableTask)
       } catch (err) {
@@ -742,7 +768,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
                 />
 
                 {mailCampaignOptions.length > 0 && (
-                  <FormControl fullWidth sx={{ mb: 0 }} size="small">
+                  <FormControl fullWidth sx={{ mb: 1.25 }} size="small">
                     <InputLabel id="mail-campaign-label">Response to mailer? (optional)</InputLabel>
                     <Select
                       labelId="mail-campaign-label"
@@ -755,6 +781,30 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
                         <MenuItem key={c.id} value={c.id}>
                           {c.submitted_at ? new Date(c.submitted_at).toLocaleDateString() : 'Campaign'}{' '}
                           — {c.template_name || `Template ${c.template_id}`}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                )}
+
+                {facebookCampaignOptions.length > 0 && (
+                  <FormControl fullWidth sx={{ mb: 0 }} size="small">
+                    <InputLabel id="facebook-campaign-label">
+                      Response to Facebook campaign? (optional)
+                    </InputLabel>
+                    <Select
+                      labelId="facebook-campaign-label"
+                      label="Response to Facebook campaign? (optional)"
+                      value={facebookCampaignId}
+                      disabled={facebookCampaignsLoading}
+                      onChange={(e) =>
+                        setFacebookCampaignId(e.target.value === '' ? '' : Number(e.target.value))
+                      }
+                    >
+                      <MenuItem value="">— Not Facebook-related —</MenuItem>
+                      {facebookCampaignOptions.map((c) => (
+                        <MenuItem key={c.id} value={c.id}>
+                          {c.name || c.meta_campaign_id}
                         </MenuItem>
                       ))}
                     </Select>

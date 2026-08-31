@@ -134,6 +134,11 @@ from app.models.mail_enqueue_attempt import MailEnqueueAttempt
 from app.models.skip_trace_config import SkipTraceConfig
 from app.models.skip_trace_attempt import SkipTraceAttempt
 
+# Marketing channel ROI
+from app.models.channel_roi_config import ChannelRoiConfig
+from app.models.facebook_ad_campaign import FacebookAdCampaign
+from app.models.facebook_campaign_lead_attribution import FacebookCampaignLeadAttribution
+
 # CRM activity dashboard goals
 from app.models.user_activity_goal import UserActivityGoal
 
@@ -249,6 +254,10 @@ __all__ = [
     'MailEnqueueAttempt',
     'SkipTraceConfig',
     'SkipTraceAttempt',
+    # Marketing channel ROI
+    'ChannelRoiConfig',
+    'FacebookAdCampaign',
+    'FacebookCampaignLeadAttribution',
     # CRM activity dashboard
     'UserActivityGoal',
 ]
