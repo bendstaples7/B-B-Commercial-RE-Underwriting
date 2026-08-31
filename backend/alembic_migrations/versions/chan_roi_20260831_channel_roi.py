@@ -43,13 +43,8 @@ def upgrade():
             CONSTRAINT uq_facebook_ad_campaigns_meta_id UNIQUE (meta_campaign_id)
         )
     """)
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS ix_facebook_ad_campaigns_meta_campaign_id
-        ON facebook_ad_campaigns (meta_campaign_id)
-    """)
 
 
 def downgrade():
-    op.execute("DROP INDEX IF EXISTS ix_facebook_ad_campaigns_meta_campaign_id")
     op.execute("DROP TABLE IF EXISTS facebook_ad_campaigns")
     op.execute("DROP TABLE IF EXISTS channel_roi_config")
