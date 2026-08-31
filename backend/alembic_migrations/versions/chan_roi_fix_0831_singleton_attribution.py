@@ -23,7 +23,7 @@ def upgrade():
         WITH keep AS (
             SELECT id
             FROM channel_roi_config
-            ORDER BY id DESC
+            ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
             LIMIT 1
         )
         DELETE FROM channel_roi_config

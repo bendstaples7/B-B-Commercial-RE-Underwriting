@@ -133,6 +133,7 @@ class TestRealChainValidator:
         text = (_VERSIONS_DIR / "chan_roi_fix_0831_singleton_attribution.py").read_text()
 
         assert "DELETE FROM channel_roi_config" in text
+        assert "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC" in text
         assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_roi_config_key" in text
         assert text.index("DELETE FROM channel_roi_config") < text.index(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_roi_config_key"
