@@ -5,7 +5,6 @@ Revises: joint_own_20260821
 Create Date: 2026-08-31
 """
 from alembic import op
-import sqlalchemy as sa
 
 
 revision = 'chan_roi_20260831'
@@ -15,41 +14,42 @@ depends_on = None
 
 
 def upgrade():
-    op.create_table(
-        'channel_roi_config',
-        sa.Column('id', sa.Integer(), primary_key=True),
-        sa.Column('encrypted_meta_token', sa.Text(), nullable=True),
-        sa.Column('meta_ad_account_id', sa.String(length=64), nullable=True),
-        sa.Column('expected_profit_per_deal', sa.Numeric(12, 2), nullable=True),
-        sa.Column('assumed_close_rate', sa.Numeric(5, 4), nullable=True),
-        sa.Column('last_synced_at', sa.DateTime(), nullable=True),
-        sa.Column('last_sync_error', sa.Text(), nullable=True),
-        sa.Column('created_at', sa.DateTime(), nullable=False, server_default=sa.text('NOW()')),
-        sa.Column('updated_at', sa.DateTime(), nullable=False, server_default=sa.text('NOW()')),
-    )
-    op.create_table(
-        'facebook_ad_campaigns',
-        sa.Column('id', sa.Integer(), primary_key=True),
-        sa.Column('meta_campaign_id', sa.String(length=64), nullable=False),
-        sa.Column('name', sa.String(length=512), nullable=False, server_default=''),
-        sa.Column('status', sa.String(length=64), nullable=True),
-        sa.Column('spend', sa.Numeric(14, 4), nullable=False, server_default='0'),
-        sa.Column('impressions', sa.Integer(), nullable=False, server_default='0'),
-        sa.Column('link_clicks', sa.Integer(), nullable=False, server_default='0'),
-        sa.Column('response_count', sa.Integer(), nullable=False, server_default='0'),
-        sa.Column('synced_at', sa.DateTime(), nullable=True),
-        sa.Column('created_at', sa.DateTime(), nullable=False, server_default=sa.text('NOW()')),
-        sa.Column('updated_at', sa.DateTime(), nullable=False, server_default=sa.text('NOW()')),
-        sa.UniqueConstraint('meta_campaign_id', name='uq_facebook_ad_campaigns_meta_id'),
-    )
-    op.create_index(
-        'ix_facebook_ad_campaigns_meta_campaign_id',
-        'facebook_ad_campaigns',
-        ['meta_campaign_id'],
-    )
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS channel_roi_config (
+            id SERIAL PRIMARY KEY,
+            encrypted_meta_token TEXT,
+            meta_ad_account_id VARCHAR(64),
+            expected_profit_per_deal NUMERIC(12, 2),
+            assumed_close_rate NUMERIC(5, 4),
+            last_synced_at TIMESTAMP WITHOUT TIME ZONE,
+            last_sync_error TEXT,
+            created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
+        )
+    """)
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS facebook_ad_campaigns (
+            id SERIAL PRIMARY KEY,
+            meta_campaign_id VARCHAR(64) NOT NULL,
+            name VARCHAR(512) NOT NULL DEFAULT '',
+            status VARCHAR(64),
+            spend NUMERIC(14, 4) NOT NULL DEFAULT 0,
+            impressions INTEGER NOT NULL DEFAULT 0,
+            link_clicks INTEGER NOT NULL DEFAULT 0,
+            response_count INTEGER NOT NULL DEFAULT 0,
+            synced_at TIMESTAMP WITHOUT TIME ZONE,
+            created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_facebook_ad_campaigns_meta_id UNIQUE (meta_campaign_id)
+        )
+    """)
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS ix_facebook_ad_campaigns_meta_campaign_id
+        ON facebook_ad_campaigns (meta_campaign_id)
+    """)
 
 
 def downgrade():
-    op.drop_index('ix_facebook_ad_campaigns_meta_campaign_id', table_name='facebook_ad_campaigns')
-    op.drop_table('facebook_ad_campaigns')
-    op.drop_table('channel_roi_config')
+    op.execute("DROP INDEX IF EXISTS ix_facebook_ad_campaigns_meta_campaign_id")
+    op.execute("DROP TABLE IF EXISTS facebook_ad_campaigns")
+    op.execute("DROP TABLE IF EXISTS channel_roi_config")
