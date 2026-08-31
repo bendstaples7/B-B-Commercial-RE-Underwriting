@@ -14,6 +14,7 @@ depends_on = None
 
 
 def upgrade():
+    # Add as nullable first so we can collapse duplicate rows before UNIQUE.
     op.execute("""
         ALTER TABLE channel_roi_config
         ADD COLUMN IF NOT EXISTS config_key VARCHAR(32)

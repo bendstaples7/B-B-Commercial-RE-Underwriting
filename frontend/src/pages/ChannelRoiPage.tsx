@@ -305,6 +305,8 @@ export const ChannelRoiPage: React.FC = () => {
       setAdAccount(hydrated.adAccount)
       setSettingsHydrated(true)
       await queryClient.invalidateQueries({ queryKey: ['channel-roi'] })
+      await queryClient.invalidateQueries({ queryKey: ['channel-roi-settings'] })
+      await queryClient.invalidateQueries({ queryKey: ['facebook-campaigns-for-attribution'] })
     },
   })
 
@@ -312,6 +314,7 @@ export const ChannelRoiPage: React.FC = () => {
     mutationFn: () => channelRoiService.syncFacebook(),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['channel-roi'] })
+      await queryClient.invalidateQueries({ queryKey: ['channel-roi-settings'] })
       await queryClient.invalidateQueries({ queryKey: ['facebook-campaigns-for-attribution'] })
     },
   })

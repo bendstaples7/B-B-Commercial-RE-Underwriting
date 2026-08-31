@@ -32,6 +32,15 @@ vi.mock('@/services/openLetterApi', () => ({
 
 vi.mock('@/services/channelRoiApi', () => ({
   default: {
+    getSettings: vi.fn().mockResolvedValue({
+      meta_connected: false,
+      meta_ad_account_id: null,
+      has_meta_token: false,
+      expected_profit_per_deal: null,
+      assumed_close_rate: null,
+      last_synced_at: null,
+      last_sync_error: null,
+    }),
     listFacebookCampaigns: vi.fn().mockResolvedValue({ campaigns: [] }),
     getSettings: vi.fn().mockResolvedValue({
       meta_connected: false,
