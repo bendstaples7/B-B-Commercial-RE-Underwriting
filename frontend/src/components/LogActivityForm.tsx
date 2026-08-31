@@ -182,7 +182,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       queryKey: ['channel-roi-settings'],
       queryFn: () => channelRoiService.getSettings(),
       enabled: mode === 'call',
-      staleTime: 60_000,
+      staleTime: 0,
     })
     const facebookAttributionEnabled =
       mode === 'call' &&

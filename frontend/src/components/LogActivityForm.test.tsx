@@ -33,6 +33,11 @@ vi.mock('@/services/openLetterApi', () => ({
 vi.mock('@/services/channelRoiApi', () => ({
   default: {
     listFacebookCampaigns: vi.fn().mockResolvedValue({ campaigns: [] }),
+    getSettings: vi.fn().mockResolvedValue({
+      meta_connected: false,
+      has_meta_token: false,
+      last_synced_at: null,
+    }),
     getDashboard: vi.fn(),
     patchSettings: vi.fn(),
     syncFacebook: vi.fn(),

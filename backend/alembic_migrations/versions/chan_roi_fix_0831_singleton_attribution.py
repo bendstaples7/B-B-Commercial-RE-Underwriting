@@ -16,7 +16,30 @@ depends_on = None
 def upgrade():
     op.execute("""
         ALTER TABLE channel_roi_config
-        ADD COLUMN IF NOT EXISTS config_key VARCHAR(32) NOT NULL DEFAULT 'default'
+        ADD COLUMN IF NOT EXISTS config_key VARCHAR(32)
+    """)
+    op.execute("""
+        WITH keep AS (
+            SELECT id
+            FROM channel_roi_config
+            ORDER BY id DESC
+            LIMIT 1
+        )
+        DELETE FROM channel_roi_config
+        WHERE id NOT IN (SELECT id FROM keep)
+    """)
+    op.execute("""
+        UPDATE channel_roi_config
+        SET config_key = 'default'
+        WHERE config_key IS NULL
+    """)
+    op.execute("""
+        ALTER TABLE channel_roi_config
+        ALTER COLUMN config_key SET DEFAULT 'default'
+    """)
+    op.execute("""
+        ALTER TABLE channel_roi_config
+        ALTER COLUMN config_key SET NOT NULL
     """)
     op.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_roi_config_key
@@ -24,8 +47,9 @@ def upgrade():
     """)
     op.execute("""
         CREATE TABLE IF NOT EXISTS facebook_campaign_lead_attributions (
-            lead_id INTEGER NOT NULL REFERENCES leads(id),
-            facebook_campaign_id INTEGER NOT NULL REFERENCES facebook_ad_campaigns(id),
+            lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+            facebook_campaign_id INTEGER NOT NULL
+                REFERENCES facebook_ad_campaigns(id) ON DELETE CASCADE,
             created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
             PRIMARY KEY (lead_id, facebook_campaign_id)
         )

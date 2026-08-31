@@ -9,9 +9,15 @@ class FacebookCampaignLeadAttribution(db.Model):
 
     __tablename__ = 'facebook_campaign_lead_attributions'
 
-    lead_id = db.Column(db.Integer, db.ForeignKey('leads.id'), primary_key=True)
+    lead_id = db.Column(
+        db.Integer,
+        db.ForeignKey('leads.id', ondelete='CASCADE'),
+        primary_key=True,
+    )
     facebook_campaign_id = db.Column(
-        db.Integer, db.ForeignKey('facebook_ad_campaigns.id'), primary_key=True
+        db.Integer,
+        db.ForeignKey('facebook_ad_campaigns.id', ondelete='CASCADE'),
+        primary_key=True,
     )
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 

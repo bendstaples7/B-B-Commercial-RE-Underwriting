@@ -126,6 +126,16 @@ def test_archived_campaign_not_attributed(app, fb_campaign, lead_id):
         assert not (entry.event_metadata or {}).get('attributed_to_facebook')
 
 
+def test_facebook_attribution_foreign_keys_cascade():
+    fks = {
+        fk.parent.name: fk.ondelete
+        for fk in FacebookCampaignLeadAttribution.__table__.foreign_keys
+    }
+
+    assert fks['lead_id'] == 'CASCADE'
+    assert fks['facebook_campaign_id'] == 'CASCADE'
+
+
 def test_dashboard_includes_facebook_row(app, fb_campaign):
     with app.app_context():
         payload = ChannelRoiService().get_dashboard()

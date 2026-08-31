@@ -128,6 +128,16 @@ class TestRealChainValidator:
         assert isinstance(result["head_revisions"], list)
         assert isinstance(result["root_revisions"], list)
 
+    def test_channel_roi_singleton_migration_dedupes_before_unique_index(self):
+        """Existing duplicate config rows must be collapsed before uniqueness is enforced."""
+        text = (_VERSIONS_DIR / "chan_roi_fix_0831_singleton_attribution.py").read_text()
+
+        assert "DELETE FROM channel_roi_config" in text
+        assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_roi_config_key" in text
+        assert text.index("DELETE FROM channel_roi_config") < text.index(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_roi_config_key"
+        )
+
 
 # ===========================================================================
 # 2. Single-revision-with-down_revision=None check on the REAL chain
