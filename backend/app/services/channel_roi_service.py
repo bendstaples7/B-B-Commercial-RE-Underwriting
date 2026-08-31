@@ -3,16 +3,23 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
+
+from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 
 from app import db
 from app.models.channel_roi_config import ChannelRoiConfig
 from app.models.facebook_ad_campaign import FacebookAdCampaign
+from app.models.facebook_campaign_lead_attribution import FacebookCampaignLeadAttribution
 from app.models.mail_campaign import MailCampaign
 from app.services.meta_ads_client_service import MetaAdsClientService
 
 logger = logging.getLogger(__name__)
+
+_UNSET = object()
+_CONFIG_KEY = 'default'
 
 
 def _dec(value) -> Decimal:
@@ -55,19 +62,33 @@ def response_rate(responses: int, denominator: int | None) -> float | None:
     return round(responses / denominator, 4)
 
 
+def _active_fb_filter():
+    return or_(
+        FacebookAdCampaign.status.is_(None),
+        FacebookAdCampaign.status != 'ARCHIVED_LOCAL',
+    )
+
+
 class ChannelRoiService:
     """Company Channel ROI settings, Meta sync, and rollup payload."""
 
     def get_or_create_config(self) -> ChannelRoiConfig:
-        config = ChannelRoiConfig.query.order_by(ChannelRoiConfig.id.desc()).first()
-        if config is None:
-            config = ChannelRoiConfig()
-            db.session.add(config)
+        config = ChannelRoiConfig.query.filter_by(config_key=_CONFIG_KEY).first()
+        if config is not None:
+            return config
+        config = ChannelRoiConfig(config_key=_CONFIG_KEY)
+        db.session.add(config)
+        try:
             db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            config = ChannelRoiConfig.query.filter_by(config_key=_CONFIG_KEY).first()
+            if config is None:
+                raise
         return config
 
     def settings_public(self, config: ChannelRoiConfig | None = None) -> dict[str, Any]:
-        config = config or ChannelRoiConfig.query.order_by(ChannelRoiConfig.id.desc()).first()
+        config = config or ChannelRoiConfig.query.filter_by(config_key=_CONFIG_KEY).first()
         if config is None:
             return {
                 'meta_connected': False,
@@ -95,23 +116,36 @@ class ChannelRoiService:
     def update_settings(
         self,
         *,
-        expected_profit_per_deal: float | None = None,
-        assumed_close_rate: float | None = None,
+        expected_profit_per_deal=_UNSET,
+        assumed_close_rate=_UNSET,
         meta_ad_account_id: str | None = None,
         meta_access_token: str | None = None,
         clear_meta_token: bool = False,
     ) -> ChannelRoiConfig:
         config = self.get_or_create_config()
-        if expected_profit_per_deal is not None:
-            config.expected_profit_per_deal = Decimal(str(expected_profit_per_deal))
-        if assumed_close_rate is not None:
-            rate = Decimal(str(assumed_close_rate))
-            if rate > 1:
-                # Accept percent (e.g. 15) as well as fraction (0.15)
-                rate = rate / Decimal('100')
-            if rate < 0 or rate > 1:
-                raise ValueError('assumed_close_rate must be between 0 and 1 (or 0–100 percent)')
-            config.assumed_close_rate = rate
+        if expected_profit_per_deal is not _UNSET:
+            if expected_profit_per_deal is None:
+                config.expected_profit_per_deal = None
+            else:
+                try:
+                    profit = Decimal(str(expected_profit_per_deal))
+                except (InvalidOperation, TypeError, ValueError) as exc:
+                    raise ValueError('expected_profit_per_deal must be a number') from exc
+                if profit < 0:
+                    raise ValueError('expected_profit_per_deal must be >= 0')
+                config.expected_profit_per_deal = profit
+        if assumed_close_rate is not _UNSET:
+            if assumed_close_rate is None:
+                config.assumed_close_rate = None
+            else:
+                # API convention: percent 0–100 (UI sends the same units shown in the field).
+                try:
+                    percent = Decimal(str(assumed_close_rate))
+                except (InvalidOperation, TypeError, ValueError) as exc:
+                    raise ValueError('assumed_close_rate must be a number') from exc
+                if percent < 0 or percent > 100:
+                    raise ValueError('assumed_close_rate must be between 0 and 100 (percent)')
+                config.assumed_close_rate = percent / Decimal('100')
         if meta_ad_account_id is not None:
             raw = meta_ad_account_id.strip()
             config.meta_ad_account_id = raw or None
@@ -162,20 +196,19 @@ class ChannelRoiService:
             existing.synced_at = now
             existing.updated_at = now
 
-        # Soft-archive campaigns Meta no longer returns (keep response history).
+        # Soft-archive campaigns Meta no longer returns (including empty sync).
+        stale_q = FacebookAdCampaign.query
         if seen:
-            stale = FacebookAdCampaign.query.filter(
-                ~FacebookAdCampaign.meta_campaign_id.in_(list(seen))
-            ).all()
-            for camp in stale:
-                if camp.status != 'ARCHIVED_LOCAL':
-                    camp.status = 'ARCHIVED_LOCAL'
-                    camp.spend = Decimal('0')
-                    camp.impressions = 0
-                    camp.link_clicks = 0
-                    camp.synced_at = now
-                    camp.updated_at = now
-                    db.session.add(camp)
+            stale_q = stale_q.filter(~FacebookAdCampaign.meta_campaign_id.in_(list(seen)))
+        for camp in stale_q.all():
+            if camp.status != 'ARCHIVED_LOCAL':
+                camp.status = 'ARCHIVED_LOCAL'
+                camp.spend = Decimal('0')
+                camp.impressions = 0
+                camp.link_clicks = 0
+                camp.synced_at = now
+                camp.updated_at = now
+                db.session.add(camp)
 
         config.last_synced_at = now
         config.last_sync_error = None
@@ -186,10 +219,7 @@ class ChannelRoiService:
 
     def list_facebook_campaigns_for_attribution(self) -> list[dict[str, Any]]:
         rows = (
-            FacebookAdCampaign.query.filter(
-                FacebookAdCampaign.status.is_(None)
-                | (FacebookAdCampaign.status != 'ARCHIVED_LOCAL')
-            )
+            FacebookAdCampaign.query.filter(_active_fb_filter())
             .order_by(FacebookAdCampaign.name.asc())
             .limit(200)
             .all()
@@ -207,41 +237,54 @@ class ChannelRoiService:
     def record_facebook_call_attribution(
         self, facebook_campaign_id: int, lead_id: int
     ) -> None:
-        """Bump response_count once per lead/campaign (first attributed call only)."""
-        from app.models import LeadTimelineEntry
-
+        """Bump response_count once per lead/campaign via unique ledger insert."""
         campaign = (
             FacebookAdCampaign.query.filter_by(id=facebook_campaign_id)
             .with_for_update()
             .first()
         )
-        if campaign is None:
+        if campaign is None or campaign.status == 'ARCHIVED_LOCAL':
             return
 
-        prior_calls = LeadTimelineEntry.query.filter_by(
+        already = FacebookCampaignLeadAttribution.query.filter_by(
             lead_id=lead_id,
-            event_type='call_logged',
-            is_deleted=False,
-        ).all()
-        count = sum(
-            1
-            for entry in prior_calls
-            if (entry.event_metadata or {}).get('attributed_to_facebook')
-            and (entry.event_metadata or {}).get('facebook_campaign_id')
-            == facebook_campaign_id
-        )
-        if count != 1:
+            facebook_campaign_id=facebook_campaign_id,
+        ).first()
+        if already is not None:
             return
+
+        db.session.add(
+            FacebookCampaignLeadAttribution(
+                lead_id=lead_id,
+                facebook_campaign_id=facebook_campaign_id,
+            )
+        )
         campaign.response_count = (campaign.response_count or 0) + 1
         campaign.updated_at = datetime.utcnow()
         db.session.add(campaign)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
 
     def get_dashboard(self) -> dict[str, Any]:
-        config = ChannelRoiConfig.query.order_by(ChannelRoiConfig.id.desc()).first()
+        config = ChannelRoiConfig.query.filter_by(config_key=_CONFIG_KEY).first()
         profit = config.expected_profit_per_deal if config else None
         close_rate = config.assumed_close_rate if config else None
         knobs_set = profit is not None and close_rate is not None
+
+        mail_totals = (
+            db.session.query(
+                func.coalesce(func.sum(MailCampaign.cost), 0),
+                func.coalesce(func.sum(MailCampaign.response_count), 0),
+                func.coalesce(func.sum(MailCampaign.lead_count), 0),
+            )
+            .filter(MailCampaign.status != 'cancelled')
+            .one()
+        )
+        mail_spend = _dec(mail_totals[0])
+        mail_responses = int(mail_totals[1] or 0)
+        mail_pieces = int(mail_totals[2] or 0)
 
         mail_rows_raw = (
             MailCampaign.query.filter(MailCampaign.status != 'cancelled')
@@ -250,16 +293,10 @@ class ChannelRoiService:
             .all()
         )
         mail_rows: list[dict[str, Any]] = []
-        mail_spend = Decimal('0')
-        mail_responses = 0
-        mail_pieces = 0
         for c in mail_rows_raw:
             spend = _dec(c.cost)
             responses = int(c.response_count or 0)
             pieces = int(c.lead_count or 0)
-            mail_spend += spend
-            mail_responses += responses
-            mail_pieces += pieces
             mail_rows.append({
                 'id': c.id,
                 'name': c.template_name or f'Campaign {c.id}',
@@ -279,26 +316,30 @@ class ChannelRoiService:
                 'submitted_at': c.submitted_at.isoformat() if c.submitted_at else None,
             })
 
-        fb_rows_raw = (
-            FacebookAdCampaign.query.filter(
-                FacebookAdCampaign.status.is_(None)
-                | (FacebookAdCampaign.status != 'ARCHIVED_LOCAL')
+        fb_totals = (
+            db.session.query(
+                func.coalesce(func.sum(FacebookAdCampaign.spend), 0),
+                func.coalesce(func.sum(FacebookAdCampaign.response_count), 0),
+                func.coalesce(func.sum(FacebookAdCampaign.link_clicks), 0),
             )
+            .filter(_active_fb_filter())
+            .one()
+        )
+        fb_spend = _dec(fb_totals[0])
+        fb_responses = int(fb_totals[1] or 0)
+        fb_clicks = int(fb_totals[2] or 0)
+
+        fb_rows_raw = (
+            FacebookAdCampaign.query.filter(_active_fb_filter())
             .order_by(FacebookAdCampaign.spend.desc())
             .limit(200)
             .all()
         )
         fb_rows: list[dict[str, Any]] = []
-        fb_spend = Decimal('0')
-        fb_responses = 0
-        fb_clicks = 0
         for c in fb_rows_raw:
             spend = _dec(c.spend)
             responses = int(c.response_count or 0)
             clicks = int(c.link_clicks or 0)
-            fb_spend += spend
-            fb_responses += responses
-            fb_clicks += clicks
             fb_rows.append({
                 'id': c.id,
                 'name': c.name or c.meta_campaign_id,

@@ -9,6 +9,22 @@ channel_roi_bp = Blueprint('channel_roi', __name__)
 _service = ChannelRoiService()
 
 
+def _optional_number(data: dict, key: str) -> float | None:
+    """Return float, None (explicit clear), or raise ValueError for bad input.
+
+    Missing key is signalled by raising KeyError so callers can skip the field.
+    """
+    if key not in data:
+        raise KeyError(key)
+    raw = data[key]
+    if raw is None or raw == '':
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f'{key} must be a number') from exc
+
+
 @channel_roi_bp.route('', methods=['GET'])
 @handle_errors
 @require_auth
@@ -30,18 +46,31 @@ def get_settings():
 @require_admin
 def patch_settings():
     """Admin-only: update projection knobs and/or Meta credentials."""
-    data = request.get_json() or {}
+    data = request.get_json()
+    if data is not None and not isinstance(data, dict):
+        raise ValueError('JSON body must be an object')
+    data = data or {}
     kwargs: dict = {}
-    if 'expected_profit_per_deal' in data and data['expected_profit_per_deal'] is not None:
-        kwargs['expected_profit_per_deal'] = data['expected_profit_per_deal']
-    if 'assumed_close_rate' in data and data['assumed_close_rate'] is not None:
-        kwargs['assumed_close_rate'] = data['assumed_close_rate']
+    try:
+        kwargs['expected_profit_per_deal'] = _optional_number(data, 'expected_profit_per_deal')
+    except KeyError:
+        pass
+    try:
+        kwargs['assumed_close_rate'] = _optional_number(data, 'assumed_close_rate')
+    except KeyError:
+        pass
     if 'meta_ad_account_id' in data:
-        kwargs['meta_ad_account_id'] = data['meta_ad_account_id'] or ''
+        raw = data['meta_ad_account_id']
+        if raw is not None and not isinstance(raw, str):
+            raise ValueError('meta_ad_account_id must be a string')
+        kwargs['meta_ad_account_id'] = raw or ''
     if data.get('clear_meta_token'):
         kwargs['clear_meta_token'] = True
     elif data.get('meta_access_token'):
-        kwargs['meta_access_token'] = data['meta_access_token']
+        token = data['meta_access_token']
+        if not isinstance(token, str):
+            raise ValueError('meta_access_token must be a string')
+        kwargs['meta_access_token'] = token
     config = _service.update_settings(**kwargs)
     return jsonify(_service.settings_public(config)), 200
 

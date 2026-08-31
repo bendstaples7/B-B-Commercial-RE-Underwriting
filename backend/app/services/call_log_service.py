@@ -188,7 +188,11 @@ def _mail_attribution_eligible(lead_id: int, mail_campaign_id: int, actor_user_i
 def _facebook_attribution_eligible(facebook_campaign_id: int) -> bool:
     from app.models.facebook_ad_campaign import FacebookAdCampaign
 
-    return FacebookAdCampaign.query.get(facebook_campaign_id) is not None
+    camp = FacebookAdCampaign.query.get(facebook_campaign_id)
+    if camp is None:
+        return False
+    # Soft-archived Meta campaigns stay in DB for history but are not attributable.
+    return camp.status != 'ARCHIVED_LOCAL'
 
 
 class CallLogService:

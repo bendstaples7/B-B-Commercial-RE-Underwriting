@@ -59,16 +59,37 @@ export interface FacebookCampaignOption {
 }
 
 export type ChannelRoiSettingsPatch = {
-  expected_profit_per_deal?: number
-  assumed_close_rate?: number
+  expected_profit_per_deal?: number | null
+  /** Percent 0–100 (same units as the UI field). Stored as 0–1 fraction server-side. */
+  assumed_close_rate?: number | null
   meta_ad_account_id?: string
   meta_access_token?: string
   clear_meta_token?: boolean
 }
 
+function hydrateSettingsForm(s: ChannelRoiSettings): {
+  profit: string
+  closeRate: string
+  adAccount: string
+} {
+  return {
+    profit: s.expected_profit_per_deal != null ? String(s.expected_profit_per_deal) : '',
+    closeRate:
+      s.assumed_close_rate != null
+        ? String(Number((s.assumed_close_rate * 100).toFixed(2)))
+        : '',
+    adAccount: s.meta_ad_account_id ?? '',
+  }
+}
+
 export const channelRoiService = {
   async getDashboard(): Promise<ChannelRoiDashboard> {
     const response = await api.get<ChannelRoiDashboard>('/marketing/channel-roi')
+    return response.data
+  },
+
+  async getSettings(): Promise<ChannelRoiSettings> {
+    const response = await api.get<ChannelRoiSettings>('/marketing/channel-roi/settings')
     return response.data
   },
 
@@ -89,5 +110,7 @@ export const channelRoiService = {
     return response.data
   },
 }
+
+export { hydrateSettingsForm }
 
 export default channelRoiService

@@ -24,6 +24,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link as RouterLink } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import channelRoiService, {
+  hydrateSettingsForm,
   type ChannelCampaignRow,
   type ChannelSummary,
 } from '@/services/channelRoiApi'
@@ -279,26 +280,30 @@ export const ChannelRoiPage: React.FC = () => {
 
   React.useEffect(() => {
     if (!data || settingsHydrated) return
-    const s = data.settings
-    setProfit(s.expected_profit_per_deal != null ? String(s.expected_profit_per_deal) : '')
-    setCloseRate(
-      s.assumed_close_rate != null ? String(Number((s.assumed_close_rate * 100).toFixed(2))) : '',
-    )
-    setAdAccount(s.meta_ad_account_id ?? '')
+    const hydrated = hydrateSettingsForm(data.settings)
+    setProfit(hydrated.profit)
+    setCloseRate(hydrated.closeRate)
+    setAdAccount(hydrated.adAccount)
     setSettingsHydrated(true)
   }, [data, settingsHydrated])
 
   const saveMutation = useMutation({
     mutationFn: () =>
       channelRoiService.patchSettings({
-        expected_profit_per_deal: profit === '' ? undefined : Number(profit),
-        assumed_close_rate: closeRate === '' ? undefined : Number(closeRate),
+        // Always send knobs so clearing a field persists NULL (not "leave unchanged").
+        expected_profit_per_deal: profit === '' ? null : Number(profit),
+        // Percent 0–100 — backend divides by 100 for storage.
+        assumed_close_rate: closeRate === '' ? null : Number(closeRate),
         meta_ad_account_id: adAccount,
         meta_access_token: token.trim() ? token.trim() : undefined,
       }),
-    onSuccess: async () => {
+    onSuccess: async (saved) => {
       setToken('')
-      setSettingsHydrated(false)
+      const hydrated = hydrateSettingsForm(saved)
+      setProfit(hydrated.profit)
+      setCloseRate(hydrated.closeRate)
+      setAdAccount(hydrated.adAccount)
+      setSettingsHydrated(true)
       await queryClient.invalidateQueries({ queryKey: ['channel-roi'] })
     },
   })

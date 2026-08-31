@@ -5,14 +5,12 @@ from app import db
 
 
 class ChannelRoiConfig(db.Model):
-    """Singleton-ish company settings for marketing channel ROI.
-
-    Prefer the latest row (``order_by(id.desc()).first()``), same pattern as HubSpotConfig.
-    """
+    """Company settings for marketing channel ROI (one row via ``config_key``)."""
 
     __tablename__ = 'channel_roi_config'
 
     id = db.Column(db.Integer, primary_key=True)
+    config_key = db.Column(db.String(32), nullable=False, unique=True, default='default')
     encrypted_meta_token = db.Column(db.Text, nullable=True)
     meta_ad_account_id = db.Column(db.String(64), nullable=True)
     expected_profit_per_deal = db.Column(db.Numeric(12, 2), nullable=True)

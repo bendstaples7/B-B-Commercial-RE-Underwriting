@@ -8,20 +8,21 @@ vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', email: 'a@b.com', is_admin: true } }),
 }))
 
-vi.mock('@/services/channelRoiApi', () => ({
-  default: {
+vi.mock('@/services/channelRoiApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/channelRoiApi')>()
+  const api = {
     getDashboard: vi.fn(),
+    getSettings: vi.fn(),
     patchSettings: vi.fn(),
     syncFacebook: vi.fn(),
     listFacebookCampaigns: vi.fn(),
-  },
-  channelRoiService: {
-    getDashboard: vi.fn(),
-    patchSettings: vi.fn(),
-    syncFacebook: vi.fn(),
-    listFacebookCampaigns: vi.fn(),
-  },
-}))
+  }
+  return {
+    ...actual,
+    default: api,
+    channelRoiService: api,
+  }
+})
 
 import channelRoiService from '@/services/channelRoiApi'
 

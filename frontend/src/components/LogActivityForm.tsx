@@ -178,13 +178,27 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
     })
     const mailCampaignOptions = mode === 'call' ? (recentMailCampaigns?.campaigns ?? []) : []
 
+    const { data: channelRoiSettings } = useQuery({
+      queryKey: ['channel-roi-settings'],
+      queryFn: () => channelRoiService.getSettings(),
+      enabled: mode === 'call',
+      staleTime: 60_000,
+    })
+    const facebookAttributionEnabled =
+      mode === 'call' &&
+      Boolean(
+        channelRoiSettings?.meta_connected ||
+          channelRoiSettings?.has_meta_token ||
+          channelRoiSettings?.last_synced_at,
+      )
     const { data: facebookCampaignsData, isLoading: facebookCampaignsLoading } = useQuery({
       queryKey: ['facebook-campaigns-for-attribution'],
       queryFn: () => channelRoiService.listFacebookCampaigns(),
-      enabled: mode === 'call',
+      enabled: facebookAttributionEnabled,
     })
-    const facebookCampaignOptions =
-      mode === 'call' ? (facebookCampaignsData?.campaigns ?? []) : []
+    const facebookCampaignOptions = facebookAttributionEnabled
+      ? (facebookCampaignsData?.campaigns ?? [])
+      : []
 
     // Call-mode fields
     const [outcome, setOutcome] = useState<LogCallPayload['outcome'] | ''>('')

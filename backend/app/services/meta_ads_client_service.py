@@ -62,9 +62,17 @@ class MetaAdsClientService:
                 payload={'error_type': 'meta_config_error'},
             ) from exc
 
+    def _auth_headers(self) -> dict[str, str]:
+        return {'Authorization': f'Bearer {self._token}'}
+
     def _request_json(self, url: str, params: dict[str, Any] | None = None) -> dict:
         try:
-            resp = requests.get(url, params=params, timeout=self.TIMEOUT)
+            resp = requests.get(
+                url,
+                params=params,
+                headers=self._auth_headers(),
+                timeout=self.TIMEOUT,
+            )
         except requests.RequestException as exc:
             raise ExternalServiceError(
                 f'Meta API request failed: {exc}',
@@ -108,13 +116,14 @@ class MetaAdsClientService:
 
         Uses one paginated campaigns list plus one paginated account-level
         insights request (``level=campaign``) — not per-campaign insights.
+        Insight rows for campaigns missing from the campaigns edge are ignored
+        so soft-archive can still clear campaigns Meta no longer lists.
         """
         campaign_rows = self._paginate(
             f'{GRAPH_BASE}/{self._account}/campaigns',
             {
                 'fields': 'id,name,status',
                 'limit': 100,
-                'access_token': self._token,
             },
         )
         by_id: dict[str, dict[str, Any]] = {}
@@ -138,22 +147,12 @@ class MetaAdsClientService:
                 'level': 'campaign',
                 'date_preset': 'maximum',
                 'limit': 100,
-                'access_token': self._token,
             },
         )
         for row in insight_rows:
             cid = str(row.get('campaign_id') or '')
-            if not cid:
+            if not cid or cid not in by_id:
                 continue
-            if cid not in by_id:
-                by_id[cid] = {
-                    'meta_campaign_id': cid,
-                    'name': cid,
-                    'status': None,
-                    'spend': Decimal('0'),
-                    'impressions': 0,
-                    'link_clicks': 0,
-                }
             by_id[cid]['spend'] = Decimal(str(row.get('spend') or '0'))
             by_id[cid]['impressions'] = int(row.get('impressions') or 0)
             by_id[cid]['link_clicks'] = self._link_clicks_from_actions(row.get('actions'))

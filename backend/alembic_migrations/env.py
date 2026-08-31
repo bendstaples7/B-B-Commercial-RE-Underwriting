@@ -94,6 +94,8 @@ _KNOWN_REVISIONS = frozenset({
     'joint_own_20260821',
     # Marketing Channel ROI — Meta config + facebook_ad_campaigns
     'chan_roi_20260831',
+    # Channel ROI singleton config_key + attribution ledger
+    'chan_roi_fix_0831',
     's0t1u2v3w4x5', 't0u1v2w3x4y5', 'u1v2w3x4y5z6',
     'v1w2x3y4z5a6', 'w2x3y4z5a6b7', 'x3y4z5a6b7c8',
     'y4z5a6b7c8d9', 'z5a6b7c8d9e0',
