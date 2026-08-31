@@ -2117,6 +2117,7 @@ def log_call(lead_id: int):
         phone_number=data.get('phone_number'),
         phone_label=data.get('phone_label'),
         mail_campaign_id=data.get('mail_campaign_id'),
+        facebook_campaign_id=data.get('facebook_campaign_id'),
         complete_task_id=data.get('complete_task_id'),
         follow_up=data.get('follow_up'),
         direction=data.get('direction') or 'outbound',

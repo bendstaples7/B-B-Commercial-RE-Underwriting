@@ -95,6 +95,9 @@ const PropertyListPage = lazy(() =>
 const MarketingHub = lazy(() =>
   import('./components/MarketingHub').then((m) => ({ default: m.MarketingHub })),
 )
+const ChannelRoiPage = lazy(() =>
+  import('./pages/ChannelRoiPage').then((m) => ({ default: m.ChannelRoiPage })),
+)
 const OAuthCallback = lazy(() =>
   import('./components/OAuthCallback').then((m) => ({ default: m.OAuthCallback })),
 )
@@ -417,6 +420,7 @@ const NAV_SECTIONS = [
         items: [
           { label: 'Direct Mail', path: '/marketing/direct-mail', icon: <LocalPostOfficeIcon />, badgeKey: null },
           { label: 'Mail Batches', path: '/marketing/direct-mail/batches', icon: <Inventory2Icon />, badgeKey: null },
+          { label: 'Channel ROI', path: '/marketing/channel-roi', icon: <BarChartIcon />, badgeKey: null },
         ],
       },
     ],
@@ -535,6 +539,10 @@ function DirectMailRoute() {
 
 function MailBatchesRoute() {
   return <MarketingHub mode="batches" />
+}
+
+function ChannelRoiRoute() {
+  return <ChannelRoiPage />
 }
 
 function MarketingRedirect({ to }: { to: string }) {
@@ -2533,6 +2541,7 @@ function App() {
           <Route path="/marketing" element={<MarketingRedirect to="/marketing/direct-mail" />} />
           <Route path="/marketing/direct-mail" element={<DirectMailRoute />} />
           <Route path="/marketing/direct-mail/batches" element={<MailBatchesRoute />} />
+          <Route path="/marketing/channel-roi" element={<ChannelRoiRoute />} />
           <Route path="/marketing/open-letter" element={<MarketingRedirect to="/marketing/direct-mail" />} />
           <Route path="/import/open-letter" element={<MarketingRedirect to="/marketing/direct-mail" />} />
           {/* Multifamily routes (Req 14.1) */}

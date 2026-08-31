@@ -1807,6 +1807,7 @@ class LogCallSchema(RequestSchema):
     phone_number = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=50))
     phone_label = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=20))
     mail_campaign_id = fields.Integer(allow_none=True, load_default=None)
+    facebook_campaign_id = fields.Integer(allow_none=True, load_default=None)
     complete_task_id = fields.Integer(allow_none=True, load_default=None)
     follow_up = fields.Nested(LogCallFollowUpSchema, allow_none=True, load_default=None)
 

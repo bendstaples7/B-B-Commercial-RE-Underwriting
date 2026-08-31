@@ -198,6 +198,12 @@ celery.conf.update(
             'schedule': 3600,
             'options': {'expires': 3300},
         },
+        # Meta Ads spend sync for Channel ROI.
+        'channel-roi-sync-facebook-campaigns': {
+            'task': 'channel_roi.sync_facebook_campaigns',
+            'schedule': 3600,
+            'options': {'expires': 3300},
+        },
         # PIN resolve follows situs healing so newly complete Cook addresses are ready.
         'property-match-resolve-unambiguous-pins': {
             'task': 'property_match.resolve_unambiguous_pins',
@@ -1564,6 +1570,20 @@ def sync_due_open_letter_campaign_analytics(limit: int = 25) -> dict:
     return sync_due_mail_campaign_analytics(limit=limit)
 
 
+@celery.task(name='channel_roi.sync_facebook_campaigns')
+def sync_channel_roi_facebook_campaigns() -> dict:
+    """Hourly beat / manual: sync Meta Ads campaigns into facebook_ad_campaigns."""
+    from app import create_app
+    from app.services.channel_roi_service import ChannelRoiService
+
+    app = create_app()
+    with app.app_context():
+        config = ChannelRoiService().settings_public()
+        if not config.get('meta_connected'):
+            return {'skipped': True, 'reason': 'meta_not_connected'}
+        return ChannelRoiService().sync_facebook_campaigns()
+
+
 @celery.task(name='ops.alert_spa_boot_failure')
 def alert_spa_boot_failure(event_id: int, href: str = None, reason: str = None):
     """Debounced ops alert for SPA boot-failure beacons."""
@@ -1896,6 +1916,7 @@ REQUIRED_TASKS = {
     'open_letter.submit_campaign',
     'open_letter.sync_campaign_analytics',
     'open_letter.sync_due_campaign_analytics',
+    'channel_roi.sync_facebook_campaigns',
     'hubspot.post_import_pipeline',
     'hubspot.rescore_only',
     'hubspot.scheduled_engagement_sync',

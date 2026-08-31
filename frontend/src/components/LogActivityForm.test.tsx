@@ -30,6 +30,15 @@ vi.mock('@/services/openLetterApi', () => ({
   },
 }))
 
+vi.mock('@/services/channelRoiApi', () => ({
+  default: {
+    listFacebookCampaigns: vi.fn().mockResolvedValue({ campaigns: [] }),
+    getDashboard: vi.fn(),
+    patchSettings: vi.fn(),
+    syncFacebook: vi.fn(),
+  },
+}))
+
 import { callLogService } from '@/services/api'
 
 const mockLogCall = callLogService.logCall as ReturnType<typeof vi.fn>

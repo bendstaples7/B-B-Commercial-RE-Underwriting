@@ -572,6 +572,9 @@ def create_app(config_name='development'):
 
     from app.controllers.mail_queue_controller import mail_queue_bp
     app.register_blueprint(mail_queue_bp, url_prefix='/api/mail-queue')
+
+    from app.controllers.channel_roi_controller import channel_roi_bp
+    app.register_blueprint(channel_roi_bp, url_prefix='/api/marketing/channel-roi')
     
     from app.controllers.condo_filter_controller import condo_filter_bp
     app.register_blueprint(condo_filter_bp, url_prefix='/api/condo-filter')

@@ -185,6 +185,12 @@ def _mail_attribution_eligible(lead_id: int, mail_campaign_id: int, actor_user_i
     ).first() is not None
 
 
+def _facebook_attribution_eligible(facebook_campaign_id: int) -> bool:
+    from app.models.facebook_ad_campaign import FacebookAdCampaign
+
+    return FacebookAdCampaign.query.get(facebook_campaign_id) is not None
+
+
 class CallLogService:
     """Handles logging calls and notes on leads."""
 
@@ -200,6 +206,7 @@ class CallLogService:
         phone_number: str | None = None,
         phone_label: str | None = None,
         mail_campaign_id: int | None = None,
+        facebook_campaign_id: int | None = None,
         complete_task_id: int | None = None,
         follow_up: dict | None = None,
         direction: str = 'outbound',
@@ -325,6 +332,14 @@ class CallLogService:
             metadata['mail_campaign_id'] = mail_campaign_id
             metadata['attributed_to_mail'] = True
 
+        attributed_to_facebook = (
+            facebook_campaign_id is not None
+            and _facebook_attribution_eligible(facebook_campaign_id)
+        )
+        if attributed_to_facebook:
+            metadata['facebook_campaign_id'] = facebook_campaign_id
+            metadata['attributed_to_facebook'] = True
+
         entry = LeadTimelineEntry(
             lead_id=lead_id,
             event_type='call_logged',
@@ -402,6 +417,18 @@ class CallLogService:
                 logger.warning(
                     'Mail call attribution failed for lead %s campaign %s: %s',
                     lead_id, mail_campaign_id, exc,
+                )
+
+        if attributed_to_facebook:
+            try:
+                from app.services.channel_roi_service import ChannelRoiService
+                ChannelRoiService().record_facebook_call_attribution(
+                    facebook_campaign_id, lead_id
+                )
+            except Exception as exc:
+                logger.warning(
+                    'Facebook call attribution failed for lead %s campaign %s: %s',
+                    lead_id, facebook_campaign_id, exc,
                 )
 
         return entry
