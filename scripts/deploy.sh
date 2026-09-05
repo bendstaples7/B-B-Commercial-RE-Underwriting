@@ -401,6 +401,21 @@ touch /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 rm -rf frontend/dist
 mv /home/deploy/frontend-dist frontend/dist
 echo "    Frontend dist installed from CI runner build"
+
+# Inject browser Maps key into index.html when CI baked an empty
+# VITE_GOOGLE_MAPS_API_KEY. Reads backend/.env (or repo-root .env) so Places
+# autocomplete works without rebuilding the SPA on the runner.
+MAPS_INJECT_SCRIPT="$APP_DIR/scripts/inject_google_maps_browser_key.py"
+if [[ ! -f "$MAPS_INJECT_SCRIPT" ]]; then
+    MAPS_INJECT_SCRIPT="/home/deploy/inject_google_maps_browser_key.py"
+fi
+if [[ -f "$MAPS_INJECT_SCRIPT" ]]; then
+    python3.11 "$MAPS_INJECT_SCRIPT" frontend/dist/index.html \
+        || echo "WARNING: Google Maps key inject skipped/failed — Places autocomplete may be unavailable"
+else
+    echo "WARNING: inject_google_maps_browser_key.py not found — Places key inject skipped"
+fi
+
 # Fail closed if assets/ is mode 0700 (nginx www-data cannot traverse → blank SPA).
 ensure_frontend_dist_readable frontend/dist \
     || { echo "FAILED: frontend dist not readable by nginx"; rollback 1; }
