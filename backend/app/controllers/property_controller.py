@@ -349,26 +349,14 @@ def _serialize_property_detail(lead):
         for er in enrichment_records
     ]
 
-    from app.services.motivation_signal_service import SIGNAL_LABELS
+    from app.services.motivation_signal_service import serialize_motivation_signal
     active_signals = sorted(
         (sig for sig in lead.motivation_signals if sig.is_active),
         key=lambda s: abs(s.points),
         reverse=True,
     )
     data['motivation_signals'] = [
-        {
-            'id': sig.id,
-            'signal_type': sig.signal_type,
-            'label': SIGNAL_LABELS.get(sig.signal_type, sig.signal_type),
-            'severity': sig.severity,
-            'points': sig.points,
-            'source': sig.source,
-            'source_dataset': sig.source_dataset,
-            'evidence': sig.evidence,
-            'detected_at': sig.detected_at.isoformat() + 'Z' if sig.detected_at else None,
-            'is_active': sig.is_active,
-        }
-        for sig in active_signals
+        serialize_motivation_signal(sig) for sig in active_signals
     ]
 
     # Marketing list memberships

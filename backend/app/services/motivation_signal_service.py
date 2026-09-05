@@ -13,6 +13,55 @@ from app.services.scoring_rubric import MOTIVATION_KEYWORDS, SOURCE_TYPE_DISTRES
 
 logger = logging.getLogger(__name__)
 
+ANALYST_SOURCE = 'analyst'
+# Stable evidence_key so (lead_id, signal_type, evidence_key) unique constraint
+# holds one active analyst finding per catalog key.
+ANALYST_EVIDENCE_KEY = 'analyst'
+
+# Mutually exclusive selling-status findings — adding one deactivates the others.
+SELLING_STATUS_FINDING_KEYS = frozenset({
+    'OWNER_SELLING_FSBO',
+    'OWNER_ACTIVELY_SELLING',
+    'LISTED_WITH_AGENT',
+    'OWNER_CONSIDERING_SALE',
+    'OWNER_NOT_SELLING',
+})
+
+# User-confirmed facts that influence structured motivation / lead_score.
+# Keys are MotivationSignal.signal_type values with source=analyst.
+ANALYST_FINDING_CATALOG: dict[str, dict[str, Any]] = {
+    'OWNER_SELLING_FSBO': {
+        'label': 'Owner selling FSBO',
+        'severity': 'high',
+        'description': (
+            'Confirmed for-sale-by-owner — owner is actively marketing the '
+            'property without a listing agent.'
+        ),
+    },
+    'OWNER_ACTIVELY_SELLING': {
+        'label': 'Owner actively selling',
+        'severity': 'high',
+        'description': (
+            'Owner confirmed they are selling (agent listing or unclear channel).'
+        ),
+    },
+    'LISTED_WITH_AGENT': {
+        'label': 'Listed with an agent',
+        'severity': 'medium',
+        'description': 'Property is listed on MLS / with a brokerage.',
+    },
+    'OWNER_CONSIDERING_SALE': {
+        'label': 'Owner considering a sale',
+        'severity': 'medium',
+        'description': 'Owner expressed interest in selling but has not listed yet.',
+    },
+    'OWNER_NOT_SELLING': {
+        'label': 'Owner not selling',
+        'severity': 'low',
+        'description': 'Owner confirmed they are not interested in selling.',
+    },
+}
+
 SIGNAL_LABELS = {
     'TAX_SCAVENGER_SALE': 'Scavenger tax sale',
     'TAX_ANNUAL_SALE': 'Annual tax sale',
@@ -27,6 +76,7 @@ SIGNAL_LABELS = {
     'HUBSPOT_MOTIVATION': 'HubSpot motivation',
     'TAX_EXEMPT': 'Tax exempt',
     'ASSESSMENT_APPEAL': 'Assessment appeal',
+    **{key: meta['label'] for key, meta in ANALYST_FINDING_CATALOG.items()},
 }
 
 POINTS_RESIDENTIAL = {
@@ -44,6 +94,11 @@ POINTS_RESIDENTIAL = {
     'HUBSPOT_MOTIVATION': 5.0,
     'TAX_EXEMPT': -15.0,
     'ASSESSMENT_APPEAL': 2.0,
+    'OWNER_SELLING_FSBO': 12.0,
+    'OWNER_ACTIVELY_SELLING': 10.0,
+    'LISTED_WITH_AGENT': 6.0,
+    'OWNER_CONSIDERING_SALE': 5.0,
+    'OWNER_NOT_SELLING': -8.0,
 }
 
 POINTS_COMMERCIAL = {
@@ -61,6 +116,11 @@ POINTS_COMMERCIAL = {
     'HUBSPOT_MOTIVATION': 5.0,
     'TAX_EXEMPT': -15.0,
     'ASSESSMENT_APPEAL': 2.0,
+    'OWNER_SELLING_FSBO': 10.0,
+    'OWNER_ACTIVELY_SELLING': 8.0,
+    'LISTED_WITH_AGENT': 5.0,
+    'OWNER_CONSIDERING_SALE': 4.0,
+    'OWNER_NOT_SELLING': -8.0,
 }
 
 STRUCTURED_MOTIVATION_CAP = {'residential': 25.0, 'commercial': 20.0}
@@ -505,12 +565,74 @@ def primary_signal_label(lead) -> Optional[str]:
     return SIGNAL_LABELS.get(top.signal_type, top.signal_type)
 
 
+def is_analyst_signal_row(row: MotivationSignal) -> bool:
+    return (row.source or '') == ANALYST_SOURCE
+
+
+def list_analyst_finding_catalog(lead_category: str = 'residential') -> list[dict]:
+    """Catalog of addable findings with category-aware point values."""
+    category = lead_category if lead_category in ('residential', 'commercial') else 'residential'
+    items = []
+    for key, meta in ANALYST_FINDING_CATALOG.items():
+        items.append({
+            'finding_key': key,
+            'label': meta['label'],
+            'severity': meta['severity'],
+            'description': meta['description'],
+            'points': _points_for(key, category),
+        })
+    return items
+
+
+def _row_as_extracted(row: MotivationSignal) -> ExtractedSignal:
+    return ExtractedSignal(
+        signal_type=row.signal_type,
+        severity=row.severity,
+        points=float(row.points or 0),
+        source=row.source,
+        source_dataset=row.source_dataset,
+        evidence_key=row.evidence_key,
+        evidence=row.evidence if isinstance(row.evidence, dict) else None,
+    )
+
+
+def load_active_analyst_signals(lead_id: int) -> list[ExtractedSignal]:
+    rows = (
+        MotivationSignal.query.filter_by(
+            lead_id=lead_id,
+            source=ANALYST_SOURCE,
+            is_active=True,
+        ).all()
+    )
+    return [_row_as_extracted(row) for row in rows]
+
+
+def serialize_motivation_signal(sig: MotivationSignal) -> dict:
+    return {
+        'id': sig.id,
+        'signal_type': sig.signal_type,
+        'label': SIGNAL_LABELS.get(sig.signal_type, sig.signal_type),
+        'severity': sig.severity,
+        'points': sig.points,
+        'source': sig.source,
+        'source_dataset': sig.source_dataset,
+        'evidence': sig.evidence,
+        'evidence_key': sig.evidence_key,
+        'detected_at': sig.detected_at.isoformat() + 'Z' if sig.detected_at else None,
+        'is_active': sig.is_active,
+        'removable': is_analyst_signal_row(sig),
+    }
+
+
 class MotivationSignalService:
     """Sync motivation signals for a lead and update denormalized score fields.
 
     ``lead.motivation_score`` is the product motivation number (structured signals
     only). HubSpot ``SIGNAL_ADJUSTMENTS`` in LeadScoringEngine modify
     ``lead_score`` engagement — they are not a second motivation_score.
+
+    Analyst findings (``source=analyst``) are user-confirmed facts such as FSBO.
+    They are preserved across enrichment sync and included in motivation_score.
     """
 
     def sync_from_lead(self, lead, *, commit: bool = True) -> float:
@@ -524,6 +646,9 @@ class MotivationSignalService:
         if isinstance(lead_id, int):
             existing = MotivationSignal.query.filter_by(lead_id=lead_id).all()
             for row in existing:
+                # Never deactivate user-confirmed analyst findings on enrichment sync.
+                if is_analyst_signal_row(row):
+                    continue
                 key = (row.signal_type, row.evidence_key or '')
                 if key not in active_keys:
                     row.is_active = False
@@ -550,13 +675,17 @@ class MotivationSignalService:
                 row.detected_at = datetime.utcnow()
                 row.is_active = True
 
+        combined = list(extracted)
+        if isinstance(lead_id, int):
+            combined.extend(load_active_analyst_signals(lead_id))
+
         # Product motivation number — structured MotivationSignal attribution only.
-        score = compute_structured_motivation_score(lead, signals=extracted)
+        score = compute_structured_motivation_score(lead, signals=combined)
         lead.motivation_score = score
-        lead.motivation_signal_summary = build_signal_summary(extracted)
+        lead.motivation_signal_summary = build_signal_summary(combined)
         # Stash last extracted signals for score_details attribution in the same
         # scoring pass (notes_keywords is already inside structured_motivation).
-        lead._motivation_extracted_signals = extracted  # type: ignore[attr-defined]
+        lead._motivation_extracted_signals = combined  # type: ignore[attr-defined]
 
         if commit and isinstance(lead_id, int):
             db.session.add(lead)
@@ -566,6 +695,113 @@ class MotivationSignalService:
             db.session.flush()
 
         return score
+
+    def _refresh_denormalized_motivation(self, lead) -> float:
+        """Recompute motivation_score + summary from extract + active analyst rows."""
+        lead_id = getattr(lead, 'id', None)
+        extracted = extract_signals_from_lead(lead)
+        combined = list(extracted)
+        if isinstance(lead_id, int):
+            combined.extend(load_active_analyst_signals(lead_id))
+        score = compute_structured_motivation_score(lead, signals=combined)
+        lead.motivation_score = score
+        lead.motivation_signal_summary = build_signal_summary(combined)
+        lead._motivation_extracted_signals = combined  # type: ignore[attr-defined]
+        db.session.add(lead)
+        return score
+
+    def add_analyst_finding(
+        self,
+        lead,
+        finding_key: str,
+        *,
+        note: Optional[str] = None,
+        actor: Optional[str] = None,
+        commit: bool = True,
+    ) -> MotivationSignal:
+        """Upsert a catalog analyst finding and refresh denormalized motivation."""
+        meta = ANALYST_FINDING_CATALOG.get(finding_key)
+        if meta is None:
+            raise ValueError(f'Unknown finding_key: {finding_key}')
+
+        lead_id = getattr(lead, 'id', None)
+        if not isinstance(lead_id, int):
+            raise ValueError('Lead must be persisted before adding findings')
+
+        category = getattr(lead, 'lead_category', 'residential') or 'residential'
+        points = _points_for(finding_key, category)
+        note_text = (note or '').strip() or None
+        evidence: dict[str, Any] = {'finding_key': finding_key}
+        if note_text:
+            evidence['note'] = note_text[:500]
+        if actor:
+            evidence['added_by'] = str(actor)[:100]
+
+        row = MotivationSignal.query.filter_by(
+            lead_id=lead_id,
+            signal_type=finding_key,
+            evidence_key=ANALYST_EVIDENCE_KEY,
+        ).first()
+        if row is None:
+            row = MotivationSignal(
+                lead_id=lead_id,
+                signal_type=finding_key,
+                evidence_key=ANALYST_EVIDENCE_KEY,
+            )
+            db.session.add(row)
+
+        row.severity = meta['severity']
+        row.points = points
+        row.source = ANALYST_SOURCE
+        row.source_dataset = None
+        row.evidence = evidence
+        row.detected_at = datetime.utcnow()
+        row.is_active = True
+
+        # One selling-status finding at a time (FSBO vs listed vs not selling).
+        if finding_key in SELLING_STATUS_FINDING_KEYS:
+            siblings = MotivationSignal.query.filter(
+                MotivationSignal.lead_id == lead_id,
+                MotivationSignal.source == ANALYST_SOURCE,
+                MotivationSignal.signal_type.in_(
+                    sorted(SELLING_STATUS_FINDING_KEYS - {finding_key})
+                ),
+                MotivationSignal.is_active.is_(True),
+            ).all()
+            for sibling in siblings:
+                sibling.is_active = False
+
+        self._refresh_denormalized_motivation(lead)
+        if commit:
+            db.session.commit()
+            db.session.refresh(row)
+        else:
+            db.session.flush()
+        return row
+
+    def remove_analyst_finding(
+        self,
+        lead,
+        signal_id: int,
+        *,
+        commit: bool = True,
+    ) -> bool:
+        """Deactivate an analyst finding; returns False if not found / not analyst."""
+        lead_id = getattr(lead, 'id', None)
+        if not isinstance(lead_id, int):
+            raise ValueError('Lead must be persisted')
+
+        row = MotivationSignal.query.filter_by(id=signal_id, lead_id=lead_id).first()
+        if row is None or not is_analyst_signal_row(row):
+            return False
+
+        row.is_active = False
+        self._refresh_denormalized_motivation(lead)
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
+        return True
 
     def copy_signals_to_lead(self, from_candidate_signals: list[dict], lead_id: int) -> None:
         """Attach precomputed prospect signals to a lead (upsert by type + evidence key)."""

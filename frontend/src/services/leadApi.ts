@@ -21,6 +21,8 @@ import type {
   QuickAddPayload,
   QuickAddLookupResponse,
   QuickAddResponse,
+  AnalystFindingCatalogItem,
+  LeadFindingMutationResponse,
 } from '@/types'
 
 /**
@@ -68,6 +70,43 @@ export const leadService = {
       task_id: taskId ?? null,
       hubspot_task_id: hubspotTaskId ?? null,
     })
+    return response.data
+  },
+
+  /**
+   * Catalog of analyst findings that bump structured motivation / lead_score.
+   */
+  async getFindingCatalog(leadId: number): Promise<{
+    findings: AnalystFindingCatalogItem[]
+    lead_category: string
+  }> {
+    const response = await api.get(`/leads/${leadId}/findings/catalog`)
+    return response.data
+  },
+
+  /**
+   * Add a user-confirmed finding (e.g. owner selling FSBO).
+   */
+  async addFinding(
+    leadId: number,
+    findingKey: string,
+    note?: string | null,
+  ): Promise<LeadFindingMutationResponse> {
+    const response = await api.post(`/leads/${leadId}/findings`, {
+      finding_key: findingKey,
+      note: note ?? null,
+    })
+    return response.data
+  },
+
+  /**
+   * Remove a removable analyst finding.
+   */
+  async removeFinding(
+    leadId: number,
+    signalId: number,
+  ): Promise<LeadFindingMutationResponse> {
+    const response = await api.delete(`/leads/${leadId}/findings/${signalId}`)
     return response.data
   },
 

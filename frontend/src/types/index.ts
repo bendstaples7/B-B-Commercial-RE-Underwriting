@@ -484,8 +484,28 @@ export interface MotivationSignalDetail {
   source: string;
   source_dataset?: string | null;
   evidence?: Record<string, unknown> | null;
+  evidence_key?: string | null;
   detected_at?: string | null;
   is_active: boolean;
+  /** True for user-confirmed analyst findings that can be removed from CC. */
+  removable?: boolean;
+}
+
+export interface AnalystFindingCatalogItem {
+  finding_key: string;
+  label: string;
+  severity: string;
+  description: string;
+  points: number;
+}
+
+export interface LeadFindingMutationResponse {
+  motivation_score?: number | null;
+  motivation_signal_summary?: MotivationSignalSummaryItem[];
+  lead_score?: number | null;
+  finding?: MotivationSignalDetail;
+  removed?: boolean;
+  signal_id?: number;
 }
 
 /** Minimal contact summary embedded inside PropertyDetail.

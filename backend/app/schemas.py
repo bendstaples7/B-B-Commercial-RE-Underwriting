@@ -1732,6 +1732,12 @@ class LeadCategoryUpdateSchema(RequestSchema):
     )
 
 
+class LeadFindingCreateSchema(RequestSchema):
+    """Validation schema for POST /api/leads/:id/findings."""
+    finding_key = fields.String(required=True, validate=validate.Length(min=1, max=64))
+    note = fields.String(allow_none=True, validate=validate.Length(max=500), load_default=None)
+
+
 class LeadPropertyOverviewUpdateSchema(RequestSchema):
     """Partial update for Command Center header property KPIs."""
     assessed_value = fields.Float(
