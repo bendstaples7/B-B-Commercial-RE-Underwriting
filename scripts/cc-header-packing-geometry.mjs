@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Hostile CC header packing geometry gate — REAL React/MUI harness (Vite).
+ * Hostile CC header packing geometry gate -- REAL React/MUI harness (Vite).
  *
  * Runs at multiple viewport widths (1280 / 1440 / 1600 / 1920) and fails if:
  * - address → Est. value gap is a dead middle ( > GAP_MAX_PX )
@@ -41,7 +41,7 @@ const VIEWPORTS = [
   { width: 1600, height: 900 },
   { width: 1920, height: 900 },
 ]
-/** Phone widths — address must not glyph-stack beside KPIs. */
+/** Phone widths -- address must not glyph-stack beside KPIs. */
 const MOBILE_VIEWPORTS = [
   { width: 390, height: 844 },
   { width: 430, height: 932 },
@@ -64,7 +64,7 @@ function assertScreenshot(viewport, path, label) {
   }
   const bytes = statSync(path).size
   if (bytes < 4000) {
-    fail(viewport, `Screenshot veto: ${label} PNG too small (${bytes} bytes) — likely blank`)
+    fail(viewport, `Screenshot veto: ${label} PNG too small (${bytes} bytes) -- likely blank`)
   }
   return bytes
 }
@@ -81,103 +81,63 @@ async function resolveHarnessBaseUrl(server) {
   return `http://127.0.0.1:${port}/`
 }
 
-async function warmupHarnessServer(base) {
-  const harnessUrl = new URL('cc-header-packing-harness.html', base).href
-  const moduleUrl = new URL('src/harness/ccHeaderPackingMain.tsx', base).href
-  const htmlRes = await fetch(harnessUrl)
-  if (!htmlRes.ok) {
-    throw new Error(`Harness HTML fetch failed (${htmlRes.status}) ${harnessUrl}`)
-  }
-  await htmlRes.text()
-  const modRes = await fetch(moduleUrl, {
-    headers: { Accept: 'application/javascript,text/javascript,*/*' },
-  })
-  if (!modRes.ok) {
-    throw new Error(`Harness module fetch failed (${modRes.status}) ${moduleUrl}`)
-  }
-  await modRes.text()
-
-  // Wait until Emotion/MUI prebundles are actually written — cold force-optimize
-  // races otherwise produce `styled_default is not a function` in Playwright.
-  const criticalDeps = [
-    'node_modules/.vite/deps/@emotion_styled.js',
-    'node_modules/.vite/deps/@emotion_react.js',
-    'node_modules/.vite/deps/@mui_material.js',
-    'node_modules/.vite/deps/@mui_material_styles.js',
-  ]
-  const deadline = Date.now() + 60000
-  for (const dep of criticalDeps) {
-    const url = new URL(dep, base).href
-    let lastStatus = 0
-    let ready = false
-    while (Date.now() < deadline) {
-      const res = await fetch(url)
-      lastStatus = res.status
-      if (res.ok) {
-        const body = await res.text()
-        if (body.includes('export') || body.includes('styled')) {
-          ready = true
-          break
-        }
-      }
-      await new Promise((r) => setTimeout(r, 250))
-    }
-    if (lastStatus !== 200) {
-      throw new Error(`Harness dep warmup failed (${lastStatus}) ${url}`)
-    }
-    if (!ready) {
-      throw new Error(`Harness dep warmup timed out before content ready ${url}`)
-    }
-  }
-}
-
 async function startViteHarness() {
   const vitePath = resolve(FRONTEND, 'node_modules/vite/dist/node/index.js')
-  const { createServer } = await import(pathToFileURL(vitePath).href)
+  const { build, preview } = await import(pathToFileURL(vitePath).href)
+  const { rmSync } = await import('node:fs')
   process.env.CC_PACKING_HARNESS = '1'
-  // Always force-optimize under CC_PACKING_HARNESS=1. Earlier CI steps (vitest)
-  // may have written node_modules/.vite/deps without the packing Emotion/MUI
-  // includes; reusing that cache races into `styled_default is not a function`.
-  const { spawnSync } = await import('node:child_process')
-  const result = spawnSync(
-    process.execPath,
-    [resolve(FRONTEND, 'node_modules/vite/bin/vite.js'), 'optimize', '--force'],
-    {
-      cwd: FRONTEND,
-      env: { ...process.env, CC_PACKING_HARNESS: '1' },
-      encoding: 'utf8',
-    },
-  )
-  if (result.status !== 0) {
-    throw new Error(`vite optimize failed: ${result.stderr || result.stdout}`)
-  }
-  const server = await createServer({
+
+  // Production build + preview: avoids Vite's serve-time dep optimizer, which
+  // intermittently emits broken Emotion default interop under CI
+  // (`styled_default is not a function`) after vitest has touched .vite/.
+  const outDir = resolve(FRONTEND, 'dist-cc-packing-harness')
+  rmSync(outDir, { recursive: true, force: true })
+  rmSync(resolve(FRONTEND, 'node_modules/.vite'), { recursive: true, force: true })
+
+  await build({
     configFile: resolve(FRONTEND, 'vite.config.ts'),
     root: FRONTEND,
-    // Do not pass resolve.dedupe here — it re-optimizes Emotion/MUI poorly and
-    // surfaces `styled_default is not a function` in Playwright.
-    server: {
-      port: 0,
-      strictPort: false,
-      host: '127.0.0.1',
-      warmup: {
-        clientFiles: [resolve(FRONTEND, 'src/harness/ccHeaderPackingMain.tsx')],
+    build: {
+      outDir,
+      emptyOutDir: true,
+      rollupOptions: {
+        input: resolve(FRONTEND, 'cc-header-packing-harness.html'),
       },
     },
     logLevel: 'error',
   })
-  await server.listen()
-  const base = await resolveHarnessBaseUrl(server)
-  try {
-    await warmupHarnessServer(base)
-  } catch (err) {
+
+  const server = await preview({
+    configFile: resolve(FRONTEND, 'vite.config.ts'),
+    root: FRONTEND,
+    build: { outDir },
+    preview: {
+      port: 0,
+      strictPort: false,
+      host: '127.0.0.1',
+    },
+    logLevel: 'error',
+  })
+
+  const addr = server.httpServer?.address()
+  const port =
+    typeof addr === 'object' && addr && typeof addr.port === 'number'
+      ? addr.port
+      : server.config.preview.port
+  if (!port || port <= 0) {
     await server.close()
-    throw err
+    throw new Error(`Packing preview has no listening port (addr=${JSON.stringify(addr)})`)
   }
-  return {
-    server,
-    harnessUrl: new URL('cc-header-packing-harness.html', base).href,
+  const base = `http://127.0.0.1:${port}/`
+  const harnessUrl = new URL('cc-header-packing-harness.html', base).href
+  const htmlRes = await fetch(harnessUrl)
+  if (!htmlRes.ok) {
+    await server.close()
+    throw new Error(`Harness HTML fetch failed (${htmlRes.status}) ${harnessUrl}`)
   }
+  await htmlRes.text()
+
+  return { server, harnessUrl }
 }
 
 function watchPageIssues(page) {
@@ -441,7 +401,7 @@ async function assertViewport(page, viewport) {
   const allZero = [address, est, stats, condo, score].every(
     (b) => b.width === 0 && b.height === 0,
   )
-  if (allZero) fail(viewport, 'Vacuous zero-sized boxes — refusing ALIGNED')
+  if (allZero) fail(viewport, 'Vacuous zero-sized boxes -- refusing ALIGNED')
 
   if (metrics.statsInsideTrail) {
     fail(viewport, 'FORBID: quick-stats inside trailing ml:auto pack')
@@ -460,7 +420,7 @@ async function assertViewport(page, viewport) {
   const topMin = Math.min(...rowTops)
   const topMax = Math.max(...rowTops)
   if (topMax - topMin > ROW_TOP_EPS) {
-    fail(viewport, `Not one horizontal row — top spread ${(topMax - topMin).toFixed(1)}px`, {
+    fail(viewport, `Not one horizontal row -- top spread ${(topMax - topMin).toFixed(1)}px`, {
       addressTop: address.top,
       statsTop: stats.top,
       condoTop: condo.top,
@@ -479,7 +439,7 @@ async function assertViewport(page, viewport) {
     })
   }
 
-  // Lead Signals must sit flush right — no leftover whitespace after the score card.
+  // Lead Signals must sit flush right -- no leftover whitespace after the score card.
   if (header && score) {
     const afterScore = header.right - score.right
     const FLUSH_MAX_PX = 28 // header padding (~12–16) + epsilon
@@ -556,7 +516,7 @@ async function assertViewport(page, viewport) {
   }
 
   if (!/12\s*Units/i.test(metrics.unitsValueText) || metrics.unitsValueText.length < 20) {
-    fail(viewport, 'Hostile Units fixture too short — gate would be theater', metrics.unitsValueText)
+    fail(viewport, 'Hostile Units fixture too short -- gate would be theater', metrics.unitsValueText)
   }
 
   if (metrics.categoryPaint.hits < metrics.categoryPaint.total) {
@@ -587,7 +547,7 @@ async function assertViewport(page, viewport) {
 
   const addr = metrics.addressLineText || ''
   if (!/Hoyne/i.test(addr) || !/60622/.test(addr)) {
-    fail(viewport, 'Address readability fail — expected full Hoyne + ZIP', addr)
+    fail(viewport, 'Address readability fail -- expected full Hoyne + ZIP', addr)
   }
   if (/\.\.\.|…\s*$/.test(addr) || /Chicago,\s*I\.\.\./i.test(addr)) {
     fail(viewport, 'Address ellipsis crush detected in DOM text', addr)
@@ -599,13 +559,13 @@ async function assertViewport(page, viewport) {
     )
   }
   if (metrics.addressApproxLines != null && metrics.addressApproxLines > 1.35) {
-    fail(viewport, `Address wraps — expected ~1 line (got ${metrics.addressApproxLines})`)
+    fail(viewport, `Address wraps -- expected ~1 line (got ${metrics.addressApproxLines})`)
   }
   // Plan lock: address must not ellipsize at 1440+.
   if (viewport.width >= 1440 && metrics.addressScrollWider) {
     fail(
       viewport,
-      'Address truncated (scrollWidth > clientWidth) at ≥1440 — must fit one line',
+      'Address truncated (scrollWidth > clientWidth) at ≥1440 -- must fit one line',
     )
   }
 
@@ -672,7 +632,7 @@ async function assertResidentialViewport(page, viewport) {
   if (metrics.trailMode !== 'grow-score') {
     fail(viewport, `Expected trail grow-score (got ${metrics.trailMode})`)
   }
-  // Match main: score uses clamp(10rem, 13vw, 260px) grow — not content-hug.
+  // Match main: score uses clamp(10rem, 13vw, 260px) grow -- not content-hug.
   const SCORE_MIN_PX = 160
   if (score.width < SCORE_MIN_PX) {
     fail(viewport, `Residential score too narrow vs main clamp: ${score.width.toFixed(1)}px < ${SCORE_MIN_PX}`)
@@ -764,7 +724,7 @@ async function assertMobileViewport(page, viewport) {
 
   // Glyph-stack regression: crushed width + many lines.
   if (addr.width < 160) {
-    fail(viewport, `Mobile: address column too narrow (${addr.width.toFixed(1)}px) — glyph-stack risk`, {
+    fail(viewport, `Mobile: address column too narrow (${addr.width.toFixed(1)}px) -- glyph-stack risk`, {
       address: addr,
       stats,
     })
@@ -784,7 +744,7 @@ async function assertMobileViewport(page, viewport) {
     )
   }
 
-  // KPIs must sit below the address (stacked) — never side-by-side on mobile.
+  // KPIs must sit below the address (stacked) -- never side-by-side on mobile.
   const stacked = stats.top >= addr.bottom - 8
   if (!stacked) {
     fail(viewport, 'Mobile: KPIs must stack below address', { address: addr, stats })

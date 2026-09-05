@@ -34,27 +34,7 @@ export default defineConfig(({ command, mode }) => {
         '@': path.resolve(__dirname, './src'),
       },
     },
-    ...(isPackingHarness
-      ? {
-          optimizeDeps: {
-            include: [
-              'react',
-              'react-dom',
-              'react-dom/client',
-              'react/jsx-runtime',
-              'react/jsx-dev-runtime',
-              '@emotion/react',
-              '@emotion/styled',
-              '@emotion/cache',
-              '@mui/styled-engine',
-              '@mui/material',
-              '@mui/material/styles',
-              '@mui/system',
-              '@mui/icons-material/ArrowBack',
-            ],
-          },
-        }
-      : {}),
+
     build: {
       rollupOptions: {
         output: {
