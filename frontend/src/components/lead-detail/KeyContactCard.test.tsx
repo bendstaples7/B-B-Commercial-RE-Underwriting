@@ -13,6 +13,7 @@ vi.mock('@/services/api', () => ({
     updateContact: vi.fn(),
     createContact: vi.fn(),
     linkContactToProperty: vi.fn(),
+    searchContacts: vi.fn(),
   },
 }))
 
@@ -282,5 +283,20 @@ describe('KeyContactCard', () => {
     fireEvent.click(screen.getByTestId('key-contact-add-person-btn'))
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.getAllByText('Add Contact').length).toBeGreaterThan(0)
+  })
+
+  it('opens edit phone & details for a flat-only key contact', () => {
+    renderCard(
+      basePayload({
+        owner_first_name: 'Gregory',
+        owner_last_name: 'Shek',
+        phone_1: '(312) 555-0199',
+        contacts: [],
+      }),
+      'Gregory Shek',
+    )
+    fireEvent.click(screen.getByTestId('key-contact-edit-details-btn'))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByTestId('contact-phone-input-0')).toHaveValue('(312) 555-0199')
   })
 })

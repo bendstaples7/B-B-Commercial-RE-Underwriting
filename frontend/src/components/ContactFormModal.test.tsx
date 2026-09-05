@@ -15,6 +15,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@/test/testUtils'
+import userEvent from '@testing-library/user-event'
 import { ContactFormModal } from './ContactFormModal'
 import { contactService } from '@/services/api'
 import type { PropertyContact } from '@/types'
@@ -28,6 +29,7 @@ vi.mock('@/services/api', () => ({
     createContact: vi.fn(),
     updateContact: vi.fn(),
     linkContactToProperty: vi.fn(),
+    searchContacts: vi.fn(),
     getPropertyContacts: vi.fn(),
     unlinkContactFromProperty: vi.fn(),
     deleteContact: vi.fn(),
@@ -339,7 +341,7 @@ describe('ContactFormModal', () => {
       await waitFor(() => {
         expect(contactService.linkContactToProperty).toHaveBeenCalledWith(
           PROPERTY_ID,
-          expect.objectContaining({ contact_id: 55 })
+          expect.objectContaining({ contact_id: 55, is_primary: false })
         )
       })
 
@@ -404,6 +406,52 @@ describe('ContactFormModal', () => {
 
       // Modal should NOT close on error
       expect(ON_CLOSE).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('link existing contact', () => {
+    it('searches and links an existing contact', async () => {
+      const user = userEvent.setup()
+      const existing = {
+        id: 99,
+        first_name: 'Gregory',
+        last_name: 'Shek',
+        role: 'owner' as const,
+        role_description: null,
+        notes: null,
+        phones: [{ id: 1, contact_id: 99, value: '555-0100', label: 'mobile' as const }],
+        emails: [],
+        created_at: null,
+        updated_at: null,
+      }
+      vi.mocked(contactService.searchContacts).mockResolvedValue([existing])
+      vi.mocked(contactService.linkContactToProperty).mockResolvedValue({
+        ...existing,
+        property_contact_role: 'owner',
+        is_primary: false,
+      })
+
+      renderCreateModal()
+
+      await user.click(screen.getByTestId('contact-form-mode-link'))
+      await user.type(screen.getByTestId('contact-link-search-input'), 'Shek')
+
+      await waitFor(() => {
+        expect(contactService.searchContacts).toHaveBeenCalledWith(
+          expect.objectContaining({ q: 'Shek', excludePropertyId: PROPERTY_ID }),
+        )
+      })
+
+      await user.click(await screen.findByRole('option', { name: /Gregory Shek/i }))
+      await user.click(screen.getByTestId('contact-form-submit'))
+
+      await waitFor(() => {
+        expect(contactService.linkContactToProperty).toHaveBeenCalledWith(
+          PROPERTY_ID,
+          expect.objectContaining({ contact_id: 99, role: 'owner', is_primary: false }),
+        )
+      })
+      await waitFor(() => expect(ON_CLOSE).toHaveBeenCalled())
     })
   })
 })

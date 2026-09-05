@@ -685,6 +685,42 @@ class TestUnlinkContactFromProperty:
 # get_contacts_for_property
 # ---------------------------------------------------------------------------
 
+class TestSearchContacts:
+    def test_search_by_partial_name(self, app):
+        with app.app_context():
+            service = ContactService()
+            gregory = _make_contact(service, "Gregory", "Shek")
+            _make_contact(service, "Alice", "Smith")
+
+            results = service.search_contacts("shek")
+            assert [c.id for c in results] == [gregory.id]
+
+    def test_search_excludes_linked_property_contacts(self, app):
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property("909 Link St")
+            linked = _make_contact(service, "Gregory", "Shek")
+            free = _make_contact(service, "Greg", "Shekman")
+            service.link_contact_to_property(
+                property_id=prop.id,
+                contact_id=linked.id,
+                role="owner",
+                is_primary=True,
+            )
+
+            results = service.search_contacts(
+                "shek",
+                exclude_property_id=prop.id,
+            )
+            assert [c.id for c in results] == [free.id]
+
+    def test_search_requires_two_characters(self, app):
+        with app.app_context():
+            service = ContactService()
+            with pytest.raises(ValidationException):
+                service.search_contacts("a")
+
+
 class TestGetContactsForProperty:
     def test_returns_contacts_with_join_metadata(self, app):
         """get_contacts_for_property returns (Contact, PropertyContact) tuples with correct metadata."""
@@ -1124,3 +1160,24 @@ class TestSamePersonOwnerConsolidate:
                 property_id=prop.id, contact_id=sign.id,
             ).one()
             assert sign_link.role == 'former_owner'
+
+
+# ---------------------------------------------------------------------------
+# Search contacts API
+# ---------------------------------------------------------------------------
+
+class TestSearchContactsApi:
+    def test_search_endpoint_returns_results(self, app, client):
+        with app.app_context():
+            service = ContactService()
+            contact = _make_contact(service, "Gregory", "Shek")
+
+        resp = client.get("/api/contacts/search", query_string={"q": "Shek"})
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert "results" in body
+        assert any(r["id"] == contact.id for r in body["results"])
+
+    def test_search_endpoint_rejects_short_query(self, client):
+        resp = client.get("/api/contacts/search", query_string={"q": "S"})
+        assert resp.status_code == 400

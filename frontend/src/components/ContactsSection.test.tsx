@@ -16,6 +16,7 @@ vi.mock('@/services/api', () => ({
     updateContact: vi.fn(),
     deleteContact: vi.fn(),
     getContact: vi.fn(),
+    searchContacts: vi.fn(),
   },
   organizationService: {
     createOrganization: vi.fn(),
@@ -459,5 +460,38 @@ describe('ContactsSection', () => {
         /manager of\s+Kdg Avondale LLC/i,
       )
     })
+  })
+
+  it('shows flat key-contact person under People when only companies are linked', async () => {
+    vi.mocked(contactService.getPropertyContacts).mockResolvedValue([])
+
+    render(
+      <ContactsSection
+        propertyId={PROPERTY_ID}
+        commandCenterData={
+          {
+            id: PROPERTY_ID,
+            owner_first_name: 'Gregory',
+            owner_last_name: 'Shek',
+            phones: [{ value: '(312) 555-0199' }],
+            organizations: [
+              {
+                id: 10,
+                name: 'Shek Holdings LLC',
+                org_type: 'llc',
+                role: 'owner',
+                link_id: 1,
+              },
+            ],
+          } as CommandCenterPayload
+        }
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Gregory Shek')).toBeInTheDocument()
+      expect(screen.getByText(/On file — not linked yet/i)).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('materialize-unlinked-person-btn')).toBeInTheDocument()
   })
 })
