@@ -13,6 +13,12 @@ const BUILD_TIME_ENV_CANDIDATES = keyPolicy.browserEnvCandidates.filter((name) =
   name.startsWith('VITE_'),
 )
 
+function buildTimeEnvValues(): Record<string, unknown> {
+  return {
+    VITE_GOOGLE_MAPS_API_KEY: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
+  }
+}
+
 declare global {
   interface Window {
     __BB_GOOGLE_MAPS_API_KEY__?: string
@@ -27,8 +33,9 @@ export function normalizeGoogleMapsApiKey(raw: unknown): string | null {
 }
 
 function resolveBuildTimeGoogleMapsApiKey(): string | null {
+  const values = buildTimeEnvValues()
   for (const name of BUILD_TIME_ENV_CANDIDATES) {
-    const key = normalizeGoogleMapsApiKey(import.meta.env[name as keyof ImportMetaEnv])
+    const key = normalizeGoogleMapsApiKey(values[name])
     if (key) return key
   }
   return null

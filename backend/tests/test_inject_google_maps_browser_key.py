@@ -17,6 +17,14 @@ def _load():
     return module
 
 
+def _load_from(path: Path, module_name: str):
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 inj = _load()
 
 
@@ -102,3 +110,20 @@ def test_inject_script_and_backend_helper_share_browser_key_policy():
 
     assert inj.ENV_CANDIDATES == BROWSER_ENV_CANDIDATES
     assert inj.PLACEHOLDER_VALUES == PLACEHOLDER_VALUES
+
+
+def test_inject_script_loads_sidecar_policy_when_copied(tmp_path: Path):
+    copied_script = tmp_path / 'inject_google_maps_browser_key.py'
+    copied_script.write_text(_PATH.read_text(encoding='utf-8'), encoding='utf-8')
+    (tmp_path / 'google_maps_browser_key_policy.json').write_text(
+        json.dumps(
+            {
+                'placeholderValues': ['placeholder-from-sidecar'],
+                'browserEnvCandidates': ['GOOGLE_MAPS_BROWSER_API_KEY'],
+            }
+        ),
+        encoding='utf-8',
+    )
+    copied = _load_from(copied_script, 'inject_google_maps_browser_key_sidecar')
+    assert copied.PLACEHOLDER_VALUES == frozenset({'placeholder-from-sidecar'})
+    assert copied.ENV_CANDIDATES == ('GOOGLE_MAPS_BROWSER_API_KEY',)

@@ -16,8 +16,19 @@ import os
 import sys
 from pathlib import Path
 
-_POLICY_PATH = Path(__file__).resolve().parents[1] / 'google_maps_browser_key_policy.json'
-_POLICY = json.loads(_POLICY_PATH.read_text(encoding='utf-8'))
+
+def _load_policy() -> dict[str, list[str]]:
+    script_path = Path(__file__).resolve()
+    for path in (
+        script_path.with_name('google_maps_browser_key_policy.json'),
+        script_path.parents[1] / 'google_maps_browser_key_policy.json',
+    ):
+        if path.is_file():
+            return json.loads(path.read_text(encoding='utf-8'))
+    raise FileNotFoundError('google_maps_browser_key_policy.json not found')
+
+
+_POLICY = _load_policy()
 
 PLACEHOLDER_VALUES = frozenset(str(value) for value in _POLICY['placeholderValues'])
 MARKER_START = '<!-- bb-google-maps-api-key -->'
