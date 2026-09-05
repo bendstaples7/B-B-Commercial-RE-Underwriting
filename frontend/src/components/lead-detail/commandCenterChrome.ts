@@ -177,7 +177,7 @@ export const ccHeaderAddressColumnSx: SxProps<Theme> = {
 export const ccHeaderPrimaryClusterSx: SxProps<Theme> = {
   display: 'flex',
   flexWrap: { xs: 'wrap', md: 'nowrap' },
-  alignItems: 'center',
+  alignItems: { xs: 'flex-start', md: 'center' },
   gap: { xs: 1.25, md: 1 },
   flex: { xs: '1 1 calc(100% - 48px)', md: '1 1 auto' },
   minWidth: { xs: 0, md: 0 },
@@ -192,7 +192,7 @@ export const ccHeaderPrimaryClusterSx: SxProps<Theme> = {
  */
 export const ccHeaderTrailingPanelsSx: SxProps<Theme> = {
   display: 'flex',
-  flexWrap: 'nowrap',
+  flexWrap: { xs: 'wrap', md: 'nowrap' },
   alignItems: 'stretch',
   gap: 1,
   // Grow into remaining row width; panels share it evenly.
@@ -203,10 +203,10 @@ export const ccHeaderTrailingPanelsSx: SxProps<Theme> = {
   width: { md: 'auto' },
   contain: 'layout',
   '& [data-testid="header-condo-check"], & [data-testid="header-lead-score"]': {
-    // Basis targets ~10rem (fluid to 260px); minWidth 0 lets panels shrink.
-    flex: { md: '1 1 clamp(10rem, 13vw, 260px)' },
-    width: { md: 'auto' },
-    minWidth: { md: 0 },
+    // xs: do not shrink below 100% (1 1 100% kept them side-by-side).
+    flex: { xs: '1 0 100%', md: '1 1 clamp(10rem, 13vw, 260px)' },
+    width: { xs: '100%', md: 'auto' },
+    minWidth: { xs: 0, md: 0 },
     maxWidth: { xs: '100%', md: 'none' },
     ml: '0 !important',
     overflow: 'hidden',
@@ -237,7 +237,7 @@ export const ccHeaderQuickStatsSx: SxProps<Theme> = {
   maxWidth: { xs: '100%', md: 'none' },
   width: { md: 'auto' },
   display: 'grid',
-  gridTemplateColumns: 'repeat(2, auto)',
+  gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(2, auto)' },
   // Room between Est/Units | Last sale/Category; keep cells left-aligned in-col.
   columnGap: { xs: 2, md: 2.5 },
   rowGap: { xs: 0.75, md: 0.65 },

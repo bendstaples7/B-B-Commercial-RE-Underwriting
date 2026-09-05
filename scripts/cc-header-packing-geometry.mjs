@@ -96,15 +96,61 @@ async function warmupHarnessServer(base) {
     throw new Error(`Harness module fetch failed (${modRes.status}) ${moduleUrl}`)
   }
   await modRes.text()
+
+  // Wait until Emotion/MUI prebundles are actually written — cold force-optimize
+  // races otherwise produce `styled_default is not a function` in Playwright.
+  const criticalDeps = [
+    'node_modules/.vite/deps/@emotion_styled.js',
+    'node_modules/.vite/deps/@emotion_react.js',
+    'node_modules/.vite/deps/@mui_material.js',
+    'node_modules/.vite/deps/@mui_material_styles.js',
+  ]
+  const deadline = Date.now() + 60000
+  for (const dep of criticalDeps) {
+    const url = new URL(dep, base).href
+    let lastStatus = 0
+    while (Date.now() < deadline) {
+      const res = await fetch(url)
+      lastStatus = res.status
+      if (res.ok) {
+        const body = await res.text()
+        if (body.includes('export') || body.includes('styled')) break
+      }
+      await new Promise((r) => setTimeout(r, 250))
+    }
+    if (lastStatus !== 200) {
+      throw new Error(`Harness dep warmup failed (${lastStatus}) ${url}`)
+    }
+  }
 }
 
 async function startViteHarness() {
   const vitePath = resolve(FRONTEND, 'node_modules/vite/dist/node/index.js')
   const { createServer } = await import(pathToFileURL(vitePath).href)
   process.env.CC_PACKING_HARNESS = '1'
+  const depsDir = resolve(FRONTEND, 'node_modules/.vite/deps')
+  const emotionReady = existsSync(resolve(depsDir, '@emotion_styled.js'))
+  if (!emotionReady) {
+    // Match `npx vite optimize` so Playwright never races a half-written cache.
+    const { spawnSync } = await import('node:child_process')
+    const result = spawnSync(
+      process.execPath,
+      [resolve(FRONTEND, 'node_modules/vite/bin/vite.js'), 'optimize', '--force'],
+      {
+        cwd: FRONTEND,
+        env: { ...process.env, CC_PACKING_HARNESS: '1' },
+        encoding: 'utf8',
+      },
+    )
+    if (result.status !== 0) {
+      throw new Error(`vite optimize failed: ${result.stderr || result.stdout}`)
+    }
+  }
   const server = await createServer({
     configFile: resolve(FRONTEND, 'vite.config.ts'),
     root: FRONTEND,
+    // Do not pass resolve.dedupe here — it re-optimizes Emotion/MUI poorly and
+    // surfaces `styled_default is not a function` in Playwright.
     server: {
       port: 0,
       strictPort: false,

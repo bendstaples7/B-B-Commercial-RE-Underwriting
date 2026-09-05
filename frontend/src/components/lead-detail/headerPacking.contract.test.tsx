@@ -47,7 +47,7 @@ describe('header packing contracts (structure + forbid)', () => {
     expect(address).not.toMatch(/"md":"14rem"/)
     expect(JSON.stringify(ccHeaderPrimaryClusterSx)).toMatch(/"md":"1 1 auto"/)
     expect(stats).toMatch(/"md":"1 1 auto"/)
-    expect(stats).toMatch(/repeat\(2,\s*auto\)/)
+    expect(stats).toMatch(/repeat\(2,\s*(?:minmax\(0,\s*1fr\)|auto)\)/)
     expect(trail).toMatch(/"md":"1 1 auto"/)
 
     // Header row nowrap on md; primary cluster stacks address above KPIs on xs.

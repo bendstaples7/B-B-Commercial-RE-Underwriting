@@ -156,7 +156,7 @@ function HarnessHeader({
         sx={{
           display: 'flex',
           flexWrap: { xs: 'wrap', md: 'nowrap' },
-          alignItems: 'center',
+          alignItems: { xs: 'flex-start', md: 'center' },
           gap: { xs: 1.25, md: 1.25 },
           minWidth: 0,
           width: '100%',

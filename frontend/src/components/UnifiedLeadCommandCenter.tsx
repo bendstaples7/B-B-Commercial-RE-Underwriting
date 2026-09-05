@@ -310,8 +310,9 @@ function PropertyOverviewHeader({
               display: 'flex',
               // ONE horizontal bar on md+ — never wrap condo under Last sale.
               flexWrap: { xs: 'wrap', md: 'nowrap' },
-              // Center KPIs / condo / score against the taller address column.
-              alignItems: 'center',
+              // xs: pin back to the top of the stacked address/KPI column.
+              // md+: center KPIs / condo / score against the taller address column.
+              alignItems: { xs: 'flex-start', md: 'center' },
               gap: { xs: 1.25, md: 1.25 },
               minWidth: 0,
               width: '100%',
