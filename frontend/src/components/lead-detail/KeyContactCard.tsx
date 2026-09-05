@@ -133,6 +133,15 @@ function formatContactRole(contact: PropertyContactSummary): string {
   return role.replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+type FormPhoneLabel = 'mobile' | 'home' | 'work' | 'other'
+
+function toFormPhoneLabel(label: string | null | undefined): FormPhoneLabel {
+  if (label === 'home' || label === 'work' || label === 'other' || label === 'mobile') {
+    return label
+  }
+  return 'mobile'
+}
+
 function channelsToInitialValues(
   name: string,
   channels: KeyContactChannel[],
@@ -142,9 +151,7 @@ function channelsToInitialValues(
     .filter((c): c is Extract<KeyContactChannel, { kind: 'phone' }> => c.kind === 'phone')
     .map((c) => ({
       value: c.phone.value,
-      label: (c.phone.label === 'home' || c.phone.label === 'work' || c.phone.label === 'other'
-        ? c.phone.label
-        : 'mobile') as const,
+      label: toFormPhoneLabel(c.phone.label),
     }))
   const emails = channels
     .filter((c): c is Extract<KeyContactChannel, { kind: 'email' }> => c.kind === 'email')
@@ -208,11 +215,7 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
         role: 'owner' as const,
         phones: phoneChannels.map((ch) => ({
           value: ch.phone.value,
-          label: (ch.phone.label === 'home'
-            || ch.phone.label === 'work'
-            || ch.phone.label === 'other'
-            ? ch.phone.label
-            : 'mobile') as const,
+          label: toFormPhoneLabel(ch.phone.label),
         })),
         emails: emailChannels.map((ch) => ({ value: ch.value, label: 'personal' as const })),
       }
@@ -223,11 +226,7 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
         ? ghost.phones.map((p) => ({ value: p.value, label: 'mobile' as const }))
         : phoneChannels.map((ch) => ({
             value: ch.phone.value,
-            label: (ch.phone.label === 'home'
-              || ch.phone.label === 'work'
-              || ch.phone.label === 'other'
-              ? ch.phone.label
-              : 'mobile') as const,
+            label: toFormPhoneLabel(ch.phone.label),
           }))
       const ghostEmails = ghost.emails.length
         ? ghost.emails.map((e) => ({ value: e.value, label: 'personal' as const }))
