@@ -305,8 +305,8 @@ export function PropertyOverviewQuickStats({
       id: 'last-sale',
       label: 'Last sale',
       value: lastSale ?? noSaleCopy ?? EM_DASH,
-      // Prefer single line; wrap only as CSS overflow fallback is via nowrap+ellipsis.
-      allowWrap: false,
+      // Allow wrap on narrow phones so "$1,546,500" is not ellipsized away.
+      allowWrap: true,
     },
     {
       id: 'units-details',

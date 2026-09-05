@@ -88,8 +88,22 @@ if (!/ccHeaderTrailingPanelsSx[\s\S]{0,250}md:\s*['"]1 1 auto['"]/.test(chrome))
   ok = false
 }
 
-if (/ccHeaderQuickStatsSx[\s\S]{0,300}repeat\(2,\s*minmax\(0,\s*1fr\)\)/.test(chrome)) {
+// Desktop md+ must hug with `auto` columns. Equal `1fr` columns on md open an
+// internal canyon between Est and Last sale. xs-only minmax(0,1fr) is allowed
+// so phone KPIs share width without truncating sale prices.
+if (
+  /ccHeaderQuickStatsSx[\s\S]{0,400}gridTemplateColumns:\s*['"]repeat\(2,\s*minmax\(0,\s*1fr\)\)['"]/.test(
+    chrome,
+  )
+  || /ccHeaderQuickStatsSx[\s\S]{0,400}md:\s*['"]repeat\(2,\s*minmax\(0,\s*1fr\)\)['"]/.test(chrome)
+) {
   console.error('FORBID: KPI 1fr 1fr columns spread Last sale away from Est (internal canyon)')
+  ok = false
+}
+if (
+  !/ccHeaderQuickStatsSx[\s\S]{0,400}md:\s*['"]repeat\(2,\s*auto\)['"]/.test(chrome)
+) {
+  console.error('Missing KPI md repeat(2, auto) hug columns')
   ok = false
 }
 

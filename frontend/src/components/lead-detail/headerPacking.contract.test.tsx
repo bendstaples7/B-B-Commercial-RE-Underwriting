@@ -47,17 +47,32 @@ describe('header packing contracts (structure + forbid)', () => {
     expect(address).not.toMatch(/"md":"14rem"/)
     expect(JSON.stringify(ccHeaderPrimaryClusterSx)).toMatch(/"md":"1 1 auto"/)
     expect(stats).toMatch(/"md":"1 1 auto"/)
-    expect(stats).toMatch(/repeat\(2,\s*auto\)/)
+    expect(stats).toMatch(/repeat\(2,\s*(?:minmax\(0,\s*1fr\)|auto)\)/)
     expect(trail).toMatch(/"md":"1 1 auto"/)
 
-    // Header row nowrap on md.
+    // Header row nowrap on md; primary cluster stacks address above KPIs on xs.
     expect(ulcc).toMatch(/flexWrap:\s*\{\s*xs:\s*['"]wrap['"],\s*md:\s*['"]nowrap['"]/)
+    expect(JSON.stringify(ccHeaderPrimaryClusterSx)).toMatch(/"xs":"wrap"/)
+    expect(JSON.stringify(ccHeaderPrimaryClusterSx)).toMatch(/"md":"nowrap"/)
+    expect(JSON.stringify(ccHeaderAddressColumnSx)).toMatch(/"xs":"1 1 100%"/)
+    expect(JSON.stringify(ccHeaderAddressColumnSx)).toMatch(/"xs":"100%"/)
 
     // 2×2 KPI grid preserved.
     expect(stats).toMatch(/repeat\(2/)
     expect(address).not.toMatch(/42%/)
     expect(JSON.stringify(ccHeaderPrimaryClusterSx)).toMatch(/nowrap/)
     expect(chrome).toMatch(/ccHeaderPaperSx/)
+  })
+
+  it('forbids overflowWrap anywhere on the hero address (glyph-stack regression)', () => {
+    const ulcc = readSrc('src/components/UnifiedLeadCommandCenter.tsx')
+    // Match the address-line Typography sx by data-testid (not a fixed char window).
+    const addressSx = ulcc.match(
+      /data-testid=["']property-overview-address-line["'][\s\S]*?sx=\{\{([\s\S]*?)\}\}/,
+    )?.[1]
+    expect(addressSx).toBeTruthy()
+    expect(addressSx).not.toMatch(/overflowWrap:\s*\{\s*xs:\s*['"]anywhere['"]/)
+    expect(addressSx).toMatch(/overflowWrap:\s*\{\s*xs:\s*['"]break-word['"]/)
   })
 
   it('forbids address maxWidth 42% and KPIs inside trailing pack', () => {

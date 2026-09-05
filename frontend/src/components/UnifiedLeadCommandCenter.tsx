@@ -310,8 +310,9 @@ function PropertyOverviewHeader({
               display: 'flex',
               // ONE horizontal bar on md+ — never wrap condo under Last sale.
               flexWrap: { xs: 'wrap', md: 'nowrap' },
-              // Center KPIs / condo / score against the taller address column.
-              alignItems: 'center',
+              // xs: pin back to the top of the stacked address/KPI column.
+              // md+: center KPIs / condo / score against the taller address column.
+              alignItems: { xs: 'flex-start', md: 'center' },
               gap: { xs: 1.25, md: 1.25 },
               minWidth: 0,
               width: '100%',
@@ -323,7 +324,7 @@ function PropertyOverviewHeader({
             edge="start"
             aria-label={fromQueue ? `Back to ${fromQueue.label}` : 'Go back'}
             size="small"
-            sx={{ mt: 0.25 }}
+            sx={{ mt: 0.25, flex: '0 0 auto' }}
           >
             <ArrowBackIcon />
           </IconButton>
@@ -350,11 +351,12 @@ function PropertyOverviewHeader({
                   fontSize: { xs: '1.15rem', sm: '1.35rem' },
                   minWidth: 0,
                   maxWidth: '100%',
-                  // Desktop: one line; do not wrap. Ellipsis only if the row truly overflows.
+                  // Mobile: wrap on word boundaries (never mid-token shatter).
+                  // Desktop: one line; ellipsis only if the row truly overflows.
                   whiteSpace: { xs: 'normal', md: 'nowrap' },
                   overflow: { xs: 'visible', md: 'hidden' },
                   textOverflow: { xs: 'clip', md: 'ellipsis' },
-                  overflowWrap: { xs: 'anywhere', md: 'normal' },
+                  overflowWrap: { xs: 'break-word', md: 'normal' },
                   wordBreak: { xs: 'normal', md: 'keep-all' },
                 }}
                 title={fullAddress}

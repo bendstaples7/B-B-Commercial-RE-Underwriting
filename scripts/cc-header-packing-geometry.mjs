@@ -41,6 +41,11 @@ const VIEWPORTS = [
   { width: 1600, height: 900 },
   { width: 1920, height: 900 },
 ]
+/** Phone widths — address must not glyph-stack beside KPIs. */
+const MOBILE_VIEWPORTS = [
+  { width: 390, height: 844 },
+  { width: 430, height: 932 },
+]
 
 function overlaps(a, b) {
   const x = Math.min(a.right, b.right) - Math.max(a.left, b.left)
@@ -91,15 +96,74 @@ async function warmupHarnessServer(base) {
     throw new Error(`Harness module fetch failed (${modRes.status}) ${moduleUrl}`)
   }
   await modRes.text()
+
+  // Wait until Emotion/MUI prebundles are actually written — cold force-optimize
+  // races otherwise produce `styled_default is not a function` in Playwright.
+  const criticalDeps = [
+    'node_modules/.vite/deps/@emotion_styled.js',
+    'node_modules/.vite/deps/@emotion_react.js',
+    'node_modules/.vite/deps/@mui_material.js',
+    'node_modules/.vite/deps/@mui_material_styles.js',
+  ]
+  const deadline = Date.now() + 60000
+  for (const dep of criticalDeps) {
+    const url = new URL(dep, base).href
+    let lastStatus = 0
+    let ready = false
+    while (Date.now() < deadline) {
+      const res = await fetch(url)
+      lastStatus = res.status
+      if (res.ok) {
+        const body = await res.text()
+        if (body.includes('export') || body.includes('styled')) {
+          ready = true
+          break
+        }
+      }
+      await new Promise((r) => setTimeout(r, 250))
+    }
+    if (lastStatus !== 200) {
+      throw new Error(`Harness dep warmup failed (${lastStatus}) ${url}`)
+    }
+    if (!ready) {
+      throw new Error(`Harness dep warmup timed out before content ready ${url}`)
+    }
+  }
 }
 
 async function startViteHarness() {
   const vitePath = resolve(FRONTEND, 'node_modules/vite/dist/node/index.js')
   const { createServer } = await import(pathToFileURL(vitePath).href)
   process.env.CC_PACKING_HARNESS = '1'
+  const depsDir = resolve(FRONTEND, 'node_modules/.vite/deps')
+  const criticalDepFiles = [
+    '@emotion_styled.js',
+    '@emotion_react.js',
+    '@mui_material.js',
+    '@mui_material_styles.js',
+  ]
+  const depsReady = criticalDepFiles.every((f) => existsSync(resolve(depsDir, f)))
+  if (!depsReady) {
+    // Match `npx vite optimize` so Playwright never races a half-written cache.
+    const { spawnSync } = await import('node:child_process')
+    const result = spawnSync(
+      process.execPath,
+      [resolve(FRONTEND, 'node_modules/vite/bin/vite.js'), 'optimize', '--force'],
+      {
+        cwd: FRONTEND,
+        env: { ...process.env, CC_PACKING_HARNESS: '1' },
+        encoding: 'utf8',
+      },
+    )
+    if (result.status !== 0) {
+      throw new Error(`vite optimize failed: ${result.stderr || result.stdout}`)
+    }
+  }
   const server = await createServer({
     configFile: resolve(FRONTEND, 'vite.config.ts'),
     root: FRONTEND,
+    // Do not pass resolve.dedupe here — it re-optimizes Emotion/MUI poorly and
+    // surfaces `styled_default is not a function` in Playwright.
     server: {
       port: 0,
       strictPort: false,
@@ -689,6 +753,80 @@ async function assertResidentialViewport(page, viewport) {
   }
 }
 
+/**
+ * Mobile packing: address stacks above KPIs (full width), never collapses to
+ * a ~1ch column that wraps every glyph.
+ */
+async function assertMobileViewport(page, viewport) {
+  const metrics = await collectMetrics(page)
+  const shotPath = resolve(ARTIFACT_DIR, `cc-header-packing-mobile-${viewport.width}.png`)
+  await page.locator('[data-testid="property-overview-header"]').screenshot({ path: shotPath })
+
+  if (!metrics.address || !metrics.stats || !metrics.header) {
+    fail(viewport, 'Mobile: missing landmark boxes', metrics)
+  }
+
+  const addr = metrics.address
+  const stats = metrics.stats
+  const header = metrics.header
+
+  // Glyph-stack regression: crushed width + many lines.
+  if (addr.width < 160) {
+    fail(viewport, `Mobile: address column too narrow (${addr.width.toFixed(1)}px) — glyph-stack risk`, {
+      address: addr,
+      stats,
+    })
+  }
+  if (addr.width < header.width * 0.55) {
+    fail(
+      viewport,
+      `Mobile: address should span most of the header (got ${addr.width.toFixed(1)} / ${header.width.toFixed(1)})`,
+      { address: addr, header },
+    )
+  }
+  if (metrics.addressApproxLines != null && metrics.addressApproxLines > 4) {
+    fail(
+      viewport,
+      `Mobile: address glyph-stack / over-wrap (≈${metrics.addressApproxLines} lines)`,
+      { addressLineText: metrics.addressLineText, address: addr },
+    )
+  }
+
+  // KPIs must sit below the address (stacked) — never side-by-side on mobile.
+  const stacked = stats.top >= addr.bottom - 8
+  if (!stacked) {
+    fail(viewport, 'Mobile: KPIs must stack below address', { address: addr, stats })
+  }
+
+  if (!/Hoyne|Gresham|Leland|Chicago/i.test(metrics.addressLineText || '')) {
+    fail(viewport, 'Mobile: address text missing expected street', metrics.addressLineText)
+  }
+
+  assertScreenshot(viewport, shotPath, 'mobile header')
+
+  console.log(
+    JSON.stringify({
+      ok: true,
+      mobile: true,
+      viewport,
+      addressWidth: Number(addr.width.toFixed(2)),
+      addressApproxLines: metrics.addressApproxLines,
+      stacked,
+      screenshotPath: shotPath,
+    }),
+  )
+
+  return {
+    ok: true,
+    mobile: true,
+    viewport,
+    addressWidthPx: Number(addr.width.toFixed(2)),
+    addressApproxLines: metrics.addressApproxLines,
+    stacked,
+    screenshotPath: shotPath,
+  }
+}
+
 async function main() {
   let chromium
   try {
@@ -702,6 +840,7 @@ async function main() {
   const browser = await chromium.launch({ headless: true })
   const results = []
   const residentialResults = []
+  const mobileResults = []
   try {
     for (const viewport of VIEWPORTS) {
       const page = await browser.newPage({ viewport })
@@ -732,6 +871,18 @@ async function main() {
       }
     }
 
+    for (const viewport of MOBILE_VIEWPORTS) {
+      const page = await browser.newPage({ viewport })
+      const issues = watchPageIssues(page)
+      try {
+        await gotoHarnessAndWait(page, harnessUrl, viewport, issues)
+        mobileResults.push(await assertMobileViewport(page, viewport))
+      } finally {
+        issues.dispose()
+        await page.close()
+      }
+    }
+
     console.log(
       JSON.stringify(
         {
@@ -740,6 +891,7 @@ async function main() {
           visible: true,
           viewports: results,
           residentialViewports: residentialResults,
+          mobileViewports: mobileResults,
         },
         null,
         2,
