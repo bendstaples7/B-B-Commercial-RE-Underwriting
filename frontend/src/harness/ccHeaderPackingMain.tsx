@@ -184,9 +184,11 @@ function HarnessHeader({
                   fontSize: '1.35rem',
                   minWidth: 0,
                   maxWidth: '100%',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
+                  // Desktop packing geometry expects one line; mobile may wrap words.
+                  whiteSpace: { xs: 'normal', md: 'nowrap' },
+                  overflow: { xs: 'visible', md: 'hidden' },
+                  textOverflow: { xs: 'clip', md: 'ellipsis' },
+                  overflowWrap: { xs: 'break-word', md: 'normal' },
                 }}
               >
                 {addressLine}

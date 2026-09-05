@@ -166,22 +166,20 @@ export const ccKpiValueSx: SxProps<Theme> = {
  * ceilings / trail ml:auto canyon.
  */
 export const ccHeaderAddressColumnSx: SxProps<Theme> = {
-  // Hug street text beside KPIs. At md+ the address keeps its one-line width;
-  // KPI cells and trail panels take responsive pressure first.
-  flex: { xs: '1 1 calc(100% - 48px)', md: '0 0 auto' },
-  minWidth: 0,
+  // xs: full-width above KPIs (avoids ~1ch glyph-stack). md+: hug street text.
+  flex: { xs: '1 1 100%', md: '0 0 auto' },
+  minWidth: { xs: '100%', md: 0 },
   maxWidth: { xs: '100%', md: 'none' },
-  width: { md: 'auto' },
+  width: { xs: '100%', md: 'auto' },
 }
 
 /** Address + 2×2 KPI band — hug content; trail panels absorb leftover width. */
 export const ccHeaderPrimaryClusterSx: SxProps<Theme> = {
   display: 'flex',
-  flexWrap: 'nowrap',
-  // Vertically center 2×2 KPI callouts against the taller address column.
+  flexWrap: { xs: 'wrap', md: 'nowrap' },
   alignItems: 'center',
   gap: { xs: 1.25, md: 1 },
-  flex: { xs: '1 1 100%', md: '1 1 auto' },
+  flex: { xs: '1 1 calc(100% - 48px)', md: '1 1 auto' },
   minWidth: { xs: 0, md: 0 },
   maxWidth: '100%',
 }
