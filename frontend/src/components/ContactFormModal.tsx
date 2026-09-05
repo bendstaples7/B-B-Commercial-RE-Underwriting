@@ -426,8 +426,11 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
   const dialogTitle = useMemo(() => {
     if (isEditMode) return 'Edit Contact'
     if (mode === 'link') return 'Link Existing Contact'
+    if (initialValues && (initialValues.firstName || initialValues.lastName || initialValues.phones?.length)) {
+      return 'Save Contact'
+    }
     return 'Add Contact'
-  }, [isEditMode, mode])
+  }, [isEditMode, mode, initialValues])
 
   const showLinkToggle = !isEditMode && allowLinkExisting
 
@@ -766,7 +769,9 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
                 ? 'Save Changes'
                 : mode === 'link'
                   ? 'Link Contact'
-                  : 'Add Contact'}
+                  : initialValues && (initialValues.firstName || initialValues.lastName || initialValues.phones?.length)
+                    ? 'Save Contact'
+                    : 'Add Contact'}
           </Button>
         </DialogActions>
       </Dialog>
