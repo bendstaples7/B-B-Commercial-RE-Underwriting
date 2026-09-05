@@ -69,14 +69,18 @@ function assertScreenshot(viewport, path, label) {
   return bytes
 }
 
-async function resolveHarnessBaseUrl(server) {
+async function resolveHarnessBaseUrl(server, mode = 'server') {
   const addr = server.httpServer?.address()
+  const configuredPort =
+    mode === 'preview'
+      ? server.config.preview?.port
+      : server.config.server?.port
   const port =
     typeof addr === 'object' && addr && typeof addr.port === 'number'
       ? addr.port
-      : server.config.server.port
+      : configuredPort
   if (!port || port <= 0) {
-    throw new Error(`Vite harness server has no listening port (addr=${JSON.stringify(addr)})`)
+    throw new Error(`Vite harness ${mode} has no listening port (addr=${JSON.stringify(addr)})`)
   }
   return `http://127.0.0.1:${port}/`
 }
@@ -119,25 +123,19 @@ async function startViteHarness() {
     logLevel: 'error',
   })
 
-  const addr = server.httpServer?.address()
-  const port =
-    typeof addr === 'object' && addr && typeof addr.port === 'number'
-      ? addr.port
-      : server.config.preview.port
-  if (!port || port <= 0) {
+  try {
+    const base = await resolveHarnessBaseUrl(server, 'preview')
+    const harnessUrl = new URL('cc-header-packing-harness.html', base).href
+    const htmlRes = await fetch(harnessUrl)
+    if (!htmlRes.ok) {
+      throw new Error(`Harness HTML fetch failed (${htmlRes.status}) ${harnessUrl}`)
+    }
+    await htmlRes.text()
+    return { server, harnessUrl }
+  } catch (err) {
     await server.close()
-    throw new Error(`Packing preview has no listening port (addr=${JSON.stringify(addr)})`)
+    throw err
   }
-  const base = `http://127.0.0.1:${port}/`
-  const harnessUrl = new URL('cc-header-packing-harness.html', base).href
-  const htmlRes = await fetch(harnessUrl)
-  if (!htmlRes.ok) {
-    await server.close()
-    throw new Error(`Harness HTML fetch failed (${htmlRes.status}) ${harnessUrl}`)
-  }
-  await htmlRes.text()
-
-  return { server, harnessUrl }
 }
 
 function watchPageIssues(page) {
