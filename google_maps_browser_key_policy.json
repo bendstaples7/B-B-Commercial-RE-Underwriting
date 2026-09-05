@@ -1,0 +1,10 @@
+{
+  "placeholderValues": [
+    "your-google-maps-api-key",
+    "REPLACE_ME"
+  ],
+  "browserEnvCandidates": [
+    "GOOGLE_MAPS_BROWSER_API_KEY",
+    "VITE_GOOGLE_MAPS_API_KEY"
+  ]
+}

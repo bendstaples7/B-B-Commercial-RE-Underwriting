@@ -402,9 +402,9 @@ rm -rf frontend/dist
 mv /home/deploy/frontend-dist frontend/dist
 echo "    Frontend dist installed from CI runner build"
 
-# Inject browser Maps key into index.html when CI baked an empty
-# VITE_GOOGLE_MAPS_API_KEY. Reads backend/.env (or repo-root .env) so Places
-# autocomplete works without rebuilding the SPA on the runner.
+# Inject browser Maps key into index.html. Reads only browser-scoped key names
+# from backend/.env (or repo-root .env) so Places autocomplete works without
+# baking secrets into the SPA bundle on the runner.
 MAPS_INJECT_SCRIPT="$APP_DIR/scripts/inject_google_maps_browser_key.py"
 if [[ ! -f "$MAPS_INJECT_SCRIPT" ]]; then
     MAPS_INJECT_SCRIPT="/home/deploy/inject_google_maps_browser_key.py"

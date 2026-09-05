@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -31,6 +32,24 @@ def test_inject_adds_bootstrap_script(tmp_path: Path):
     assert 'bb-google-maps-api-key' in text
 
 
+def test_inject_escapes_quotes_backslashes_and_script_terminator(tmp_path: Path):
+    index = tmp_path / 'index.html'
+    index.write_text(
+        '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
+        encoding='utf-8',
+    )
+    api_key = 'key"with\\chars</script><script>alert(1)</script>'
+    assert inj.inject(index, api_key)
+    text = index.read_text(encoding='utf-8')
+    assignment = text.split('window.__BB_GOOGLE_MAPS_API_KEY__=', 1)[1].split(
+        ';</script>',
+        1,
+    )[0]
+    assert json.loads(assignment) == api_key
+    assert '<\\/script>' in assignment
+    assert text.count('</script>') == 1
+
+
 def test_inject_is_idempotent(tmp_path: Path):
     index = tmp_path / 'index.html'
     index.write_text(
@@ -51,7 +70,35 @@ def test_resolve_key_from_dotenv(tmp_path: Path, monkeypatch):
     monkeypatch.delenv('VITE_GOOGLE_MAPS_API_KEY', raising=False)
     (tmp_path / 'backend').mkdir()
     (tmp_path / 'backend' / '.env').write_text(
-        'GOOGLE_MAPS_API_KEY=AIzaSyFromBackendEnv\n',
+        'GOOGLE_MAPS_BROWSER_API_KEY=AIzaSyFromBackendEnv\n',
         encoding='utf-8',
     )
     assert inj.resolve_key(tmp_path) == 'AIzaSyFromBackendEnv'
+
+
+def test_resolve_key_skips_deploy_placeholders_and_server_key(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv('GOOGLE_MAPS_API_KEY', raising=False)
+    monkeypatch.delenv('GOOGLE_MAPS_BROWSER_API_KEY', raising=False)
+    monkeypatch.delenv('VITE_GOOGLE_MAPS_API_KEY', raising=False)
+    (tmp_path / 'backend').mkdir()
+    (tmp_path / 'backend' / '.env').write_text(
+        '\n'.join(
+            [
+                'GOOGLE_MAPS_BROWSER_API_KEY=REPLACE_ME',
+                'VITE_GOOGLE_MAPS_API_KEY=your-google-maps-api-key',
+                'GOOGLE_MAPS_API_KEY=AIzaSyServerOnlyKey',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    assert inj.resolve_key(tmp_path) is None
+
+
+def test_inject_script_and_backend_helper_share_browser_key_policy():
+    from app.services.helpers.google_maps_browser_key import (
+        BROWSER_ENV_CANDIDATES,
+        PLACEHOLDER_VALUES,
+    )
+
+    assert inj.ENV_CANDIDATES == BROWSER_ENV_CANDIDATES
+    assert inj.PLACEHOLDER_VALUES == PLACEHOLDER_VALUES

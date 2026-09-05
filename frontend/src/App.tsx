@@ -298,7 +298,7 @@ function GoogleMapsScriptProvider({
   useEffect(() => {
     if (enabled && keyLookupDone && !apiKey) {
       console.warn(
-        'Google Maps API key is not available (build-time VITE_GOOGLE_MAPS_API_KEY empty and backend /api/config/client returned none) — address autocomplete will not work.',
+        'Google Maps browser API key is not available (runtime inject, local Vite env, and backend /api/config/client returned none) — address autocomplete will not work.',
       )
     }
   }, [enabled, keyLookupDone, apiKey])

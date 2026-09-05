@@ -1,12 +1,17 @@
 /**
  * Resolve the Google Maps JS / Places API key for the SPA.
  *
- * Build-time ``VITE_GOOGLE_MAPS_API_KEY`` is preferred. When CI builds without
- * that secret (historically empty in production), fall back to a deploy-injected
- * ``window.__BB_GOOGLE_MAPS_API_KEY__`` or an authenticated backend config fetch.
+ * Production should prefer the deploy-injected ``window`` key. Vite env keys
+ * remain supported for local/dev builds, and authenticated backend config is
+ * the async fallback.
  */
 
-const PLACEHOLDER = 'your-google-maps-api-key'
+import keyPolicy from '../../../google_maps_browser_key_policy.json'
+
+const PLACEHOLDER_VALUES = new Set<string>(keyPolicy.placeholderValues)
+const BUILD_TIME_ENV_CANDIDATES = keyPolicy.browserEnvCandidates.filter((name) =>
+  name.startsWith('VITE_'),
+)
 
 declare global {
   interface Window {
@@ -17,18 +22,25 @@ declare global {
 export function normalizeGoogleMapsApiKey(raw: unknown): string | null {
   if (typeof raw !== 'string') return null
   const key = raw.trim()
-  if (!key || key === PLACEHOLDER) return null
+  if (!key || PLACEHOLDER_VALUES.has(key)) return null
   return key
+}
+
+function resolveBuildTimeGoogleMapsApiKey(): string | null {
+  for (const name of BUILD_TIME_ENV_CANDIDATES) {
+    const key = normalizeGoogleMapsApiKey(import.meta.env[name as keyof ImportMetaEnv])
+    if (key) return key
+  }
+  return null
 }
 
 /** Synchronous sources available before any network call. */
 export function resolveGoogleMapsApiKeySync(): string | null {
-  const fromEnv = normalizeGoogleMapsApiKey(import.meta.env.VITE_GOOGLE_MAPS_API_KEY)
-  if (fromEnv) return fromEnv
   if (typeof window !== 'undefined') {
-    return normalizeGoogleMapsApiKey(window.__BB_GOOGLE_MAPS_API_KEY__)
+    const fromWindow = normalizeGoogleMapsApiKey(window.__BB_GOOGLE_MAPS_API_KEY__)
+    if (fromWindow) return fromWindow
   }
-  return null
+  return resolveBuildTimeGoogleMapsApiKey()
 }
 
 type ClientConfigResponse = {

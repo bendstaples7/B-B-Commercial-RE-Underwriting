@@ -2,9 +2,9 @@
 """Inject window.__BB_GOOGLE_MAPS_API_KEY__ into a built SPA index.html.
 
 CI often builds the frontend without VITE_GOOGLE_MAPS_API_KEY, leaving
-``googleMapsApiKey:""`` in the bundle. Deploy reads the key from backend/.env
-(or repo-root .env) and injects a small bootstrap script so authenticated
-clients can load Places autocomplete without a rebuild.
+``googleMapsApiKey:""`` in the bundle. Deploy reads a browser-scoped key from
+backend/.env (or repo-root .env) and injects a small bootstrap script so
+authenticated clients can load Places autocomplete without a rebuild.
 
 Usage:
   python3.11 scripts/inject_google_maps_browser_key.py frontend/dist/index.html
@@ -16,14 +16,13 @@ import os
 import sys
 from pathlib import Path
 
-PLACEHOLDER = 'your-google-maps-api-key'
+_POLICY_PATH = Path(__file__).resolve().parents[1] / 'google_maps_browser_key_policy.json'
+_POLICY = json.loads(_POLICY_PATH.read_text(encoding='utf-8'))
+
+PLACEHOLDER_VALUES = frozenset(str(value) for value in _POLICY['placeholderValues'])
 MARKER_START = '<!-- bb-google-maps-api-key -->'
 MARKER_END = '<!-- /bb-google-maps-api-key -->'
-ENV_CANDIDATES = (
-    'GOOGLE_MAPS_BROWSER_API_KEY',
-    'VITE_GOOGLE_MAPS_API_KEY',
-    'GOOGLE_MAPS_API_KEY',
-)
+ENV_CANDIDATES = tuple(str(value) for value in _POLICY['browserEnvCandidates'])
 
 
 def _load_dotenv(path: Path) -> dict[str, str]:
@@ -48,15 +47,15 @@ def resolve_key(app_dir: Path) -> str | None:
         merged.update(_load_dotenv(app_dir / rel))
     for name in ENV_CANDIDATES:
         raw = (os.environ.get(name) or merged.get(name) or '').strip()
-        if raw and raw != PLACEHOLDER:
+        if raw and raw not in PLACEHOLDER_VALUES:
             return raw
     return None
 
 
 def inject(index_html: Path, api_key: str) -> bool:
     text = index_html.read_text(encoding='utf-8')
-    # JSON-encode so quotes / backslashes cannot break out of the script.
-    safe = json.dumps(api_key)
+    # JSON-encode for JavaScript, then escape HTML script terminators.
+    safe = json.dumps(api_key).replace('</', '<\\/')
     snippet = (
         f'{MARKER_START}\n'
         f'<script>window.__BB_GOOGLE_MAPS_API_KEY__={safe};</script>\n'
