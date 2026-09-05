@@ -135,29 +135,21 @@ async function startViteHarness() {
   const vitePath = resolve(FRONTEND, 'node_modules/vite/dist/node/index.js')
   const { createServer } = await import(pathToFileURL(vitePath).href)
   process.env.CC_PACKING_HARNESS = '1'
-  const depsDir = resolve(FRONTEND, 'node_modules/.vite/deps')
-  const criticalDepFiles = [
-    '@emotion_styled.js',
-    '@emotion_react.js',
-    '@mui_material.js',
-    '@mui_material_styles.js',
-  ]
-  const depsReady = criticalDepFiles.every((f) => existsSync(resolve(depsDir, f)))
-  if (!depsReady) {
-    // Match `npx vite optimize` so Playwright never races a half-written cache.
-    const { spawnSync } = await import('node:child_process')
-    const result = spawnSync(
-      process.execPath,
-      [resolve(FRONTEND, 'node_modules/vite/bin/vite.js'), 'optimize', '--force'],
-      {
-        cwd: FRONTEND,
-        env: { ...process.env, CC_PACKING_HARNESS: '1' },
-        encoding: 'utf8',
-      },
-    )
-    if (result.status !== 0) {
-      throw new Error(`vite optimize failed: ${result.stderr || result.stdout}`)
-    }
+  // Always force-optimize under CC_PACKING_HARNESS=1. Earlier CI steps (vitest)
+  // may have written node_modules/.vite/deps without the packing Emotion/MUI
+  // includes; reusing that cache races into `styled_default is not a function`.
+  const { spawnSync } = await import('node:child_process')
+  const result = spawnSync(
+    process.execPath,
+    [resolve(FRONTEND, 'node_modules/vite/bin/vite.js'), 'optimize', '--force'],
+    {
+      cwd: FRONTEND,
+      env: { ...process.env, CC_PACKING_HARNESS: '1' },
+      encoding: 'utf8',
+    },
+  )
+  if (result.status !== 0) {
+    throw new Error(`vite optimize failed: ${result.stderr || result.stdout}`)
   }
   const server = await createServer({
     configFile: resolve(FRONTEND, 'vite.config.ts'),

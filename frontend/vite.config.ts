@@ -45,6 +45,8 @@ export default defineConfig(({ command, mode }) => {
               'react/jsx-dev-runtime',
               '@emotion/react',
               '@emotion/styled',
+              '@emotion/cache',
+              '@mui/styled-engine',
               '@mui/material',
               '@mui/material/styles',
               '@mui/system',
