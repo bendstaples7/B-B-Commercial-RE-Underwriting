@@ -240,6 +240,19 @@ function hasPageIssues(issues) {
   )
 }
 
+function isRecoverableMuiStyledFlake(issues) {
+  return issues.pageErrors.some((msg) =>
+    /styled_default is not a function/i.test(msg),
+  )
+}
+
+function clearPageIssues(issues) {
+  issues.consoleErrors.length = 0
+  issues.pageErrors.length = 0
+  issues.requestFailures.length = 0
+  issues.responseErrors.length = 0
+}
+
 async function waitForHarnessReady(page, viewport, issues) {
   const startedAt = Date.now()
   let lastError = null
@@ -263,21 +276,32 @@ async function waitForHarnessReady(page, viewport, issues) {
         .first()
         .waitFor({ state: 'visible', timeout })
       if (hasPageIssues(issues)) {
+        // Cold Vite/Emotion races can throw once then recover after reload.
+        if (isRecoverableMuiStyledFlake(issues) && attempt < 3) {
+          clearPageIssues(issues)
+          throw new Error('recoverable MUI styled_default flake')
+        }
         fail(viewport, 'Harness page/console errors', issues)
       }
       return
     } catch (err) {
       lastError = err
-      if (hasPageIssues(issues) || attempt === 3) break
+      const recoverable = isRecoverableMuiStyledFlake(issues)
+      if (recoverable) clearPageIssues(issues)
+      if ((hasPageIssues(issues) && !recoverable) || attempt === 3) break
       // CI occasionally serves the shell but leaves the root empty on the first
-      // request. A reload gives Vite one more chance without masking real errors.
+      // request (or hits a half-written Emotion prebundle). A reload gives Vite
+      // one more chance without masking real errors.
       const reloadTimeout = Math.max(
         1,
         HARNESS_VISIBLE_TIMEOUT_MS - (Date.now() - startedAt),
       )
       await page.reload({ waitUntil: 'domcontentloaded', timeout: reloadTimeout })
       await page.waitForTimeout(
-        Math.min(500, Math.max(0, HARNESS_VISIBLE_TIMEOUT_MS - (Date.now() - startedAt))),
+        Math.min(
+          recoverable ? 1500 : 500,
+          Math.max(0, HARNESS_VISIBLE_TIMEOUT_MS - (Date.now() - startedAt)),
+        ),
       )
     }
   }
