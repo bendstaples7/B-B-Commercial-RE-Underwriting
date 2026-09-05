@@ -109,17 +109,24 @@ async function warmupHarnessServer(base) {
   for (const dep of criticalDeps) {
     const url = new URL(dep, base).href
     let lastStatus = 0
+    let ready = false
     while (Date.now() < deadline) {
       const res = await fetch(url)
       lastStatus = res.status
       if (res.ok) {
         const body = await res.text()
-        if (body.includes('export') || body.includes('styled')) break
+        if (body.includes('export') || body.includes('styled')) {
+          ready = true
+          break
+        }
       }
       await new Promise((r) => setTimeout(r, 250))
     }
     if (lastStatus !== 200) {
       throw new Error(`Harness dep warmup failed (${lastStatus}) ${url}`)
+    }
+    if (!ready) {
+      throw new Error(`Harness dep warmup timed out before content ready ${url}`)
     }
   }
 }
@@ -129,8 +136,14 @@ async function startViteHarness() {
   const { createServer } = await import(pathToFileURL(vitePath).href)
   process.env.CC_PACKING_HARNESS = '1'
   const depsDir = resolve(FRONTEND, 'node_modules/.vite/deps')
-  const emotionReady = existsSync(resolve(depsDir, '@emotion_styled.js'))
-  if (!emotionReady) {
+  const criticalDepFiles = [
+    '@emotion_styled.js',
+    '@emotion_react.js',
+    '@mui_material.js',
+    '@mui_material_styles.js',
+  ]
+  const depsReady = criticalDepFiles.every((f) => existsSync(resolve(depsDir, f)))
+  if (!depsReady) {
     // Match `npx vite optimize` so Playwright never races a half-written cache.
     const { spawnSync } = await import('node:child_process')
     const result = spawnSync(
@@ -779,17 +792,10 @@ async function assertMobileViewport(page, viewport) {
     )
   }
 
-  // KPIs sit below the address (stacked), not crushed beside it.
+  // KPIs must sit below the address (stacked) — never side-by-side on mobile.
   const stacked = stats.top >= addr.bottom - 8
-  const sideBySideCrushed = !stacked && addr.width < 120
-  if (!stacked && sideBySideCrushed) {
-    fail(viewport, 'Mobile: KPIs crushed beside narrow address', { address: addr, stats })
-  }
-  if (!stacked && stats.left < addr.right - 24 && addr.width < header.width * 0.7) {
-    fail(viewport, 'Mobile: address+KPI share a row with a squeezed address', {
-      address: addr,
-      stats,
-    })
+  if (!stacked) {
+    fail(viewport, 'Mobile: KPIs must stack below address', { address: addr, stats })
   }
 
   if (!/Hoyne|Gresham|Leland|Chicago/i.test(metrics.addressLineText || '')) {

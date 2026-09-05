@@ -66,12 +66,13 @@ describe('header packing contracts (structure + forbid)', () => {
 
   it('forbids overflowWrap anywhere on the hero address (glyph-stack regression)', () => {
     const ulcc = readSrc('src/components/UnifiedLeadCommandCenter.tsx')
-    const addressBlock = ulcc.slice(
-      ulcc.indexOf('property-overview-address-line'),
-      ulcc.indexOf('property-overview-address-line') + 900,
-    )
-    expect(addressBlock).not.toMatch(/overflowWrap:\s*\{\s*xs:\s*['"]anywhere['"]/)
-    expect(addressBlock).toMatch(/overflowWrap:\s*\{\s*xs:\s*['"]break-word['"]/)
+    // Match the address-line Typography sx by data-testid (not a fixed char window).
+    const addressSx = ulcc.match(
+      /data-testid=["']property-overview-address-line["'][\s\S]*?sx=\{\{([\s\S]*?)\}\}/,
+    )?.[1]
+    expect(addressSx).toBeTruthy()
+    expect(addressSx).not.toMatch(/overflowWrap:\s*\{\s*xs:\s*['"]anywhere['"]/)
+    expect(addressSx).toMatch(/overflowWrap:\s*\{\s*xs:\s*['"]break-word['"]/)
   })
 
   it('forbids address maxWidth 42% and KPIs inside trailing pack', () => {
