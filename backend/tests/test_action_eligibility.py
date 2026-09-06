@@ -71,6 +71,19 @@ def test_mail_recently_sold_with_date():
     assert '2027-03-31' in (result.message or '')
 
 
+def test_mail_cadence_with_date():
+    from app.services.action_eligibility import REASON_MAIL_CADENCE
+
+    result = evaluate_add_to_mail_batch(
+        mail_eligible=False,
+        mail_ineligible_reason='mail_cadence',
+        mail_eligible_date=date(2026, 10, 26),
+    )
+    assert result.ok is False
+    assert result.reason_code == REASON_MAIL_CADENCE
+    assert '2026-10-26' in (result.message or '')
+
+
 def test_mail_invalid_address():
     result = evaluate_add_to_mail_batch(mail_eligible=False)
     assert result.ok is False

@@ -158,6 +158,9 @@ WINNING_RULE_LABELS = {
     'mailable_no_digital_contact': 'Mailable but no phone or email',
     'no_property_match_with_address': 'Has an address but no confirmed property match',
     'mail_work_in_flight': 'Mail work is already in progress',
+    'mail_cadence_cooldown': (
+        'Mailed recently — wait for the quarterly rematch date before mailing again'
+    ),
     'recently_sold': 'Property was recently sold — prior-owner contact info is likely outdated',
     'recent_sale_hold': (
         'Recent-sale hold — prior-owner contact info is likely outdated until skip trace'

@@ -34,7 +34,7 @@ from app.services.recommended_action_metadata import (
 from app.services.outreach_method_service import resolve_outreach_contact
 from app.services.lead_scoring_engine import LeadScoringEngine
 from app.services.mail_task_lifecycle_service import (
-    recent_sale_mail_eligible_date,
+    resolve_mail_eligibility_hold,
     resolve_mail_queue_status,
 )
 from app.services.helpers.mailer_history import consolidate_mailer_history
@@ -946,7 +946,7 @@ def get_command_center(lead_id: int):
         }
 
     is_mailable = is_owner_mailable_lead(lead)
-    mail_eligible_date = recent_sale_mail_eligible_date(lead)
+    mail_eligible_date, mail_hold_reason = resolve_mail_eligibility_hold(lead)
     from app.services.cook_county_enrichment_service import is_cook_county_lead
 
     # Union JSONB mailer_history with mail_sent timeline rows (heals silent
@@ -1184,7 +1184,7 @@ def get_command_center(lead_id: int):
         'is_mailable': is_mailable,
         'mail_eligible': is_mailable and mail_eligible_date is None,
         'mail_ineligible_reason': (
-            'recently_sold'
+            mail_hold_reason
             if mail_eligible_date is not None
             else (
                 'invalid_owner_address'
@@ -1755,7 +1755,6 @@ def apply_parsed_owner_mailing_route(lead_id: int):
     """Persist in-memory parsed owner mailing onto structured mailing_* columns."""
     from app import db
     from app.services.mailing_address_service import apply_parsed_owner_mailing
-    from app.services.mail_task_lifecycle_service import recent_sale_mail_eligible_date
 
     lead, denied = _load_authorized_lead(lead_id)
     if denied is not None:
@@ -1776,13 +1775,15 @@ def apply_parsed_owner_mailing_route(lead_id: int):
 
     lead = Lead.query.get(lead_id)
     is_mailable = is_owner_mailable_lead(lead) if lead else False
-    mail_eligible_date = recent_sale_mail_eligible_date(lead) if lead else None
+    mail_eligible_date, mail_hold_reason = (
+        resolve_mail_eligibility_hold(lead) if lead else (None, None)
+    )
     return jsonify({
         **result,
         'is_mailable': is_mailable,
         'mail_eligible': is_mailable and mail_eligible_date is None,
         'mail_ineligible_reason': (
-            'recently_sold'
+            mail_hold_reason
             if mail_eligible_date is not None
             else (
                 'invalid_owner_address'

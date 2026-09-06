@@ -2330,7 +2330,7 @@ export interface CommandCenterPayload {
   }>;
   is_mailable?: boolean;
   mail_eligible?: boolean;
-  mail_ineligible_reason?: 'recently_sold' | 'invalid_owner_address' | null;
+  mail_ineligible_reason?: 'recently_sold' | 'mail_cadence' | 'invalid_owner_address' | null;
   mail_eligible_date?: string | null;
   /** Owner mailing parse preview + Apply Parsed affordance when blocked. */
   owner_mailing_readiness?: OwnerMailingReadiness | null;

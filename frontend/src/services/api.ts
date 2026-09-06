@@ -1341,7 +1341,7 @@ export const commandCenterService = {
     updated_fields: string[]
     is_mailable: boolean
     mail_eligible: boolean
-    mail_ineligible_reason: 'recently_sold' | 'invalid_owner_address' | null
+    mail_ineligible_reason: 'recently_sold' | 'mail_cadence' | 'invalid_owner_address' | null
     mail_eligible_date: string | null
     owner_mailing_readiness: import('@/types').OwnerMailingReadiness
     mailing_address: string | null

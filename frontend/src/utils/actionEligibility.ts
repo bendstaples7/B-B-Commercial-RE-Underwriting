@@ -9,6 +9,7 @@ export const REASON_ALREADY_SKIP_TRACE = 'already_skip_trace'
 export const REASON_TERMINAL_STATUS = 'terminal_status'
 export const REASON_DNC_BLOCKS_OUTREACH = 'dnc_blocks_outreach'
 export const REASON_MAIL_RECENTLY_SOLD = 'mail_recently_sold'
+export const REASON_MAIL_CADENCE = 'mail_cadence'
 export const REASON_MAIL_INVALID_ADDRESS = 'mail_invalid_address'
 export const REASON_MAIL_ALREADY_QUEUED = 'mail_already_queued'
 
@@ -88,6 +89,18 @@ export function evaluateAddToMailBatch(input: {
     return blocked(
       REASON_MAIL_RECENTLY_SOLD,
       'Held after recent sale until the two-year hold ends',
+    )
+  }
+  if (input.mailIneligibleReason === 'mail_cadence') {
+    if (input.mailEligibleDate) {
+      return blocked(
+        REASON_MAIL_CADENCE,
+        `Next mail on ${formatDateOnly(input.mailEligibleDate)}`,
+      )
+    }
+    return blocked(
+      REASON_MAIL_CADENCE,
+      'Next mail after the quarterly rematch date',
     )
   }
   if (

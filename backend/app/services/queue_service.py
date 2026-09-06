@@ -296,8 +296,25 @@ def _filter_mail_eligible_leads(
     PostgreSQL candidate queries already enforce complete owner addresses and
     the recent-sale hold. In that case only returned-target and owner-policy
     checks remain here. SQLite keeps the full Python oracle used by tests.
+    Also excludes the quarterly last-mailed cadence cooldown.
     """
+    from app.services.last_mailed_service import get_last_mailed_at_by_lead_ids
+    from app.services.mail_task_lifecycle_service import (
+        mail_cadence_eligible_date_from_last_mailed,
+    )
+
     blocked = cold_mail_block_reasons_for_leads(leads)
+    last_mailed = (
+        get_last_mailed_at_by_lead_ids([lead.id for lead in leads])
+        if leads
+        else {}
+    )
+
+    def _cadence_ok(lead) -> bool:
+        return mail_cadence_eligible_date_from_last_mailed(
+            last_mailed.get(lead.id),
+        ) is None
+
     if sql_prefiltered:
         # SQL already enforced address + recent-sale; keep Python recent-sale as
         # a cheap belt-and-suspenders check when sale columns are present.
@@ -307,6 +324,7 @@ def _filter_mail_eligible_leads(
                 not is_recently_sold(lead)
                 and not current_owner_mailing_was_returned(lead)
                 and lead.id not in blocked
+                and _cadence_ok(lead)
             )
         ]
     return [
@@ -315,6 +333,7 @@ def _filter_mail_eligible_leads(
             not is_recently_sold(lead)
             and is_owner_mailable_lead(lead)
             and lead.id not in blocked
+            and _cadence_ok(lead)
         )
     ]
 

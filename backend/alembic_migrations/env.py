@@ -98,6 +98,8 @@ _KNOWN_REVISIONS = frozenset({
     'chan_roi_fix_0831',
     # Channel ROI attribution FK ON DELETE CASCADE
     'chan_roi_cascade_0831',
+    # Quarterly mail cadence cooldown heal (rematch dues + rescore)
+    'mail_cad_20260905',
     's0t1u2v3w4x5', 't0u1v2w3x4y5', 'u1v2w3x4y5z6',
     'v1w2x3y4z5a6', 'w2x3y4z5a6b7', 'x3y4z5a6b7c8',
     'y4z5a6b7c8d9', 'z5a6b7c8d9e0',

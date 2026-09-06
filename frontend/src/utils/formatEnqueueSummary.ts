@@ -19,6 +19,7 @@ const STATUS_LABELS: Record<string, string> = {
   already_queued: 'already in batch',
   invalid_address: 'invalid address',
   recently_sold: 'recently sold',
+  mail_cadence: 'mailed within 90 days',
   not_found: 'not found',
   not_authorized: 'not authorized',
   error: 'could not queue',
