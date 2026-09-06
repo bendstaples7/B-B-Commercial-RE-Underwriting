@@ -1197,8 +1197,26 @@ def is_mail_follow_up_title(title: str | None) -> bool:
 
 
 def is_mail_follow_up_task(task: LeadTask) -> bool:
-    """True when the task is the post-mailer rematch cadence (pending or dated)."""
+    """True when the task is the post-mailer rematch cadence (pending or dated).
+
+    Identity is title-based: prep and rematch both use task_type
+    ``add_to_mail_batch`` (MAIL_REMATCH_TASK_TYPE), so type alone must not
+    protect prep rows from complete_tasks_superseded_by_mail.
+    """
     return is_mail_follow_up_title(task.title)
+
+
+def _is_heal_rematch_candidate(task: LeadTask) -> bool:
+    """Heal candidates: rematch titles, or renamed pending rematch (undated + type).
+
+    Pending rematch is created with ``due_date=None``; prep mail tasks always get
+    a calendar due date. Type-only matching is therefore safe only while undated.
+    """
+    if is_mail_follow_up_title(task.title):
+        return True
+    if (task.task_type or '').strip() != MAIL_REMATCH_TASK_TYPE:
+        return False
+    return task.due_date is None
 
 
 def mail_rematch_due_date(
@@ -1879,12 +1897,7 @@ def heal_mail_cadence_cooldown(
         )
         .all()
     )
-    rematch_tasks = [
-        t for t in rematch_tasks
-        if is_mail_follow_up_task(t)
-        or (t.task_type or '').strip() == MAIL_REMATCH_TASK_TYPE
-    ]
-
+    rematch_tasks = [t for t in rematch_tasks if _is_heal_rematch_candidate(t)]
     mail_ready_ids = [
         row[0]
         for row in db.session.query(Lead.id).filter(
