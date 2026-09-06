@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from app import db
-from app.models import Lead, LeadTask, LeadTimelineEntry, Task
+from app.models import Lead, LeadTask, LeadTimelineEntry, MailQueueItem, Task
 from app.services.action_eligibility import (
     REASON_MAIL_CADENCE,
     evaluate_add_to_mail_batch,
@@ -141,7 +141,7 @@ def test_scoring_blocks_mail_ready_during_cadence(app):
         assert method is None
 
 
-def test_tier_a_non_mailable_cadence_keeps_phone_fallback():
+def test_tier_a_non_mailable_lead_keeps_phone_fallback():
     lead = SimpleNamespace(
         id=9001,
         lead_status='mailing_no_contact_made',
@@ -176,9 +176,6 @@ def test_tier_a_non_mailable_cadence_keeps_phone_fallback():
     ), patch(
         'app.services.lead_scoring_engine.is_mailable_lead',
         return_value=False,
-    ), patch(
-        'app.services.lead_scoring_engine._mail_cadence_block_outcome',
-        return_value=('nurture', 'mail_cadence_cooldown', {}),
     ):
         action, rule, signals = LeadScoringEngine.evaluate_recommended_action(
             lead,
@@ -353,7 +350,50 @@ def test_enqueue_batches_mail_cadence_lookup_for_authorized_leads(app):
 
         assert result['added'] == 1
         assert result['skipped'] == 1
-        last_mailed.assert_called_once_with([owned.id])
+        assert last_mailed.call_args_list[0].args == ([owned.id],)
+        assert last_mailed.call_args_list[1].args == ([owned.id],)
+
+
+def test_enqueue_rechecks_cadence_before_queue_write(app):
+    from app.services.mail_queue_service import MailQueueService
+
+    with app.app_context():
+        lead = Lead(
+            property_street='92 Cadence Race St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            mailing_address='92 Cadence Race St',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
+            owner_user_id='test-user',
+            lead_status='mailing_no_contact_made',
+            lead_category='residential',
+            lead_score=90.0,
+            recommended_action='mail_ready',
+        )
+        db.session.add(lead)
+        db.session.commit()
+        sent_at = datetime.now(timezone.utc) - timedelta(days=1)
+
+        with patch(
+            'app.services.mail_queue_service.get_last_mailed_at_by_lead_ids',
+            side_effect=[{lead.id: None}, {lead.id: sent_at}],
+        ), patch(
+            'app.services.mail_queue_service.refresh_leads_after_mail_task_changes',
+        ), patch(
+            'app.services.mail_queue_service._refresh_rejected_leads',
+        ):
+            result = MailQueueService().enqueue_leads([lead.id], 'test-user')
+
+        assert result['added'] == 0
+        assert result['skipped'] == 1
+        assert result['results'][0]['status'] == 'mail_cadence'
+        assert MailQueueItem.query.filter_by(
+            lead_id=lead.id,
+            status='queued',
+        ).first() is None
 
 
 def test_heal_rescores_stale_mail_ready(app):
@@ -456,7 +496,7 @@ def test_heal_aligns_canonical_rematch_with_old_title_mirror(app):
         assert mirror.title == rematch.title
 
 
-def test_heal_commit_false_keeps_rescore_uncommitted(app):
+def test_heal_commit_false_keeps_rescore_and_weights_uncommitted(app):
     with app.app_context():
         lead = Lead(
             property_street='95 Cadence No Commit St',
@@ -467,7 +507,7 @@ def test_heal_commit_false_keeps_rescore_uncommitted(app):
             mailing_city='Chicago',
             mailing_state='IL',
             mailing_zip='60601',
-            owner_user_id='test-owner',
+            owner_user_id='test-owner-no-weights',
             lead_status='mailing_no_contact_made',
             lead_category='residential',
             lead_score=80.0,
@@ -487,14 +527,11 @@ def test_heal_commit_false_keeps_rescore_uncommitted(app):
         )
         db.session.commit()
 
-        with patch(
-            'app.services.lead_scoring_engine.LeadScoringEngine.score_and_persist',
-            return_value=None,
-        ) as score:
+        with patch('app.services.lead_scoring_engine.db.session.commit') as commit:
             result = heal_mail_cadence_cooldown(commit=False)
 
         assert result['rescored'] == 1
-        score.assert_called_once_with(lead.id, commit=False)
+        commit.assert_not_called()
         db.session.rollback()
 
 

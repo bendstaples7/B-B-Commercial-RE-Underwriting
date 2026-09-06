@@ -17,9 +17,19 @@ depends_on = None
 
 def upgrade():
     # Keep the idempotent data heal inside Alembic's transaction.
+    from alembic import op
+    from app import db
     from app.services.mail_task_lifecycle_service import heal_mail_cadence_cooldown
 
-    result = heal_mail_cadence_cooldown(commit=False)
+    bind = op.get_bind()
+    session = db.session()
+    previous_bind = session.bind
+    session.bind = bind
+    try:
+        result = heal_mail_cadence_cooldown(commit=False)
+        db.session.flush()
+    finally:
+        session.bind = previous_bind
     print(
         'mail_cad_20260905: '
         f"dues_fixed={result['rematch_dues_fixed']} "

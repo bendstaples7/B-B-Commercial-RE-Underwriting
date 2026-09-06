@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 
+from app.exceptions import MailQueueError
 from app.models.lead import Lead
 from app.models.lead_task import LeadTask
 from app.models.lead_timeline_entry import LeadTimelineEntry
@@ -2563,6 +2564,87 @@ class TestSubmitCampaignFollowUp:
             assert pending.due_date == expected_due
             mock_client.place_order.assert_not_called()
             refresh.assert_called_once_with([lead.id])
+
+    def test_submit_campaign_cancel_after_order_refreshes_cadence_drops(
+        self, app, fernet_key, monkeypatch,
+    ):
+        from app import db
+        from app.services.open_letter_client_service import OpenLetterClientService
+
+        monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
+
+        with app.app_context():
+            sent_at = datetime.now(timezone.utc) - timedelta(days=20)
+            cadence_lead = _make_lead(
+                app,
+                '9 Cadence Cancel St',
+                up_next_to_mail=True,
+            )
+            good = _make_lead(app, '9 Good Cancel St')
+            create_pending_mail_follow_up_task(cadence_lead, actor=USER_ID)
+            token = OpenLetterClientService.encrypt_token('test-token')
+            config = OpenLetterConfig(
+                user_id=USER_ID,
+                encrypted_api_token=token,
+                batch_minimum=1,
+                default_product_id='prod-1',
+                default_template_id='tmpl-1',
+            )
+            campaign = MailCampaign(
+                status='pending',
+                lead_count=2,
+                product_id='prod-1',
+                template_id='tmpl-1',
+                creative=_campaign_creative(),
+                created_by=USER_ID,
+            )
+            db.session.add_all([config, campaign])
+            db.session.flush()
+            db.session.add_all([
+                MailQueueItem(
+                    lead_id=cadence_lead.id,
+                    user_id=USER_ID,
+                    status='queued',
+                    campaign_id=campaign.id,
+                ),
+                MailQueueItem(
+                    lead_id=good.id,
+                    user_id=USER_ID,
+                    status='queued',
+                    campaign_id=campaign.id,
+                ),
+                LeadTimelineEntry(
+                    lead_id=cadence_lead.id,
+                    event_type='mail_sent',
+                    occurred_at=sent_at,
+                    source='system',
+                    actor='test',
+                    summary='Mail sent',
+                ),
+            ])
+            db.session.commit()
+
+            def cancel_during_order(_payload):
+                MailCampaign.query.filter_by(id=campaign.id).update({
+                    'status': 'cancelled',
+                })
+                db.session.commit()
+                return {'data': {'id': 'olc-after-cancel'}}
+
+            mock_client = MagicMock()
+            mock_client.place_order.side_effect = cancel_during_order
+            cfg_svc = MagicMock()
+            cfg_svc.require_config.return_value = config
+            cfg_svc.get_client.return_value = mock_client
+
+            svc = MailCampaignService()
+            svc._config_service = cfg_svc
+
+            with patch('app.services.mail_campaign_service.refresh_leads_after_mail_task_changes') as refresh:
+                with pytest.raises(MailQueueError, match='cancelled during place_order'):
+                    svc.submit_campaign(campaign.id)
+
+            refresh.assert_called_once_with([cadence_lead.id])
 
     def test_submit_campaign_failure_cancels_pending_follow_up(self, app, fernet_key, monkeypatch):
         from app import db

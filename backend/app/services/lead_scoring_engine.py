@@ -226,10 +226,7 @@ def _mail_cadence_block_outcome(lead: Lead) -> tuple[str, str, dict] | None:
             getattr(lead, 'id', None),
             exc,
         )
-        # Match _mail_work_in_flight: unit tests often score without an app
-        # context. Fail closed only for real in-app oracle failures.
-        if 'application context' in str(exc).lower():
-            return None
+        # Fail closed: do not recommend mail when the cadence oracle errors.
         return 'nurture', 'mail_cadence_cooldown', {
             'lead_id': getattr(lead, 'id', None),
             'mail_cadence_check_failed': True,
@@ -920,7 +917,7 @@ class LeadScoringEngine:
         )
         if lead is None:
             return None
-        weights = self.get_weights(lead.owner_user_id or 'default')
+        weights = self.get_weights(lead.owner_user_id or 'default', commit=commit)
         signals = (
             HubSpotSignal.query
             .filter_by(lead_id=lead.id)
@@ -1012,12 +1009,15 @@ class LeadScoringEngine:
     # Weight management
     # ------------------------------------------------------------------
 
-    def get_weights(self, user_id: str) -> ScoringWeights:
+    def get_weights(self, user_id: str, *, commit: bool = True) -> ScoringWeights:
         weights = ScoringWeights.query.filter_by(user_id=user_id).first()
         if not weights:
             weights = ScoringWeights(user_id=user_id, **DEFAULT_WEIGHTS)
             db.session.add(weights)
-            db.session.commit()
+            if commit:
+                db.session.commit()
+            else:
+                db.session.flush()
         return weights
 
     def update_weights(

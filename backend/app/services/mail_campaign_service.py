@@ -945,6 +945,7 @@ class MailCampaignService:
                         + '\nolc_order_placed_after_cancel — cancel in Connect'
                     ).strip()
             db.session.commit()
+            refresh_leads_after_mail_task_changes(cadence_removed_lead_ids)
             raise MailQueueError(
                 f'Campaign {campaign_id} was cancelled during place_order',
                 status_code=409,

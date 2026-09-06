@@ -1198,8 +1198,6 @@ def is_mail_follow_up_title(title: str | None) -> bool:
 
 def is_mail_follow_up_task(task: LeadTask) -> bool:
     """True when the task is the post-mailer rematch cadence (pending or dated)."""
-    if (task.task_type or '').strip() == MAIL_REMATCH_TASK_TYPE:
-        return True
     return is_mail_follow_up_title(task.title)
 
 
@@ -1881,7 +1879,11 @@ def heal_mail_cadence_cooldown(
         )
         .all()
     )
-    rematch_tasks = [t for t in rematch_tasks if is_mail_follow_up_task(t)]
+    rematch_tasks = [
+        t for t in rematch_tasks
+        if is_mail_follow_up_task(t)
+        or (t.task_type or '').strip() == MAIL_REMATCH_TASK_TYPE
+    ]
 
     mail_ready_ids = [
         row[0]
