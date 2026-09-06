@@ -211,6 +211,31 @@ def _mail_work_in_flight(lead_id: int) -> bool:
         return False
 
 
+def _mail_cadence_block_outcome(lead: Lead) -> tuple[str, str, dict] | None:
+    """Nurture when last mailed within the quarterly rematch window."""
+    try:
+        from app.services.mail_task_lifecycle_service import mail_cadence_eligible_date
+
+        eligible = mail_cadence_eligible_date(lead)
+    except Exception as exc:
+        logger.warning(
+            "mail cadence check failed for lead_id=%s: %s",
+            getattr(lead, 'id', None),
+            exc,
+        )
+        # Fail closed: do not recommend mail when the cadence oracle errors.
+        return 'nurture', 'mail_cadence_cooldown', {
+            'lead_id': getattr(lead, 'id', None),
+            'mail_cadence_check_failed': True,
+        }
+    if eligible is None:
+        return None
+    return 'nurture', 'mail_cadence_cooldown', {
+        'lead_id': getattr(lead, 'id', None),
+        'mail_eligible_date': eligible.isoformat(),
+    }
+
+
 def _has_overdue_lead_task(lead_id: int) -> bool:
     """True when an open overdue *call-completable* LeadTask exists.
 
@@ -652,6 +677,9 @@ class LeadScoringEngine:
                         'has_email': False,
                         'is_mailable': True,
                     }
+                cadence_block = _mail_cadence_block_outcome(lead)
+                if cadence_block is not None:
+                    return cadence_block
                 blocked = _cold_mail_ready_outcome(lead)
                 if blocked is not None:
                     return blocked
@@ -725,6 +753,9 @@ class LeadScoringEngine:
             return 'nurture', 'negative_motivation', {'motivation_score': motivation_score}
 
         if score_tier == "A" and data_quality_score >= 70:
+            cadence_block = _mail_cadence_block_outcome(lead)
+            if cadence_block is not None:
+                return cadence_block
             blocked = _cold_mail_ready_outcome(lead)
             if blocked is not None:
                 return blocked
@@ -1362,6 +1393,8 @@ class LeadScoringEngine:
         if recommended_action == 'mail_ready':
             if rubric.is_recently_sold(lead):
                 return 'hold', None
+            if _mail_cadence_block_outcome(lead) is not None:
+                return 'nurture', None
             return recommended_action, 'direct_mail'
         if recommended_action == 'call_ready':
             return recommended_action, 'phone'
@@ -1388,6 +1421,8 @@ class LeadScoringEngine:
             recommended_action, method, winning_rule=winning_rule,
         )
         if refined == 'mail_ready':
+            if _mail_cadence_block_outcome(lead) is not None:
+                return 'nurture', None
             method = 'direct_mail'
         elif refined == 'call_ready':
             method = 'phone'

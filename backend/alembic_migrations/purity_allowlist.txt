@@ -11,3 +11,5 @@ note_pf_20260812_note_property_facts.py
 t9u0v1w2x3y4_add_mail_enqueue_attempts.py
 # Joint-name class heal: imports split_joint_person_owner_name only (no create_app).
 joint_own_20260821_heal_joint_owners.py
+# Quarterly mail cadence heal: imports heal_mail_cadence_cooldown only (no create_app).
+mail_cad_20260905_mail_cadence_cooldown.py

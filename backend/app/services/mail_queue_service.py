@@ -26,6 +26,7 @@ from app.services.mail_task_lifecycle_service import (
     cancel_pending_mail_follow_up_tasks,
     complete_tasks_superseded_by_mail,
     create_pending_mail_follow_up_task,
+    mail_cadence_eligible_date,
     reconcile_recent_sale_mail_tasks_for_lead,
     refresh_leads_after_mail_task_changes,
     sync_recent_sale_hubspot_due_dates,
@@ -273,6 +274,14 @@ class MailQueueService:
                             ],
                             'hubspot_due_sync': reconciliation['hubspot_task_ids'],
                         }
+                    elif (
+                        cadence_eligible := mail_cadence_eligible_date(lead)
+                    ) is not None:
+                        outcome = {
+                            'lead_id': lead_id,
+                            'status': 'mail_cadence',
+                            'mail_eligible_date': cadence_eligible.isoformat(),
+                        }
                     elif MailQueueItem.query.filter_by(
                         lead_id=lead_id, status='queued', user_id=user_id,
                     ).first():
@@ -389,6 +398,8 @@ class MailQueueService:
                             if outcome.get('rescheduled_to'):
                                 recent_sale_hubspot_sync[task_id] = outcome['rescheduled_to']
                         outcome.pop('hubspot_due_sync', None)
+                    elif status == 'mail_cadence':
+                        rejected_lead_ids.append(lead_id)
                 results.append(outcome)
             except Exception as exc:
                 # Soft-fail: one bad lead must never 500 the whole batch.
@@ -410,6 +421,7 @@ class MailQueueService:
             'skip_trace_scheduled',
             'skip_trace_task_id',
             'removed_queue_item_count',
+            'mail_eligible_date',
         }
         audit_results = [
             {

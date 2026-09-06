@@ -69,6 +69,17 @@ describe('formatEnqueueSummary', () => {
     expect(enqueueResultSeverity(result)).toBe('error')
   })
 
+  it('surfaces a mail cadence rejection', () => {
+    const result = {
+      added: 0,
+      skipped: 1,
+      invalid: 0,
+      results: [{ lead_id: 1, status: 'mail_cadence', mail_eligible_date: '2026-10-26' }],
+    }
+    expect(formatEnqueueSummary(result)).toBe('1 mailed within 90 days')
+    expect(enqueueResultSeverity(result)).toBe('error')
+  })
+
   it('uses warning severity for mixed outcomes', () => {
     expect(enqueueResultSeverity({ added: 1, skipped: 1, invalid: 0 })).toBe('warning')
   })

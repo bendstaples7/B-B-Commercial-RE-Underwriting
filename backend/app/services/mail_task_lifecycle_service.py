@@ -48,6 +48,86 @@ def recent_sale_mail_eligible_date(lead: Lead) -> date | None:
     return sale_date + timedelta(days=RECENT_SALE_SUPPRESSION_DAYS)
 
 
+def mail_cadence_eligible_date_from_last_mailed(
+    last_mailed_at: datetime | None,
+    *,
+    today: date | None = None,
+    offset_days: int = MAIL_REMATCH_OFFSET_DAYS,
+) -> date | None:
+    """First date mail is allowed again after ``last_mailed_at``, or None if ok now."""
+    if last_mailed_at is None:
+        return None
+    sent = last_mailed_at
+    if sent.tzinfo is not None:
+        sent = sent.astimezone(timezone.utc).replace(tzinfo=None)
+    eligible = sent.date() + timedelta(days=offset_days)
+    on_day = today or date.today()
+    if on_day < eligible:
+        return eligible
+    return None
+
+
+def mail_cadence_eligible_date(
+    lead: Lead,
+    *,
+    last_mailed_at: datetime | None = None,
+    today: date | None = None,
+) -> date | None:
+    """Return the first date direct mail is allowed after the last send (90d)."""
+    if last_mailed_at is None:
+        lead_id = getattr(lead, 'id', None)
+        if not isinstance(lead_id, int):
+            return None
+        from app.services.last_mailed_service import get_last_mailed_at_by_lead_ids
+
+        last_mailed_at = get_last_mailed_at_by_lead_ids([lead_id]).get(lead_id)
+    return mail_cadence_eligible_date_from_last_mailed(
+        last_mailed_at,
+        today=today,
+    )
+
+
+def lead_in_mail_cadence_cooldown(
+    lead: Lead,
+    *,
+    last_mailed_at: datetime | None = None,
+    today: date | None = None,
+) -> bool:
+    """True when the lead was mailed within the quarterly rematch window."""
+    return mail_cadence_eligible_date(
+        lead,
+        last_mailed_at=last_mailed_at,
+        today=today,
+    ) is not None
+
+
+def resolve_mail_eligibility_hold(
+    lead: Lead,
+    *,
+    last_mailed_at: datetime | None = None,
+    today: date | None = None,
+) -> tuple[date | None, str | None]:
+    """Effective mail hold date + reason (``recently_sold`` or ``mail_cadence``).
+
+    When both holds apply, the later eligible date wins (and its reason).
+    """
+    sale = recent_sale_mail_eligible_date(lead)
+    cadence = mail_cadence_eligible_date(
+        lead,
+        last_mailed_at=last_mailed_at,
+        today=today,
+    )
+    if sale is not None and cadence is not None:
+        if sale >= cadence:
+            return sale, 'recently_sold'
+        return cadence, 'mail_cadence'
+    if sale is not None:
+        return sale, 'recently_sold'
+    if cadence is not None:
+        return cadence, 'mail_cadence'
+    return None, None
+
+
 def _is_recent_sale_defer_task(
     lead: Lead,
     task_type: str | None,
@@ -1143,7 +1223,10 @@ def mail_rematch_due_date(
 ) -> date | None:
     """Return the canonical quarterly rematch due date for a mail send."""
     if last_sent_at is not None:
-        return last_sent_at.date() + timedelta(days=offset_days)
+        sent = last_sent_at
+        if sent.tzinfo is not None:
+            sent = sent.astimezone(timezone.utc).replace(tzinfo=None)
+        return sent.date() + timedelta(days=offset_days)
     return fallback
 
 
@@ -1771,3 +1854,140 @@ def refresh_leads_after_mail_task_changes(lead_ids: list[int]) -> None:
                 exc,
                 exc_info=True,
             )
+
+
+def heal_mail_cadence_cooldown(
+    *,
+    commit: bool = True,
+    last_mailed_batch_size: int = 200,
+    rescore_batch_size: int = 50,
+) -> dict:
+    """Align rematch dues, dequeue staged cadence leads, and rescore stale mail_ready.
+
+    Idempotent. Uses the canonical last-mailed oracle in batches so Deploy stays
+    bounded while matching runtime eligibility.
+    """
+    from sqlalchemy import or_
+
+    from app.services.last_mailed_service import get_last_mailed_at_by_lead_ids
+
+    rematch_tasks = (
+        LeadTask.query
+        .filter(
+            LeadTask.status == 'open',
+            or_(
+                LeadTask.task_type == MAIL_REMATCH_TASK_TYPE,
+                LeadTask.title.ilike('%add to next mailer%'),
+                LeadTask.title.ilike('%follow up after mail%'),
+            ),
+        )
+        .all()
+    )
+    rematch_tasks = [t for t in rematch_tasks if is_mail_follow_up_task(t)]
+
+    mail_ready_ids = [
+        row[0]
+        for row in db.session.query(Lead.id).filter(
+            Lead.recommended_action == 'mail_ready',
+        ).all()
+    ]
+    queued_ids = [
+        row[0]
+        for row in db.session.query(MailQueueItem.lead_id).filter(
+            MailQueueItem.status == 'queued',
+        ).distinct().all()
+    ]
+    candidate_ids = sorted({
+        *mail_ready_ids,
+        *queued_ids,
+        *(task.lead_id for task in rematch_tasks),
+    })
+
+    last_mailed: dict[int, datetime | None] = {}
+    for i in range(0, len(candidate_ids), max(1, last_mailed_batch_size)):
+        chunk = candidate_ids[i:i + last_mailed_batch_size]
+        last_mailed.update(get_last_mailed_at_by_lead_ids(chunk))
+
+    cooldown_ids: set[int] = set()
+    for lead_id in candidate_ids:
+        if mail_cadence_eligible_date_from_last_mailed(
+            last_mailed.get(lead_id),
+        ) is not None:
+            cooldown_ids.add(lead_id)
+
+    rematch_tasks = [t for t in rematch_tasks if t.lead_id in cooldown_ids]
+    rematch_lead_ids = sorted({task.lead_id for task in rematch_tasks})
+    leads_by_id = {
+        lead.id: lead
+        for lead in Lead.query.filter(Lead.id.in_(rematch_lead_ids)).all()
+    } if rematch_lead_ids else {}
+
+    dues_fixed = 0
+    affected: set[int] = set()
+    now = datetime.now(timezone.utc)
+    for task in rematch_tasks:
+        lead = leads_by_id.get(task.lead_id)
+        last_sent = last_mailed.get(task.lead_id)
+        if lead is None or last_sent is None:
+            continue
+        expected = mail_rematch_due_date(last_sent, None)
+        if expected is None or task.due_date == expected:
+            continue
+        title = _mail_follow_up_title(lead)
+        task.due_date = expected
+        task.task_type = MAIL_REMATCH_TASK_TYPE
+        task.title = title
+        db.session.add(task)
+        for mirror in _select_rematch_mirrors(
+            task,
+            task.lead_id,
+            {task.title, title},
+            allow_pending_title_match=True,
+        ):
+            _sync_rematch_mirror(
+                mirror,
+                title=title,
+                due_date=expected,
+                now=now,
+            )
+        dues_fixed += 1
+        affected.add(task.lead_id)
+
+    removed_queue = 0
+    if cooldown_ids:
+        queued_items = (
+            MailQueueItem.query
+            .filter(
+                MailQueueItem.lead_id.in_(list(cooldown_ids)),
+                MailQueueItem.status == 'queued',
+            )
+            .all()
+        )
+        for item in queued_items:
+            item.status = 'removed'
+            item.updated_at = datetime.utcnow()
+            db.session.add(item)
+            removed_queue += 1
+            affected.add(item.lead_id)
+            lead = db.session.get(Lead, item.lead_id)
+            if lead is not None and lead.up_next_to_mail:
+                lead.up_next_to_mail = False
+                db.session.add(lead)
+
+    if commit and (dues_fixed or removed_queue):
+        db.session.commit()
+
+    rescore_ids = sorted(cooldown_ids & set(mail_ready_ids))
+    rescored = 0
+    for i in range(0, len(rescore_ids), max(1, rescore_batch_size)):
+        chunk = rescore_ids[i:i + rescore_batch_size]
+        refresh_leads_after_mail_task_changes(chunk)
+        rescored += len(chunk)
+        affected.update(chunk)
+
+    return {
+        'rematch_dues_fixed': dues_fixed,
+        'rescored': rescored,
+        'removed_queue_items': removed_queue,
+        'affected_lead_ids': sorted(affected),
+    }

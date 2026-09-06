@@ -751,6 +751,35 @@ class MailCampaignService:
                 local_invalid_count += 1
                 continue
             persist_embedded_address_fields(lead)
+            from app.services.mail_task_lifecycle_service import mail_cadence_eligible_date
+
+            cadence_eligible = mail_cadence_eligible_date(lead)
+            if cadence_eligible is not None:
+                drop_reasons['Quarterly mail cadence hold'] += 1
+                item.status = 'removed'
+                item.campaign_id = None
+                item.validation_error = (
+                    f'Next mail on {cadence_eligible.isoformat()} '
+                    '(quarterly cadence)'
+                )
+                item.updated_at = datetime.utcnow()
+                self._timeline.append(
+                    lead_id=lead.id,
+                    event_type='note_added',
+                    actor=campaign.created_by,
+                    summary=(
+                        f'Removed from mail batch {campaign.id}: '
+                        f'quarterly cadence until {cadence_eligible.isoformat()}'
+                    ),
+                    metadata={
+                        'campaign_id': campaign.id,
+                        'reason': 'mail_cadence',
+                        'mail_eligible_date': cadence_eligible.isoformat(),
+                    },
+                    source='system',
+                    commit=False,
+                )
+                continue
             validation_error = validate_owner_mailing_address(
                 lead,
                 support_blocked_lead_ids=support_blocked,
