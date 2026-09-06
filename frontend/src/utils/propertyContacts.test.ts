@@ -10,6 +10,7 @@ import {
   additionalPeopleForKeyContact,
   primaryOwnerDisplayName,
   rankOwnersForDisplay,
+  unlinkedPeopleFromLead,
 } from './propertyContacts'
 
 function makeContact(
@@ -183,5 +184,66 @@ describe('additionalPeopleForKeyContact', () => {
       makeContact({ id: 2, first_name: 'Yumi', last_name: 'Niece', is_primary: false }),
     ])
     expect(extra.map((c) => c.id)).toEqual([2])
+  })
+})
+
+describe('unlinkedPeopleFromLead', () => {
+  it('surfaces flat owner when People contacts are only companies', () => {
+    const rows = unlinkedPeopleFromLead(
+      [makeContact({ id: 1, first_name: 'Acme', last_name: 'LLC', is_primary: true })],
+      {
+        ownerFirst: 'Gregory',
+        ownerLast: 'Shek',
+        phones: [{ value: '(312) 555-0100' }],
+      },
+    )
+    expect(rows).toEqual([
+      expect.objectContaining({
+        first_name: 'Gregory',
+        last_name: 'Shek',
+        source: 'flat_owner',
+      }),
+    ])
+    expect(rows[0].phones[0].value).toContain('555')
+  })
+
+  it('surfaces flat Owner 2 without aggregate owner channels', () => {
+    const rows = unlinkedPeopleFromLead([], {
+      ownerFirst: 'Gregory',
+      ownerLast: 'Shek',
+      owner2First: 'Yumi',
+      owner2Last: 'Niece',
+      phones: [{ value: '(312) 555-0100', label: 'work' }],
+    })
+
+    expect(rows.map((row) => `${row.first_name} ${row.last_name}`)).toEqual([
+      'Gregory Shek',
+      'Yumi Niece',
+    ])
+    expect(rows[0].phones[0]).toEqual({ value: '(312) 555-0100', label: 'work' })
+    expect(rows[1].phones).toEqual([])
+  })
+
+  it('surfaces org resolved person when not already linked', () => {
+    const rows = unlinkedPeopleFromLead([], {
+      organizations: [
+        {
+          id: 10,
+          name: 'Shek Holdings LLC',
+          org_type: 'llc',
+          role: 'owner',
+          link_id: 1,
+          resolved_person_name: 'Gregory Shek',
+          resolved_person_role: 'manager',
+        },
+      ],
+    })
+    expect(rows).toEqual([
+      expect.objectContaining({
+        first_name: 'Gregory',
+        last_name: 'Shek',
+        source: 'resolved_person',
+      }),
+    ])
   })
 })

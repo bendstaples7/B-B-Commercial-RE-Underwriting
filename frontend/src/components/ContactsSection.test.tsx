@@ -7,6 +7,8 @@ import { ContactsSection } from './ContactsSection'
 import { contactService } from '@/services/api'
 import type { CommandCenterPayload, PropertyContact } from '@/types'
 
+const contactFormModalSpy = vi.hoisted(() => vi.fn())
+
 vi.mock('@/services/api', () => ({
   contactService: {
     getPropertyContacts: vi.fn(),
@@ -16,6 +18,7 @@ vi.mock('@/services/api', () => ({
     updateContact: vi.fn(),
     deleteContact: vi.fn(),
     getContact: vi.fn(),
+    searchContacts: vi.fn(),
   },
   organizationService: {
     createOrganization: vi.fn(),
@@ -42,8 +45,10 @@ vi.mock('@/services/entityResolutionApi', () => ({
 }))
 
 vi.mock('./ContactFormModal', () => ({
-  ContactFormModal: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="contact-form-modal">ContactFormModal</div> : null,
+  ContactFormModal: (props: Record<string, unknown>) => {
+    contactFormModalSpy(props)
+    return props.open ? <div data-testid="contact-form-modal">ContactFormModal</div> : null
+  },
 }))
 
 const PROPERTY_ID = 42
@@ -205,10 +210,35 @@ describe('ContactsSection', () => {
   it('opens ContactFormModal from Add Contact', async () => {
     vi.mocked(contactService.getPropertyContacts).mockResolvedValue([])
     render(<ContactsSection propertyId={PROPERTY_ID} />)
+    await waitFor(() => {
+      expect(screen.getByText(/No people linked yet/i)).toBeInTheDocument()
+    })
     fireEvent.click(screen.getByRole('button', { name: /add contact/i }))
     await waitFor(() => {
       expect(screen.getByTestId('contact-form-modal')).toBeInTheDocument()
     })
+    const calls = contactFormModalSpy.mock.calls
+    const props = calls[calls.length - 1][0]
+    expect(props).toMatchObject({
+      open: true,
+      linkAsPrimary: true,
+      initialMode: 'create',
+    })
+  })
+
+  it('does not infer primary status before contacts finish loading', async () => {
+    vi.mocked(contactService.getPropertyContacts).mockReturnValue(
+      new Promise(() => {}),
+    )
+    render(<ContactsSection propertyId={PROPERTY_ID} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /add contact/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('contact-form-modal')).toBeInTheDocument()
+    })
+    const calls = contactFormModalSpy.mock.calls
+    expect(calls[calls.length - 1][0]).toMatchObject({ linkAsPrimary: false })
   })
 
   it('surfaces fetch errors', async () => {
@@ -458,6 +488,56 @@ describe('ContactsSection', () => {
       expect(screen.getByTestId('person-company-role')).toHaveTextContent(
         /manager of\s+Kdg Avondale LLC/i,
       )
+    })
+  })
+
+  it('shows flat key-contact person under People when only companies are linked', async () => {
+    vi.mocked(contactService.getPropertyContacts).mockResolvedValue([])
+
+    render(
+      <ContactsSection
+        propertyId={PROPERTY_ID}
+        commandCenterData={
+          {
+            id: PROPERTY_ID,
+            owner_first_name: 'Gregory',
+            owner_last_name: 'Shek',
+            phones: [{ value: '(312) 555-0199', label: 'work' }],
+            organizations: [
+              {
+                id: 10,
+                name: 'Shek Holdings LLC',
+                org_type: 'llc',
+                role: 'owner',
+                link_id: 1,
+              },
+            ],
+          } as CommandCenterPayload
+        }
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Gregory Shek')).toBeInTheDocument()
+      expect(screen.getByText(/On file — not linked yet/i)).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('materialize-unlinked-person-btn')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('materialize-unlinked-person-btn'))
+    await waitFor(() => {
+      expect(screen.getByTestId('contact-form-modal')).toBeInTheDocument()
+    })
+    const calls = contactFormModalSpy.mock.calls
+    const props = calls[calls.length - 1][0]
+    expect(props).toMatchObject({
+      linkAsPrimary: true,
+      initialMode: 'link',
+      initialLinkQuery: 'Gregory Shek',
+    })
+    expect(props.initialValues).toMatchObject({
+      firstName: 'Gregory',
+      lastName: 'Shek',
+      phones: [{ value: '(312) 555-0199', label: 'work' }],
     })
   })
 })

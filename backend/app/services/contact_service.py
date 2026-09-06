@@ -19,6 +19,7 @@ from app.models.property_contact import PropertyContact
 from app.models.lead import Property
 from app.exceptions import ResourceNotFoundError, ConflictError, ValidationException
 from app.services.contact_backfill import phone_digits, split_phone_field, split_email_field
+from app.services.helpers.sql_like import escape_like_pattern
 
 from sqlalchemy.orm import selectinload
 
@@ -477,6 +478,66 @@ class ContactService:
     # ------------------------------------------------------------------
     # Query
     # ------------------------------------------------------------------
+
+    def search_contacts(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        exclude_property_id: int | None = None,
+    ) -> list[Contact]:
+        """Search contacts by first/last name for linking to a property.
+
+        Matching is case-insensitive substring on ``first_name``, ``last_name``,
+        or the concatenated full name. Results are ordered by last name, then
+        first name. Optionally exclude contacts already linked to a property.
+        """
+        q = _strip_invisible(query or '')
+        if len(q) < 2:
+            raise ValidationException(
+                'Search query must be at least 2 characters.',
+                field='q',
+            )
+        try:
+            limit = max(1, min(int(limit), 50))
+        except (TypeError, ValueError):
+            limit = 20
+
+        pattern = f'%{escape_like_pattern(q)}%'
+        full_name = db.func.trim(
+            db.func.concat(
+                db.func.coalesce(Contact.first_name, ''),
+                ' ',
+                db.func.coalesce(Contact.last_name, ''),
+            )
+        )
+        stmt = (
+            Contact.query
+            .options(
+                selectinload(Contact.phones),
+                selectinload(Contact.emails),
+            )
+            .filter(
+                db.or_(
+                    Contact.first_name.ilike(pattern, escape='\\'),
+                    Contact.last_name.ilike(pattern, escape='\\'),
+                    full_name.ilike(pattern, escape='\\'),
+                )
+            )
+        )
+        if exclude_property_id is not None:
+            linked_ids = (
+                db.session.query(PropertyContact.contact_id)
+                .filter(PropertyContact.property_id == exclude_property_id)
+            )
+            stmt = stmt.filter(~Contact.id.in_(linked_ids))
+
+        return (
+            stmt
+            .order_by(Contact.last_name.asc(), Contact.first_name.asc())
+            .limit(limit)
+            .all()
+        )
 
     def get_contacts_for_property(
         self,

@@ -8,6 +8,7 @@ carry their full `/api/...` paths (matching the pattern used by `timeline_bp`).
 
 Routes:
   POST   /api/contacts/
+  GET    /api/contacts/search
   GET    /api/contacts/<id>
   PUT    /api/contacts/<id>
   DELETE /api/contacts/<id>
@@ -26,6 +27,7 @@ from app.exceptions import (
     ResourceNotFoundError,
     ValidationException,
 )
+from app.api_utils import require_auth
 from app.services.contact_service import ContactService
 
 logger = logging.getLogger(__name__)
@@ -167,6 +169,41 @@ def create_contact():
     data['keep_on_gis'] = True
     contact = contact_service.create_contact(data)
     return jsonify(_serialize_contact(contact)), 201
+
+
+@contacts_bp.route('/api/contacts/search', methods=['GET'])
+@handle_errors
+@require_auth
+def search_contacts():
+    """Search contacts by name for linking an existing person to a property.
+
+    Query params
+    ------------
+    q : str (required, min 2 chars)
+    limit : int (optional, default 20, max 50)
+    exclude_property_id : int (optional) — omit contacts already linked here
+
+    Returns 200 with ``{ results: Contact[] }``.
+    """
+    q = request.args.get('q', '')
+    limit = request.args.get('limit', 20)
+    exclude_raw = request.args.get('exclude_property_id')
+    exclude_property_id = None
+    if exclude_raw not in (None, ''):
+        try:
+            exclude_property_id = int(exclude_raw)
+        except (TypeError, ValueError):
+            return jsonify({
+                'error': 'Validation error',
+                'message': 'exclude_property_id must be an integer',
+            }), 400
+
+    contacts = contact_service.search_contacts(
+        q,
+        limit=limit,
+        exclude_property_id=exclude_property_id,
+    )
+    return jsonify({'results': [_serialize_contact(c) for c in contacts]}), 200
 
 
 @contacts_bp.route('/api/contacts/<int:contact_id>', methods=['GET'])

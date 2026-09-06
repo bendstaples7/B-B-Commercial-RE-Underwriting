@@ -362,6 +362,97 @@ export function ownerDisplayEntries(
   return [...labeledPeople, ...companies, ...alsoListed]
 }
 
+/** Person named on the lead but not yet linked as a PropertyContact. */
+export type UnlinkedLeadPerson = {
+  key: string
+  first_name: string | null
+  last_name: string | null
+  source: 'flat_owner' | 'resolved_person'
+  phones: Array<{ value: string; label?: string }>
+  emails: Array<{ value: string; label?: string }>
+}
+
+/**
+ * People who appear as Key Contact / LLC manager but are missing from the
+ * People list — flat owner name or org-resolved person without a contact row.
+ */
+export function unlinkedPeopleFromLead(
+  contacts: PropertyContactSummary[] | undefined | null,
+  options?: {
+    ownerFirst?: string | null
+    ownerLast?: string | null
+    owner2First?: string | null
+    owner2Last?: string | null
+    organizations?: PropertyOrganizationSummary[] | null
+    phones?: Array<{ value?: string | null; label?: string | null } | string> | null
+    emails?: Array<{ value?: string | null; label?: string | null } | string> | null
+  },
+): UnlinkedLeadPerson[] {
+  const existing = new Set(
+    (contacts ?? [])
+      .filter((c) => !isAddressLikeContactName(c) && !isEntityContactName(c))
+      .map((c) => personIdentityKey(c))
+      .filter(Boolean),
+  )
+
+  const phoneRows = (options?.phones ?? [])
+    .map((p) => {
+      if (typeof p === 'string') {
+        const value = p.trim()
+        return value ? { value } : null
+      }
+      const value = (p.value || '').trim()
+      return value ? { value, label: p.label ?? undefined } : null
+    })
+    .filter((p): p is { value: string; label?: string } => Boolean(p))
+
+  const emailRows = (options?.emails ?? [])
+    .map((e) => {
+      if (typeof e === 'string') {
+        const value = e.trim()
+        return value ? { value } : null
+      }
+      const value = (e.value || '').trim()
+      return value ? { value, label: e.label ?? undefined } : null
+    })
+    .filter((e): e is { value: string; label?: string } => Boolean(e))
+
+  const out: UnlinkedLeadPerson[] = []
+  const push = (
+    first: string | null | undefined,
+    last: string | null | undefined,
+    source: UnlinkedLeadPerson['source'],
+    withChannels: boolean,
+  ) => {
+    const contact = { first_name: first ?? null, last_name: last ?? null }
+    if (isAddressLikeContactName(contact) || isEntityContactName(contact)) return
+    const name = contactDisplayName(contact)
+    if (!name || isGenericOwnerName(name)) return
+    const key = personIdentityKey(contact)
+    if (!key || existing.has(key) || out.some((p) => personIdentityKey(p) === key)) return
+    out.push({
+      key: `${source}:${key}`,
+      first_name: contact.first_name,
+      last_name: contact.last_name,
+      source,
+      phones: withChannels ? phoneRows : [],
+      emails: withChannels ? emailRows : [],
+    })
+  }
+
+  push(options?.ownerFirst, options?.ownerLast, 'flat_owner', true)
+  push(options?.owner2First, options?.owner2Last, 'flat_owner', false)
+
+  for (const org of options?.organizations ?? []) {
+    const resolved = (org.resolved_person_name || '').trim()
+    if (!resolved) continue
+    const parts = splitDisplayName(resolved)
+    push(parts.first_name, parts.last_name, 'resolved_person', false)
+  }
+
+  return out
+}
+
 /**
  * Prefer a real person from contacts; then linked company name; then any named contact.
  * Falls back to flat owner first/last when owner contacts are absent or unnamed.

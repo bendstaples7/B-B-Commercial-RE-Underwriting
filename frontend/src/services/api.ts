@@ -1229,6 +1229,22 @@ export const contactService = {
     return response.data
   },
 
+  /** GET /api/contacts/search — find contacts by name for linking */
+  searchContacts: async (params: {
+    q: string
+    limit?: number
+    excludePropertyId?: number
+  }): Promise<Contact[]> => {
+    const response = await api.get<{ results: Contact[] }>('/contacts/search', {
+      params: {
+        q: params.q,
+        limit: params.limit ?? 20,
+        exclude_property_id: params.excludePropertyId,
+      },
+    })
+    return response.data.results ?? []
+  },
+
   /** GET /api/contacts/{id} — get a contact with phones, emails, and linked properties */
   getContact: async (id: number): Promise<Contact> => {
     const response = await api.get<Contact>(`/contacts/${id}`)
