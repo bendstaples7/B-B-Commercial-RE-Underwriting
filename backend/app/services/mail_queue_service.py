@@ -26,11 +26,12 @@ from app.services.mail_task_lifecycle_service import (
     cancel_pending_mail_follow_up_tasks,
     complete_tasks_superseded_by_mail,
     create_pending_mail_follow_up_task,
-    mail_cadence_eligible_date,
+    mail_cadence_eligible_date_from_last_mailed,
     reconcile_recent_sale_mail_tasks_for_lead,
     refresh_leads_after_mail_task_changes,
     sync_recent_sale_hubspot_due_dates,
 )
+from app.services.last_mailed_service import get_last_mailed_at_by_lead_ids
 from app.services.hubspot_task_completion_service import sync_pending_hubspot_completions
 
 logger = logging.getLogger(__name__)
@@ -237,6 +238,14 @@ class MailQueueService:
         rejected_lead_ids: list[int] = []
         hubspot_sync_ids: list[str] = []
         recent_sale_hubspot_sync: dict[str, str] = {}
+        authorized_lead_ids = [
+            row[0]
+            for row in db.session.query(Lead.id).filter(
+                Lead.id.in_(lead_ids),
+                Lead.owner_user_id == user_id,
+            ).all()
+        ]
+        last_mailed = get_last_mailed_at_by_lead_ids(authorized_lead_ids)
 
         for lead_id in lead_ids:
             outcome: dict | None = None
@@ -275,7 +284,9 @@ class MailQueueService:
                             'hubspot_due_sync': reconciliation['hubspot_task_ids'],
                         }
                     elif (
-                        cadence_eligible := mail_cadence_eligible_date(lead)
+                        cadence_eligible := mail_cadence_eligible_date_from_last_mailed(
+                            last_mailed.get(lead.id),
+                        )
                     ) is not None:
                         outcome = {
                             'lead_id': lead_id,

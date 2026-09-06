@@ -16,10 +16,10 @@ depends_on = None
 
 
 def upgrade():
-    # Flask-Migrate runs inside app context — service layer is safe.
+    # Keep the idempotent data heal inside Alembic's transaction.
     from app.services.mail_task_lifecycle_service import heal_mail_cadence_cooldown
 
-    result = heal_mail_cadence_cooldown(commit=True)
+    result = heal_mail_cadence_cooldown(commit=False)
     print(
         'mail_cad_20260905: '
         f"dues_fixed={result['rematch_dues_fixed']} "

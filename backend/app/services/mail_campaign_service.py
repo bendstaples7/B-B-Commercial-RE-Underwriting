@@ -43,9 +43,11 @@ from app.services.open_letter_contact_mapper import (
 from app.services.mail_task_lifecycle_service import (
     cancel_pending_mail_follow_up_tasks,
     complete_tasks_superseded_by_mail,
+    mail_cadence_eligible_date_from_last_mailed,
     refresh_leads_after_mail_task_changes,
     schedule_mail_follow_up_task,
 )
+from app.services.last_mailed_service import get_last_mailed_at_by_lead_ids
 from app.services.hubspot_task_completion_service import sync_pending_hubspot_completions
 
 logger = logging.getLogger(__name__)
@@ -730,12 +732,14 @@ class MailCampaignService:
         contacts = []
         lead_by_item: dict[int, Lead] = {}
         invalid_lead_ids: list[int] = []
+        cadence_removed_lead_ids: list[int] = []
         drop_reasons: Counter[str] = Counter()
         # Local invalids only (exclude address-dedupe requeues from invalid_at_submit).
         local_invalid_count = 0
         seen_mailing_keys: dict[str, int] = {}
         # Process lowest queue-item id first so dedupe keeps a stable winner.
         items = sorted(items, key=lambda it: it.id)
+        last_mailed = get_last_mailed_at_by_lead_ids([it.lead_id for it in items])
         staged_at_submit = len(items)
         if campaign.staged_count is None:
             campaign.staged_count = staged_at_submit
@@ -751,9 +755,9 @@ class MailCampaignService:
                 local_invalid_count += 1
                 continue
             persist_embedded_address_fields(lead)
-            from app.services.mail_task_lifecycle_service import mail_cadence_eligible_date
 
-            cadence_eligible = mail_cadence_eligible_date(lead)
+            last_sent_at = last_mailed.get(lead.id)
+            cadence_eligible = mail_cadence_eligible_date_from_last_mailed(last_sent_at)
             if cadence_eligible is not None:
                 drop_reasons['Quarterly mail cadence hold'] += 1
                 item.status = 'removed'
@@ -763,6 +767,19 @@ class MailCampaignService:
                     '(quarterly cadence)'
                 )
                 item.updated_at = datetime.utcnow()
+                if not MailQueueItem.query.filter(
+                    MailQueueItem.lead_id == lead.id,
+                    MailQueueItem.status == 'queued',
+                    MailQueueItem.id != item.id,
+                ).count():
+                    lead.up_next_to_mail = False
+                if last_sent_at is not None:
+                    schedule_mail_follow_up_task(
+                        lead=lead,
+                        sent_at=last_sent_at,
+                        actor=campaign.created_by,
+                    )
+                cadence_removed_lead_ids.append(lead.id)
                 self._timeline.append(
                     lead_id=lead.id,
                     event_type='note_added',
@@ -855,7 +872,9 @@ class MailCampaignService:
             campaign.submitted_count = 0
             campaign.lead_count = 0
             db.session.commit()
-            refresh_leads_after_mail_task_changes(invalid_lead_ids)
+            refresh_leads_after_mail_task_changes(
+                invalid_lead_ids + cadence_removed_lead_ids,
+            )
             return campaign
 
         # Do not set submitted_count / final lead_count until place_order succeeds.
@@ -904,7 +923,9 @@ class MailCampaignService:
                         )
                         failed_lead_ids.append(lead.id)
             db.session.commit()
-            refresh_leads_after_mail_task_changes(failed_lead_ids + invalid_lead_ids)
+            refresh_leads_after_mail_task_changes(
+                failed_lead_ids + invalid_lead_ids + cadence_removed_lead_ids,
+            )
             raise
 
         db.session.refresh(campaign)
@@ -1002,7 +1023,9 @@ class MailCampaignService:
 
         db.session.commit()
         sync_pending_hubspot_completions(hubspot_sync_ids)
-        refresh_leads_after_mail_task_changes(sent_lead_ids + invalid_lead_ids)
+        refresh_leads_after_mail_task_changes(
+            sent_lead_ids + invalid_lead_ids + cadence_removed_lead_ids,
+        )
         self._schedule_post_submit_analytics_sync(campaign.id)
         return campaign
 

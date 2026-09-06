@@ -214,6 +214,9 @@ def _mail_work_in_flight(lead_id: int) -> bool:
 def _mail_cadence_block_outcome(lead: Lead) -> tuple[str, str, dict] | None:
     """Nurture when last mailed within the quarterly rematch window."""
     try:
+        from flask import has_app_context
+        if not has_app_context():
+            return None
         from app.services.mail_task_lifecycle_service import mail_cadence_eligible_date
 
         eligible = mail_cadence_eligible_date(lead)
@@ -753,9 +756,10 @@ class LeadScoringEngine:
             return 'nurture', 'negative_motivation', {'motivation_score': motivation_score}
 
         if score_tier == "A" and data_quality_score >= 70:
-            cadence_block = _mail_cadence_block_outcome(lead)
-            if cadence_block is not None:
-                return cadence_block
+            if is_mailable_lead(lead):
+                cadence_block = _mail_cadence_block_outcome(lead)
+                if cadence_block is not None:
+                    return cadence_block
             blocked = _cold_mail_ready_outcome(lead)
             if blocked is not None:
                 return blocked
@@ -1389,12 +1393,12 @@ class LeadScoringEngine:
         """Resolve contact channel and refine outreach action."""
         if not recommended_action:
             return recommended_action, None
+        if winning_rule == 'mail_cadence_cooldown':
+            return recommended_action, None
 
         if recommended_action == 'mail_ready':
             if rubric.is_recently_sold(lead):
                 return 'hold', None
-            if _mail_cadence_block_outcome(lead) is not None:
-                return 'nurture', None
             return recommended_action, 'direct_mail'
         if recommended_action == 'call_ready':
             return recommended_action, 'phone'

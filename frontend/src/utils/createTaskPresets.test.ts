@@ -6,6 +6,7 @@ import {
   CREATE_TASK_PRESETS,
   getCreateTaskPreset,
   resolveCreateTaskPayload,
+  type CreateTaskPresetId,
 } from './createTaskPresets'
 
 describe('createTaskPresets', () => {
@@ -47,6 +48,6 @@ describe('createTaskPresets', () => {
   })
 
   it('getCreateTaskPreset falls back to custom for unknown ids', () => {
-    expect(getCreateTaskPreset('custom').requireTitle).toBe(true)
+    expect(getCreateTaskPreset('bogus' as CreateTaskPresetId).requireTitle).toBe(true)
   })
 })

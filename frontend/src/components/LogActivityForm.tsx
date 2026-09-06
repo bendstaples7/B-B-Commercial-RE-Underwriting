@@ -293,7 +293,10 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
 
     const buildFollowUpPayload = (dueDate: string | null) => {
       if (!dueDate) return null
-      const { title, task_type } = resolveCreateTaskPayload(nextStepType, customTaskTitle)
+      const { title, task_type } = resolveCreateTaskPayload(
+        nextStepType,
+        nextStepType === 'custom' ? customTaskTitle : '',
+      )
       return {
         title,
         due_date: dueDate,

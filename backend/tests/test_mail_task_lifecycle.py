@@ -7,6 +7,7 @@ from cryptography.fernet import Fernet
 
 from app.models.lead import Lead
 from app.models.lead_task import LeadTask
+from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.models.mail_campaign import MailCampaign
 from app.models.mail_queue_item import MailQueueItem
 from app.models.open_letter_config import OpenLetterConfig
@@ -2491,6 +2492,77 @@ class TestSubmitCampaignFollowUp:
             assert refreshed.status == 'submitted'
             assert refreshed.submitted_count == 1
             assert refreshed.lead_count == 1
+
+    def test_submit_campaign_cadence_drop_dates_pending_follow_up(
+        self, app, fernet_key, monkeypatch,
+    ):
+        from app import db
+        from app.services.open_letter_client_service import OpenLetterClientService
+
+        monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
+
+        with app.app_context():
+            sent_at = datetime.now(timezone.utc) - timedelta(days=20)
+            expected_due = sent_at.date() + timedelta(days=MAIL_REMATCH_OFFSET_DAYS)
+            lead = _make_lead(app, '9 Cadence Drop St', up_next_to_mail=True)
+            pending = create_pending_mail_follow_up_task(lead, actor=USER_ID)
+            token = OpenLetterClientService.encrypt_token('test-token')
+            config = OpenLetterConfig(
+                user_id=USER_ID,
+                encrypted_api_token=token,
+                batch_minimum=1,
+                default_product_id='prod-1',
+                default_template_id='tmpl-1',
+            )
+            campaign = MailCampaign(
+                status='pending',
+                lead_count=1,
+                product_id='prod-1',
+                template_id='tmpl-1',
+                creative=_campaign_creative(),
+                created_by=USER_ID,
+            )
+            db.session.add_all([config, campaign])
+            db.session.flush()
+            item = MailQueueItem(
+                lead_id=lead.id,
+                user_id=USER_ID,
+                status='queued',
+                campaign_id=campaign.id,
+            )
+            db.session.add_all([
+                item,
+                LeadTimelineEntry(
+                    lead_id=lead.id,
+                    event_type='mail_sent',
+                    occurred_at=sent_at,
+                    source='system',
+                    actor='test',
+                    summary='Mail sent',
+                ),
+            ])
+            db.session.commit()
+
+            mock_client = MagicMock()
+            cfg_svc = MagicMock()
+            cfg_svc.require_config.return_value = config
+            cfg_svc.get_client.return_value = mock_client
+
+            svc = MailCampaignService()
+            svc._config_service = cfg_svc
+
+            with patch('app.services.mail_campaign_service.refresh_leads_after_mail_task_changes') as refresh:
+                result = svc.submit_campaign(campaign.id)
+
+            assert result.status == 'failed'
+            assert result.error_message == 'No valid contacts to send'
+            assert item.status == 'removed'
+            assert item.campaign_id is None
+            assert 'quarterly cadence' in (item.validation_error or '')
+            assert lead.up_next_to_mail is False
+            assert pending.due_date == expected_due
+            mock_client.place_order.assert_not_called()
+            refresh.assert_called_once_with([lead.id])
 
     def test_submit_campaign_failure_cancels_pending_follow_up(self, app, fernet_key, monkeypatch):
         from app import db

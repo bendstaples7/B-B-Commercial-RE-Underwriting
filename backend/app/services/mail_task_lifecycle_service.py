@@ -87,20 +87,6 @@ def mail_cadence_eligible_date(
     )
 
 
-def lead_in_mail_cadence_cooldown(
-    lead: Lead,
-    *,
-    last_mailed_at: datetime | None = None,
-    today: date | None = None,
-) -> bool:
-    """True when the lead was mailed within the quarterly rematch window."""
-    return mail_cadence_eligible_date(
-        lead,
-        last_mailed_at=last_mailed_at,
-        today=today,
-    ) is not None
-
-
 def resolve_mail_eligibility_hold(
     lead: Lead,
     *,
@@ -1212,6 +1198,8 @@ def is_mail_follow_up_title(title: str | None) -> bool:
 
 def is_mail_follow_up_task(task: LeadTask) -> bool:
     """True when the task is the post-mailer rematch cadence (pending or dated)."""
+    if (task.task_type or '').strip() == MAIL_REMATCH_TASK_TYPE:
+        return True
     return is_mail_follow_up_title(task.title)
 
 
@@ -1838,15 +1826,21 @@ def ensure_due_today_call_task(
     return task
 
 
-def refresh_leads_after_mail_task_changes(lead_ids: list[int]) -> None:
+def refresh_leads_after_mail_task_changes(
+    lead_ids: list[int],
+    *,
+    commit: bool = True,
+) -> None:
     """Recompute recommended actions after mail task lifecycle updates."""
     if not lead_ids:
         return
-    from app.services.lead_refresh import refresh_lead_scoring
+    from app.services.lead_scoring_engine import LeadScoringEngine
+
+    engine = LeadScoringEngine()
 
     for lead_id in lead_ids:
         try:
-            refresh_lead_scoring(lead_id)
+            engine.score_and_persist(lead_id, commit=commit)
         except Exception as exc:
             logger.error(
                 'refresh_lead_scoring failed for lead %s after mail task lifecycle: %s',
@@ -1915,7 +1909,7 @@ def heal_mail_cadence_cooldown(
         ) is not None:
             cooldown_ids.add(lead_id)
 
-    rematch_tasks = [t for t in rematch_tasks if t.lead_id in cooldown_ids]
+    rematch_tasks = [t for t in rematch_tasks if last_mailed.get(t.lead_id) is not None]
     rematch_lead_ids = sorted({task.lead_id for task in rematch_tasks})
     leads_by_id = {
         lead.id: lead
@@ -1934,6 +1928,7 @@ def heal_mail_cadence_cooldown(
         if expected is None or task.due_date == expected:
             continue
         title = _mail_follow_up_title(lead)
+        old_title = task.title
         task.due_date = expected
         task.task_type = MAIL_REMATCH_TASK_TYPE
         task.title = title
@@ -1941,7 +1936,7 @@ def heal_mail_cadence_cooldown(
         for mirror in _select_rematch_mirrors(
             task,
             task.lead_id,
-            {task.title, title},
+            {old_title, title},
             allow_pending_title_match=True,
         ):
             _sync_rematch_mirror(
@@ -1981,7 +1976,7 @@ def heal_mail_cadence_cooldown(
     rescored = 0
     for i in range(0, len(rescore_ids), max(1, rescore_batch_size)):
         chunk = rescore_ids[i:i + rescore_batch_size]
-        refresh_leads_after_mail_task_changes(chunk)
+        refresh_leads_after_mail_task_changes(chunk, commit=commit)
         rescored += len(chunk)
         affected.update(chunk)
 
