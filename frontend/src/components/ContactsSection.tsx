@@ -278,6 +278,7 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
     }
     return Array.from(byKey.values())
   }, [contacts])
+  const contactsLoadedSuccessfully = contacts !== undefined && !fetchError
 
   const unlinkedPeople = useMemo(
     () =>
@@ -607,7 +608,7 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
               setCreateInitialValues(undefined)
               setInitialFormMode('create')
               setInitialLinkQuery('')
-              setLinkAsPrimary(peopleContacts.length === 0)
+              setLinkAsPrimary(contactsLoadedSuccessfully && peopleContacts.length === 0)
               setFormOpen(true)
             }}
             aria-label="Add contact"
@@ -861,7 +862,7 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
                         })
                         setInitialFormMode('link')
                         setInitialLinkQuery(fullName)
-                        setLinkAsPrimary(peopleContacts.length === 0)
+                        setLinkAsPrimary(contactsLoadedSuccessfully && peopleContacts.length === 0)
                         setFormOpen(true)
                       }}
                       data-testid="materialize-unlinked-person-btn"

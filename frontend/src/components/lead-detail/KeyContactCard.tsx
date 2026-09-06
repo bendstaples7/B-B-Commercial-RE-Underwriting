@@ -1,11 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Box, Button, Chip, Divider, Link, Paper, Stack, Typography } from '@mui/material'
 import { useQuery } from '@tanstack/react-query'
 import EmailOutlinedIcon from '@mui/icons-material/EmailOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import LocalPostOfficeOutlinedIcon from '@mui/icons-material/LocalPostOfficeOutlined'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
-import type { CommandCenterPayload, LeadPhone, PropertyContactSummary } from '@/types'
+import type { CommandCenterPayload, Contact, LeadPhone, PropertyContactSummary } from '@/types'
 import {
   ccCardSx,
   ccMetaSx,
@@ -182,6 +182,8 @@ function channelsToInitialValues(
 export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyContactCardProps) {
   const [addOpen, setAddOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
+  const [editDetailsLoading, setEditDetailsLoading] = useState(false)
+  const [prefetchedEditContact, setPrefetchedEditContact] = useState<Contact | null>(null)
   const channels = resolveKeyContactChannels(commandCenterData)
   const mailing = formatKeyContactMailing(commandCenterData)
   const displayName = name?.trim() || 'No contact on file'
@@ -227,15 +229,35 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
     enabled: false,
   })
 
+  useEffect(() => {
+    setPrefetchedEditContact(null)
+  }, [editablePerson?.id])
+
   const editContact = useMemo(() => {
     if (!editablePerson) return undefined
-    if (!editableContactDetail) return editablePerson
+    const fullContact = prefetchedEditContact ?? editableContactDetail
+    if (!fullContact) return editablePerson
     return {
-      ...editableContactDetail,
+      ...fullContact,
       property_contact_role: editablePerson.role,
       is_primary: editablePerson.is_primary,
     }
-  }, [editableContactDetail, editablePerson])
+  }, [editableContactDetail, editablePerson, prefetchedEditContact])
+
+  const openEditDetails = async () => {
+    if (!editablePerson) {
+      setEditOpen(true)
+      return
+    }
+    setEditDetailsLoading(true)
+    try {
+      const result = await fetchEditableContactDetail()
+      setPrefetchedEditContact(result.data ?? null)
+    } finally {
+      setEditDetailsLoading(false)
+      setEditOpen(true)
+    }
+  }
 
   const editInitialValues = useMemo(() => {
     if (editablePerson) {
@@ -412,15 +434,13 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
               size="small"
               variant="text"
               startIcon={<EditOutlinedIcon />}
-              onClick={() => {
-                setEditOpen(true)
-                if (editablePerson) void fetchEditableContactDetail()
-              }}
+              onClick={() => { void openEditDetails() }}
               aria-label="Edit contact details"
+              disabled={editDetailsLoading}
               data-testid="key-contact-edit-details-btn"
               sx={{ cursor: 'pointer', px: 0.5, ml: -0.5 }}
             >
-              Edit phone & details
+              {editDetailsLoading ? 'Loading details…' : 'Edit phone & details'}
             </Button>
           </Box>
         )}
@@ -524,7 +544,10 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
       />
       <ContactFormModal
         open={editOpen}
-        onClose={() => setEditOpen(false)}
+        onClose={() => {
+          setEditOpen(false)
+          setPrefetchedEditContact(null)
+        }}
         propertyId={commandCenterData.id}
         contact={editContact}
         initialValues={editInitialValues}

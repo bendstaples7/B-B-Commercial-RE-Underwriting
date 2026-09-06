@@ -19,6 +19,7 @@ from app.models.property_contact import PropertyContact
 from app.models.lead import Property
 from app.exceptions import ResourceNotFoundError, ConflictError, ValidationException
 from app.services.contact_backfill import phone_digits, split_phone_field, split_email_field
+from app.services.helpers.sql_like import escape_like_pattern
 
 from sqlalchemy.orm import selectinload
 
@@ -56,16 +57,6 @@ def _strip_invisible(value: str) -> str:
         if not (unicodedata.category(ch).startswith('C') or unicodedata.category(ch) == 'Zs')
     )
     return cleaned.strip()
-
-
-def _escape_like_pattern(value: str) -> str:
-    """Escape SQL LIKE wildcards so contact search is a literal substring match."""
-    return (
-        value
-        .replace('\\', '\\\\')
-        .replace('%', '\\%')
-        .replace('_', '\\_')
-    )
 
 
 class ContactService:
@@ -512,7 +503,7 @@ class ContactService:
         except (TypeError, ValueError):
             limit = 20
 
-        pattern = f'%{_escape_like_pattern(q)}%'
+        pattern = f'%{escape_like_pattern(q)}%'
         full_name = db.func.trim(
             db.func.concat(
                 db.func.coalesce(Contact.first_name, ''),

@@ -210,6 +210,9 @@ describe('ContactsSection', () => {
   it('opens ContactFormModal from Add Contact', async () => {
     vi.mocked(contactService.getPropertyContacts).mockResolvedValue([])
     render(<ContactsSection propertyId={PROPERTY_ID} />)
+    await waitFor(() => {
+      expect(screen.getByText(/No people linked yet/i)).toBeInTheDocument()
+    })
     fireEvent.click(screen.getByRole('button', { name: /add contact/i }))
     await waitFor(() => {
       expect(screen.getByTestId('contact-form-modal')).toBeInTheDocument()
@@ -221,6 +224,21 @@ describe('ContactsSection', () => {
       linkAsPrimary: true,
       initialMode: 'create',
     })
+  })
+
+  it('does not infer primary status before contacts finish loading', async () => {
+    vi.mocked(contactService.getPropertyContacts).mockReturnValue(
+      new Promise(() => {}),
+    )
+    render(<ContactsSection propertyId={PROPERTY_ID} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /add contact/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('contact-form-modal')).toBeInTheDocument()
+    })
+    const calls = contactFormModalSpy.mock.calls
+    expect(calls[calls.length - 1][0]).toMatchObject({ linkAsPrimary: false })
   })
 
   it('surfaces fetch errors', async () => {

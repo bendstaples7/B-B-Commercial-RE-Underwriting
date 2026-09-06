@@ -438,6 +438,43 @@ describe('ContactFormModal', () => {
       expect(payload).not.toHaveProperty('notes')
       expect(payload).not.toHaveProperty('role_description')
     })
+
+    it('preserves newly typed notes for summary edit targets', async () => {
+      vi.mocked(contactService.updateContact).mockResolvedValue({
+        ...mockContact,
+        notes: 'Call after 5pm',
+      })
+
+      render(
+        <ContactFormModal
+          open={true}
+          onClose={ON_CLOSE}
+          propertyId={PROPERTY_ID}
+          contact={{
+            id: mockContact.id,
+            first_name: 'Jane',
+            last_name: 'Doe',
+            role: 'owner',
+            property_contact_role: 'owner',
+            phones: [],
+            emails: [],
+            is_primary: true,
+          }}
+        />,
+      )
+
+      fireEvent.change(screen.getByRole('textbox', { name: /notes/i }), {
+        target: { value: 'Call after 5pm' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+
+      await waitFor(() => {
+        expect(contactService.updateContact).toHaveBeenCalledWith(
+          mockContact.id,
+          expect.objectContaining({ notes: 'Call after 5pm' }),
+        )
+      })
+    })
   })
 
   describe('API error handling', () => {

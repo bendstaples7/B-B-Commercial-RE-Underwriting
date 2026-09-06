@@ -10,6 +10,7 @@ from app.models import Lead, LeadTimelineEntry
 from app.services.gis.routing import parse_city_state_zip_from_address
 from app.services.google_sheets_importer import GoogleSheetsImporter
 from app.services.helpers.deal_source import DEAL_SOURCE_OPTIONS
+from app.services.helpers.sql_like import escape_like_pattern
 from app.services.hubspot_writeback_service import DEFAULT_QUICK_ADD_DEAL_SOURCE
 from app.services.skip_trace_enqueue import SkipTraceEnqueue
 
@@ -26,12 +27,6 @@ PRIORITY_TO_MANUAL: dict[str, int] = {
     'medium': 3,
     'low': 1,
 }
-
-
-def _escape_like_pattern(value: str) -> str:
-    """Escape SQL LIKE metacharacters so user input is matched literally."""
-    return value.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-
 
 def _format_capture_timestamp(when: datetime | None = None) -> str:
     dt = when or datetime.now(timezone.utc)
@@ -145,7 +140,7 @@ class QuickAddService:
             matches = (
                 Lead.query.filter(Lead.owner_user_id == user_id)
                 .filter(Lead.property_street.isnot(None))
-                .filter(Lead.property_street.ilike(f'%{_escape_like_pattern(search)}%', escape='\\'))
+                .filter(Lead.property_street.ilike(f'%{escape_like_pattern(search)}%', escape='\\'))
                 .order_by(Lead.updated_at.desc())
                 .limit(limit * 3)
                 .all()

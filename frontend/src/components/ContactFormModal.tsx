@@ -464,10 +464,20 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
         .filter((e) => e.value.trim())
         .map((e) => ({ value: e.value.trim(), label: e.label })),
     }
-    if (isEditMode && contact?.role_description === undefined && initialValues?.roleDescription === undefined) {
+    if (
+      isEditMode
+      && contact?.role_description === undefined
+      && initialValues?.roleDescription === undefined
+      && !form.roleDescription.trim()
+    ) {
       delete payload.role_description
     }
-    if (isEditMode && contact?.notes === undefined && initialValues?.notes === undefined) {
+    if (
+      isEditMode
+      && contact?.notes === undefined
+      && initialValues?.notes === undefined
+      && !form.notes.trim()
+    ) {
       delete payload.notes
     }
 

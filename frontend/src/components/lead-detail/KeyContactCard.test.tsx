@@ -331,6 +331,18 @@ describe('KeyContactCard', () => {
 
   it('seeds flat channels when editing a linked key contact', async () => {
     const user = userEvent.setup()
+    vi.mocked(contactService.getContact).mockResolvedValue({
+      id: 88,
+      first_name: 'Jane',
+      last_name: 'Doe',
+      role: 'owner',
+      role_description: 'Owner contact',
+      notes: 'Preserve this note',
+      phones: [{ id: 1, contact_id: 88, value: '555-9999', label: 'mobile' }],
+      emails: [],
+      created_at: null,
+      updated_at: null,
+    })
 
     renderCard(
       basePayload({
@@ -350,7 +362,13 @@ describe('KeyContactCard', () => {
 
     await user.click(screen.getByTestId('key-contact-edit-details-btn'))
 
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(contactService.getContact).toHaveBeenCalledWith(88)
+    })
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+    expect(screen.getByRole('textbox', { name: /notes/i })).toHaveValue('Preserve this note')
     expect(screen.getByDisplayValue('555-9999')).toBeInTheDocument()
     expect(screen.getByDisplayValue('(312) 555-0000')).toBeInTheDocument()
   })
