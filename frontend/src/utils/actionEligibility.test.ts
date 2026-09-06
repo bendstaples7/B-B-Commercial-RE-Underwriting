@@ -3,6 +3,7 @@ import {
   REASON_ALREADY_SKIP_TRACE,
   REASON_DNC_BLOCKS_OUTREACH,
   REASON_MAIL_ALREADY_QUEUED,
+  REASON_MAIL_CADENCE,
   REASON_MAIL_INVALID_ADDRESS,
   REASON_MAIL_RECENTLY_SOLD,
   REASON_TERMINAL_STATUS,
@@ -45,6 +46,16 @@ describe('actionEligibility', () => {
     ).toMatchObject({
       reasonCode: REASON_MAIL_RECENTLY_SOLD,
       message: `Held after recent sale until ${formatDateOnly('2027-03-31')}`,
+    })
+    expect(
+      evaluateAddToMailBatch({
+        mailEligible: false,
+        mailIneligibleReason: 'mail_cadence',
+        mailEligibleDate: '2026-10-26',
+      }),
+    ).toMatchObject({
+      reasonCode: REASON_MAIL_CADENCE,
+      message: `Next mail on ${formatDateOnly('2026-10-26')}`,
     })
     expect(evaluateAddToMailBatch({ mailEligible: false }).reasonCode).toBe(
       REASON_MAIL_INVALID_ADDRESS,

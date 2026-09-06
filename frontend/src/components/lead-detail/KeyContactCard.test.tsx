@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@/test/testUtils'
+import userEvent from '@testing-library/user-event'
 import {
   KeyContactCard,
   formatKeyContactMailing,
@@ -13,8 +14,14 @@ vi.mock('@/services/api', () => ({
     updateContact: vi.fn(),
     createContact: vi.fn(),
     linkContactToProperty: vi.fn(),
+    searchContacts: vi.fn(),
+    getContact: vi.fn(),
   },
 }))
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
 function basePayload(overrides: Partial<CommandCenterPayload> = {}): CommandCenterPayload {
   return {
@@ -282,5 +289,167 @@ describe('KeyContactCard', () => {
     fireEvent.click(screen.getByTestId('key-contact-add-person-btn'))
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.getAllByText('Add Contact').length).toBeGreaterThan(0)
+  })
+
+  it('does not offer person edit details for an organization-only key contact', () => {
+    renderCard(
+      basePayload({
+        owner_first_name: null,
+        owner_last_name: null,
+        contacts: [],
+        organizations: [
+          {
+            id: 10,
+            name: 'Kdg Avondale LLC',
+            org_type: 'llc',
+            role: 'owner',
+            link_id: 1,
+          },
+        ],
+      }),
+      'Kdg Avondale LLC',
+    )
+
+    expect(screen.getByTestId('key-contact-name')).toHaveTextContent('Kdg Avondale LLC')
+    expect(screen.queryByTestId('key-contact-edit-details-btn')).not.toBeInTheDocument()
+  })
+
+  it('opens edit phone & details for a flat-only key contact', () => {
+    renderCard(
+      basePayload({
+        owner_first_name: 'Gregory',
+        owner_last_name: 'Shek',
+        phone_1: '(312) 555-0199',
+        contacts: [],
+      }),
+      'Gregory Shek',
+    )
+    fireEvent.click(screen.getByTestId('key-contact-edit-details-btn'))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByTestId('contact-phone-input-0')).toHaveValue('(312) 555-0199')
+  })
+
+  it('seeds flat channels when editing a linked key contact', async () => {
+    const user = userEvent.setup()
+    vi.mocked(contactService.getContact).mockResolvedValue({
+      id: 88,
+      first_name: 'Jane',
+      last_name: 'Doe',
+      role: 'owner',
+      role_description: 'Owner contact',
+      notes: 'Preserve this note',
+      phones: [{ id: 1, contact_id: 88, value: '555-9999', label: 'mobile' }],
+      emails: [],
+      created_at: null,
+      updated_at: null,
+    })
+
+    renderCard(
+      basePayload({
+        contacts: [{
+          id: 88,
+          first_name: 'Jane',
+          last_name: 'Doe',
+          role: 'owner',
+          is_primary: true,
+          phones: [{ value: '555-9999', label: 'mobile' }],
+          emails: [],
+        }],
+        phones: [{ value: '(312) 555-0000', label: 'work' }],
+      }),
+      'Jane Doe',
+    )
+
+    await user.click(screen.getByTestId('key-contact-edit-details-btn'))
+
+    await waitFor(() => {
+      expect(contactService.getContact).toHaveBeenCalledWith(88)
+    })
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+    expect(screen.getByRole('textbox', { name: /notes/i })).toHaveValue('Preserve this note')
+    expect(screen.getByDisplayValue('555-9999')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('(312) 555-0000')).toBeInTheDocument()
+  })
+
+  it('keeps edit closed and shows an error when linked contact details fail to load', async () => {
+    const user = userEvent.setup()
+    vi.mocked(contactService.getContact).mockRejectedValue(new Error('Network error'))
+
+    renderCard(
+      basePayload({
+        contacts: [{
+          id: 88,
+          first_name: 'Jane',
+          last_name: 'Doe',
+          role: 'owner',
+          is_primary: true,
+          phones: [{ value: '555-9999', label: 'mobile' }],
+          emails: [],
+        }],
+      }),
+      'Jane Doe',
+    )
+
+    await user.click(screen.getByTestId('key-contact-edit-details-btn'))
+
+    await waitFor(() => {
+      expect(contactService.getContact).toHaveBeenCalledWith(88)
+    })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(
+      await screen.findByText('Could not load contact details. Please try again.'),
+    ).toBeInTheDocument()
+  })
+
+  it('clears a stale load error after a successful retry opens the editor', async () => {
+    const user = userEvent.setup()
+    vi.mocked(contactService.getContact)
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValueOnce({
+        id: 88,
+        first_name: 'Jane',
+        last_name: 'Doe',
+        role: 'owner',
+        role_description: 'Owner contact',
+        notes: 'Loaded on retry',
+        phones: [{ id: 1, contact_id: 88, value: '555-9999', label: 'mobile' }],
+        emails: [],
+        created_at: null,
+        updated_at: null,
+      })
+
+    renderCard(
+      basePayload({
+        contacts: [{
+          id: 88,
+          first_name: 'Jane',
+          last_name: 'Doe',
+          role: 'owner',
+          is_primary: true,
+          phones: [{ value: '555-9999', label: 'mobile' }],
+          emails: [],
+        }],
+      }),
+      'Jane Doe',
+    )
+
+    await user.click(screen.getByTestId('key-contact-edit-details-btn'))
+    expect(
+      await screen.findByText('Could not load contact details. Please try again.'),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByTestId('key-contact-edit-details-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+    expect(screen.getByRole('textbox', { name: /notes/i })).toHaveValue('Loaded on retry')
+    await waitFor(() => {
+      expect(
+        screen.queryByText('Could not load contact details. Please try again.'),
+      ).not.toBeInTheDocument()
+    })
   })
 })

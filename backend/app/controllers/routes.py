@@ -7,6 +7,7 @@ from app.controllers.workflow_controller import WorkflowController
 from app.models.analysis_session import WorkflowStep
 from app.models.user import User
 from app.models.lead import Lead
+from app.api_utils import require_auth
 from app.schemas import (
     StartAnalysisSchema,
     PropertyFactsSchema,
@@ -15,6 +16,9 @@ from app.schemas import (
     ExportGoogleSheetsSchema
 )
 from app.services.report_generator import ReportGenerator
+from app.services.helpers.google_maps_browser_key import (
+    resolve_google_maps_browser_api_key,
+)
 from app import limiter
 import logging
 
@@ -202,6 +206,21 @@ def health_runtime():
     payload = {'status': 'ok'}
     payload.update(get_runtime_identity(allow_restart=allow_restart))
     return jsonify(payload), 200
+
+
+@api_bp.route('/config/client', methods=['GET'])
+@handle_errors
+@require_auth
+def client_config():
+    """Authenticated client bootstrap config (browser Maps / Places key).
+
+    The SPA historically relied on build-time ``VITE_GOOGLE_MAPS_API_KEY``.
+    CI often ships an empty key; this endpoint lets authenticated sessions
+    recover autocomplete from the backend env without rebuilding the SPA.
+    """
+    return jsonify({
+        'google_maps_api_key': resolve_google_maps_browser_api_key(),
+    }), 200
 
 
 @api_bp.route('/health', methods=['GET'])

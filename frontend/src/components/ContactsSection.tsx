@@ -37,17 +37,20 @@ import {
   personIdentityKey,
   personIdentityKeyFromFullName,
   splitDisplayName,
+  unlinkedPeopleFromLead,
 } from '@/utils/propertyContacts'
 import { ContactNameInlineEdit } from '@/components/ContactNameInlineEdit'
 import { PhoneList } from '@/components/PhoneRow'
 import type {
   CommandCenterPayload,
   ContactRole,
+  EmailLabel,
   EntityResolutionStatus,
+  PhoneLabel,
   PropertyContact,
   PropertyOrganizationSummary,
 } from '@/types'
-import { ContactFormModal } from './ContactFormModal'
+import { ContactFormModal, type ContactFormInitialValues } from './ContactFormModal'
 import {
   ccMetaSx,
   ccRowTitleSx,
@@ -132,6 +135,10 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
 
   const [formOpen, setFormOpen] = useState(false)
   const [editingContact, setEditingContact] = useState<PropertyContact | undefined>(undefined)
+  const [createInitialValues, setCreateInitialValues] = useState<ContactFormInitialValues | undefined>(undefined)
+  const [initialFormMode, setInitialFormMode] = useState<'create' | 'link'>('create')
+  const [initialLinkQuery, setInitialLinkQuery] = useState('')
+  const [linkAsPrimary, setLinkAsPrimary] = useState(false)
   const [companyDialogOpen, setCompanyDialogOpen] = useState(false)
   const [companyName, setCompanyName] = useState('')
 
@@ -271,6 +278,30 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
     }
     return Array.from(byKey.values())
   }, [contacts])
+  const contactsLoadedSuccessfully = contacts !== undefined && !fetchError
+
+  const unlinkedPeople = useMemo(
+    () =>
+      unlinkedPeopleFromLead(contacts, {
+        ownerFirst: cc?.owner_first_name,
+        ownerLast: cc?.owner_last_name,
+        owner2First: cc?.owner_2_first_name,
+        owner2Last: cc?.owner_2_last_name,
+        organizations: organizations,
+        phones: cc?.phones,
+        emails: cc?.emails,
+      }),
+    [
+      contacts,
+      cc?.owner_first_name,
+      cc?.owner_last_name,
+      cc?.owner_2_first_name,
+      cc?.owner_2_last_name,
+      organizations,
+      cc?.phones,
+      cc?.emails,
+    ],
+  )
 
   const leftoverEntityContacts = useMemo(
     () => (contacts ?? []).filter((c) => isEntityContactName(c)),
@@ -574,9 +605,14 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
             startIcon={<PersonAddIcon />}
             onClick={() => {
               setEditingContact(undefined)
+              setCreateInitialValues(undefined)
+              setInitialFormMode('create')
+              setInitialLinkQuery('')
+              setLinkAsPrimary(contactsLoadedSuccessfully && peopleContacts.length === 0)
               setFormOpen(true)
             }}
             aria-label="Add contact"
+            data-testid="add-contact-btn"
           >
             Add Contact
           </Button>
@@ -767,20 +803,83 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
         </Alert>
       )}
 
-      {!isLoading && !fetchError && peopleContacts.length === 0 && (
+      {!isLoading && !fetchError && peopleContacts.length === 0 && unlinkedPeople.length === 0 && (
         <Typography variant="body2" color="text.secondary">
-          No people linked yet. Use Add Contact to link one.
+          No people linked yet. Use Add Contact to create or link one.
         </Typography>
       )}
 
-      {!isLoading && !fetchError && peopleContacts.length > 0 && (
+      {!isLoading && !fetchError && (peopleContacts.length > 0 || unlinkedPeople.length > 0) && (
         <List disablePadding data-testid="people-list">
+          {unlinkedPeople.map((person, index) => {
+            const fullName =
+              [person.first_name, person.last_name].filter(Boolean).join(' ') || '(No name)'
+            const sourceLabel =
+              person.source === 'resolved_person'
+                ? 'From company research'
+                : 'On file — not linked yet'
+            return (
+              <React.Fragment key={person.key}>
+                {index > 0 && <Divider />}
+                <ListItem
+                  sx={{ flexDirection: 'column', alignItems: 'stretch', py: 1.25 }}
+                  data-testid={`unlinked-person-row-${person.key}`}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, width: '100%' }}>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                        <Typography sx={{ ...ccRowTitleSx, fontWeight: 500 }}>{fullName}</Typography>
+                        <Chip size="small" label={sourceLabel} variant="outlined" color="warning" />
+                      </Box>
+                      {person.phones?.length ? (
+                        <PhoneList phones={person.phones} showLabel dense={false} />
+                      ) : null}
+                      {person.emails?.map((email) => (
+                        <Typography key={email.value} variant="body2" color="text.secondary">
+                          {email.value}
+                        </Typography>
+                      ))}
+                    </Box>
+                  </Box>
+                  <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      onClick={() => {
+                        const fullName = [person.first_name, person.last_name].filter(Boolean).join(' ')
+                        setEditingContact(undefined)
+                        setCreateInitialValues({
+                          firstName: person.first_name ?? '',
+                          lastName: person.last_name ?? '',
+                          phones: person.phones.map((p) => ({
+                            value: p.value,
+                            label: p.label as PhoneLabel | undefined,
+                          })),
+                          emails: person.emails.map((e) => ({
+                            value: e.value,
+                            label: e.label as EmailLabel | undefined,
+                          })),
+                        })
+                        setInitialFormMode('link')
+                        setInitialLinkQuery(fullName)
+                        setLinkAsPrimary(contactsLoadedSuccessfully && peopleContacts.length === 0)
+                        setFormOpen(true)
+                      }}
+                      data-testid="materialize-unlinked-person-btn"
+                    >
+                      Save as contact
+                    </Button>
+                  </Box>
+                </ListItem>
+              </React.Fragment>
+            )
+          })}
           {peopleContacts.map((contact, index) => {
             const fullName =
               [contact.first_name, contact.last_name].filter(Boolean).join(' ') || '(No name)'
             return (
               <React.Fragment key={contact.id}>
-                {index > 0 && <Divider />}
+                {(index > 0 || unlinkedPeople.length > 0) && <Divider />}
                 <ListItem
                   sx={{ flexDirection: 'column', alignItems: 'stretch', py: 1.25 }}
                   data-testid={`person-row-${contact.id}`}
@@ -854,6 +953,10 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
                       size="small"
                       variant="outlined"
                       onClick={() => {
+                        setCreateInitialValues(undefined)
+                        setInitialFormMode('create')
+                        setInitialLinkQuery('')
+                        setLinkAsPrimary(false)
                         setEditingContact(contact)
                         setFormOpen(true)
                       }}
@@ -937,11 +1040,20 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
         onClose={() => {
           setFormOpen(false)
           setEditingContact(undefined)
+          setCreateInitialValues(undefined)
+          setInitialFormMode('create')
+          setInitialLinkQuery('')
+          setLinkAsPrimary(false)
           queryClient.invalidateQueries({ queryKey: ['propertyContacts', propertyId] })
           queryClient.invalidateQueries({ queryKey: ['commandCenter', propertyId] })
         }}
         propertyId={propertyId}
         contact={editingContact}
+        initialValues={createInitialValues}
+        linkAsPrimary={linkAsPrimary}
+        allowLinkExisting={!editingContact}
+        initialMode={initialFormMode}
+        initialLinkQuery={initialLinkQuery}
       />
 
       <AppSnackbar

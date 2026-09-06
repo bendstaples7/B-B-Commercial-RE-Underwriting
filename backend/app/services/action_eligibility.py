@@ -27,6 +27,7 @@ REASON_ALREADY_SKIP_TRACE = 'already_skip_trace'
 REASON_TERMINAL_STATUS = 'terminal_status'
 REASON_DNC_BLOCKS_OUTREACH = 'dnc_blocks_outreach'
 REASON_MAIL_RECENTLY_SOLD = 'mail_recently_sold'
+REASON_MAIL_CADENCE = 'mail_cadence'
 REASON_MAIL_INVALID_ADDRESS = 'mail_invalid_address'
 REASON_MAIL_ALREADY_QUEUED = 'mail_already_queued'
 
@@ -114,6 +115,20 @@ def evaluate_add_to_mail_batch(
         return _blocked(
             REASON_MAIL_RECENTLY_SOLD,
             'Held after recent sale until the two-year hold ends',
+        )
+    if mail_ineligible_reason == 'mail_cadence':
+        if mail_eligible_date:
+            if isinstance(mail_eligible_date, date):
+                when = mail_eligible_date.isoformat()
+            else:
+                when = str(mail_eligible_date)
+            return _blocked(
+                REASON_MAIL_CADENCE,
+                f'Next mail on {when}',
+            )
+        return _blocked(
+            REASON_MAIL_CADENCE,
+            'Next mail after the quarterly rematch date',
         )
     return _blocked(
         REASON_MAIL_INVALID_ADDRESS,

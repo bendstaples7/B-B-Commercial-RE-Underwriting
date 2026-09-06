@@ -241,6 +241,15 @@ export function QuickAddPage() {
           message: `Lead was reactivated, but a recent sale was detected. Direct mail is deferred until ${eligible}.`,
         }
       }
+      if (outcome?.status === 'mail_cadence') {
+        const eligible = outcome.mail_eligible_date
+          ? formatDateOnly(outcome.mail_eligible_date)
+          : 'the quarterly rematch date'
+        return {
+          severity: 'warning' as const,
+          message: `Lead was reactivated, but was mailed recently. Next mail on ${eligible}.`,
+        }
+      }
       throw new Error(outcome?.error || 'Lead was reactivated, but could not be added to mail.')
     },
     onSuccess: (feedback) => {

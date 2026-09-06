@@ -1229,6 +1229,22 @@ export const contactService = {
     return response.data
   },
 
+  /** GET /api/contacts/search — find contacts by name for linking */
+  searchContacts: async (params: {
+    q: string
+    limit?: number
+    excludePropertyId?: number
+  }): Promise<Contact[]> => {
+    const response = await api.get<{ results: Contact[] }>('/contacts/search', {
+      params: {
+        q: params.q,
+        limit: params.limit ?? 20,
+        exclude_property_id: params.excludePropertyId,
+      },
+    })
+    return response.data.results ?? []
+  },
+
   /** GET /api/contacts/{id} — get a contact with phones, emails, and linked properties */
   getContact: async (id: number): Promise<Contact> => {
     const response = await api.get<Contact>(`/contacts/${id}`)
@@ -1325,7 +1341,7 @@ export const commandCenterService = {
     updated_fields: string[]
     is_mailable: boolean
     mail_eligible: boolean
-    mail_ineligible_reason: 'recently_sold' | 'invalid_owner_address' | null
+    mail_ineligible_reason: 'recently_sold' | 'mail_cadence' | 'invalid_owner_address' | null
     mail_eligible_date: string | null
     owner_mailing_readiness: import('@/types').OwnerMailingReadiness
     mailing_address: string | null

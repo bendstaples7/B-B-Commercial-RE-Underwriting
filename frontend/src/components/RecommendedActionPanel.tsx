@@ -314,6 +314,13 @@ export function RecommendedActionPanel({
         : ' until the two-year hold ends.'}
       {' '}When the hold expires, the lead moves to Skip Trace for active work.
     </Alert>
+  ) : mailIneligibleReason === 'mail_cadence' ? (
+    <Alert severity="warning" sx={{ mb: 2 }} data-testid="mail-cadence-hold">
+      Mailed recently.
+      {mailEligibleDate
+        ? ` Next mail on ${formatDateOnly(mailEligibleDate)}.`
+        : ' Next mail after the quarterly rematch date.'}
+    </Alert>
   ) : null
 
   const showMailAddressAlert =
@@ -328,6 +335,7 @@ export function RecommendedActionPanel({
       )
     )
     && mailIneligibleReason !== 'recently_sold'
+    && mailIneligibleReason !== 'mail_cadence'
 
   const handleApplyParsedMailing = async () => {
     if (!onApplyParsedMailing) return

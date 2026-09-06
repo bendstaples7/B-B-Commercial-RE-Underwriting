@@ -35,6 +35,7 @@ const STATUS_LABELS: Record<string, string> = {
   queued: 'Staged',
   invalid_address: 'Invalid address',
   recently_sold: 'Recently sold',
+  mail_cadence: 'Mailed within 90 days',
   already_queued: 'Already staged',
   not_authorized: 'Not authorized',
   not_found: 'Not found',
@@ -53,6 +54,12 @@ function outcomeDetail(outcome: Outcome): string | null {
       return `Recent sale detected ${saleDate}.${queueRemoval} Deprioritized for the recent-sale hold until ${eligibleDate}; then moves to Skip Trace for active work. Direct mail remains deferred until then.`
     }
     return `Recent sale detected ${saleDate}.`
+  }
+  if (outcome.status === 'mail_cadence') {
+    if (outcome.mail_eligible_date) {
+      return `Next mail on ${formatDateOnly(outcome.mail_eligible_date)}.`
+    }
+    return 'Next mail after the quarterly rematch date.'
   }
   return null
 }
@@ -112,8 +119,9 @@ export function MailEnqueueResultDialog({
   const staged = result.results.filter((item) => item.status === 'queued')
   const invalid = result.results.filter((item) => item.status === 'invalid_address')
   const recentlySold = result.results.filter((item) => item.status === 'recently_sold')
+  const mailCadence = result.results.filter((item) => item.status === 'mail_cadence')
   const other = result.results.filter(
-    (item) => !['queued', 'invalid_address', 'recently_sold'].includes(item.status),
+    (item) => !['queued', 'invalid_address', 'recently_sold', 'mail_cadence'].includes(item.status),
   )
 
   return (
@@ -126,6 +134,7 @@ export function MailEnqueueResultDialog({
         <Stack spacing={2.5}>
           <OutcomeGroup label="Invalid addresses" outcomes={invalid} />
           <OutcomeGroup label="Recently sold" outcomes={recentlySold} />
+          <OutcomeGroup label="Mailed within 90 days" outcomes={mailCadence} />
           <OutcomeGroup label="Other outcomes" outcomes={other} />
           <OutcomeGroup label="Staged for next batch" outcomes={staged} />
         </Stack>

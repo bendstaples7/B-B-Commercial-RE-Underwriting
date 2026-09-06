@@ -428,6 +428,68 @@ describe('LeadTaskList', () => {
       })
     })
 
+    it('creates call_owner_today task when Schedule call is selected', async () => {
+      const newTask = makeTask(101, {
+        title: 'Follow up call',
+        task_type: 'call_owner_today',
+      })
+      mockCreateTask.mockResolvedValue(newTask)
+
+      render(
+        <LeadTaskList
+          leadId={7}
+          tasks={[]}
+          onTaskCreated={vi.fn()}
+        />,
+      )
+
+      await user.click(screen.getByTestId('open-task-form-btn'))
+      const typeSelect = screen.getByLabelText('Type')
+      await user.click(typeSelect)
+      await user.click(await screen.findByRole('option', { name: 'Schedule call' }))
+      expect(screen.getByTestId('task-title-input')).toHaveValue('Follow up call')
+      await user.click(screen.getByTestId('save-task-btn'))
+
+      await waitFor(() => {
+        expect(mockCreateTask).toHaveBeenCalledWith(7, {
+          title: 'Follow up call',
+          task_type: 'call_owner_today',
+          due_date: null,
+        })
+      })
+    })
+
+    it('creates custom Email owner task when Schedule email is selected', async () => {
+      const newTask = makeTask(102, {
+        title: 'Email owner',
+        task_type: 'custom',
+      })
+      mockCreateTask.mockResolvedValue(newTask)
+
+      render(
+        <LeadTaskList
+          leadId={7}
+          tasks={[]}
+          onTaskCreated={vi.fn()}
+        />,
+      )
+
+      await user.click(screen.getByTestId('open-task-form-btn'))
+      const typeSelect = screen.getByLabelText('Type')
+      await user.click(typeSelect)
+      await user.click(await screen.findByRole('option', { name: 'Schedule email' }))
+      expect(screen.getByTestId('task-title-input')).toHaveValue('Email owner')
+      await user.click(screen.getByTestId('save-task-btn'))
+
+      await waitFor(() => {
+        expect(mockCreateTask).toHaveBeenCalledWith(7, {
+          title: 'Email owner',
+          task_type: 'custom',
+          due_date: null,
+        })
+      })
+    })
+
     it('creates add_to_mail_batch task when type is selected', async () => {
       const newTask = makeTask(100, {
         title: 'Add to mail queue',

@@ -211,6 +211,34 @@ def _mail_work_in_flight(lead_id: int) -> bool:
         return False
 
 
+def _mail_cadence_block_outcome(lead: Lead) -> tuple[str, str, dict] | None:
+    """Nurture when last mailed within the quarterly rematch window."""
+    try:
+        from flask import has_app_context
+        if not has_app_context():
+            return None
+        from app.services.mail_task_lifecycle_service import mail_cadence_eligible_date
+
+        eligible = mail_cadence_eligible_date(lead)
+    except Exception as exc:
+        logger.warning(
+            "mail cadence check failed for lead_id=%s: %s",
+            getattr(lead, 'id', None),
+            exc,
+        )
+        # Fail closed: do not recommend mail when the cadence oracle errors.
+        return 'nurture', 'mail_cadence_cooldown', {
+            'lead_id': getattr(lead, 'id', None),
+            'mail_cadence_check_failed': True,
+        }
+    if eligible is None:
+        return None
+    return 'nurture', 'mail_cadence_cooldown', {
+        'lead_id': getattr(lead, 'id', None),
+        'mail_eligible_date': eligible.isoformat(),
+    }
+
+
 def _has_overdue_lead_task(lead_id: int) -> bool:
     """True when an open overdue *call-completable* LeadTask exists.
 
@@ -652,6 +680,9 @@ class LeadScoringEngine:
                         'has_email': False,
                         'is_mailable': True,
                     }
+                cadence_block = _mail_cadence_block_outcome(lead)
+                if cadence_block is not None:
+                    return cadence_block
                 blocked = _cold_mail_ready_outcome(lead)
                 if blocked is not None:
                     return blocked
@@ -725,6 +756,10 @@ class LeadScoringEngine:
             return 'nurture', 'negative_motivation', {'motivation_score': motivation_score}
 
         if score_tier == "A" and data_quality_score >= 70:
+            if is_mailable_lead(lead):
+                cadence_block = _mail_cadence_block_outcome(lead)
+                if cadence_block is not None:
+                    return cadence_block
             blocked = _cold_mail_ready_outcome(lead)
             if blocked is not None:
                 return blocked
@@ -882,7 +917,7 @@ class LeadScoringEngine:
         )
         if lead is None:
             return None
-        weights = self.get_weights(lead.owner_user_id or 'default')
+        weights = self.get_weights(lead.owner_user_id or 'default', commit=commit)
         signals = (
             HubSpotSignal.query
             .filter_by(lead_id=lead.id)
@@ -974,12 +1009,15 @@ class LeadScoringEngine:
     # Weight management
     # ------------------------------------------------------------------
 
-    def get_weights(self, user_id: str) -> ScoringWeights:
+    def get_weights(self, user_id: str, *, commit: bool = True) -> ScoringWeights:
         weights = ScoringWeights.query.filter_by(user_id=user_id).first()
         if not weights:
             weights = ScoringWeights(user_id=user_id, **DEFAULT_WEIGHTS)
             db.session.add(weights)
-            db.session.commit()
+            if commit:
+                db.session.commit()
+            else:
+                db.session.flush()
         return weights
 
     def update_weights(
@@ -1358,6 +1396,8 @@ class LeadScoringEngine:
         """Resolve contact channel and refine outreach action."""
         if not recommended_action:
             return recommended_action, None
+        if winning_rule == 'mail_cadence_cooldown':
+            return recommended_action, None
 
         if recommended_action == 'mail_ready':
             if rubric.is_recently_sold(lead):
@@ -1388,6 +1428,8 @@ class LeadScoringEngine:
             recommended_action, method, winning_rule=winning_rule,
         )
         if refined == 'mail_ready':
+            if _mail_cadence_block_outcome(lead) is not None:
+                return 'nurture', None
             method = 'direct_mail'
         elif refined == 'call_ready':
             method = 'phone'

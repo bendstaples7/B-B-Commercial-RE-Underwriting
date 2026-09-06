@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Box, Button, Chip, Divider, Link, Paper, Stack, Typography } from '@mui/material'
+import { useQuery } from '@tanstack/react-query'
 import EmailOutlinedIcon from '@mui/icons-material/EmailOutlined'
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import LocalPostOfficeOutlinedIcon from '@mui/icons-material/LocalPostOfficeOutlined'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
-import type { CommandCenterPayload, LeadPhone, PropertyContactSummary } from '@/types'
+import type { CommandCenterPayload, Contact, LeadPhone, PropertyContactSummary } from '@/types'
 import {
   ccCardSx,
   ccMetaSx,
@@ -18,9 +20,16 @@ import {
   additionalPeopleForKeyContact,
   contactDisplayName,
   primaryEditablePersonContact,
+  splitDisplayName,
+  unlinkedPeopleFromLead,
 } from '@/utils/propertyContacts'
 import { ContactNameInlineEdit } from '@/components/ContactNameInlineEdit'
-import { ContactFormModal } from '@/components/ContactFormModal'
+import {
+  ContactFormModal,
+  type ContactFormInitialValues,
+} from '@/components/ContactFormModal'
+import { contactService } from '@/services/api'
+import { AppSnackbar } from '@/components/AppSnackbar'
 
 export interface KeyContactCardProps {
   name: string | null
@@ -127,17 +136,86 @@ function formatContactRole(contact: PropertyContactSummary): string {
   return role.replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+type FormPhoneLabel = 'mobile' | 'home' | 'work' | 'other'
+type FormEmailLabel = 'personal' | 'work' | 'other'
+
+function toFormPhoneLabel(label: string | null | undefined): FormPhoneLabel {
+  if (label === 'home' || label === 'work' || label === 'other' || label === 'mobile') {
+    return label
+  }
+  return 'mobile'
+}
+
+function toFormEmailLabel(label: string | null | undefined): FormEmailLabel {
+  if (label === 'work' || label === 'other' || label === 'personal') {
+    return label
+  }
+  return 'personal'
+}
+
+function channelsToInitialValues(
+  name: string,
+  channels: KeyContactChannel[],
+): ContactFormInitialValues {
+  const parts = splitDisplayName(name)
+  const phones = channels
+    .filter((c): c is Extract<KeyContactChannel, { kind: 'phone' }> => c.kind === 'phone')
+    .map((c) => ({
+      value: c.phone.value,
+      label: toFormPhoneLabel(c.phone.label),
+    }))
+  const emails = channels
+    .filter((c): c is Extract<KeyContactChannel, { kind: 'email' }> => c.kind === 'email')
+    .map((c) => ({ value: c.value, label: 'personal' as const }))
+  return {
+    firstName: parts.first_name ?? '',
+    lastName: parts.last_name ?? '',
+    role: 'owner',
+    phones,
+    emails,
+  }
+}
+
 /**
  * Persistent Key Contact card — name / phone / email / mailing (no avatar).
  * On lg+ this is the single outreach contact surface.
  */
 export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyContactCardProps) {
   const [addOpen, setAddOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
+  const [editDetailsLoading, setEditDetailsLoading] = useState(false)
+  const [prefetchedEditContact, setPrefetchedEditContact] = useState<Contact | null>(null)
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string }>({
+    open: false,
+    message: '',
+  })
   const channels = resolveKeyContactChannels(commandCenterData)
   const mailing = formatKeyContactMailing(commandCenterData)
   const displayName = name?.trim() || 'No contact on file'
   const editablePerson = primaryEditablePersonContact(commandCenterData.contacts)
   const extraPeople = additionalPeopleForKeyContact(commandCenterData.contacts)
+  const ghostPeople = useMemo(
+    () =>
+      unlinkedPeopleFromLead(commandCenterData.contacts, {
+        ownerFirst: commandCenterData.owner_first_name,
+        ownerLast: commandCenterData.owner_last_name,
+        owner2First: commandCenterData.owner_2_first_name,
+        owner2Last: commandCenterData.owner_2_last_name,
+        organizations: commandCenterData.organizations,
+        phones: commandCenterData.phones,
+        emails: commandCenterData.emails,
+      }),
+    [
+      commandCenterData.contacts,
+      commandCenterData.owner_first_name,
+      commandCenterData.owner_last_name,
+      commandCenterData.owner_2_first_name,
+      commandCenterData.owner_2_last_name,
+      commandCenterData.organizations,
+      commandCenterData.phones,
+      commandCenterData.emails,
+    ],
+  )
   const phoneChannels = channels.filter(
     (c): c is Extract<KeyContactChannel, { kind: 'phone' }> => c.kind === 'phone',
   )
@@ -145,6 +223,109 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
     (c): c is Extract<KeyContactChannel, { kind: 'email' }> => c.kind === 'email',
   )
   const contactsUntrusted = Boolean(commandCenterData.contacts_likely_prior_owner)
+  const canEditDetails = !contactsUntrusted && (Boolean(editablePerson) || ghostPeople.length > 0)
+
+  const {
+    data: editableContactDetail,
+    refetch: fetchEditableContactDetail,
+  } = useQuery({
+    queryKey: ['contact', editablePerson?.id],
+    queryFn: () => contactService.getContact(editablePerson!.id),
+    enabled: false,
+  })
+
+  useEffect(() => {
+    setPrefetchedEditContact(null)
+  }, [editablePerson?.id])
+
+  const editContact = useMemo(() => {
+    if (!editablePerson) return undefined
+    const fullContact = prefetchedEditContact ?? editableContactDetail
+    if (!fullContact) return editablePerson
+    return {
+      ...fullContact,
+      property_contact_role: editablePerson.role,
+      is_primary: editablePerson.is_primary,
+    }
+  }, [editableContactDetail, editablePerson, prefetchedEditContact])
+
+  const openEditDetails = async () => {
+    if (!editablePerson) {
+      setEditOpen(true)
+      return
+    }
+    setEditDetailsLoading(true)
+    try {
+      const result = await fetchEditableContactDetail()
+      if (!result.data) {
+        setSnackbar({
+          open: true,
+          message: 'Could not load contact details. Please try again.',
+        })
+        return
+      }
+      setPrefetchedEditContact(result.data)
+      setSnackbar((s) => ({ ...s, open: false }))
+      setEditOpen(true)
+    } catch {
+      setSnackbar({
+        open: true,
+        message: 'Could not load contact details. Please try again.',
+      })
+    } finally {
+      setEditDetailsLoading(false)
+    }
+  }
+
+  const editInitialValues = useMemo(() => {
+    if (editablePerson) {
+      // Seed flat lead channels too; the form dedupes them against contact rows.
+      return {
+        firstName: editablePerson.first_name ?? '',
+        lastName: editablePerson.last_name ?? '',
+        role: 'owner' as const,
+        phones: phoneChannels.map((ch) => ({
+          value: ch.phone.value,
+          label: toFormPhoneLabel(ch.phone.label),
+        })),
+        emails: emailChannels.map((ch) => ({ value: ch.value, label: 'personal' as const })),
+      }
+    }
+    const ghost = ghostPeople[0]
+    if (ghost) {
+      const ghostPhones = ghost.phones.length
+        ? ghost.phones.map((p) => ({ value: p.value, label: toFormPhoneLabel(p.label) }))
+        : phoneChannels.map((ch) => ({
+            value: ch.phone.value,
+            label: toFormPhoneLabel(ch.phone.label),
+          }))
+      const ghostEmails = ghost.emails.length
+        ? ghost.emails.map((e) => ({
+            value: e.value,
+            label: toFormEmailLabel(e.label),
+          }))
+        : emailChannels.map((ch) => ({ value: ch.value, label: 'personal' as const }))
+      return {
+        firstName: ghost.first_name ?? '',
+        lastName: ghost.last_name ?? '',
+        role: 'owner' as const,
+        phones: ghostPhones,
+        emails: ghostEmails,
+      }
+    }
+    if (displayName === 'No contact on file') {
+      return channelsToInitialValues('', channels)
+    }
+    return channelsToInitialValues(displayName, channels)
+  }, [
+    editablePerson,
+    ghostPeople,
+    displayName,
+    channels,
+    phoneChannels,
+    emailChannels,
+  ])
+
   const contactBody = (
     <>
       {editablePerson ? (
@@ -265,6 +446,22 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
             </Typography>
           )}
         </Box>
+        {canEditDetails && (
+          <Box>
+            <Button
+              size="small"
+              variant="text"
+              startIcon={<EditOutlinedIcon />}
+              onClick={() => { void openEditDetails() }}
+              aria-label="Edit contact details"
+              disabled={editDetailsLoading}
+              data-testid="key-contact-edit-details-btn"
+              sx={{ cursor: 'pointer', px: 0.5, ml: -0.5 }}
+            >
+              {editDetailsLoading ? 'Loading details…' : 'Edit phone & details'}
+            </Button>
+          </Box>
+        )}
         {extraPeople.length > 0 && (
           <Stack spacing={1} sx={{ pt: 0.5 }} data-testid="key-contact-other-people">
             <Divider />
@@ -304,64 +501,85 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
   )
 
   return (
-    <Paper
-      data-testid="key-contact-card"
-      elevation={0}
-      sx={{
-        ...ccCardSx,
-        ...(sticky
-          ? {
-              position: 'sticky',
-              top: 16,
-              zIndex: 2,
-            }
-          : {}),
-        '&[data-owner-link-highlight="true"]': {
-          outline: '2px solid',
-          outlineColor: 'primary.main',
-          outlineOffset: 2,
-        },
-      }}
-    >
-      <Box
+    <>
+      <Paper
+        data-testid="key-contact-card"
+        elevation={0}
         sx={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 1,
-          mb: 1,
+          ...ccCardSx,
+          ...(sticky
+            ? {
+                position: 'sticky',
+                top: 16,
+                zIndex: 2,
+              }
+            : {}),
+          '&[data-owner-link-highlight="true"]': {
+            outline: '2px solid',
+            outlineColor: 'primary.main',
+            outlineOffset: 2,
+          },
         }}
       >
-        <Typography sx={ccSectionTitleSx} component="h2">
-          Key Contact
-        </Typography>
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={<PersonAddIcon />}
-          onClick={() => setAddOpen(true)}
-          aria-label="Add person"
-          data-testid="key-contact-add-person-btn"
-          sx={{ cursor: 'pointer', flexShrink: 0 }}
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 1,
+            mb: 1,
+          }}
         >
-          Add person
-        </Button>
-      </Box>
-      {contactsUntrusted ? (
-        <PriorOwnerStaleOverlay
-          testId="key-contact-stale"
-          bannerTestId="key-contact-likely-prior-owner"
-        >
-          {contactBody}
-        </PriorOwnerStaleOverlay>
-      ) : (
-        contactBody
-      )}
-      <ContactFormModal
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        propertyId={commandCenterData.id}
+          <Typography sx={ccSectionTitleSx} component="h2">
+            Key Contact
+          </Typography>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<PersonAddIcon />}
+            onClick={() => setAddOpen(true)}
+            aria-label="Add person"
+            data-testid="key-contact-add-person-btn"
+            sx={{ cursor: 'pointer', flexShrink: 0 }}
+          >
+            Add person
+          </Button>
+        </Box>
+        {contactsUntrusted ? (
+          <PriorOwnerStaleOverlay
+            testId="key-contact-stale"
+            bannerTestId="key-contact-likely-prior-owner"
+          >
+            {contactBody}
+          </PriorOwnerStaleOverlay>
+        ) : (
+          contactBody
+        )}
+        <ContactFormModal
+          open={addOpen}
+          onClose={() => setAddOpen(false)}
+          propertyId={commandCenterData.id}
+          allowLinkExisting
+        />
+        <ContactFormModal
+          open={editOpen}
+          onClose={() => {
+            setEditOpen(false)
+            setPrefetchedEditContact(null)
+          }}
+          propertyId={commandCenterData.id}
+          contact={editContact}
+          initialValues={editInitialValues}
+          linkAsPrimary={!editablePerson}
+          allowLinkExisting={false}
+        />
+      </Paper>
+      <AppSnackbar
+        open={snackbar.open}
+        onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
+        message={snackbar.message}
+        severity="error"
       />
-    </Paper>
+    </>
   )
 }

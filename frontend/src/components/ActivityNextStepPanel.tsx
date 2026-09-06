@@ -21,8 +21,12 @@ import {
   type FollowUpPreset,
   formatFollowUpPresetLabel,
 } from '@/utils/followUpPresets'
+import {
+  CREATE_TASK_PRESETS,
+  type CreateTaskPresetId,
+} from '@/utils/createTaskPresets'
 
-export type NextStepTaskType = 'call_owner_today' | 'add_to_mail_batch' | 'custom'
+export type NextStepTaskType = CreateTaskPresetId
 
 export interface ActivityNextStepPanelProps {
   completableTask: LeadTask | null
@@ -169,9 +173,11 @@ export function ActivityNextStepPanel({
                   onChange={(e) => onNextStepTypeChange(e.target.value as NextStepTaskType)}
                   inputProps={{ 'data-testid': 'next-step-type-select' }}
                 >
-                  <MenuItem value="call_owner_today">Follow-up call</MenuItem>
-                  <MenuItem value="add_to_mail_batch">Add to mail queue</MenuItem>
-                  <MenuItem value="custom">Custom task</MenuItem>
+                  {CREATE_TASK_PRESETS.map((opt) => (
+                    <MenuItem key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </MenuItem>
+                  ))}
                 </Select>
               </FormControl>
               {nextStepType === 'custom' && (

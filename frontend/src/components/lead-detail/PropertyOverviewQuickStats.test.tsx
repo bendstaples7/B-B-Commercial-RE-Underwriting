@@ -255,9 +255,13 @@ describe('PropertyOverviewQuickStats', () => {
     )
 
     await user.click(screen.getByTestId('quick-stat-last-sale-edit-trigger'))
+    // Popover seeds drafts in useEffect after open — wait before replace so
+    // clear+type cannot race and append onto a late-filled '425000'.
     const priceInput = screen.getByTestId('quick-stat-last-sale-price-input')
-    await user.clear(priceInput)
-    await user.type(priceInput, '450000')
+    await waitFor(() => {
+      expect(priceInput).toHaveValue('425000')
+    })
+    fireEvent.change(priceInput, { target: { value: '450000' } })
     await user.click(screen.getByTestId('quick-stat-last-sale-save'))
 
     await waitFor(() => {
@@ -285,7 +289,10 @@ describe('PropertyOverviewQuickStats', () => {
 
     await user.click(screen.getByTestId('quick-stat-last-sale-edit-trigger'))
 
-    expect(screen.getByTestId('quick-stat-last-sale-price-input')).toHaveValue('425000')
+    // Popover seeds drafts in useEffect after open — wait so CI doesn't race empty ''.
+    await waitFor(() => {
+      expect(screen.getByTestId('quick-stat-last-sale-price-input')).toHaveValue('425000')
+    })
   })
 
   it('rejects marker-only prices and fractional units before saving', async () => {
@@ -323,8 +330,10 @@ describe('PropertyOverviewQuickStats', () => {
 
     await user.click(screen.getByTestId('quick-stat-last-sale-edit-trigger'))
     const priceInput = screen.getByTestId('quick-stat-last-sale-price-input')
-    await user.clear(priceInput)
-    await user.type(priceInput, '325000')
+    await waitFor(() => {
+      expect(priceInput).toHaveValue('300000')
+    })
+    fireEvent.change(priceInput, { target: { value: '325000' } })
     await user.click(screen.getByTestId('quick-stat-last-sale-save'))
 
     await waitFor(() => {

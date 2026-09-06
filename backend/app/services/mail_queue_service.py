@@ -26,10 +26,12 @@ from app.services.mail_task_lifecycle_service import (
     cancel_pending_mail_follow_up_tasks,
     complete_tasks_superseded_by_mail,
     create_pending_mail_follow_up_task,
+    mail_cadence_eligible_date_from_last_mailed,
     reconcile_recent_sale_mail_tasks_for_lead,
     refresh_leads_after_mail_task_changes,
     sync_recent_sale_hubspot_due_dates,
 )
+from app.services.last_mailed_service import get_last_mailed_at_by_lead_ids
 from app.services.hubspot_task_completion_service import sync_pending_hubspot_completions
 
 logger = logging.getLogger(__name__)
@@ -236,6 +238,14 @@ class MailQueueService:
         rejected_lead_ids: list[int] = []
         hubspot_sync_ids: list[str] = []
         recent_sale_hubspot_sync: dict[str, str] = {}
+        authorized_lead_ids = [
+            row[0]
+            for row in db.session.query(Lead.id).filter(
+                Lead.id.in_(lead_ids),
+                Lead.owner_user_id == user_id,
+            ).all()
+        ]
+        last_mailed = get_last_mailed_at_by_lead_ids(authorized_lead_ids)
 
         for lead_id in lead_ids:
             outcome: dict | None = None
@@ -273,6 +283,16 @@ class MailQueueService:
                             ],
                             'hubspot_due_sync': reconciliation['hubspot_task_ids'],
                         }
+                    elif (
+                        cadence_eligible := mail_cadence_eligible_date_from_last_mailed(
+                            last_mailed.get(lead.id),
+                        )
+                    ) is not None:
+                        outcome = {
+                            'lead_id': lead_id,
+                            'status': 'mail_cadence',
+                            'mail_eligible_date': cadence_eligible.isoformat(),
+                        }
                     elif MailQueueItem.query.filter_by(
                         lead_id=lead_id, status='queued', user_id=user_id,
                     ).first():
@@ -305,62 +325,78 @@ class MailQueueService:
                                 'error': error,
                             }
                         else:
-                            item = (
-                                MailQueueItem.query
-                                .filter_by(
-                                    lead_id=lead_id,
-                                    user_id=user_id,
-                                    status='invalid_address',
+                            fresh_last_mailed = get_last_mailed_at_by_lead_ids(
+                                [lead.id],
+                            ).get(lead.id)
+                            last_mailed[lead.id] = fresh_last_mailed
+                            fresh_cadence_eligible = (
+                                mail_cadence_eligible_date_from_last_mailed(
+                                    fresh_last_mailed,
                                 )
-                                .order_by(MailQueueItem.created_at.desc())
-                                .first()
                             )
-                            if item is None:
-                                item = MailQueueItem(
-                                    lead_id=lead_id,
-                                    user_id=user_id,
-                                    status='queued',
-                                )
+                            if fresh_cadence_eligible is not None:
+                                outcome = {
+                                    'lead_id': lead_id,
+                                    'status': 'mail_cadence',
+                                    'mail_eligible_date': fresh_cadence_eligible.isoformat(),
+                                }
                             else:
-                                item.status = 'queued'
-                                item.validation_error = None
-                            db.session.add(item)
-                            db.session.flush()
-                            # Canonical readiness: recommended_action == mail_ready +
-                            # MailQueueItem. Do not set legacy up_next_to_mail.
-                            self._timeline.append(
-                                lead_id=lead_id,
-                                event_type='mail_queued',
-                                actor=user_id,
-                                summary='Added to mail queue',
-                                metadata={'queue_item_id': item.id},
-                                source='system',
-                                commit=False,
-                            )
-                            _completed, pending_sync = complete_tasks_superseded_by_mail(
-                                lead_id, actor=user_id, commit=False,
-                            )
-                            create_pending_mail_follow_up_task(lead, actor=user_id)
-                            from app.services.lead_status_service import (
-                                unpark_deprioritize_for_active_work,
-                            )
-                            unparked = unpark_deprioritize_for_active_work(
-                                lead,
-                                actor=user_id,
-                                reason='Queued for direct mail',
-                                source='system',
-                                commit=False,
-                                recompute_action=False,
-                            )
-                            # Flush remaining writes before savepoint release so
-                            # success accounting only runs if the unit commits.
-                            db.session.flush()
-                            outcome = {
-                                'lead_id': lead_id,
-                                'status': 'queued',
-                                'hubspot_sync': pending_sync,
-                                'unparked': unparked,
-                            }
+                                item = (
+                                    MailQueueItem.query
+                                    .filter_by(
+                                        lead_id=lead_id,
+                                        user_id=user_id,
+                                        status='invalid_address',
+                                    )
+                                    .order_by(MailQueueItem.created_at.desc())
+                                    .first()
+                                )
+                                if item is None:
+                                    item = MailQueueItem(
+                                        lead_id=lead_id,
+                                        user_id=user_id,
+                                        status='queued',
+                                    )
+                                else:
+                                    item.status = 'queued'
+                                    item.validation_error = None
+                                db.session.add(item)
+                                db.session.flush()
+                                # Canonical readiness: recommended_action == mail_ready +
+                                # MailQueueItem. Do not set legacy up_next_to_mail.
+                                self._timeline.append(
+                                    lead_id=lead_id,
+                                    event_type='mail_queued',
+                                    actor=user_id,
+                                    summary='Added to mail queue',
+                                    metadata={'queue_item_id': item.id},
+                                    source='system',
+                                    commit=False,
+                                )
+                                _completed, pending_sync = complete_tasks_superseded_by_mail(
+                                    lead_id, actor=user_id, commit=False,
+                                )
+                                create_pending_mail_follow_up_task(lead, actor=user_id)
+                                from app.services.lead_status_service import (
+                                    unpark_deprioritize_for_active_work,
+                                )
+                                unparked = unpark_deprioritize_for_active_work(
+                                    lead,
+                                    actor=user_id,
+                                    reason='Queued for direct mail',
+                                    source='system',
+                                    commit=False,
+                                    recompute_action=False,
+                                )
+                                # Flush remaining writes before savepoint release so
+                                # success accounting only runs if the unit commits.
+                                db.session.flush()
+                                outcome = {
+                                    'lead_id': lead_id,
+                                    'status': 'queued',
+                                    'hubspot_sync': pending_sync,
+                                    'unparked': unparked,
+                                }
 
                 # Savepoint released successfully — record a single outcome.
                 if outcome is None:
@@ -389,6 +425,8 @@ class MailQueueService:
                             if outcome.get('rescheduled_to'):
                                 recent_sale_hubspot_sync[task_id] = outcome['rescheduled_to']
                         outcome.pop('hubspot_due_sync', None)
+                    elif status == 'mail_cadence':
+                        rejected_lead_ids.append(lead_id)
                 results.append(outcome)
             except Exception as exc:
                 # Soft-fail: one bad lead must never 500 the whole batch.
@@ -410,6 +448,7 @@ class MailQueueService:
             'skip_trace_scheduled',
             'skip_trace_task_id',
             'removed_queue_item_count',
+            'mail_eligible_date',
         }
         audit_results = [
             {

@@ -94,6 +94,7 @@ export interface EnqueueLeadResult {
   skip_trace_scheduled?: boolean
   skip_trace_task_id?: number | null
   removed_queue_item_count?: number
+  mail_eligible_date?: string | null
 }
 
 export type EnqueueResult = Omit<MailQueueSummary, 'items'> & {
