@@ -40,6 +40,14 @@ interface MotivationSignalsPanelProps {
   score?: PropertyScoreRecord | null
 }
 
+function errorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) {
+    return err.message
+  }
+  const apiMessage = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+  return apiMessage || fallback
+}
+
 export function MotivationSignalsPanel({ lead, leadId, score }: MotivationSignalsPanelProps) {
   const queryClient = useQueryClient()
   const signals = (lead.motivation_signals ?? []) as MotivationSignalDetail[]
@@ -54,7 +62,14 @@ export function MotivationSignalsPanel({ lead, leadId, score }: MotivationSignal
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const { data: catalogData, isLoading: catalogLoading } = useQuery({
+  const {
+    data: catalogData,
+    error: catalogError,
+    isError: catalogIsError,
+    isFetching: catalogFetching,
+    isLoading: catalogLoading,
+    refetch: refetchCatalog,
+  } = useQuery({
     queryKey: ['findingCatalog', leadId],
     queryFn: () => leadService.getFindingCatalog(leadId),
     staleTime: 60_000,
@@ -88,10 +103,7 @@ export function MotivationSignalsPanel({ lead, leadId, score }: MotivationSignal
       setNote('')
       await refreshAfterMutation()
     } catch (err: unknown) {
-      const message =
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-        'Could not add finding'
-      setError(message)
+      setError(errorMessage(err, 'Could not add finding'))
     } finally {
       setSaving(false)
     }
@@ -105,10 +117,7 @@ export function MotivationSignalsPanel({ lead, leadId, score }: MotivationSignal
       await leadService.removeFinding(leadId, signalId)
       await refreshAfterMutation()
     } catch (err: unknown) {
-      const message =
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-        'Could not remove finding'
-      setError(message)
+      setError(errorMessage(err, 'Could not remove finding'))
     } finally {
       setSaving(false)
     }
@@ -148,6 +157,24 @@ export function MotivationSignalsPanel({ lead, leadId, score }: MotivationSignal
         </Typography>
         {catalogLoading ? (
           <CircularProgress size={20} aria-label="Loading findings catalog" />
+        ) : catalogIsError ? (
+          <Alert
+            severity="error"
+            action={
+              <Button
+                color="inherit"
+                size="small"
+                onClick={() => {
+                  void refetchCatalog()
+                }}
+                disabled={catalogFetching}
+              >
+                {catalogFetching ? 'Retrying…' : 'Retry'}
+              </Button>
+            }
+          >
+            {errorMessage(catalogError, 'Could not load findings catalog')}
+          </Alert>
         ) : (
           <Stack spacing={1.5}>
             <FormControl size="small" fullWidth>

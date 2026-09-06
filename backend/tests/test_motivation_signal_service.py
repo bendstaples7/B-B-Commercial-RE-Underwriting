@@ -217,6 +217,31 @@ class TestAnalystFindings:
             )
             assert 'FSBO' in labels
 
+    def test_sync_recalculates_analyst_points_for_current_category(self, app):
+        with app.app_context():
+            lead = Property(**_base_lead_kwargs())
+            db.session.add(lead)
+            db.session.commit()
+
+            svc = MotivationSignalService()
+            row = svc.add_analyst_finding(lead, 'OWNER_SELLING_FSBO')
+            assert row.points == 12.0
+
+            lead.lead_category = 'commercial'
+            db.session.add(lead)
+            db.session.commit()
+
+            svc.sync_from_lead(lead)
+            db.session.refresh(row)
+
+            assert row.is_active is True
+            assert row.points == 10.0
+            summary = {
+                item['signal_type']: item['points']
+                for item in (lead.motivation_signal_summary or [])
+            }
+            assert summary['OWNER_SELLING_FSBO'] == 10.0
+
     def test_selling_status_findings_are_mutually_exclusive(self, app):
         with app.app_context():
             lead = Property(**_base_lead_kwargs())

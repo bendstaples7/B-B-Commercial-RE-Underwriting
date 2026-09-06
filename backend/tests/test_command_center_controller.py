@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry, Task
+from app.models.motivation_signal import MotivationSignal
 from app.models.user import User
 from app.services.auth_service import AuthService
 from app.services.hubspot_timeline_import_service import HubSpotTimelineImportService
@@ -1019,6 +1020,16 @@ class TestLeadFindings:
             assert body['lead_score'] is not None
             assert body['lead_score'] > before_score
 
+            findings = client.get(
+                f'/api/leads/{lead.id}/findings',
+                headers=_AUTH_HEADERS,
+            )
+            assert findings.status_code == 200
+            finding_rows = findings.get_json()['findings']
+            assert len(finding_rows) == 1
+            assert finding_rows[0]['signal_type'] == 'OWNER_SELLING_FSBO'
+            assert finding_rows[0]['removable'] is True
+
             detail = client.get(
                 f'/api/properties/{lead.id}',
                 headers=_AUTH_HEADERS,
@@ -1040,14 +1051,41 @@ class TestLeadFindings:
                 headers=_AUTH_HEADERS,
             )
             assert created.status_code == 201
-            signal_id = created.get_json()['finding']['id']
+            created_body = created.get_json()
+            signal_id = created_body['finding']['id']
+            created_motivation = float(created_body['motivation_score'] or 0)
+            created_lead_score = float(created_body['lead_score'] or 0)
 
             deleted = client.delete(
                 f'/api/leads/{lead.id}/findings/{signal_id}',
                 headers=_AUTH_HEADERS,
             )
             assert deleted.status_code == 200
-            assert deleted.get_json()['removed'] is True
+            deleted_body = deleted.get_json()
+            assert deleted_body['removed'] is True
+            assert float(deleted_body['motivation_score'] or 0) < created_motivation
+            assert float(deleted_body['lead_score'] or 0) < created_lead_score
+
+    def test_add_finding_rolls_back_when_scoring_fails(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '24 Finding St')
+            with patch(
+                'app.services.lead_scoring_engine.LeadScoringEngine.score_and_persist',
+                side_effect=RuntimeError('boom'),
+            ):
+                response = client.post(
+                    f'/api/leads/{lead.id}/findings',
+                    data=json.dumps({'finding_key': 'OWNER_ACTIVELY_SELLING'}),
+                    content_type='application/json',
+                    headers=_AUTH_HEADERS,
+                )
+
+            assert response.status_code == 500
+            assert MotivationSignal.query.filter_by(
+                lead_id=lead.id,
+                source='analyst',
+                is_active=True,
+            ).count() == 0
 
     def test_unknown_finding_returns_400(self, client, app):
         with app.app_context():

@@ -635,6 +635,16 @@ class MotivationSignalService:
     They are preserved across enrichment sync and included in motivation_score.
     """
 
+    def _lock_lead_for_analyst_finding(self, lead, lead_id: int):
+        """Serialize per-lead analyst finding edits before status sibling checks."""
+        return (
+            db.session.query(lead.__class__)
+            .filter_by(id=lead_id)
+            .populate_existing()
+            .with_for_update()
+            .one_or_none()
+        )
+
     def sync_from_lead(self, lead, *, commit: bool = True) -> float:
         lead_id = getattr(lead, 'id', None)
         extracted = extract_signals_from_lead(lead)
@@ -648,6 +658,10 @@ class MotivationSignalService:
             for row in existing:
                 # Never deactivate user-confirmed analyst findings on enrichment sync.
                 if is_analyst_signal_row(row):
+                    row.points = _points_for(
+                        row.signal_type,
+                        getattr(lead, 'lead_category', 'residential') or 'residential',
+                    )
                     continue
                 key = (row.signal_type, row.evidence_key or '')
                 if key not in active_keys:
@@ -727,6 +741,12 @@ class MotivationSignalService:
         lead_id = getattr(lead, 'id', None)
         if not isinstance(lead_id, int):
             raise ValueError('Lead must be persisted before adding findings')
+
+        if finding_key in SELLING_STATUS_FINDING_KEYS:
+            locked_lead = self._lock_lead_for_analyst_finding(lead, lead_id)
+            if locked_lead is None:
+                raise ValueError('Lead must be persisted before adding findings')
+            lead = locked_lead
 
         category = getattr(lead, 'lead_category', 'residential') or 'residential'
         points = _points_for(finding_key, category)

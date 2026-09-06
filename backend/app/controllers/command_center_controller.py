@@ -1603,6 +1603,47 @@ def get_finding_catalog(lead_id: int):
     }), 200
 
 
+@command_center_bp.route('/<int:lead_id>/findings', methods=['GET'])
+@require_auth
+@handle_errors
+def list_lead_findings(lead_id: int):
+    """
+    GET /api/leads/<lead_id>/findings
+
+    Active user-confirmed analyst findings for a lead.
+    """
+    from app.models.motivation_signal import MotivationSignal
+    from app.services.motivation_signal_service import (
+        ANALYST_SOURCE,
+        serialize_motivation_signal,
+    )
+
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return denied
+
+    rows = (
+        MotivationSignal.query.filter_by(
+            lead_id=lead_id,
+            source=ANALYST_SOURCE,
+            is_active=True,
+        )
+        .order_by(MotivationSignal.detected_at.desc(), MotivationSignal.id.desc())
+        .all()
+    )
+
+    return jsonify({
+        'findings': [serialize_motivation_signal(row) for row in rows],
+        'motivation_score': lead.motivation_score,
+        'motivation_signal_summary': lead.motivation_signal_summary,
+        'lead_score': lead.lead_score,
+    }), 200
+
+
 @command_center_bp.route('/<int:lead_id>/findings', methods=['POST'])
 @require_auth
 @handle_errors
@@ -1637,12 +1678,12 @@ def add_lead_finding(lead_id: int):
             data['finding_key'],
             note=data.get('note'),
             actor=actor,
-            commit=True,
+            commit=False,
         )
     except ValueError as exc:
         return jsonify({'error': 'Invalid request', 'message': str(exc)}), 400
 
-    refresh_lead_scoring(lead_id)
+    refresh_lead_scoring(lead_id, raise_on_error=True)
     db.session.refresh(lead)
     db.session.refresh(row)
 
@@ -1676,7 +1717,7 @@ def remove_lead_finding(lead_id: int, signal_id: int):
         return denied
 
     removed = MotivationSignalService().remove_analyst_finding(
-        lead, signal_id, commit=True,
+        lead, signal_id, commit=False,
     )
     if not removed:
         return jsonify({
@@ -1684,7 +1725,7 @@ def remove_lead_finding(lead_id: int, signal_id: int):
             'message': 'Finding not found or is not removable',
         }), 404
 
-    refresh_lead_scoring(lead_id)
+    refresh_lead_scoring(lead_id, raise_on_error=True)
     db.session.refresh(lead)
 
     return jsonify({
