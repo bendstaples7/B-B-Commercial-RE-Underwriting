@@ -18,18 +18,21 @@ depends_on = None
 def upgrade():
     # Keep the idempotent data heal inside Alembic's transaction.
     from alembic import op
+    from sqlalchemy.orm import Session
+
     from app import db
     from app.services.mail_task_lifecycle_service import heal_mail_cadence_cooldown
 
     bind = op.get_bind()
-    session = db.session()
-    previous_bind = session.bind
-    session.bind = bind
+    db.session.remove()
+    migration_session = Session(bind=bind)
+    db.session.registry.set(migration_session)
     try:
         result = heal_mail_cadence_cooldown(commit=False)
-        db.session.flush()
-    finally:
-        session.bind = previous_bind
+        migration_session.flush()
+    except Exception:
+        migration_session.rollback()
+        raise
     print(
         'mail_cad_20260905: '
         f"dues_fixed={result['rematch_dues_fixed']} "

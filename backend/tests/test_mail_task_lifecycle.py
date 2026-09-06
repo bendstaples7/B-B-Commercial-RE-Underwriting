@@ -2580,6 +2580,14 @@ class TestSubmitCampaignFollowUp:
                 '9 Cadence Cancel St',
                 up_next_to_mail=True,
             )
+            invalid = _make_lead(
+                app,
+                '9 Invalid Cancel St',
+                mailing_address=None,
+                mailing_city=None,
+                mailing_state=None,
+                mailing_zip=None,
+            )
             good = _make_lead(app, '9 Good Cancel St')
             create_pending_mail_follow_up_task(cadence_lead, actor=USER_ID)
             token = OpenLetterClientService.encrypt_token('test-token')
@@ -2592,7 +2600,7 @@ class TestSubmitCampaignFollowUp:
             )
             campaign = MailCampaign(
                 status='pending',
-                lead_count=2,
+                lead_count=3,
                 product_id='prod-1',
                 template_id='tmpl-1',
                 creative=_campaign_creative(),
@@ -2603,6 +2611,12 @@ class TestSubmitCampaignFollowUp:
             db.session.add_all([
                 MailQueueItem(
                     lead_id=cadence_lead.id,
+                    user_id=USER_ID,
+                    status='queued',
+                    campaign_id=campaign.id,
+                ),
+                MailQueueItem(
+                    lead_id=invalid.id,
                     user_id=USER_ID,
                     status='queued',
                     campaign_id=campaign.id,
@@ -2644,7 +2658,7 @@ class TestSubmitCampaignFollowUp:
                 with pytest.raises(MailQueueError, match='cancelled during place_order'):
                     svc.submit_campaign(campaign.id)
 
-            refresh.assert_called_once_with([cadence_lead.id])
+            refresh.assert_called_once_with([invalid.id, cadence_lead.id])
 
     def test_submit_campaign_failure_cancels_pending_follow_up(self, app, fernet_key, monkeypatch):
         from app import db
