@@ -372,4 +372,34 @@ describe('KeyContactCard', () => {
     expect(screen.getByDisplayValue('555-9999')).toBeInTheDocument()
     expect(screen.getByDisplayValue('(312) 555-0000')).toBeInTheDocument()
   })
+
+  it('keeps edit closed and shows an error when linked contact details fail to load', async () => {
+    const user = userEvent.setup()
+    vi.mocked(contactService.getContact).mockRejectedValue(new Error('Network error'))
+
+    renderCard(
+      basePayload({
+        contacts: [{
+          id: 88,
+          first_name: 'Jane',
+          last_name: 'Doe',
+          role: 'owner',
+          is_primary: true,
+          phones: [{ value: '555-9999', label: 'mobile' }],
+          emails: [],
+        }],
+      }),
+      'Jane Doe',
+    )
+
+    await user.click(screen.getByTestId('key-contact-edit-details-btn'))
+
+    await waitFor(() => {
+      expect(contactService.getContact).toHaveBeenCalledWith(88)
+    })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(
+      await screen.findByText('Could not load contact details. Please try again.'),
+    ).toBeInTheDocument()
+  })
 })

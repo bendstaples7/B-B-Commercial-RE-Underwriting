@@ -29,6 +29,7 @@ import {
   type ContactFormInitialValues,
 } from '@/components/ContactFormModal'
 import { contactService } from '@/services/api'
+import { AppSnackbar } from '@/components/AppSnackbar'
 
 export interface KeyContactCardProps {
   name: string | null
@@ -184,6 +185,10 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
   const [editOpen, setEditOpen] = useState(false)
   const [editDetailsLoading, setEditDetailsLoading] = useState(false)
   const [prefetchedEditContact, setPrefetchedEditContact] = useState<Contact | null>(null)
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string }>({
+    open: false,
+    message: '',
+  })
   const channels = resolveKeyContactChannels(commandCenterData)
   const mailing = formatKeyContactMailing(commandCenterData)
   const displayName = name?.trim() || 'No contact on file'
@@ -252,10 +257,22 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
     setEditDetailsLoading(true)
     try {
       const result = await fetchEditableContactDetail()
-      setPrefetchedEditContact(result.data ?? null)
+      if (!result.data) {
+        setSnackbar({
+          open: true,
+          message: 'Could not load contact details. Please try again.',
+        })
+        return
+      }
+      setPrefetchedEditContact(result.data)
+      setEditOpen(true)
+    } catch {
+      setSnackbar({
+        open: true,
+        message: 'Could not load contact details. Please try again.',
+      })
     } finally {
       setEditDetailsLoading(false)
-      setEditOpen(true)
     }
   }
 
@@ -483,77 +500,85 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
   )
 
   return (
-    <Paper
-      data-testid="key-contact-card"
-      elevation={0}
-      sx={{
-        ...ccCardSx,
-        ...(sticky
-          ? {
-              position: 'sticky',
-              top: 16,
-              zIndex: 2,
-            }
-          : {}),
-        '&[data-owner-link-highlight="true"]': {
-          outline: '2px solid',
-          outlineColor: 'primary.main',
-          outlineOffset: 2,
-        },
-      }}
-    >
-      <Box
+    <>
+      <Paper
+        data-testid="key-contact-card"
+        elevation={0}
         sx={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 1,
-          mb: 1,
+          ...ccCardSx,
+          ...(sticky
+            ? {
+                position: 'sticky',
+                top: 16,
+                zIndex: 2,
+              }
+            : {}),
+          '&[data-owner-link-highlight="true"]': {
+            outline: '2px solid',
+            outlineColor: 'primary.main',
+            outlineOffset: 2,
+          },
         }}
       >
-        <Typography sx={ccSectionTitleSx} component="h2">
-          Key Contact
-        </Typography>
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={<PersonAddIcon />}
-          onClick={() => setAddOpen(true)}
-          aria-label="Add person"
-          data-testid="key-contact-add-person-btn"
-          sx={{ cursor: 'pointer', flexShrink: 0 }}
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 1,
+            mb: 1,
+          }}
         >
-          Add person
-        </Button>
-      </Box>
-      {contactsUntrusted ? (
-        <PriorOwnerStaleOverlay
-          testId="key-contact-stale"
-          bannerTestId="key-contact-likely-prior-owner"
-        >
-          {contactBody}
-        </PriorOwnerStaleOverlay>
-      ) : (
-        contactBody
-      )}
-      <ContactFormModal
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        propertyId={commandCenterData.id}
-        allowLinkExisting
+          <Typography sx={ccSectionTitleSx} component="h2">
+            Key Contact
+          </Typography>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<PersonAddIcon />}
+            onClick={() => setAddOpen(true)}
+            aria-label="Add person"
+            data-testid="key-contact-add-person-btn"
+            sx={{ cursor: 'pointer', flexShrink: 0 }}
+          >
+            Add person
+          </Button>
+        </Box>
+        {contactsUntrusted ? (
+          <PriorOwnerStaleOverlay
+            testId="key-contact-stale"
+            bannerTestId="key-contact-likely-prior-owner"
+          >
+            {contactBody}
+          </PriorOwnerStaleOverlay>
+        ) : (
+          contactBody
+        )}
+        <ContactFormModal
+          open={addOpen}
+          onClose={() => setAddOpen(false)}
+          propertyId={commandCenterData.id}
+          allowLinkExisting
+        />
+        <ContactFormModal
+          open={editOpen}
+          onClose={() => {
+            setEditOpen(false)
+            setPrefetchedEditContact(null)
+          }}
+          propertyId={commandCenterData.id}
+          contact={editContact}
+          initialValues={editInitialValues}
+          linkAsPrimary={!editablePerson}
+          allowLinkExisting={false}
+        />
+      </Paper>
+      <AppSnackbar
+        open={snackbar.open}
+        onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
+        message={snackbar.message}
+        severity="error"
       />
-      <ContactFormModal
-        open={editOpen}
-        onClose={() => {
-          setEditOpen(false)
-          setPrefetchedEditContact(null)
-        }}
-        propertyId={commandCenterData.id}
-        contact={editContact}
-        initialValues={editInitialValues}
-        linkAsPrimary={!editablePerson}
-        allowLinkExisting={false}
-      />
-    </Paper>
+    </>
   )
 }
