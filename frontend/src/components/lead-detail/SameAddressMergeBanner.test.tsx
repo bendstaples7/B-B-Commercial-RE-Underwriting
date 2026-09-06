@@ -486,9 +486,12 @@ describe('SameAddressMergeBanner', () => {
     })
 
     await user.click(screen.getByText('Cancel'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('same-address-merge-dialog')).not.toBeInTheDocument()
+    })
     await user.click(screen.getByTestId('same-address-merge-open'))
 
-    expect(screen.getByTestId('same-address-merge-paste-id')).toHaveValue('')
+    expect(await screen.findByTestId('same-address-merge-paste-id')).toHaveValue('')
     expect(screen.queryAllByText('Manual twin (#300)')).toHaveLength(0)
   })
 })

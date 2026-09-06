@@ -97,8 +97,7 @@ export function SameAddressMergeBanner({
     [options, winnerId],
   )
 
-  useEffect(() => {
-    if (!open) return
+  const resetDialogState = useCallback(() => {
     setWinnerId(leadId)
     setError(null)
     setPasteId('')
@@ -106,8 +105,23 @@ export function SameAddressMergeBanner({
     setPastePreview(null)
     setPasteError(null)
     setValidatedPasteId('')
+    setPasteLookupPending(false)
+    pasteLookupPromise.current = null
     selectRemoveId(first?.id ?? null)
-  }, [leadId, open, first?.id, selectRemoveId])
+  }, [first?.id, leadId, selectRemoveId])
+
+  useEffect(() => {
+    if (!open) return
+    resetDialogState()
+  }, [open, resetDialogState])
+
+  const closeDialog = useCallback(() => {
+    if (saving) return
+    setOpen(false)
+    // Clear paste/manual twin state on close so cancel + reopen cannot keep
+    // a stale lead id if open→true is coalesced before open flips false.
+    resetDialogState()
+  }, [resetDialogState, saving])
 
   useEffect(() => {
     if (removeId != null && removable.some((row) => row.id === removeId)) return
@@ -259,7 +273,7 @@ export function SameAddressMergeBanner({
 
       <Dialog
         open={open}
-        onClose={() => !saving && setOpen(false)}
+        onClose={closeDialog}
         aria-labelledby="same-address-merge-title"
         fullWidth
         maxWidth="sm"
@@ -355,7 +369,7 @@ export function SameAddressMergeBanner({
           ) : null}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpen(false)} disabled={saving} sx={{ cursor: 'pointer' }}>
+          <Button onClick={closeDialog} disabled={saving} sx={{ cursor: 'pointer' }}>
             Cancel
           </Button>
           <Button
