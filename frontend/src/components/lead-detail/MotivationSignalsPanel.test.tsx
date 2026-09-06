@@ -69,7 +69,7 @@ describe('MotivationSignalsPanel findings', () => {
       marketing_lists: [],
       analysis_session: null,
       contacts: [],
-    } as PropertyDetail)
+    } as unknown as PropertyDetail)
 
     expect(await screen.findByTestId('add-finding-form')).toBeInTheDocument()
     const addBtn = await screen.findByTestId('add-finding-button')
@@ -101,7 +101,7 @@ describe('MotivationSignalsPanel findings', () => {
       marketing_lists: [],
       analysis_session: null,
       contacts: [],
-    } as PropertyDetail)
+    } as unknown as PropertyDetail)
 
     const removeBtn = await screen.findByTestId('remove-finding-99')
     fireEvent.click(removeBtn)
