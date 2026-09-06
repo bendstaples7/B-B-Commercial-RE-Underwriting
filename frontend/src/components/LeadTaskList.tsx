@@ -32,12 +32,18 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import AddTaskIcon from '@mui/icons-material/AddTask'
 import HubIcon from '@mui/icons-material/Hub'
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted'
-import type { LeadTask, LeadTaskType, CRMRecommendedAction, OutreachContact, LeadTimelineEntry } from '@/types'
+import type { LeadTask, CRMRecommendedAction, OutreachContact, LeadTimelineEntry } from '@/types'
 import { leadTaskService, callLogService } from '@/services/api'
 import { OutreachContactInline, OutreachContactMissingHint } from '@/components/OutreachContactCallout'
 import { FollowUpHorizonControls } from '@/components/FollowUpHorizonControls'
 import { ccSectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
 import { findActivityContextForTask } from '@/utils/timelineTaskContext'
+import {
+  CREATE_TASK_PRESETS,
+  getCreateTaskPreset,
+  resolveCreateTaskPayload,
+  type CreateTaskPresetId,
+} from '@/utils/createTaskPresets'
 import {
   type FollowUpPreset,
   formatFollowUpPresetLabel,
@@ -50,15 +56,6 @@ import {
 // ---------------------------------------------------------------------------
 
 export type TaskDueStatus = 'overdue' | 'due_today' | 'upcoming' | 'no_due'
-
-const CREATE_TASK_TYPES: Array<{ value: LeadTaskType; label: string; defaultTitle?: string }> = [
-  { value: 'custom', label: 'Custom' },
-  {
-    value: 'add_to_mail_batch',
-    label: 'Add to mail queue',
-    defaultTitle: 'Add to mail queue',
-  },
-]
 
 const DUE_STATUS_SORT_ORDER: Record<TaskDueStatus, number> = {
   overdue: 0,
@@ -169,7 +166,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
 ) {
   const [formOpen, setFormOpen] = useState(false)
   const [title, setTitle] = useState('')
-  const [taskType, setTaskType] = useState<LeadTaskType>('custom')
+  const [taskPreset, setTaskPreset] = useState<CreateTaskPresetId>('custom')
   const [dueDate, setDueDate] = useState('')
   const [titleError, setTitleError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -219,7 +216,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     setEditSubmitError(null)
     setFormOpen(true)
     setTitle('')
-    setTaskType('custom')
+    setTaskPreset('custom')
     setDueDate('')
     setTitleError(null)
     setSubmitError(null)
@@ -232,20 +229,22 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
   const handleCloseForm = () => {
     setFormOpen(false)
     setTitle('')
-    setTaskType('custom')
+    setTaskPreset('custom')
     setDueDate('')
     setTitleError(null)
     setSubmitError(null)
   }
 
-  const handleTaskTypeChange = (nextType: LeadTaskType) => {
-    const prevDefault = CREATE_TASK_TYPES.find((t) => t.value === taskType)?.defaultTitle
-    const nextDefault = CREATE_TASK_TYPES.find((t) => t.value === nextType)?.defaultTitle
-    setTaskType(nextType)
+  const handleTaskPresetChange = (nextPreset: CreateTaskPresetId) => {
+    const prevDefault = getCreateTaskPreset(taskPreset).defaultTitle
+    const nextDefault = getCreateTaskPreset(nextPreset).defaultTitle
+    setTaskPreset(nextPreset)
     // Prefill default title when switching to a typed task and title is empty or still the prior default
     if (nextDefault && (!title.trim() || title.trim() === prevDefault)) {
       setTitle(nextDefault)
       if (titleError) setTitleError(null)
+    } else if (!nextDefault && title.trim() === prevDefault) {
+      setTitle('')
     }
   }
 
@@ -257,11 +256,19 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
   }
 
   const handleSubmit = async () => {
-    const error = validateTitle(title)
+    const preset = getCreateTaskPreset(taskPreset)
+    // Custom requires a user-entered title; typed presets may fall back to defaultTitle.
+    const titleForValidation = title.trim() || preset.defaultTitle || ''
+    const error = validateTitle(titleForValidation)
     if (error) {
       setTitleError(error)
       return
     }
+
+    const { title: resolvedTitle, task_type: taskType } = resolveCreateTaskPayload(
+      taskPreset,
+      titleForValidation,
+    )
 
     setTitleError(null)
     setSubmitError(null)
@@ -273,7 +280,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
       id: 0,
       lead_id: leadId,
       task_type: taskType,
-      title: title.trim(),
+      title: resolvedTitle,
       status: 'open',
       due_date: dueDate || null,
       created_at: new Date().toISOString(),
@@ -286,7 +293,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
 
     try {
       const newTask = await leadTaskService.createTask(leadId, {
-        title: title.trim(),
+        title: resolvedTitle,
         task_type: taskType,
         due_date: dueDate || null,
       })
@@ -1049,12 +1056,12 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
             <Select
               labelId="task-type-label"
               label="Type"
-              value={taskType}
-              onChange={(e) => handleTaskTypeChange(e.target.value as LeadTaskType)}
+              value={taskPreset}
+              onChange={(e) => handleTaskPresetChange(e.target.value as CreateTaskPresetId)}
               inputProps={{ 'data-testid': 'task-type-select' }}
             >
-              {CREATE_TASK_TYPES.map((opt) => (
-                <MenuItem key={opt.value} value={opt.value}>
+              {CREATE_TASK_PRESETS.map((opt) => (
+                <MenuItem key={opt.id} value={opt.id}>
                   {opt.label}
                 </MenuItem>
               ))}

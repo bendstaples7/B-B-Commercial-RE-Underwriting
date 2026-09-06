@@ -46,6 +46,7 @@ import {
   followUpDueForPreset,
   resolveFollowUpDueDate,
 } from '@/utils/followUpPresets'
+import { resolveCreateTaskPayload, type CreateTaskPresetId } from '@/utils/createTaskPresets'
 import { addSentFromAddress, getSentFromAddresses } from '@/utils/emailSentFromAddresses'
 
 const MAX_CALL_NOTES_LENGTH = 2000
@@ -230,7 +231,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
     const [followUpPreset, setFollowUpPreset] = useState<FollowUpPreset>('3')
     const [customDueDate, setCustomDueDate] = useState('')
     const [nextStepExpanded, setNextStepExpanded] = useState(false)
-    const [nextStepType, setNextStepType] = useState<'call_owner_today' | 'add_to_mail_batch' | 'custom'>('call_owner_today')
+    const [nextStepType, setNextStepType] = useState<CreateTaskPresetId>('call_owner_today')
     const [customTaskTitle, setCustomTaskTitle] = useState('')
 
     const [outcomeError, setOutcomeError] = useState<string | null>(null)
@@ -292,14 +293,11 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
 
     const buildFollowUpPayload = (dueDate: string | null) => {
       if (!dueDate) return null
+      const { title, task_type } = resolveCreateTaskPayload(nextStepType, customTaskTitle)
       return {
-        title: nextStepType === 'add_to_mail_batch'
-          ? 'Add to mail queue'
-          : nextStepType === 'custom'
-            ? customTaskTitle.trim() || 'Custom task'
-            : 'Follow up call',
+        title,
         due_date: dueDate,
-        task_type: nextStepType,
+        task_type,
       }
     }
 
