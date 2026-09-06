@@ -535,6 +535,37 @@ def test_heal_commit_false_keeps_rescore_and_weights_uncommitted(app):
         db.session.rollback()
 
 
+def test_mail_cad_migration_routes_orm_through_alembic_bind(app, monkeypatch):
+    """FSA 3.1 get_bind ignores session.bind — migration installs a bound Session."""
+    from alembic_migrations.versions import mail_cad_20260905_mail_cadence_cooldown as migration
+
+    sentinel = object()
+    seen: dict = {}
+
+    def fake_heal(*, commit: bool = True):
+        seen['commit'] = commit
+        seen['bind'] = db.session.get_bind()
+        return {
+            'rematch_dues_fixed': 0,
+            'rescored': 0,
+            'removed_queue_items': 0,
+            'affected_lead_ids': [],
+        }
+
+    monkeypatch.setattr(
+        'app.services.mail_task_lifecycle_service.heal_mail_cadence_cooldown',
+        fake_heal,
+    )
+    monkeypatch.setattr('alembic.op.get_bind', lambda: sentinel)
+
+    with app.app_context():
+        migration.upgrade()
+        assert seen['commit'] is False
+        assert seen['bind'] is sentinel
+        # Scoped session restored after migration finally.
+        assert db.session.get_bind() is not sentinel
+
+
 def test_evaluate_add_to_mail_batch_cadence_message():
     result = evaluate_add_to_mail_batch(
         mail_eligible=False,

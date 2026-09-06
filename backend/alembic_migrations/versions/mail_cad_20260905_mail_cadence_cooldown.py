@@ -17,6 +17,10 @@ depends_on = None
 
 def upgrade():
     # Keep the idempotent data heal inside Alembic's transaction.
+    #
+    # Flask-SQLAlchemy 3.1 Session.get_bind() always prefers db.engines[None]
+    # and ignores session.bind. Install a plain SQLAlchemy Session bound to
+    # op.get_bind() into the scoped registry so ORM writes join Alembic's txn.
     from alembic import op
     from sqlalchemy.orm import Session
 
@@ -33,6 +37,9 @@ def upgrade():
     except Exception:
         migration_session.rollback()
         raise
+    finally:
+        db.session.remove()
+
     print(
         'mail_cad_20260905: '
         f"dues_fixed={result['rematch_dues_fixed']} "
