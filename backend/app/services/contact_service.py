@@ -58,6 +58,16 @@ def _strip_invisible(value: str) -> str:
     return cleaned.strip()
 
 
+def _escape_like_pattern(value: str) -> str:
+    """Escape SQL LIKE wildcards so contact search is a literal substring match."""
+    return (
+        value
+        .replace('\\', '\\\\')
+        .replace('%', '\\%')
+        .replace('_', '\\_')
+    )
+
+
 class ContactService:
     """Service class for all Contact-related operations.
 
@@ -502,7 +512,7 @@ class ContactService:
         except (TypeError, ValueError):
             limit = 20
 
-        pattern = f'%{q}%'
+        pattern = f'%{_escape_like_pattern(q)}%'
         full_name = db.func.trim(
             db.func.concat(
                 db.func.coalesce(Contact.first_name, ''),
@@ -518,9 +528,9 @@ class ContactService:
             )
             .filter(
                 db.or_(
-                    Contact.first_name.ilike(pattern),
-                    Contact.last_name.ilike(pattern),
-                    full_name.ilike(pattern),
+                    Contact.first_name.ilike(pattern, escape='\\'),
+                    Contact.last_name.ilike(pattern, escape='\\'),
+                    full_name.ilike(pattern, escape='\\'),
                 )
             )
         )

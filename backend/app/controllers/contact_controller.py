@@ -27,6 +27,7 @@ from app.exceptions import (
     ResourceNotFoundError,
     ValidationException,
 )
+from app.api_utils import require_auth
 from app.services.contact_service import ContactService
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,7 @@ def create_contact():
 
 @contacts_bp.route('/api/contacts/search', methods=['GET'])
 @handle_errors
+@require_auth
 def search_contacts():
     """Search contacts by name for linking an existing person to a property.
 

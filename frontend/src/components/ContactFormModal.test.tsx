@@ -155,6 +155,26 @@ describe('ContactFormModal', () => {
 
       expect(screen.getByDisplayValue('jane@example.com')).toBeInTheDocument()
     })
+
+    it('merges initial flat channels with existing contact channels', () => {
+      render(
+        <ContactFormModal
+          open={true}
+          onClose={ON_CLOSE}
+          propertyId={PROPERTY_ID}
+          contact={mockContact}
+          initialValues={{
+            phones: [{ value: '555-0000', label: 'work' }],
+            emails: [{ value: 'flat@example.com', label: 'work' }],
+          }}
+        />,
+      )
+
+      expect(screen.getByDisplayValue('555-9999')).toBeInTheDocument()
+      expect(screen.getByDisplayValue('555-0000')).toBeInTheDocument()
+      expect(screen.getByDisplayValue('jane@example.com')).toBeInTheDocument()
+      expect(screen.getByDisplayValue('flat@example.com')).toBeInTheDocument()
+    })
   })
 
   describe('validation', () => {
@@ -381,6 +401,43 @@ describe('ContactFormModal', () => {
         expect(ON_CLOSE).toHaveBeenCalled()
       })
     })
+
+    it('does not overwrite omitted notes or role description for summary edit targets', async () => {
+      vi.mocked(contactService.updateContact).mockResolvedValue({
+        ...mockContact,
+        first_name: 'Janet',
+      })
+
+      render(
+        <ContactFormModal
+          open={true}
+          onClose={ON_CLOSE}
+          propertyId={PROPERTY_ID}
+          contact={{
+            id: mockContact.id,
+            first_name: 'Jane',
+            last_name: 'Doe',
+            role: 'owner',
+            property_contact_role: 'owner',
+            phones: [],
+            emails: [],
+            is_primary: true,
+          }}
+        />,
+      )
+
+      fireEvent.change(screen.getByRole('textbox', { name: /first name/i }), {
+        target: { value: 'Janet' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+
+      await waitFor(() => {
+        expect(contactService.updateContact).toHaveBeenCalled()
+      })
+      const payload = vi.mocked(contactService.updateContact).mock.calls[0][1]
+      expect(payload).not.toHaveProperty('notes')
+      expect(payload).not.toHaveProperty('role_description')
+    })
   })
 
   describe('API error handling', () => {
@@ -452,6 +509,37 @@ describe('ContactFormModal', () => {
         )
       })
       await waitFor(() => expect(ON_CLOSE).toHaveBeenCalled())
+    })
+
+    it('clears the selected contact when the search text is edited', async () => {
+      const user = userEvent.setup()
+      const existing = {
+        id: 99,
+        first_name: 'Gregory',
+        last_name: 'Shek',
+        role: 'owner' as const,
+        role_description: null,
+        notes: null,
+        phones: [{ id: 1, contact_id: 99, value: '555-0100', label: 'mobile' as const }],
+        emails: [],
+        created_at: null,
+        updated_at: null,
+      }
+      vi.mocked(contactService.searchContacts).mockResolvedValue([existing])
+
+      renderCreateModal()
+
+      await user.click(screen.getByTestId('contact-form-mode-link'))
+      await user.type(screen.getByTestId('contact-link-search-input'), 'Shek')
+      await user.click(await screen.findByRole('option', { name: /Gregory Shek/i }))
+      await user.clear(screen.getByTestId('contact-link-search-input'))
+      await user.type(screen.getByTestId('contact-link-search-input'), 'Jones')
+      await user.click(screen.getByTestId('contact-form-submit'))
+
+      await waitFor(() => {
+        expect(screen.getByText('Select an existing contact to link.')).toBeInTheDocument()
+      })
+      expect(contactService.linkContactToProperty).not.toHaveBeenCalled()
     })
   })
 })

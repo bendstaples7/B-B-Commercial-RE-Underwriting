@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Box, Button, Chip, Divider, Link, Paper, Stack, Typography } from '@mui/material'
+import { useQuery } from '@tanstack/react-query'
 import EmailOutlinedIcon from '@mui/icons-material/EmailOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import LocalPostOfficeOutlinedIcon from '@mui/icons-material/LocalPostOfficeOutlined'
@@ -27,6 +28,7 @@ import {
   ContactFormModal,
   type ContactFormInitialValues,
 } from '@/components/ContactFormModal'
+import { contactService } from '@/services/api'
 
 export interface KeyContactCardProps {
   name: string | null
@@ -134,12 +136,20 @@ function formatContactRole(contact: PropertyContactSummary): string {
 }
 
 type FormPhoneLabel = 'mobile' | 'home' | 'work' | 'other'
+type FormEmailLabel = 'personal' | 'work' | 'other'
 
 function toFormPhoneLabel(label: string | null | undefined): FormPhoneLabel {
   if (label === 'home' || label === 'work' || label === 'other' || label === 'mobile') {
     return label
   }
   return 'mobile'
+}
+
+function toFormEmailLabel(label: string | null | undefined): FormEmailLabel {
+  if (label === 'work' || label === 'other' || label === 'personal') {
+    return label
+  }
+  return 'personal'
 }
 
 function channelsToInitialValues(
@@ -182,6 +192,8 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
       unlinkedPeopleFromLead(commandCenterData.contacts, {
         ownerFirst: commandCenterData.owner_first_name,
         ownerLast: commandCenterData.owner_last_name,
+        owner2First: commandCenterData.owner_2_first_name,
+        owner2Last: commandCenterData.owner_2_last_name,
         organizations: commandCenterData.organizations,
         phones: commandCenterData.phones,
         emails: commandCenterData.emails,
@@ -190,6 +202,8 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
       commandCenterData.contacts,
       commandCenterData.owner_first_name,
       commandCenterData.owner_last_name,
+      commandCenterData.owner_2_first_name,
+      commandCenterData.owner_2_last_name,
       commandCenterData.organizations,
       commandCenterData.phones,
       commandCenterData.emails,
@@ -202,13 +216,30 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
     (c): c is Extract<KeyContactChannel, { kind: 'email' }> => c.kind === 'email',
   )
   const contactsUntrusted = Boolean(commandCenterData.contacts_likely_prior_owner)
-  const canEditDetails = !contactsUntrusted && (Boolean(editablePerson) || displayName !== 'No contact on file' || phoneChannels.length > 0)
+  const canEditDetails = !contactsUntrusted && (Boolean(editablePerson) || ghostPeople.length > 0)
+
+  const {
+    data: editableContactDetail,
+    refetch: fetchEditableContactDetail,
+  } = useQuery({
+    queryKey: ['contact', editablePerson?.id],
+    queryFn: () => contactService.getContact(editablePerson!.id),
+    enabled: false,
+  })
+
+  const editContact = useMemo(() => {
+    if (!editablePerson) return undefined
+    if (!editableContactDetail) return editablePerson
+    return {
+      ...editableContactDetail,
+      property_contact_role: editablePerson.role,
+      is_primary: editablePerson.is_primary,
+    }
+  }, [editableContactDetail, editablePerson])
 
   const editInitialValues = useMemo(() => {
     if (editablePerson) {
-      const hasContactPhones = (editablePerson.phones || []).some((p) => p?.value?.trim())
-      if (hasContactPhones) return undefined
-      // Contact row exists but phones only live on flat lead slots — seed the form.
+      // Seed flat lead channels too; the form dedupes them against contact rows.
       return {
         firstName: editablePerson.first_name ?? '',
         lastName: editablePerson.last_name ?? '',
@@ -223,13 +254,16 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
     const ghost = ghostPeople[0]
     if (ghost) {
       const ghostPhones = ghost.phones.length
-        ? ghost.phones.map((p) => ({ value: p.value, label: 'mobile' as const }))
+        ? ghost.phones.map((p) => ({ value: p.value, label: toFormPhoneLabel(p.label) }))
         : phoneChannels.map((ch) => ({
             value: ch.phone.value,
             label: toFormPhoneLabel(ch.phone.label),
           }))
       const ghostEmails = ghost.emails.length
-        ? ghost.emails.map((e) => ({ value: e.value, label: 'personal' as const }))
+        ? ghost.emails.map((e) => ({
+            value: e.value,
+            label: toFormEmailLabel(e.label),
+          }))
         : emailChannels.map((ch) => ({ value: ch.value, label: 'personal' as const }))
       return {
         firstName: ghost.first_name ?? '',
@@ -378,7 +412,10 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
               size="small"
               variant="text"
               startIcon={<EditOutlinedIcon />}
-              onClick={() => setEditOpen(true)}
+              onClick={() => {
+                setEditOpen(true)
+                if (editablePerson) void fetchEditableContactDetail()
+              }}
               aria-label="Edit contact details"
               data-testid="key-contact-edit-details-btn"
               sx={{ cursor: 'pointer', px: 0.5, ml: -0.5 }}
@@ -489,7 +526,7 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
         open={editOpen}
         onClose={() => setEditOpen(false)}
         propertyId={commandCenterData.id}
-        contact={editablePerson ?? undefined}
+        contact={editContact}
         initialValues={editInitialValues}
         linkAsPrimary={!editablePerson}
         allowLinkExisting={false}

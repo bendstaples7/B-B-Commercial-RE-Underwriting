@@ -381,6 +381,8 @@ export function unlinkedPeopleFromLead(
   options?: {
     ownerFirst?: string | null
     ownerLast?: string | null
+    owner2First?: string | null
+    owner2Last?: string | null
     organizations?: PropertyOrganizationSummary[] | null
     phones?: Array<{ value?: string | null; label?: string | null } | string> | null
     emails?: Array<{ value?: string | null; label?: string | null } | string> | null
@@ -439,6 +441,7 @@ export function unlinkedPeopleFromLead(
   }
 
   push(options?.ownerFirst, options?.ownerLast, 'flat_owner', true)
+  push(options?.owner2First, options?.owner2Last, 'flat_owner', true)
 
   for (const org of options?.organizations ?? []) {
     const resolved = (org.resolved_person_name || '').trim()

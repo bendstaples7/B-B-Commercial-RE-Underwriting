@@ -44,11 +44,13 @@ import { PhoneList } from '@/components/PhoneRow'
 import type {
   CommandCenterPayload,
   ContactRole,
+  EmailLabel,
   EntityResolutionStatus,
+  PhoneLabel,
   PropertyContact,
   PropertyOrganizationSummary,
 } from '@/types'
-import { ContactFormModal } from './ContactFormModal'
+import { ContactFormModal, type ContactFormInitialValues } from './ContactFormModal'
 import {
   ccMetaSx,
   ccRowTitleSx,
@@ -133,15 +135,9 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
 
   const [formOpen, setFormOpen] = useState(false)
   const [editingContact, setEditingContact] = useState<PropertyContact | undefined>(undefined)
-  const [createInitialValues, setCreateInitialValues] = useState<
-    | {
-        firstName?: string
-        lastName?: string
-        phones?: Array<{ value: string; label?: 'mobile' }>
-        emails?: Array<{ value: string; label?: 'personal' }>
-      }
-    | undefined
-  >(undefined)
+  const [createInitialValues, setCreateInitialValues] = useState<ContactFormInitialValues | undefined>(undefined)
+  const [initialFormMode, setInitialFormMode] = useState<'create' | 'link'>('create')
+  const [initialLinkQuery, setInitialLinkQuery] = useState('')
   const [linkAsPrimary, setLinkAsPrimary] = useState(false)
   const [companyDialogOpen, setCompanyDialogOpen] = useState(false)
   const [companyName, setCompanyName] = useState('')
@@ -288,6 +284,8 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
       unlinkedPeopleFromLead(contacts, {
         ownerFirst: cc?.owner_first_name,
         ownerLast: cc?.owner_last_name,
+        owner2First: cc?.owner_2_first_name,
+        owner2Last: cc?.owner_2_last_name,
         organizations: organizations,
         phones: cc?.phones,
         emails: cc?.emails,
@@ -296,6 +294,8 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
       contacts,
       cc?.owner_first_name,
       cc?.owner_last_name,
+      cc?.owner_2_first_name,
+      cc?.owner_2_last_name,
       organizations,
       cc?.phones,
       cc?.emails,
@@ -605,7 +605,9 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
             onClick={() => {
               setEditingContact(undefined)
               setCreateInitialValues(undefined)
-              setLinkAsPrimary(false)
+              setInitialFormMode('create')
+              setInitialLinkQuery('')
+              setLinkAsPrimary(peopleContacts.length === 0)
               setFormOpen(true)
             }}
             aria-label="Add contact"
@@ -843,19 +845,22 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
                       size="small"
                       variant="contained"
                       onClick={() => {
+                        const fullName = [person.first_name, person.last_name].filter(Boolean).join(' ')
                         setEditingContact(undefined)
                         setCreateInitialValues({
                           firstName: person.first_name ?? '',
                           lastName: person.last_name ?? '',
                           phones: person.phones.map((p) => ({
                             value: p.value,
-                            label: 'mobile',
+                            label: p.label as PhoneLabel | undefined,
                           })),
                           emails: person.emails.map((e) => ({
                             value: e.value,
-                            label: 'personal',
+                            label: e.label as EmailLabel | undefined,
                           })),
                         })
+                        setInitialFormMode('link')
+                        setInitialLinkQuery(fullName)
                         setLinkAsPrimary(peopleContacts.length === 0)
                         setFormOpen(true)
                       }}
@@ -948,6 +953,8 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
                       variant="outlined"
                       onClick={() => {
                         setCreateInitialValues(undefined)
+                        setInitialFormMode('create')
+                        setInitialLinkQuery('')
                         setLinkAsPrimary(false)
                         setEditingContact(contact)
                         setFormOpen(true)
@@ -1033,6 +1040,8 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
           setFormOpen(false)
           setEditingContact(undefined)
           setCreateInitialValues(undefined)
+          setInitialFormMode('create')
+          setInitialLinkQuery('')
           setLinkAsPrimary(false)
           queryClient.invalidateQueries({ queryKey: ['propertyContacts', propertyId] })
           queryClient.invalidateQueries({ queryKey: ['commandCenter', propertyId] })
@@ -1042,6 +1051,8 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
         initialValues={createInitialValues}
         linkAsPrimary={linkAsPrimary}
         allowLinkExisting={!editingContact}
+        initialMode={initialFormMode}
+        initialLinkQuery={initialLinkQuery}
       />
 
       <AppSnackbar

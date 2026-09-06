@@ -190,17 +190,19 @@ function hasPageIssues(issues) {
   )
 }
 
-function isRecoverableMuiStyledFlake(issues) {
-  return issues.pageErrors.some((msg) =>
-    /styled_default is not a function/i.test(msg),
-  )
+function isRecoverableMuiStyledFlakeMessage(msg) {
+  return /styled_default is not a function/i.test(msg)
 }
 
-function clearPageIssues(issues) {
-  issues.consoleErrors.length = 0
-  issues.pageErrors.length = 0
-  issues.requestFailures.length = 0
-  issues.responseErrors.length = 0
+function isRecoverableMuiStyledFlake(issues) {
+  return issues.pageErrors.some(isRecoverableMuiStyledFlakeMessage)
+}
+
+function clearRecoverableMuiStyledFlakeIssues(issues) {
+  const keptPageErrors = issues.pageErrors.filter(
+    (msg) => !isRecoverableMuiStyledFlakeMessage(msg),
+  )
+  issues.pageErrors.splice(0, issues.pageErrors.length, ...keptPageErrors)
 }
 
 async function waitForHarnessReady(page, viewport, issues) {
@@ -228,7 +230,6 @@ async function waitForHarnessReady(page, viewport, issues) {
       if (hasPageIssues(issues)) {
         // Cold Vite/Emotion races can throw once then recover after reload.
         if (isRecoverableMuiStyledFlake(issues) && attempt < 3) {
-          clearPageIssues(issues)
           throw new Error('recoverable MUI styled_default flake')
         }
         fail(viewport, 'Harness page/console errors', issues)
@@ -237,8 +238,8 @@ async function waitForHarnessReady(page, viewport, issues) {
     } catch (err) {
       lastError = err
       const recoverable = isRecoverableMuiStyledFlake(issues)
-      if (recoverable) clearPageIssues(issues)
-      if ((hasPageIssues(issues) && !recoverable) || attempt === 3) break
+      if (recoverable) clearRecoverableMuiStyledFlakeIssues(issues)
+      if (hasPageIssues(issues) || attempt === 3) break
       // CI occasionally serves the shell but leaves the root empty on the first
       // request (or hits a half-written Emotion prebundle). A reload gives Vite
       // one more chance without masking real errors.

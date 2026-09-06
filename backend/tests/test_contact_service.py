@@ -19,6 +19,8 @@ from app.models.property_contact import PropertyContact
 from app.services.contact_service import ContactService
 from app.exceptions import ValidationException, ResourceNotFoundError, ConflictError
 
+_AUTH_HEADERS = {'X-User-Id': 'test-user'}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -695,6 +697,13 @@ class TestSearchContacts:
             results = service.search_contacts("shek")
             assert [c.id for c in results] == [gregory.id]
 
+    def test_search_treats_like_wildcards_literally(self, app):
+        with app.app_context():
+            service = ContactService()
+            _make_contact(service, "Alice", "Smith")
+
+            assert service.search_contacts("__") == []
+
     def test_search_excludes_linked_property_contacts(self, app):
         with app.app_context():
             service = ContactService()
@@ -1167,17 +1176,29 @@ class TestSamePersonOwnerConsolidate:
 # ---------------------------------------------------------------------------
 
 class TestSearchContactsApi:
+    def test_search_endpoint_requires_auth(self, client):
+        resp = client.get("/api/contacts/search", query_string={"q": "Shek"})
+        assert resp.status_code == 401
+
     def test_search_endpoint_returns_results(self, app, client):
         with app.app_context():
             service = ContactService()
             contact = _make_contact(service, "Gregory", "Shek")
 
-        resp = client.get("/api/contacts/search", query_string={"q": "Shek"})
+        resp = client.get(
+            "/api/contacts/search",
+            headers=_AUTH_HEADERS,
+            query_string={"q": "Shek"},
+        )
         assert resp.status_code == 200
         body = resp.get_json()
         assert "results" in body
         assert any(r["id"] == contact.id for r in body["results"])
 
     def test_search_endpoint_rejects_short_query(self, client):
-        resp = client.get("/api/contacts/search", query_string={"q": "S"})
+        resp = client.get(
+            "/api/contacts/search",
+            headers=_AUTH_HEADERS,
+            query_string={"q": "S"},
+        )
         assert resp.status_code == 400

@@ -119,6 +119,10 @@ export interface ContactFormModalProps {
   linkAsPrimary?: boolean
   /** Show Create new / Link existing toggle (create mode only). Default true. */
   allowLinkExisting?: boolean
+  /** Initial mode for create flows that should first search for an existing contact. */
+  initialMode?: 'create' | 'link'
+  /** Initial search text when opening directly in link mode. */
+  initialLinkQuery?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +155,37 @@ function asContactRole(value: string | null | undefined): ContactRole {
     return value
   }
   return 'owner'
+}
+
+function phoneRowKey(value: string): string {
+  const digits = value.replace(/\D/g, '')
+  return digits || value.trim().toLowerCase()
+}
+
+function mergePhoneRows(primary: PhoneRow[], extra: PhoneRow[]): PhoneRow[] {
+  const seen = new Set<string>()
+  const rows: PhoneRow[] = []
+  for (const row of [...primary, ...extra]) {
+    const value = row.value.trim()
+    const key = phoneRowKey(value)
+    if (!value || seen.has(key)) continue
+    seen.add(key)
+    rows.push({ value, label: row.label })
+  }
+  return rows
+}
+
+function mergeEmailRows(primary: EmailRow[], extra: EmailRow[]): EmailRow[] {
+  const seen = new Set<string>()
+  const rows: EmailRow[] = []
+  for (const row of [...primary, ...extra]) {
+    const value = row.value.trim()
+    const key = value.toLowerCase()
+    if (!value || seen.has(key)) continue
+    seen.add(key)
+    rows.push({ value, label: row.label })
+  }
+  return rows
 }
 
 function buildInitialState(
@@ -188,8 +223,8 @@ function buildInitialState(
       ),
       roleDescription: contact.role_description ?? initialValues?.roleDescription ?? '',
       notes: contact.notes ?? initialValues?.notes ?? '',
-      phones: contactPhones.length ? contactPhones : seedPhones,
-      emails: contactEmails.length ? contactEmails : seedEmails,
+      phones: mergePhoneRows(contactPhones, seedPhones),
+      emails: mergeEmailRows(contactEmails, seedEmails),
     }
   }
   return {
@@ -221,6 +256,8 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
   initialValues,
   linkAsPrimary = false,
   allowLinkExisting = true,
+  initialMode = 'create',
+  initialLinkQuery = '',
 }) => {
   const queryClient = useQueryClient()
   const isEditMode = contact !== undefined
@@ -229,6 +266,7 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
   const [form, setForm] = useState<FormState>(() => buildInitialState(contact, initialValues))
   const [nameError, setNameError] = useState(false)
   const [linkQuery, setLinkQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [selectedExisting, setSelectedExisting] = useState<Contact | null>(null)
   const [linkRole, setLinkRole] = useState<ContactRole>('owner')
 
@@ -241,10 +279,12 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
 
   useEffect(() => {
     if (!open) return
+    const nextMode = !isEditMode && allowLinkExisting && initialMode === 'link' ? 'link' : 'create'
     setForm(buildInitialState(contact, initialValues))
     setNameError(false)
-    setMode('create')
-    setLinkQuery('')
+    setMode(nextMode)
+    setLinkQuery(nextMode === 'link' ? initialLinkQuery : '')
+    setDebouncedQuery('')
     setSelectedExisting(null)
     setLinkRole(initialValues?.role ?? 'owner')
     // Reset only when the dialog opens or the edited contact changes — not on
@@ -252,7 +292,16 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
   }, [contact, open])
 
-  const debouncedQuery = linkQuery.trim()
+  useEffect(() => {
+    if (!open || isEditMode || mode !== 'link') {
+      setDebouncedQuery('')
+      return
+    }
+    const trimmed = linkQuery.trim()
+    const timeout = window.setTimeout(() => setDebouncedQuery(trimmed), 250)
+    return () => window.clearTimeout(timeout)
+  }, [isEditMode, linkQuery, mode, open])
+
   const { data: searchResults = [], isFetching: searchLoading } = useQuery({
     queryKey: ['contactSearch', propertyId, debouncedQuery],
     queryFn: () =>
@@ -415,6 +464,12 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
         .filter((e) => e.value.trim())
         .map((e) => ({ value: e.value.trim(), label: e.label })),
     }
+    if (isEditMode && contact?.role_description === undefined && initialValues?.roleDescription === undefined) {
+      delete payload.role_description
+    }
+    if (isEditMode && contact?.notes === undefined && initialValues?.notes === undefined) {
+      delete payload.notes
+    }
 
     if (isEditMode) {
       updateMutation.mutate(payload)
@@ -476,12 +531,17 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
                   value={selectedExisting}
                   onChange={(_, value) => setSelectedExisting(value)}
                   inputValue={linkQuery}
-                  onInputChange={(_, value) => setLinkQuery(value)}
+                  onInputChange={(_, value, reason) => {
+                    setLinkQuery(value)
+                    if (reason === 'input' || reason === 'clear') {
+                      setSelectedExisting(null)
+                    }
+                  }}
                   getOptionLabel={(option) => contactDisplayName(option) || `Contact #${option.id}`}
                   isOptionEqualToValue={(a, b) => a.id === b.id}
                   filterOptions={(x) => x}
                   noOptionsText={
-                    debouncedQuery.length < 2
+                    linkQuery.trim().length < 2
                       ? 'Type at least 2 characters'
                       : searchLoading
                         ? 'Searching…'

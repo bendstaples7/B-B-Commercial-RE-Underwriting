@@ -207,6 +207,22 @@ describe('unlinkedPeopleFromLead', () => {
     expect(rows[0].phones[0].value).toContain('555')
   })
 
+  it('surfaces flat Owner 2 when it is not already linked', () => {
+    const rows = unlinkedPeopleFromLead([], {
+      ownerFirst: 'Gregory',
+      ownerLast: 'Shek',
+      owner2First: 'Yumi',
+      owner2Last: 'Niece',
+      phones: [{ value: '(312) 555-0100', label: 'work' }],
+    })
+
+    expect(rows.map((row) => `${row.first_name} ${row.last_name}`)).toEqual([
+      'Gregory Shek',
+      'Yumi Niece',
+    ])
+    expect(rows[1].phones[0]).toEqual({ value: '(312) 555-0100', label: 'work' })
+  })
+
   it('surfaces org resolved person when not already linked', () => {
     const rows = unlinkedPeopleFromLead([], {
       organizations: [

@@ -7,6 +7,8 @@ import { ContactsSection } from './ContactsSection'
 import { contactService } from '@/services/api'
 import type { CommandCenterPayload, PropertyContact } from '@/types'
 
+const contactFormModalSpy = vi.hoisted(() => vi.fn())
+
 vi.mock('@/services/api', () => ({
   contactService: {
     getPropertyContacts: vi.fn(),
@@ -43,8 +45,10 @@ vi.mock('@/services/entityResolutionApi', () => ({
 }))
 
 vi.mock('./ContactFormModal', () => ({
-  ContactFormModal: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="contact-form-modal">ContactFormModal</div> : null,
+  ContactFormModal: (props: Record<string, unknown>) => {
+    contactFormModalSpy(props)
+    return props.open ? <div data-testid="contact-form-modal">ContactFormModal</div> : null
+  },
 }))
 
 const PROPERTY_ID = 42
@@ -209,6 +213,13 @@ describe('ContactsSection', () => {
     fireEvent.click(screen.getByRole('button', { name: /add contact/i }))
     await waitFor(() => {
       expect(screen.getByTestId('contact-form-modal')).toBeInTheDocument()
+    })
+    const calls = contactFormModalSpy.mock.calls
+    const props = calls[calls.length - 1][0]
+    expect(props).toMatchObject({
+      open: true,
+      linkAsPrimary: true,
+      initialMode: 'create',
     })
   })
 
@@ -473,7 +484,7 @@ describe('ContactsSection', () => {
             id: PROPERTY_ID,
             owner_first_name: 'Gregory',
             owner_last_name: 'Shek',
-            phones: [{ value: '(312) 555-0199' }],
+            phones: [{ value: '(312) 555-0199', label: 'work' }],
             organizations: [
               {
                 id: 10,
@@ -493,5 +504,22 @@ describe('ContactsSection', () => {
       expect(screen.getByText(/On file — not linked yet/i)).toBeInTheDocument()
     })
     expect(screen.getByTestId('materialize-unlinked-person-btn')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('materialize-unlinked-person-btn'))
+    await waitFor(() => {
+      expect(screen.getByTestId('contact-form-modal')).toBeInTheDocument()
+    })
+    const calls = contactFormModalSpy.mock.calls
+    const props = calls[calls.length - 1][0]
+    expect(props).toMatchObject({
+      linkAsPrimary: true,
+      initialMode: 'link',
+      initialLinkQuery: 'Gregory Shek',
+    })
+    expect(props.initialValues).toMatchObject({
+      firstName: 'Gregory',
+      lastName: 'Shek',
+      phones: [{ value: '(312) 555-0199', label: 'work' }],
+    })
   })
 })
