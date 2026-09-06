@@ -63,6 +63,7 @@ export function SameAddressMergeBanner({
   const removeIdRef = useRef<number | null>(null)
   const pasteIdRef = useRef('')
   const pasteLookupPromise = useRef<Promise<boolean> | null>(null)
+  const pasteLookupRequestId = useRef(0)
 
   const selectRemoveId = useCallback((nextRemoveId: number | null) => {
     removeIdRef.current = nextRemoveId
@@ -72,6 +73,12 @@ export function SameAddressMergeBanner({
   const first = twins[0]
   const extra = Math.max(0, twins.length - 1)
   const hasTwins = twins.length > 0
+
+  const invalidatePasteLookup = useCallback(() => {
+    pasteLookupRequestId.current += 1
+    pasteLookupPromise.current = null
+    setPasteLookupPending(false)
+  }, [])
 
   const options = useMemo(() => {
     const rows: Array<{
@@ -102,13 +109,12 @@ export function SameAddressMergeBanner({
     setError(null)
     setPasteId('')
     pasteIdRef.current = ''
+    invalidatePasteLookup()
     setPastePreview(null)
     setPasteError(null)
     setValidatedPasteId('')
-    setPasteLookupPending(false)
-    pasteLookupPromise.current = null
     selectRemoveId(first?.id ?? null)
-  }, [first?.id, leadId, selectRemoveId])
+  }, [first?.id, invalidatePasteLookup, leadId, selectRemoveId])
 
   useEffect(() => {
     if (!open) return
@@ -132,6 +138,7 @@ export function SameAddressMergeBanner({
     if (pasteLookupPromise.current) return pasteLookupPromise.current
     const raw = pasteId.trim()
     if (!raw) {
+      invalidatePasteLookup()
       setPastePreview(null)
       setPasteError(null)
       setValidatedPasteId('')
@@ -139,17 +146,21 @@ export function SameAddressMergeBanner({
     }
     const parsed = Number(raw)
     if (!Number.isInteger(parsed) || parsed <= 0 || parsed === leadId) {
+      invalidatePasteLookup()
       setPasteError('Enter a different lead number.')
       setPastePreview(null)
       setValidatedPasteId('')
       return false
     }
+    const requestId = pasteLookupRequestId.current + 1
+    pasteLookupRequestId.current = requestId
+    const isCurrentLookup = () =>
+      pasteLookupRequestId.current === requestId && pasteIdRef.current.trim() === raw
     const lookup = (async () => {
       setPasteLookupPending(true)
       try {
         const preview = await commandCenterService.getMergePreview(leadId, parsed)
-        if (pasteIdRef.current.trim() !== raw) {
-          setValidatedPasteId('')
+        if (!isCurrentLookup()) {
           return false
         }
         if (!preview.same_building) {
@@ -164,8 +175,7 @@ export function SameAddressMergeBanner({
         selectRemoveId(preview.other.id)
         return true
       } catch (err) {
-        if (pasteIdRef.current.trim() !== raw) {
-          setValidatedPasteId('')
+        if (!isCurrentLookup()) {
           return false
         }
         setPasteError(err instanceof Error ? err.message : 'Could not look up that lead.')
@@ -173,8 +183,10 @@ export function SameAddressMergeBanner({
         setValidatedPasteId('')
         return false
       } finally {
-        setPasteLookupPending(false)
-        pasteLookupPromise.current = null
+        if (pasteLookupRequestId.current === requestId) {
+          setPasteLookupPending(false)
+          pasteLookupPromise.current = null
+        }
       }
     })()
     pasteLookupPromise.current = lookup
@@ -346,6 +358,7 @@ export function SameAddressMergeBanner({
             value={pasteId}
             onChange={(event) => {
               pasteIdRef.current = event.target.value
+              invalidatePasteLookup()
               setPasteId(event.target.value)
               setPastePreview(null)
               setPasteError(null)
