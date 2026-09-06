@@ -63,6 +63,7 @@ export function SameAddressMergeBanner({
   const removeIdRef = useRef<number | null>(null)
   const pasteIdRef = useRef('')
   const pasteLookupPromise = useRef<Promise<boolean> | null>(null)
+  const pasteLookupRequestId = useRef(0)
 
   const selectRemoveId = useCallback((nextRemoveId: number | null) => {
     removeIdRef.current = nextRemoveId
@@ -72,6 +73,12 @@ export function SameAddressMergeBanner({
   const first = twins[0]
   const extra = Math.max(0, twins.length - 1)
   const hasTwins = twins.length > 0
+
+  const invalidatePasteLookup = useCallback(() => {
+    pasteLookupRequestId.current += 1
+    pasteLookupPromise.current = null
+    setPasteLookupPending(false)
+  }, [])
 
   const options = useMemo(() => {
     const rows: Array<{
@@ -97,17 +104,30 @@ export function SameAddressMergeBanner({
     [options, winnerId],
   )
 
-  useEffect(() => {
-    if (!open) return
+  const resetDialogState = useCallback(() => {
     setWinnerId(leadId)
     setError(null)
     setPasteId('')
     pasteIdRef.current = ''
+    invalidatePasteLookup()
     setPastePreview(null)
     setPasteError(null)
     setValidatedPasteId('')
     selectRemoveId(first?.id ?? null)
-  }, [leadId, open, first?.id, selectRemoveId])
+  }, [first?.id, invalidatePasteLookup, leadId, selectRemoveId])
+
+  useEffect(() => {
+    if (!open) return
+    resetDialogState()
+  }, [open, resetDialogState])
+
+  const closeDialog = useCallback(() => {
+    if (saving) return
+    setOpen(false)
+    // Clear paste/manual twin state on close so cancel + reopen cannot keep
+    // a stale lead id if open→true is coalesced before open flips false.
+    resetDialogState()
+  }, [resetDialogState, saving])
 
   useEffect(() => {
     if (removeId != null && removable.some((row) => row.id === removeId)) return
@@ -118,6 +138,7 @@ export function SameAddressMergeBanner({
     if (pasteLookupPromise.current) return pasteLookupPromise.current
     const raw = pasteId.trim()
     if (!raw) {
+      invalidatePasteLookup()
       setPastePreview(null)
       setPasteError(null)
       setValidatedPasteId('')
@@ -125,17 +146,21 @@ export function SameAddressMergeBanner({
     }
     const parsed = Number(raw)
     if (!Number.isInteger(parsed) || parsed <= 0 || parsed === leadId) {
+      invalidatePasteLookup()
       setPasteError('Enter a different lead number.')
       setPastePreview(null)
       setValidatedPasteId('')
       return false
     }
+    const requestId = pasteLookupRequestId.current + 1
+    pasteLookupRequestId.current = requestId
+    const isCurrentLookup = () =>
+      pasteLookupRequestId.current === requestId && pasteIdRef.current.trim() === raw
     const lookup = (async () => {
       setPasteLookupPending(true)
       try {
         const preview = await commandCenterService.getMergePreview(leadId, parsed)
-        if (pasteIdRef.current.trim() !== raw) {
-          setValidatedPasteId('')
+        if (!isCurrentLookup()) {
           return false
         }
         if (!preview.same_building) {
@@ -150,8 +175,7 @@ export function SameAddressMergeBanner({
         selectRemoveId(preview.other.id)
         return true
       } catch (err) {
-        if (pasteIdRef.current.trim() !== raw) {
-          setValidatedPasteId('')
+        if (!isCurrentLookup()) {
           return false
         }
         setPasteError(err instanceof Error ? err.message : 'Could not look up that lead.')
@@ -159,8 +183,10 @@ export function SameAddressMergeBanner({
         setValidatedPasteId('')
         return false
       } finally {
-        setPasteLookupPending(false)
-        pasteLookupPromise.current = null
+        if (pasteLookupRequestId.current === requestId) {
+          setPasteLookupPending(false)
+          pasteLookupPromise.current = null
+        }
       }
     })()
     pasteLookupPromise.current = lookup
@@ -259,7 +285,7 @@ export function SameAddressMergeBanner({
 
       <Dialog
         open={open}
-        onClose={() => !saving && setOpen(false)}
+        onClose={closeDialog}
         aria-labelledby="same-address-merge-title"
         fullWidth
         maxWidth="sm"
@@ -332,6 +358,7 @@ export function SameAddressMergeBanner({
             value={pasteId}
             onChange={(event) => {
               pasteIdRef.current = event.target.value
+              invalidatePasteLookup()
               setPasteId(event.target.value)
               setPastePreview(null)
               setPasteError(null)
@@ -355,7 +382,7 @@ export function SameAddressMergeBanner({
           ) : null}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpen(false)} disabled={saving} sx={{ cursor: 'pointer' }}>
+          <Button onClick={closeDialog} disabled={saving} sx={{ cursor: 'pointer' }}>
             Cancel
           </Button>
           <Button

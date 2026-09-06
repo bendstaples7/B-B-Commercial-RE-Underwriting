@@ -26,6 +26,20 @@ const twin200: SameAddressLeadSummary = {
   people_names: ['Yoko Miller', 'Edwin Chen'],
 }
 
+type MergePreviewResponse = {
+  same_building: boolean
+  current: SameAddressLeadSummary
+  other: SameAddressLeadSummary
+}
+
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {}
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
 describe('SameAddressMergeBanner', () => {
   beforeEach(() => {
     vi.mocked(commandCenterService.getMergePreview).mockReset()
@@ -486,9 +500,100 @@ describe('SameAddressMergeBanner', () => {
     })
 
     await user.click(screen.getByText('Cancel'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('same-address-merge-dialog')).not.toBeInTheDocument()
+    })
     await user.click(screen.getByTestId('same-address-merge-open'))
 
-    expect(screen.getByTestId('same-address-merge-paste-id')).toHaveValue('')
+    expect(await screen.findByTestId('same-address-merge-paste-id')).toHaveValue('')
     expect(screen.queryAllByText('Manual twin (#300)')).toHaveLength(0)
+  })
+
+  it('ignores stale paste lookups after cancel and a newer lookup starts', async () => {
+    const user = userEvent.setup()
+    const firstLookup = deferred<MergePreviewResponse>()
+    const secondLookup = deferred<MergePreviewResponse>()
+    vi.mocked(commandCenterService.getMergePreview).mockImplementation((_leadId, otherId) => {
+      if (otherId === 300) return firstLookup.promise
+      if (otherId === 400) return secondLookup.promise
+      throw new Error(`Unexpected lead lookup ${otherId}`)
+    })
+
+    render(
+      <MemoryRouter>
+        <SameAddressMergeBanner
+          leadId={100}
+          currentOwnerLabel="Yoko"
+          currentPeopleNames={['Yoko']}
+          twins={[
+            {
+              id: 200,
+              property_street: '1110 Yoko Ave',
+              owner_display_name: 'Edwin',
+              people_names: ['Edwin'],
+            },
+          ]}
+          onMerged={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    await user.type(screen.getByTestId('same-address-merge-paste-id'), '300')
+    await user.tab()
+    await waitFor(() => {
+      expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 300)
+    })
+
+    await user.click(screen.getByText('Cancel'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('same-address-merge-dialog')).not.toBeInTheDocument()
+    })
+
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    await user.type(await screen.findByTestId('same-address-merge-paste-id'), '400')
+    await user.tab()
+    await waitFor(() => {
+      expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 400)
+    })
+
+    firstLookup.resolve({
+      same_building: true,
+      current: {
+        id: 100,
+        property_street: '1110 Yoko Ave',
+        owner_display_name: 'Yoko',
+        people_names: ['Yoko'],
+      },
+      other: {
+        id: 300,
+        property_street: '1110 Yoko Ave',
+        owner_display_name: 'Stale manual',
+        people_names: ['Stale manual'],
+      },
+    })
+    await waitFor(() => {
+      expect(screen.getByText('Checking lead...')).toBeInTheDocument()
+    })
+
+    secondLookup.resolve({
+      same_building: true,
+      current: {
+        id: 100,
+        property_street: '1110 Yoko Ave',
+        owner_display_name: 'Yoko',
+        people_names: ['Yoko'],
+      },
+      other: {
+        id: 400,
+        property_street: '1110 Yoko Ave',
+        owner_display_name: 'Fresh manual',
+        people_names: ['Fresh manual'],
+      },
+    })
+    await waitFor(() => {
+      expect(screen.getAllByText('Fresh manual (#400)').length).toBeGreaterThan(0)
+    })
+    expect(screen.queryAllByText('Stale manual (#300)')).toHaveLength(0)
   })
 })

@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry, Task
+from app.models.motivation_signal import MotivationSignal
 from app.models.user import User
 from app.services.auth_service import AuthService
 from app.services.hubspot_timeline_import_service import HubSpotTimelineImportService
@@ -975,6 +976,127 @@ class TestUpdateCategory:
             assert body['lead_category_locked'] is True
             db.session.refresh(lead)
             assert lead.lead_category == 'residential'
+
+
+class TestLeadFindings:
+    def test_catalog_lists_fsbo(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '20 Finding St')
+            response = client.get(
+                f'/api/leads/{lead.id}/findings/catalog',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            keys = {item['finding_key'] for item in body['findings']}
+            assert 'OWNER_SELLING_FSBO' in keys
+            fsbo = next(i for i in body['findings'] if i['finding_key'] == 'OWNER_SELLING_FSBO')
+            assert fsbo['points'] > 0
+
+    def test_add_fsbo_finding_updates_scores(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '21 Finding St', lead_score=40.0, motivation_score=0.0)
+            # Baseline rescore without finding — then add FSBO and compare.
+            from app.services.lead_refresh import refresh_lead_scoring
+            refresh_lead_scoring(lead.id)
+            db.session.refresh(lead)
+            before_score = float(lead.lead_score or 0)
+            before_motivation = float(lead.motivation_score or 0)
+
+            response = client.post(
+                f'/api/leads/{lead.id}/findings',
+                data=json.dumps({
+                    'finding_key': 'OWNER_SELLING_FSBO',
+                    'note': 'Saw FSBO sign',
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 201, response.get_json()
+            body = response.get_json()
+            assert body['finding']['signal_type'] == 'OWNER_SELLING_FSBO'
+            assert body['finding']['removable'] is True
+            assert body['motivation_score'] >= before_motivation + 10
+            assert body['lead_score'] is not None
+            assert body['lead_score'] > before_score
+
+            findings = client.get(
+                f'/api/leads/{lead.id}/findings',
+                headers=_AUTH_HEADERS,
+            )
+            assert findings.status_code == 200
+            finding_rows = findings.get_json()['findings']
+            assert len(finding_rows) == 1
+            assert finding_rows[0]['signal_type'] == 'OWNER_SELLING_FSBO'
+            assert finding_rows[0]['removable'] is True
+
+            detail = client.get(
+                f'/api/properties/{lead.id}',
+                headers=_AUTH_HEADERS,
+            )
+            assert detail.status_code == 200
+            signals = detail.get_json().get('motivation_signals') or []
+            assert any(
+                s.get('signal_type') == 'OWNER_SELLING_FSBO' and s.get('removable')
+                for s in signals
+            )
+
+    def test_remove_finding(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '22 Finding St')
+            created = client.post(
+                f'/api/leads/{lead.id}/findings',
+                data=json.dumps({'finding_key': 'OWNER_ACTIVELY_SELLING'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert created.status_code == 201
+            created_body = created.get_json()
+            signal_id = created_body['finding']['id']
+            created_motivation = float(created_body['motivation_score'] or 0)
+            created_lead_score = float(created_body['lead_score'] or 0)
+
+            deleted = client.delete(
+                f'/api/leads/{lead.id}/findings/{signal_id}',
+                headers=_AUTH_HEADERS,
+            )
+            assert deleted.status_code == 200
+            deleted_body = deleted.get_json()
+            assert deleted_body['removed'] is True
+            assert float(deleted_body['motivation_score'] or 0) < created_motivation
+            assert float(deleted_body['lead_score'] or 0) < created_lead_score
+
+    def test_add_finding_rolls_back_when_scoring_fails(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '24 Finding St')
+            with patch(
+                'app.services.lead_scoring_engine.LeadScoringEngine.score_and_persist',
+                side_effect=RuntimeError('boom'),
+            ):
+                response = client.post(
+                    f'/api/leads/{lead.id}/findings',
+                    data=json.dumps({'finding_key': 'OWNER_ACTIVELY_SELLING'}),
+                    content_type='application/json',
+                    headers=_AUTH_HEADERS,
+                )
+
+            assert response.status_code == 500
+            assert MotivationSignal.query.filter_by(
+                lead_id=lead.id,
+                source='analyst',
+                is_active=True,
+            ).count() == 0
+
+    def test_unknown_finding_returns_400(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '23 Finding St')
+            response = client.post(
+                f'/api/leads/{lead.id}/findings',
+                data=json.dumps({'finding_key': 'BOGUS'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 400
 
 
 class TestUpdatePropertyOverview:

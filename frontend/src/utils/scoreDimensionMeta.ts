@@ -83,8 +83,8 @@ const DIMENSION_COPY: Record<string, Omit<ScoreDimensionMeta, 'maxPoints'>> = {
   structured_motivation: {
     label: 'Seller motivation',
     description:
-      'Product motivation score from MotivationSignal rows (tax/violation distress, source type, notes keywords, manual priority), capped. This is lead.motivation_score — not HubSpot engagement.',
-    dataSource: 'motivation_signals table (synced from enrichment JSON and ingestion fields)',
+      'Product motivation score from MotivationSignal rows (tax/violation distress, source type, notes keywords, manual priority, analyst findings such as FSBO), capped. This is lead.motivation_score — not HubSpot engagement.',
+    dataSource: 'motivation_signals table (synced from enrichment JSON and ingestion fields; analyst findings from Command Center)',
   },
   notes_keywords: {
     label: 'Notes Keywords (attribution)',

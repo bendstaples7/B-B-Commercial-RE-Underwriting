@@ -19,6 +19,7 @@ from app.models import Lead, LeadTask, LeadTimelineEntry
 from app.schemas import (
     LeadTaskCreateSchema, LeadTaskUpdateSchema, LeadTaskSnoozeSchema,
     LogNoteSchema, LogCallSchema, LeadStatusUpdateSchema, LeadCategoryUpdateSchema,
+    LeadFindingCreateSchema,
     LeadPropertyOverviewUpdateSchema,
     ParkLeadSchema, DoNotContactSchema, ReactivateLeadSchema,
     LeadTimelineEntrySchema,
@@ -1573,6 +1574,166 @@ def update_category(lead_id: int):
         'property_type': lead.property_type,
         'lead_score': lead.lead_score,
         'timeline_entry': _serialize_timeline_entry(entry),
+    }), 200
+
+
+@command_center_bp.route('/<int:lead_id>/findings/catalog', methods=['GET'])
+@require_auth
+@handle_errors
+def get_finding_catalog(lead_id: int):
+    """
+    GET /api/leads/<lead_id>/findings/catalog
+
+    Catalog of analyst findings that can be added to influence motivation score.
+    """
+    from app.services.motivation_signal_service import list_analyst_finding_catalog
+
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return denied
+
+    category = (lead.lead_category or 'residential').strip().lower() or 'residential'
+    return jsonify({
+        'findings': list_analyst_finding_catalog(category),
+        'lead_category': category,
+    }), 200
+
+
+@command_center_bp.route('/<int:lead_id>/findings', methods=['GET'])
+@require_auth
+@handle_errors
+def list_lead_findings(lead_id: int):
+    """
+    GET /api/leads/<lead_id>/findings
+
+    Active user-confirmed analyst findings for a lead.
+    """
+    from app.models.motivation_signal import MotivationSignal
+    from app.services.motivation_signal_service import (
+        ANALYST_SOURCE,
+        serialize_motivation_signal,
+    )
+
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return denied
+
+    rows = (
+        MotivationSignal.query.filter_by(
+            lead_id=lead_id,
+            source=ANALYST_SOURCE,
+            is_active=True,
+        )
+        .order_by(MotivationSignal.detected_at.desc(), MotivationSignal.id.desc())
+        .all()
+    )
+
+    return jsonify({
+        'findings': [serialize_motivation_signal(row) for row in rows],
+        'motivation_score': lead.motivation_score,
+        'motivation_signal_summary': lead.motivation_signal_summary,
+        'lead_score': lead.lead_score,
+    }), 200
+
+
+@command_center_bp.route('/<int:lead_id>/findings', methods=['POST'])
+@require_auth
+@handle_errors
+def add_lead_finding(lead_id: int):
+    """
+    POST /api/leads/<lead_id>/findings
+
+    Add a user-confirmed finding (e.g. owner selling FSBO) that feeds
+    structured motivation and lead_score / queue prioritization.
+    """
+    from app import db
+    from app.services.lead_refresh import refresh_lead_scoring
+    from app.services.motivation_signal_service import (
+        MotivationSignalService,
+        serialize_motivation_signal,
+    )
+
+    data = LeadFindingCreateSchema().load(request.get_json() or {})
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return denied
+
+    actor = str(getattr(g, 'user_id', None) or 'anonymous')
+    svc = MotivationSignalService()
+    try:
+        row = svc.add_analyst_finding(
+            lead,
+            data['finding_key'],
+            note=data.get('note'),
+            actor=actor,
+            commit=False,
+        )
+    except ValueError as exc:
+        return jsonify({'error': 'Invalid request', 'message': str(exc)}), 400
+
+    refresh_lead_scoring(lead_id, raise_on_error=True)
+    db.session.refresh(lead)
+    db.session.refresh(row)
+
+    return jsonify({
+        'finding': serialize_motivation_signal(row),
+        'motivation_score': lead.motivation_score,
+        'motivation_signal_summary': lead.motivation_signal_summary,
+        'lead_score': lead.lead_score,
+    }), 201
+
+
+@command_center_bp.route('/<int:lead_id>/findings/<int:signal_id>', methods=['DELETE'])
+@require_auth
+@handle_errors
+def remove_lead_finding(lead_id: int, signal_id: int):
+    """
+    DELETE /api/leads/<lead_id>/findings/<signal_id>
+
+    Remove (deactivate) a user-confirmed analyst finding.
+    """
+    from app import db
+    from app.services.lead_refresh import refresh_lead_scoring
+    from app.services.motivation_signal_service import MotivationSignalService
+
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return denied
+
+    removed = MotivationSignalService().remove_analyst_finding(
+        lead, signal_id, commit=False,
+    )
+    if not removed:
+        return jsonify({
+            'error': 'Not found',
+            'message': 'Finding not found or is not removable',
+        }), 404
+
+    refresh_lead_scoring(lead_id, raise_on_error=True)
+    db.session.refresh(lead)
+
+    return jsonify({
+        'removed': True,
+        'signal_id': signal_id,
+        'motivation_score': lead.motivation_score,
+        'motivation_signal_summary': lead.motivation_signal_summary,
+        'lead_score': lead.lead_score,
     }), 200
 
 

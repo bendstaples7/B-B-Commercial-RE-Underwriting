@@ -643,14 +643,20 @@ export function LeadDetailTabPanel({
               <Box sx={{ mb: 2 }}>
                 <ScoreBreakdownCard score={scoreData.latest} />
               </Box>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                Motivation signals
-              </Typography>
-              <Box sx={{ mb: 2 }}>
-                <MotivationSignalsPanel lead={leadData} score={scoreData.latest} />
-              </Box>
-              <ScoreHistoryTimeline history={scoreData.history} />
             </>
+          )}
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>
+            Motivation signals & findings
+          </Typography>
+          <Box sx={{ mb: 2 }}>
+            <MotivationSignalsPanel
+              lead={leadData}
+              leadId={leadId}
+              score={scoreData?.latest ?? null}
+            />
+          </Box>
+          {scoreData?.latest && (
+            <ScoreHistoryTimeline history={scoreData.history} />
           )}
         </Box>
       )}
