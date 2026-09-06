@@ -234,6 +234,10 @@ const NAV_ICON_PILL_HOVER = 'rgba(51, 65, 85, 0.14)'
 // (e.g. PropertyFactsForm uses usePlacesAutocomplete which needs the API ready)
 // ---------------------------------------------------------------------------
 import { GoogleMapsLoadedContext } from '@/context/GoogleMapsContext'
+import {
+  fetchGoogleMapsApiKeyFromBackend,
+  resolveGoogleMapsApiKeySync,
+} from '@/utils/googleMapsApiKey'
 // @react-google-maps/api reloads the script if this array changes identity.
 // Declare it outside the component so it's stable across renders.
 const GOOGLE_MAPS_LIBRARIES: ['places'] = ['places']
@@ -247,10 +251,15 @@ function pathNeedsGoogleMaps(pathname: string): boolean {
   )
 }
 
-function GoogleMapsScriptLoader({ children }: { children: React.ReactNode }) {
-  const googleMapsApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
+function GoogleMapsScriptLoader({
+  apiKey,
+  children,
+}: {
+  apiKey: string
+  children: React.ReactNode
+}) {
   const { isLoaded } = useLoadScript({
-    googleMapsApiKey: googleMapsApiKey ?? '',
+    googleMapsApiKey: apiKey,
     libraries: GOOGLE_MAPS_LIBRARIES,
   })
   return (
@@ -267,14 +276,41 @@ function GoogleMapsScriptProvider({
   enabled: boolean
   children: React.ReactNode
 }) {
-  if (!enabled) {
+  const [apiKey, setApiKey] = useState<string | null>(() => resolveGoogleMapsApiKeySync())
+  const [keyLookupDone, setKeyLookupDone] = useState(() => Boolean(resolveGoogleMapsApiKeySync()))
+
+  useEffect(() => {
+    if (!enabled || apiKey) {
+      setKeyLookupDone(true)
+      return
+    }
+    let cancelled = false
+    fetchGoogleMapsApiKeyFromBackend().then((key) => {
+      if (cancelled) return
+      if (key) setApiKey(key)
+      setKeyLookupDone(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [enabled, apiKey])
+
+  useEffect(() => {
+    if (enabled && keyLookupDone && !apiKey) {
+      console.warn(
+        'Google Maps browser API key is not available (runtime inject, local Vite env, and backend /api/config/client returned none) — address autocomplete will not work.',
+      )
+    }
+  }, [enabled, keyLookupDone, apiKey])
+
+  if (!enabled || !apiKey) {
     return (
       <GoogleMapsLoadedContext.Provider value={false}>
         {children}
       </GoogleMapsLoadedContext.Provider>
     )
   }
-  return <GoogleMapsScriptLoader>{children}</GoogleMapsScriptLoader>
+  return <GoogleMapsScriptLoader apiKey={apiKey}>{children}</GoogleMapsScriptLoader>
 }
 
 function RouteLazyFallback() {
@@ -1650,9 +1686,6 @@ function App() {
     }
   }, [user, mapsPathNeedsScript])
   const mapsEnabled = Boolean(user) && (mapsLoadedForSession || mapsPathNeedsScript)
-  if (!import.meta.env.VITE_GOOGLE_MAPS_API_KEY && mapsEnabled) {
-    console.warn('VITE_GOOGLE_MAPS_API_KEY is not set — address autocomplete will not work.')
-  }
 
   const toggleDrawer = () => setDrawerOpen((prev) => !prev)
 

@@ -113,3 +113,4 @@ artifacts/
 # Live-UI auth exports (JWT session) — never commit
 artifacts/auth/
 artifacts/live-ui/
+frontend/dist-cc-packing-harness/

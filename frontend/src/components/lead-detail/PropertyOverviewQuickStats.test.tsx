@@ -285,7 +285,10 @@ describe('PropertyOverviewQuickStats', () => {
 
     await user.click(screen.getByTestId('quick-stat-last-sale-edit-trigger'))
 
-    expect(screen.getByTestId('quick-stat-last-sale-price-input')).toHaveValue('425000')
+    // Popover seeds drafts in useEffect after open — wait so CI doesn't race empty ''.
+    await waitFor(() => {
+      expect(screen.getByTestId('quick-stat-last-sale-price-input')).toHaveValue('425000')
+    })
   })
 
   it('rejects marker-only prices and fractional units before saving', async () => {

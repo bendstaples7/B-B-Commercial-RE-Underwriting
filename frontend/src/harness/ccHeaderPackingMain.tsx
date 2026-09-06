@@ -5,6 +5,10 @@
  * ?fixture=residential — no-condo header for KPI centering symmetry gate
  * (default) — condo hostile Hoyne fixture
  */
+// Side-effect imports first so Emotion's default export is wired before MUI
+// styled() runs — guards CI against `styled_default is not a function`.
+import '@emotion/react'
+import '@emotion/styled'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Box, Chip, CssBaseline, IconButton, Typography } from '@mui/material'
