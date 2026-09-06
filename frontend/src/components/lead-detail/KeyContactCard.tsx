@@ -265,6 +265,7 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
         return
       }
       setPrefetchedEditContact(result.data)
+      setSnackbar((s) => ({ ...s, open: false }))
       setEditOpen(true)
     } catch {
       setSnackbar({

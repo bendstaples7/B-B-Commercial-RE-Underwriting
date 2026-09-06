@@ -402,4 +402,54 @@ describe('KeyContactCard', () => {
       await screen.findByText('Could not load contact details. Please try again.'),
     ).toBeInTheDocument()
   })
+
+  it('clears a stale load error after a successful retry opens the editor', async () => {
+    const user = userEvent.setup()
+    vi.mocked(contactService.getContact)
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValueOnce({
+        id: 88,
+        first_name: 'Jane',
+        last_name: 'Doe',
+        role: 'owner',
+        role_description: 'Owner contact',
+        notes: 'Loaded on retry',
+        phones: [{ id: 1, contact_id: 88, value: '555-9999', label: 'mobile' }],
+        emails: [],
+        created_at: null,
+        updated_at: null,
+      })
+
+    renderCard(
+      basePayload({
+        contacts: [{
+          id: 88,
+          first_name: 'Jane',
+          last_name: 'Doe',
+          role: 'owner',
+          is_primary: true,
+          phones: [{ value: '555-9999', label: 'mobile' }],
+          emails: [],
+        }],
+      }),
+      'Jane Doe',
+    )
+
+    await user.click(screen.getByTestId('key-contact-edit-details-btn'))
+    expect(
+      await screen.findByText('Could not load contact details. Please try again.'),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByTestId('key-contact-edit-details-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+    expect(screen.getByRole('textbox', { name: /notes/i })).toHaveValue('Loaded on retry')
+    await waitFor(() => {
+      expect(
+        screen.queryByText('Could not load contact details. Please try again.'),
+      ).not.toBeInTheDocument()
+    })
+  })
 })
