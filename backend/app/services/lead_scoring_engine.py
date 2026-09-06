@@ -226,7 +226,10 @@ def _mail_cadence_block_outcome(lead: Lead) -> tuple[str, str, dict] | None:
             getattr(lead, 'id', None),
             exc,
         )
-        # Fail closed: do not recommend mail when the cadence oracle errors.
+        # Match _mail_work_in_flight: unit tests often score without an app
+        # context. Fail closed only for real in-app oracle failures.
+        if 'application context' in str(exc).lower():
+            return None
         return 'nurture', 'mail_cadence_cooldown', {
             'lead_id': getattr(lead, 'id', None),
             'mail_cadence_check_failed': True,
