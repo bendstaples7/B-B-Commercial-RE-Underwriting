@@ -1848,6 +1848,10 @@ def refresh_leads_after_mail_task_changes(
                 exc,
                 exc_info=True,
             )
+            if commit:
+                db.session.rollback()
+                continue
+            raise
 
 
 def heal_mail_cadence_cooldown(
