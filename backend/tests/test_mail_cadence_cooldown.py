@@ -20,6 +20,7 @@ from app.services.lead_scoring_engine import (
 )
 from app.services.mail_task_lifecycle_service import (
     MAIL_REMATCH_OFFSET_DAYS,
+    MAIL_REMATCH_WORKFLOW_KEY,
     heal_mail_cadence_cooldown,
     mail_cadence_eligible_date_from_last_mailed,
     mail_rematch_due_date,
@@ -461,6 +462,7 @@ def test_heal_aligns_canonical_rematch_with_old_title_mirror(app):
             title='Owner edited display title',
             status='open',
             due_date=None,
+            workflow_key=MAIL_REMATCH_WORKFLOW_KEY,
             created_by='test',
         )
         mirror = Task(
@@ -494,6 +496,56 @@ def test_heal_aligns_canonical_rematch_with_old_title_mirror(app):
         assert mirror.due_date is not None
         assert mirror.due_date.date() == expected
         assert mirror.title == rematch.title
+
+
+def test_heal_does_not_rewrite_manual_undated_mail_task(app):
+    with app.app_context():
+        sent_at = datetime.now(timezone.utc) - timedelta(days=15)
+        lead = Lead(
+            property_street='94 Manual Mail Task St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            mailing_address='94 Manual Mail Task St',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
+            owner_user_id='test-owner',
+            lead_status='mailing_no_contact_made',
+            lead_category='residential',
+            lead_score=80.0,
+            recommended_action='nurture',
+        )
+        db.session.add(lead)
+        db.session.flush()
+        manual = LeadTask(
+            lead_id=lead.id,
+            task_type='add_to_mail_batch',
+            title='Manual mail prep note',
+            status='open',
+            due_date=None,
+            workflow_key=None,
+            created_by='test',
+        )
+        db.session.add_all([
+            manual,
+            LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type='mail_sent',
+                occurred_at=sent_at,
+                source='system',
+                actor='test',
+                summary='Mail sent',
+            ),
+        ])
+        db.session.commit()
+
+        result = heal_mail_cadence_cooldown(commit=True)
+
+        assert result['rematch_dues_fixed'] == 0
+        assert manual.title == 'Manual mail prep note'
+        assert manual.due_date is None
+        assert manual.workflow_key is None
 
 
 def test_heal_commit_false_keeps_rescore_and_weights_uncommitted(app):

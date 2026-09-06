@@ -35,6 +35,7 @@ FOLLOW_UP_AFTER_MAIL_TITLE_RE = re.compile(
     re.IGNORECASE,
 )
 MAIL_REMATCH_TASK_TYPE = 'add_to_mail_batch'
+MAIL_REMATCH_WORKFLOW_KEY = 'mail_rematch_cadence'
 SENT_RECENTLY_DAYS = 14
 RECENT_SALE_RECONCILIATION_BATCH_SIZE = 500
 TERMINAL_MAIL_STOP_STATUSES = frozenset({'suppressed', 'do_not_contact'})
@@ -1203,20 +1204,15 @@ def is_mail_follow_up_task(task: LeadTask) -> bool:
     ``add_to_mail_batch`` (MAIL_REMATCH_TASK_TYPE), so type alone must not
     protect prep rows from complete_tasks_superseded_by_mail.
     """
-    return is_mail_follow_up_title(task.title)
+    return (
+        is_mail_follow_up_title(task.title)
+        or task.workflow_key == MAIL_REMATCH_WORKFLOW_KEY
+    )
 
 
 def _is_heal_rematch_candidate(task: LeadTask) -> bool:
-    """Heal candidates: rematch titles, or renamed pending rematch (undated + type).
-
-    Pending rematch is created with ``due_date=None``; prep mail tasks always get
-    a calendar due date. Type-only matching is therefore safe only while undated.
-    """
-    if is_mail_follow_up_title(task.title):
-        return True
-    if (task.task_type or '').strip() != MAIL_REMATCH_TASK_TYPE:
-        return False
-    return task.due_date is None
+    """Heal candidates: legacy titles, or durable rematch workflow identity."""
+    return is_mail_follow_up_task(task)
 
 
 def mail_rematch_due_date(
@@ -1492,6 +1488,7 @@ def create_pending_mail_follow_up_task(
         title=title,
         status='open',
         due_date=None,
+        workflow_key=MAIL_REMATCH_WORKFLOW_KEY,
         created_by=actor,
     )
     db.session.add(task)
@@ -1592,6 +1589,7 @@ def convert_legacy_mail_follow_up_to_rematch(
     task.task_type = MAIL_REMATCH_TASK_TYPE
     task.title = new_title
     task.due_date = due_date
+    task.workflow_key = MAIL_REMATCH_WORKFLOW_KEY
     db.session.add(task)
 
     _sync_or_create_rematch_mirror(
@@ -1658,6 +1656,7 @@ def schedule_mail_follow_up_task(
         existing.due_date = due_date
         existing.title = title
         existing.task_type = MAIL_REMATCH_TASK_TYPE
+        existing.workflow_key = MAIL_REMATCH_WORKFLOW_KEY
         db.session.add(existing)
         _sync_or_create_rematch_mirror(
             existing,
@@ -1697,6 +1696,7 @@ def schedule_mail_follow_up_task(
         title=title,
         status='open',
         due_date=due_date,
+        workflow_key=MAIL_REMATCH_WORKFLOW_KEY,
         created_by=actor,
     )
     db.session.add(task)
@@ -1951,6 +1951,7 @@ def heal_mail_cadence_cooldown(
         task.due_date = expected
         task.task_type = MAIL_REMATCH_TASK_TYPE
         task.title = title
+        task.workflow_key = MAIL_REMATCH_WORKFLOW_KEY
         db.session.add(task)
         for mirror in _select_rematch_mirrors(
             task,
