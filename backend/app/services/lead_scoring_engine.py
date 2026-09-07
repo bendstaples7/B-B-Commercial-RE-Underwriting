@@ -164,15 +164,6 @@ ENGAGEMENT_MODIFIERS = {
 ENGAGEMENT_LOOKBACK_DAYS = 90
 RECENT_CONTACT_DAYS = 14
 
-# Persist five weighted buckets on score_details for outcome calibration / UI.
-BUCKET_META_KEYS = (
-    "bucket_property_characteristics",
-    "bucket_data_completeness",
-    "bucket_owner_situation",
-    "bucket_location_desirability",
-    "bucket_data_enrichment",
-)
-
 SCORING_ATTRIBUTES = rubric.SCORING_ATTRIBUTES
 
 
@@ -419,9 +410,15 @@ class LeadScoringEngine:
 
         category = getattr(lead, "lead_category", "residential") or "residential"
         if category == "commercial":
-            rubric_result = rubric.calculate_commercial_score(lead)
+            rubric_result = rubric.calculate_commercial_score(
+                lead,
+                contact_reachability=contact_reachability,
+            )
         else:
-            rubric_result = rubric.calculate_residential_score(lead)
+            rubric_result = rubric.calculate_residential_score(
+                lead,
+                contact_reachability=contact_reachability,
+            )
 
         score_details = dict(rubric_result["score_details"])
         score_version = rubric_result["score_version"]
@@ -465,7 +462,10 @@ class LeadScoringEngine:
         engagement_mod = self._score_engagement(lead)
         # HubSpot SIGNAL_ADJUSTMENTS → lead_score engagement, not motivation_score.
         hubspot_mod = self._hubspot_signal_adjustment(signals)
-        contact_quality_mod = rubric.contact_quality_modifier(lead)
+        contact_quality_mod = rubric.contact_quality_modifier(
+            lead,
+            contact_reachability=contact_reachability,
+        )
 
         from app.services.motivation_signal_service import notes_keywords_points
         extracted = getattr(lead, '_motivation_extracted_signals', None)

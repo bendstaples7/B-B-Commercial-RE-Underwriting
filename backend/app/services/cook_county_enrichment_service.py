@@ -1,7 +1,9 @@
 """Orchestrate automatic Cook County / Chicago open-data enrichment."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import logging
+import threading
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -23,6 +25,7 @@ from app.services.plugins.address_utils import is_chicago_address
 from app.services.scoring_rubric import is_recently_sold
 
 logger = logging.getLogger(__name__)
+_plugin_resolver_context = threading.local()
 
 COOK_COUNTY_MARKET = "cook_county_il"
 BACKFILL_BATCH_SIZE = 75
@@ -48,6 +51,26 @@ def _plugins_run_count(result, *, fallback: int) -> int:
         return max(0, int(raw))
     except (TypeError, ValueError):
         return fallback
+
+
+@contextmanager
+def _temporary_plugin_resolver(plugin_resolver):
+    previous = getattr(_plugin_resolver_context, "resolver", None)
+    _plugin_resolver_context.resolver = plugin_resolver
+    try:
+        yield
+    finally:
+        if previous is None:
+            try:
+                delattr(_plugin_resolver_context, "resolver")
+            except AttributeError:
+                pass
+        else:
+            _plugin_resolver_context.resolver = previous
+
+
+def _active_plugin_resolver():
+    return getattr(_plugin_resolver_context, "resolver", plugins_for_lead)
 
 
 _PIN_PLUGINS = (
@@ -315,7 +338,7 @@ def _ensure_pin_from_gis(lead: Lead) -> bool:
 
 def enrich_cook_county_lead(lead_id: int) -> dict:
     """Run all applicable Cook County plugins for one lead; rescore once."""
-    return _enrich_cook_county_lead_with_plugins(lead_id, plugins_for_lead)
+    return _enrich_cook_county_lead_with_plugins(lead_id, _active_plugin_resolver())
 
 
 def enrich_cook_county_sale_date(lead_id: int) -> dict:
@@ -584,6 +607,7 @@ def _enrich_distress_priority_lane(
         "socrata_calls": 0,
         "capped": False,
         "lane": "distress_priority",
+        "_processed_lead_ids": [],
     }
     cursor = last_id
     enriched_count = 0
@@ -608,6 +632,7 @@ def _enrich_distress_priority_lane(
 
         for lead in candidates:
             cursor = lead.id
+            summary["_processed_lead_ids"].append(lead.id)
             summary["processed"] += 1
 
             if not lead_needs_distress_enrichment(lead):
@@ -629,10 +654,8 @@ def _enrich_distress_priority_lane(
                 return summary
 
             try:
-                result = _enrich_cook_county_lead_with_plugins(
-                    lead.id,
-                    lambda _lead: plugin_names,
-                )
+                with _temporary_plugin_resolver(lambda _lead: plugin_names):
+                    result = enrich_cook_county_lead(lead.id)
                 summary["socrata_calls"] += _plugins_run_count(
                     result, fallback=len(plugin_names)
                 )
@@ -699,41 +722,54 @@ def backfill_cook_county_enrichment(
         distress_budget = max(1, min(batch_size, remaining_cap // 2 or remaining_cap))
         distress_summary = _enrich_distress_priority_lane(
             batch_size=distress_budget,
-            socrata_call_cap=remaining_cap // 2 or remaining_cap,
-            last_id=0,
+            socrata_call_cap=remaining_cap,
+            last_id=last_id,
         )
-        summary["distress_lane"] = distress_summary
+        distress_processed_ids = set(distress_summary.get("_processed_lead_ids") or [])
+        summary["distress_lane"] = {
+            key: value
+            for key, value in distress_summary.items()
+            if key != "_processed_lead_ids"
+        }
         summary["socrata_calls"] += distress_summary.get("socrata_calls", 0)
+        summary["processed"] += distress_summary.get("processed", 0)
+        summary["skipped"] += distress_summary.get("skipped", 0)
         summary["enriched"] += distress_summary.get("enriched", 0)
         summary["errors"] += distress_summary.get("errors", 0)
         remaining_cap = max(0, socrata_call_cap - summary["socrata_calls"])
-        if remaining_cap <= 0:
+        if remaining_cap <= 0 or summary["enriched"] >= batch_size:
             summary["capped"] = True
-            summary["last_id"] = last_id
+            summary["last_id"] = distress_summary.get("last_id", last_id)
             return summary
+    else:
+        distress_processed_ids = set()
 
     cursor = last_id
     enriched_count = 0
-    general_batch = max(1, batch_size - int(summary.get("enriched") or 0))
+    distress_last_id = int(
+        (summary.get("distress_lane") or {}).get("last_id") or last_id
+    )
+    general_batch = batch_size - int(summary.get("enriched") or 0)
+    if general_batch <= 0:
+        summary["capped"] = True
+        summary["last_id"] = distress_last_id
+        return summary
 
     while enriched_count < general_batch and summary["socrata_calls"] < socrata_call_cap:
-        candidates = (
-            db.session.query(Lead)
-            .filter(
-                Lead.id > cursor,
-                Lead.property_state.in_(("IL", "Illinois", "il")),
-                or_(
-                    (
-                        Lead.county_assessor_pin.isnot(None)
-                        & (Lead.county_assessor_pin != "")
-                    ),
-                    func.lower(Lead.property_city) == "chicago",
+        query = db.session.query(Lead).filter(
+            Lead.id > cursor,
+            Lead.property_state.in_(("IL", "Illinois", "il")),
+            or_(
+                (
+                    Lead.county_assessor_pin.isnot(None)
+                    & (Lead.county_assessor_pin != "")
                 ),
-            )
-            .order_by(Lead.id)
-            .limit(batch_size * 2)
-            .all()
+                func.lower(Lead.property_city) == "chicago",
+            ),
         )
+        if distress_processed_ids:
+            query = query.filter(~Lead.id.in_(distress_processed_ids))
+        candidates = query.order_by(Lead.id).limit(batch_size * 2).all()
         if not candidates:
             break
 
@@ -797,7 +833,7 @@ def backfill_cook_county_enrichment(
                 summary["last_id"] = cursor
                 return summary
 
-    summary["last_id"] = cursor
+    summary["last_id"] = max(cursor, distress_last_id)
     return summary
 
 

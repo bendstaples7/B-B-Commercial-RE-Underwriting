@@ -655,7 +655,10 @@ def sql_not_recently_sold(cutoff: date | None = None):
     )
 
 
-def calculate_residential_score(lead: Lead) -> dict:
+def calculate_residential_score(
+    lead: Lead,
+    contact_reachability: tuple[float, dict] | None = None,
+) -> dict:
     details = {}
     details["property_type_fit"] = residential_property_type_fit(lead)
     details["neighborhood_fit"] = residential_neighborhood_fit(lead)
@@ -669,17 +672,23 @@ def calculate_residential_score(lead: Lead) -> dict:
 
     details["owner_mailing_quality"] = owner_mailing_quality(lead)
     details["years_owned"] = 0.0
-    from app.services.motivation_signal_service import (
-        public_record_distress_score,
-        structured_motivation_score,
+    from app.services.motivation_signal_service import motivation_component_attribution
+    extracted_signals = getattr(lead, "_motivation_extracted_signals", None)
+    if not isinstance(extracted_signals, list):
+        extracted_signals = None
+    motivation = motivation_component_attribution(
+        lead,
+        signals=extracted_signals,
     )
-    details["structured_motivation"] = structured_motivation_score(lead)
-    details["public_record_distress"] = public_record_distress_score(lead)
+    details["structured_motivation"] = motivation["structured_motivation"]
+    details["public_record_distress"] = motivation["public_record_distress"]
     details["property_heuristics"] = property_heuristics_bonus(lead)
 
     details["contactability"] = contactability_score(lead, max_points=20.0)
     details["contact_quality"] = contact_quality_score(
-        lead, max_points=float(RESIDENTIAL_MAX_POINTS["contact_quality"]),
+        lead,
+        max_points=float(RESIDENTIAL_MAX_POINTS["contact_quality"]),
+        contact_reachability=contact_reachability,
     )
     details["property_equity"] = property_equity_score(lead, max_points=25.0)
     details["ownership_duration"] = ownership_duration_score(lead, max_points=15.0)
@@ -692,7 +701,10 @@ def calculate_residential_score(lead: Lead) -> dict:
     }
 
 
-def calculate_commercial_score(lead: Lead) -> dict:
+def calculate_commercial_score(
+    lead: Lead,
+    contact_reachability: tuple[float, dict] | None = None,
+) -> dict:
     details = {}
     details["property_type_fit"] = commercial_property_type_fit(lead)
     details["condo_clarity"] = condo_clarity_score(lead)
@@ -701,15 +713,21 @@ def calculate_commercial_score(lead: Lead) -> dict:
     details["owner_concentration"] = owner_concentration_score(lead)
     details["absentee_owner"] = absentee_owner_score(lead)
     details["building_size_fit"] = building_size_fit_score(lead)
-    from app.services.motivation_signal_service import (
-        public_record_distress_score,
-        structured_motivation_score,
+    from app.services.motivation_signal_service import motivation_component_attribution
+    extracted_signals = getattr(lead, "_motivation_extracted_signals", None)
+    if not isinstance(extracted_signals, list):
+        extracted_signals = None
+    motivation = motivation_component_attribution(
+        lead,
+        signals=extracted_signals,
     )
-    details["structured_motivation"] = structured_motivation_score(lead)
-    details["public_record_distress"] = public_record_distress_score(lead)
+    details["structured_motivation"] = motivation["structured_motivation"]
+    details["public_record_distress"] = motivation["public_record_distress"]
     details["contactability"] = contactability_score(lead, max_points=20.0)
     details["contact_quality"] = contact_quality_score(
-        lead, max_points=float(COMMERCIAL_MAX_POINTS["contact_quality"]),
+        lead,
+        max_points=float(COMMERCIAL_MAX_POINTS["contact_quality"]),
+        contact_reachability=contact_reachability,
     )
     details["property_equity"] = property_equity_score(lead, max_points=25.0)
     details["ownership_duration"] = ownership_duration_score(lead, max_points=15.0)
@@ -1028,26 +1046,22 @@ def _best_phone_confidence(lead: Lead) -> int | None:
     return max(scores)
 
 
-def contact_quality_score(lead: Lead, max_points: float = 15.0) -> float:
-    """Confidence-weighted contact quality (not mere phone/email presence).
-
-    Stale / prior-owner contacts after a recent sale earn zero here; a separate
-    modifier on ``LeadScoringEngine`` applies an explicit penalty.
-    """
+def _contact_quality_from_values(
+    best_confidence: int | None,
+    has_email: bool,
+    email_owner_primary: bool,
+    *,
+    max_points: float,
+) -> float:
     from app.services.phone_confidence_service import MIN_VIABLE_CONFIDENCE
 
-    if contacts_untrusted(lead):
-        return 0.0
-
     score = 0.0
-    best = _best_phone_confidence(lead)
-    if best is not None and best >= MIN_VIABLE_CONFIDENCE:
-        # Up to ~67% of max from confidence curve
-        score += (best / 100.0) * (max_points * 0.67)
-        if best >= 85:
-            score += max_points * 0.13  # confirmed / HubSpot-primary floor
+    if best_confidence is not None and best_confidence >= MIN_VIABLE_CONFIDENCE:
+        # Up to ~67% of max from confidence curve.
+        score += (best_confidence / 100.0) * (max_points * 0.67)
+        if best_confidence >= 85:
+            score += max_points * 0.13
 
-    _email_pts, has_email, email_owner_primary = _email_reachability(lead)
     if has_email:
         score += max_points * 0.13
         if email_owner_primary:
@@ -1056,7 +1070,42 @@ def contact_quality_score(lead: Lead, max_points: float = 15.0) -> float:
     return round(min(score, max_points), 2)
 
 
-def contact_quality_modifier(lead: Lead) -> float:
+def contact_quality_score(
+    lead: Lead,
+    max_points: float = 15.0,
+    contact_reachability: tuple[float, dict] | None = None,
+) -> float:
+    """Confidence-weighted contact quality (not mere phone/email presence).
+
+    Stale / prior-owner contacts after a recent sale earn zero here; a separate
+    modifier on ``LeadScoringEngine`` applies an explicit penalty.
+    """
+    if contacts_untrusted(lead):
+        return 0.0
+
+    if contact_reachability is not None:
+        _contact_points, meta = contact_reachability
+        return _contact_quality_from_values(
+            meta.get("best_phone_confidence"),
+            bool(meta.get("has_email")),
+            bool(meta.get("email_owner_or_primary")),
+            max_points=max_points,
+        )
+
+    best = _best_phone_confidence(lead)
+    _email_pts, has_email, email_owner_primary = _email_reachability(lead)
+    return _contact_quality_from_values(
+        best,
+        has_email,
+        email_owner_primary,
+        max_points=max_points,
+    )
+
+
+def contact_quality_modifier(
+    lead: Lead,
+    contact_reachability: tuple[float, dict] | None = None,
+) -> float:
     """Additive lead_score penalty/bonus for contact trust and confidence.
 
     Applied after the weighted base so stale contacts cannot inflate priority
@@ -1069,7 +1118,11 @@ def contact_quality_modifier(lead: Lead) -> float:
     if contacts_need_post_hold_verification(lead):
         return -8.0
 
-    best = _best_phone_confidence(lead)
+    if contact_reachability is not None:
+        _contact_points, meta = contact_reachability
+        best = meta.get("best_phone_confidence")
+    else:
+        best = _best_phone_confidence(lead)
     if best is None:
         return 0.0
     if best < MIN_VIABLE_CONFIDENCE:

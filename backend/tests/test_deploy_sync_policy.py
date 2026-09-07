@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app.services import deploy_sync_policy
 from app.services.deploy_sync_policy import (
     apply_pipeline_cooldown,
     classify_deploy_sync_mode,
@@ -164,9 +165,33 @@ class TestScoringCodeHash:
             assert scoring_code_changed_since_last_run() is False
 
     def test_hash_covers_rubric_and_engine(self):
-        digest = scoring_code_file_hash()
-        assert isinstance(digest, str)
+        with patch.object(
+            deploy_sync_policy,
+            '_SCORING_HASH_FILES',
+            ('lead_scoring_engine.py',),
+        ):
+            engine_only = scoring_code_file_hash()
+        with patch.object(
+            deploy_sync_policy,
+            '_SCORING_HASH_FILES',
+            ('lead_scoring_engine.py', 'scoring_rubric.py'),
+        ):
+            engine_and_rubric = scoring_code_file_hash()
+
+        assert isinstance(engine_and_rubric, str)
+        assert len(engine_and_rubric) == 64
+        assert engine_and_rubric != engine_only
+
+    def test_missing_hash_file_warns(self, caplog):
+        with patch.object(
+            deploy_sync_policy,
+            '_SCORING_HASH_FILES',
+            ('definitely_missing_scoring_module.py',),
+        ):
+            digest = scoring_code_file_hash()
+
         assert len(digest) == 64
+        assert 'Scoring module missing from hash' in caplog.text
 
 
 class TestResolveDeploySyncMode:

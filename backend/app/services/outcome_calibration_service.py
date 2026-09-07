@@ -96,6 +96,7 @@ class CalibrationReport:
     skipped_reason: Optional[str] = None
     calibrated_at: Optional[str] = None
     stratum_counts: dict[str, dict[str, int]] = field(default_factory=dict)
+    owner_reports: dict[str, dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -113,6 +114,7 @@ class CalibrationReport:
             "skipped_reason": self.skipped_reason,
             "calibrated_at": self.calibrated_at,
             "stratum_counts": self.stratum_counts,
+            "owner_reports": self.owner_reports,
         }
 
 
@@ -170,20 +172,51 @@ def _mean_buckets(rows: list[dict[str, float]]) -> dict[str, float]:
 
 
 def _normalize_weights(raw: dict[str, float]) -> dict[str, float]:
-    clamped = {
+    projected = {
         key: max(MIN_WEIGHT, min(MAX_WEIGHT, float(raw.get(key, 0.0))))
         for key in WEIGHT_KEYS
     }
-    total = sum(clamped.values())
+    total = sum(projected.values())
     if total <= 0:
         return dict(DEFAULT_WEIGHTS)
-    normalized = {key: val / total for key, val in clamped.items()}
-    # Fix residual float drift onto last key.
-    drift = 1.0 - sum(normalized.values())
-    if abs(drift) > 1e-9:
-        last = WEIGHT_KEYS[-1]
-        normalized[last] = max(MIN_WEIGHT, normalized[last] + drift)
-    return {key: round(normalized[key], 4) for key in WEIGHT_KEYS}
+
+    # Project onto sum=1 while preserving the configured min/max bounds.
+    for _ in WEIGHT_KEYS:
+        drift = 1.0 - sum(projected.values())
+        if abs(drift) <= 1e-12:
+            break
+        if drift > 0:
+            candidates = [
+                key for key in WEIGHT_KEYS if projected[key] < MAX_WEIGHT - 1e-12
+            ]
+            capacity = sum(MAX_WEIGHT - projected[key] for key in candidates)
+        else:
+            candidates = [
+                key for key in WEIGHT_KEYS if projected[key] > MIN_WEIGHT + 1e-12
+            ]
+            capacity = sum(projected[key] - MIN_WEIGHT for key in candidates)
+        if not candidates or capacity <= 0:
+            break
+        for key in candidates:
+            share = (
+                (MAX_WEIGHT - projected[key]) / capacity
+                if drift > 0
+                else (projected[key] - MIN_WEIGHT) / capacity
+            )
+            projected[key] += drift * share
+            projected[key] = max(MIN_WEIGHT, min(MAX_WEIGHT, projected[key]))
+
+    rounded = {key: round(projected[key], 4) for key in WEIGHT_KEYS}
+    drift = round(1.0 - sum(rounded.values()), 4)
+    if drift:
+        candidates = (
+            [key for key in WEIGHT_KEYS if rounded[key] + drift <= MAX_WEIGHT]
+            if drift > 0
+            else [key for key in WEIGHT_KEYS if rounded[key] + drift >= MIN_WEIGHT]
+        )
+        if candidates:
+            rounded[candidates[-1]] = round(rounded[candidates[-1]] + drift, 4)
+    return rounded
 
 
 def suggest_weights_from_lifts(
@@ -247,6 +280,7 @@ def _outcome_transition_rows(*, lookback_days: int) -> list[LeadTimelineEntry]:
     rows = (
         LeadTimelineEntry.query.filter(
             LeadTimelineEntry.event_type == 'status_changed',
+            LeadTimelineEntry.is_deleted.is_(False),
             LeadTimelineEntry.occurred_at >= cutoff_naive,
         )
         .order_by(LeadTimelineEntry.occurred_at.asc(), LeadTimelineEntry.id.asc())
@@ -273,6 +307,7 @@ def collect_outcome_bucket_samples(
     *,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     sample_mode: SampleMode = DEFAULT_SAMPLE_MODE,
+    user_id: str = 'default',
 ) -> tuple[list[dict[str, float]], list[dict[str, float]], dict[str, dict[str, int]]]:
     """Load score buckets for positive/negative outcomes.
 
@@ -284,6 +319,17 @@ def collect_outcome_bucket_samples(
     positive: list[dict[str, float]] = []
     negative: list[dict[str, float]] = []
     stratum_counts: dict[str, dict[str, int]] = {}
+
+    def _owner_filter():
+        if user_id == 'default':
+            return Lead.owner_user_id.is_(None)
+        return Lead.owner_user_id == user_id
+
+    def _lead_belongs_to_weight_user(lead: Lead) -> bool:
+        owner_user_id = getattr(lead, 'owner_user_id', None)
+        if user_id == 'default':
+            return owner_user_id is None
+        return owner_user_id == user_id
 
     def _record(lead: Lead, buckets: dict[str, float], positive_outcome: bool) -> None:
         key = _stratum_key(lead)
@@ -301,6 +347,7 @@ def collect_outcome_bucket_samples(
         leads = (
             Lead.query.filter(
                 Lead.lead_status.in_(POSITIVE_OUTCOME_STATUSES | NEGATIVE_OUTCOME_STATUSES),
+                _owner_filter(),
                 Lead.updated_at >= cutoff_naive,
             )
             .all()
@@ -331,6 +378,8 @@ def collect_outcome_bucket_samples(
         new_status = (meta.get('new_status') or '').strip()
         lead = db.session.get(Lead, lead_id)
         if lead is None:
+            continue
+        if not _lead_belongs_to_weight_user(lead):
             continue
         score_row = _latest_score_before(lead_id, entry.occurred_at)
         buckets = _buckets_from_score_row(score_row, lead)
@@ -370,6 +419,7 @@ def calibrate_scoring_weights(
     positive, negative, stratum_counts = collect_outcome_bucket_samples(
         lookback_days=lookback_days,
         sample_mode=sample_mode,
+        user_id=user_id,
     )
     report.positive_count = len(positive)
     report.negative_count = len(negative)
@@ -438,13 +488,37 @@ def calibrate_scoring_weights(
     report.applied = True
     report.current_weights = _weights_dict(updated)
     if rescore:
-        report.leads_rescored = engine.bulk_rescore(user_id=user_id)
+        lead_ids = _lead_ids_for_weight_user(user_id)
+        report.leads_rescored = (
+            engine.bulk_rescore(user_id=user_id, lead_ids=lead_ids)
+            if lead_ids else 0
+        )
     logger.info(
         "Calibrated scoring weights for user %s (mode=%s pos=%s neg=%s rescored=%s)",
         user_id, sample_mode, report.positive_count, report.negative_count,
         report.leads_rescored,
     )
     return report
+
+
+def _lead_ids_for_weight_user(user_id: str) -> list[int]:
+    query = db.session.query(Lead.id)
+    if user_id == 'default':
+        query = query.filter(Lead.owner_user_id.is_(None))
+    else:
+        query = query.filter(Lead.owner_user_id == user_id)
+    return [int(row[0]) for row in query.all()]
+
+
+def _distinct_lead_owner_ids() -> list[str]:
+    rows = (
+        db.session.query(Lead.owner_user_id)
+        .filter(Lead.owner_user_id.isnot(None), Lead.owner_user_id != '')
+        .distinct()
+        .order_by(Lead.owner_user_id)
+        .all()
+    )
+    return [str(row[0]) for row in rows if row[0]]
 
 
 def run_scheduled_calibration(
@@ -455,10 +529,36 @@ def run_scheduled_calibration(
         '1', 'true', 'yes',
     )
     lookback_days = int(os.environ.get('SCORING_CALIBRATION_LOOKBACK_DAYS', '365'))
-    return calibrate_scoring_weights(
-        user_id,
-        apply=apply,
-        rescore=apply,
+    if not apply or user_id != 'default':
+        return calibrate_scoring_weights(
+            user_id,
+            apply=apply,
+            rescore=apply,
+            lookback_days=lookback_days,
+            sample_mode='pre_outcome',
+        )
+
+    owner_ids = ['default'] + _distinct_lead_owner_ids()
+    reports = {
+        owner_id: calibrate_scoring_weights(
+            owner_id,
+            apply=True,
+            rescore=True,
+            lookback_days=lookback_days,
+            sample_mode='pre_outcome',
+        ).to_dict()
+        for owner_id in owner_ids
+    }
+    aggregate = CalibrationReport(
         lookback_days=lookback_days,
         sample_mode='pre_outcome',
+        calibrated_at=datetime.now(timezone.utc).isoformat(),
+        owner_reports=reports,
     )
+    aggregate.positive_count = sum(r.get('positive_count', 0) for r in reports.values())
+    aggregate.negative_count = sum(r.get('negative_count', 0) for r in reports.values())
+    aggregate.leads_rescored = sum(r.get('leads_rescored', 0) for r in reports.values())
+    aggregate.applied = any(r.get('applied') for r in reports.values())
+    if not aggregate.applied:
+        aggregate.skipped_reason = 'All owner calibrations skipped.'
+    return aggregate

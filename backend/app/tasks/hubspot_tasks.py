@@ -1810,16 +1810,17 @@ def run_rescore_leads_after_import(
 
         engine = LeadScoringEngine()
         affected = list(lead_ids) if lead_ids is not None else get_pipeline_affected_leads()
+        scoring_changed = scoring_code_changed_since_last_run()
 
         if force_full:
             rescored = engine.bulk_rescore(user_id)
-        elif affected:
-            rescored = engine.bulk_rescore(user_id, lead_ids=affected)
-        elif scoring_code_changed_since_last_run():
+        elif scoring_changed:
             logger.info(
                 "run_rescore_leads_after_import: scoring code changed — full rescore fallback",
             )
             rescored = engine.bulk_rescore(user_id)
+        elif affected:
+            rescored = engine.bulk_rescore(user_id, lead_ids=affected)
         else:
             logger.info(
                 "run_rescore_leads_after_import: no affected leads and scoring unchanged — skip",

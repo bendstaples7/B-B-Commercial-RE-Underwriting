@@ -1,7 +1,7 @@
 """Heal quarterly mail cadence: rematch dues + rescore stale mail_ready.
 
 Revision ID: mail_cad_20260905
-Revises: chan_roi_cascade_0831
+Revises: score_cal_20260907
 Create Date: 2026-09-05
 
 Idempotent data migration: open rematch tasks get due_date = last_mailed + 90,
@@ -10,7 +10,7 @@ and leads still ``mail_ready`` inside that window are rescored out of Ready to M
 
 
 revision = 'mail_cad_20260905'
-down_revision = 'chan_roi_cascade_0831'
+down_revision = 'score_cal_20260907'
 branch_labels = None
 depends_on = None
 

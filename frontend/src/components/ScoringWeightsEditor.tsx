@@ -68,6 +68,12 @@ const WEIGHT_MAX = 1
 
 /** Tolerance for floating-point comparison when checking weight sum. */
 const SUM_TOLERANCE = 0.005
+const TIMEZONE_OFFSET_PATTERN = /(?:Z|[+-]\d{2}:\d{2})$/i
+
+const formatCalibrationTimestamp = (value: string): string => {
+  const timestamp = TIMEZONE_OFFSET_PATTERN.test(value) ? value : `${value}Z`
+  return new Date(timestamp).toLocaleString()
+}
 
 /**
  * Editor for lead scoring criterion weights.
@@ -320,7 +326,7 @@ export const ScoringWeightsEditor: React.FC = () => {
               valueLabelFormat={formatPercent}
               aria-labelledby={`label-${criterion.key}`}
               aria-valuetext={formatPercent(weights[criterion.key])}
-              disabled={saving}
+              disabled={saving || calibrating}
             />
           </Box>
         ))}
@@ -395,7 +401,7 @@ export const ScoringWeightsEditor: React.FC = () => {
         </Typography>
         {lastCalibratedAt && (
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-            Last applied: {new Date(lastCalibratedAt).toLocaleString()}
+            Last applied: {formatCalibrationTimestamp(lastCalibratedAt)}
           </Typography>
         )}
         {calibrationPreview && !calibrationPreview.skipped_reason && (
@@ -420,7 +426,7 @@ export const ScoringWeightsEditor: React.FC = () => {
           <Button
             variant="outlined"
             onClick={handleCalibratePreview}
-            disabled={saving || calibrating}
+            disabled={saving || calibrating || isDirty}
             aria-label="Preview outcome-calibrated scoring weights"
             sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
@@ -430,7 +436,7 @@ export const ScoringWeightsEditor: React.FC = () => {
             variant="outlined"
             color="secondary"
             onClick={handleCalibrateApply}
-            disabled={saving || calibrating}
+            disabled={saving || calibrating || isDirty}
             aria-label="Apply outcome-calibrated scoring weights and rescore"
             sx={{ width: { xs: '100%', sm: 'auto' } }}
           >

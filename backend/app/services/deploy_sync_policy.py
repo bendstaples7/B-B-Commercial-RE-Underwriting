@@ -39,7 +39,6 @@ _RESCORE_ONLY_PATTERNS = (
     'backend/app/services/outcome_calibration*',
     'backend/app/services/motivation_signal*',
     'backend/app/services/lead_refresh*',
-    'backend/app/services/deterministic_scoring*',
     'backend/app/services/outreach_method*',
     'backend/app/services/action_engine*',
     'backend/app/services/queue_service*',
@@ -345,6 +344,11 @@ def scoring_code_file_hash() -> str:
             digest.update(b'\0')
             digest.update(path.read_bytes())
             digest.update(b'\0')
+        else:
+            logger.warning(
+                'Scoring module missing from hash, rescore fallback degraded: %s',
+                path,
+            )
     return digest.hexdigest()
 
 

@@ -405,6 +405,10 @@ def _serialize_property_detail(lead):
 
 def _serialize_scoring_weights(weights):
     """Serialize ScoringWeights to dictionary."""
+    last_calibrated_at = getattr(weights, 'last_calibrated_at', None)
+    if last_calibrated_at is not None and last_calibrated_at.tzinfo is None:
+        from datetime import timezone
+        last_calibrated_at = last_calibrated_at.replace(tzinfo=timezone.utc)
     return {
         'id': weights.id,
         'user_id': weights.user_id,
@@ -415,8 +419,8 @@ def _serialize_scoring_weights(weights):
         'data_enrichment_weight': weights.data_enrichment_weight,
         'calibration_meta': getattr(weights, 'calibration_meta', None),
         'last_calibrated_at': (
-            weights.last_calibrated_at.isoformat()
-            if getattr(weights, 'last_calibrated_at', None) else None
+            last_calibrated_at.isoformat().replace('+00:00', 'Z')
+            if last_calibrated_at else None
         ),
         'created_at': weights.created_at.isoformat() if weights.created_at else None,
         'updated_at': weights.updated_at.isoformat() if weights.updated_at else None,
@@ -852,6 +856,7 @@ def update_scoring_weights():
 @properties_bp.route('/scoring/calibrate', methods=['POST'])
 @limiter.limit("5 per minute")
 @handle_errors
+@require_auth
 def calibrate_scoring_weights():
     """Dry-run or apply outcome-calibrated scoring weight nudges.
 
@@ -863,7 +868,14 @@ def calibrate_scoring_weights():
     """
     from app.services.outcome_calibration_service import calibrate_scoring_weights as run_calibration
 
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    elif not isinstance(data, dict):
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'Request body must be a JSON object',
+        }), 400
     user_id = get_current_user_id()
     if not user_id or user_id == 'anonymous':
         return jsonify({
@@ -871,10 +883,21 @@ def calibrate_scoring_weights():
             'message': 'user_id is required (send X-User-Id header)',
         }), 400
 
-    apply = bool(data.get('apply', False))
-    rescore = bool(data.get('rescore', True))
-    lookback_days = int(data.get('lookback_days', 365))
-    learning_rate = float(data.get('learning_rate', 0.15))
+    apply = data.get('apply', False)
+    rescore = data.get('rescore', True)
+    if not isinstance(apply, bool) or not isinstance(rescore, bool):
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'apply and rescore must be booleans',
+        }), 400
+    try:
+        lookback_days = int(data.get('lookback_days', 365))
+        learning_rate = float(data.get('learning_rate', 0.15))
+    except (TypeError, ValueError):
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'lookback_days and learning_rate must be numeric',
+        }), 400
     sample_mode = str(data.get('sample_mode') or 'pre_outcome').strip().lower()
     if sample_mode not in ('pre_outcome', 'latest'):
         return jsonify({

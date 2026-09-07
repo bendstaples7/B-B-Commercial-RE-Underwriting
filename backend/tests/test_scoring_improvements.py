@@ -12,9 +12,11 @@ from app.services.motivation_signal_service import (
     compute_total_motivation_score,
 )
 from app.services.outcome_calibration_service import (
+    CalibrationReport,
     suggest_weights_from_lifts,
     _normalize_weights,
     collect_outcome_bucket_samples,
+    run_scheduled_calibration,
 )
 from app.services.scoring_rubric import (
     calculate_residential_score,
@@ -99,6 +101,29 @@ class TestContactQuality:
         assert score < 15
         assert contact_quality_modifier(lead) == 0.0
 
+    def test_contact_quality_uses_batch_reachability(self):
+        lead = _make_lead()
+        reachability = (42.0, {
+            "best_phone_confidence": 95,
+            "has_email": True,
+            "email_owner_or_primary": True,
+        })
+        with patch(
+            "app.services.scoring_rubric._best_phone_confidence",
+            side_effect=AssertionError("per-lead phone lookup should not run"),
+        ), patch(
+            "app.services.scoring_rubric._email_reachability",
+            side_effect=AssertionError("per-lead email lookup should not run"),
+        ):
+            assert contact_quality_score(
+                lead,
+                contact_reachability=reachability,
+            ) > 0
+            assert contact_quality_modifier(
+                lead,
+                contact_reachability=reachability,
+            ) == 5.0
+
     def test_engagement_ignores_phone_email_flags(self):
         lead = _make_lead(has_phone=True, has_email=True)
         assert engagement_score(lead) == 0.0
@@ -182,6 +207,17 @@ class TestOutcomeCalibration:
         })
         assert abs(sum(out.values()) - 1.0) < 0.011
 
+    def test_normalize_weights_respects_bounds_after_projection(self):
+        out = _normalize_weights({
+            "property_characteristics_weight": 10.0,
+            "data_completeness_weight": 0.01,
+            "owner_situation_weight": 0.01,
+            "location_desirability_weight": 0.01,
+            "data_enrichment_weight": 0.01,
+        })
+        assert abs(sum(out.values()) - 1.0) < 0.011
+        assert all(0.05 <= val <= 0.50 for val in out.values())
+
     def test_pre_outcome_uses_score_before_transition(self, app):
         from app.models.lead import Property
         from app.models.lead_score import LeadScore
@@ -262,12 +298,175 @@ class TestOutcomeCalibration:
             positive, negative, strata = collect_outcome_bucket_samples(
                 lookback_days=30,
                 sample_mode="pre_outcome",
+                user_id="test-user",
             )
             assert len(negative) == 0
             assert any(
                 abs(row["owner_situation"] - 60.0) < 0.01 for row in positive
             ), f"expected pre-outcome buckets, got {positive}"
             assert strata.get("residential", {}).get("positive", 0) >= 1
+
+    def test_pre_outcome_ignores_deleted_transitions(self, app):
+        from app.models.lead import Property
+        from app.models.lead_score import LeadScore
+        from app.models.lead_timeline_entry import LeadTimelineEntry
+        from app import db
+
+        with app.app_context():
+            lead = Property(
+                property_street="101 Deleted Calibration Ave",
+                property_city="Chicago",
+                property_state="IL",
+                property_zip="60647",
+                lead_category="residential",
+                lead_status="deal_won",
+                owner_user_id="test-user",
+            )
+            db.session.add(lead)
+            db.session.flush()
+
+            transition_at = datetime.utcnow() - timedelta(days=5)
+            db.session.add(LeadScore(
+                lead_id=lead.id,
+                score_version="unified_v2_residential",
+                total_score=77.0,
+                score_tier="B",
+                data_quality_score=77.0,
+                recommended_action="nurture",
+                top_signals=[],
+                score_details={
+                    "bucket_property_characteristics": 77.0,
+                    "bucket_data_completeness": 77.0,
+                    "bucket_owner_situation": 77.0,
+                    "bucket_location_desirability": 77.0,
+                    "bucket_data_enrichment": 77.0,
+                },
+                missing_data=[],
+                created_at=transition_at - timedelta(days=1),
+            ))
+            db.session.add(LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type="status_changed",
+                occurred_at=transition_at,
+                source="system",
+                actor="test",
+                summary="deleted win",
+                event_metadata={
+                    "previous_status": "mailing_no_contact_made",
+                    "new_status": "deal_won",
+                },
+                is_deleted=True,
+            ))
+            db.session.commit()
+
+            positive, _negative, _strata = collect_outcome_bucket_samples(
+                lookback_days=30,
+                sample_mode="pre_outcome",
+                user_id="test-user",
+            )
+
+            assert all(
+                abs(row["owner_situation"] - 77.0) > 0.01 for row in positive
+            )
+
+    def test_samples_are_scoped_to_weight_owner(self, app):
+        from app.models.lead import Property
+        from app.models.lead_score import LeadScore
+        from app.models.lead_timeline_entry import LeadTimelineEntry
+        from app import db
+
+        with app.app_context():
+            transition_at = datetime.utcnow() - timedelta(days=3)
+            for owner_id, bucket_value in (("owner-a", 61.0), ("owner-b", 92.0)):
+                lead = Property(
+                    property_street=f"{owner_id} Calibration Ave",
+                    property_city="Chicago",
+                    property_state="IL",
+                    property_zip="60647",
+                    lead_category="residential",
+                    lead_status="deal_won",
+                    owner_user_id=owner_id,
+                )
+                db.session.add(lead)
+                db.session.flush()
+                db.session.add(LeadScore(
+                    lead_id=lead.id,
+                    score_version="unified_v2_residential",
+                    total_score=bucket_value,
+                    score_tier="B",
+                    data_quality_score=bucket_value,
+                    recommended_action="nurture",
+                    top_signals=[],
+                    score_details={
+                        "bucket_property_characteristics": bucket_value,
+                        "bucket_data_completeness": bucket_value,
+                        "bucket_owner_situation": bucket_value,
+                        "bucket_location_desirability": bucket_value,
+                        "bucket_data_enrichment": bucket_value,
+                    },
+                    missing_data=[],
+                    created_at=transition_at - timedelta(days=1),
+                ))
+                db.session.add(LeadTimelineEntry(
+                    lead_id=lead.id,
+                    event_type="status_changed",
+                    occurred_at=transition_at,
+                    source="system",
+                    actor="test",
+                    summary="won",
+                    event_metadata={
+                        "previous_status": "mailing_no_contact_made",
+                        "new_status": "deal_won",
+                    },
+                ))
+            db.session.commit()
+
+            positive, _negative, _strata = collect_outcome_bucket_samples(
+                lookback_days=30,
+                sample_mode="pre_outcome",
+                user_id="owner-a",
+            )
+
+            assert any(abs(row["owner_situation"] - 61.0) < 0.01 for row in positive)
+            assert all(abs(row["owner_situation"] - 92.0) > 0.01 for row in positive)
+
+    def test_scheduled_apply_calibrates_each_lead_owner(self, app, monkeypatch):
+        from app.models.lead import Property
+        from app import db
+
+        with app.app_context():
+            for owner_id in (None, "owner-a", "owner-b"):
+                db.session.add(Property(
+                    property_street=f"{owner_id or 'default'} Scheduled Cal Ave",
+                    property_city="Chicago",
+                    property_state="IL",
+                    property_zip="60647",
+                    lead_category="residential",
+                    owner_user_id=owner_id,
+                ))
+            db.session.commit()
+
+            seen: list[str] = []
+
+            def _fake_calibrate(user_id, **_kwargs):
+                seen.append(user_id)
+                return CalibrationReport(
+                    positive_count=1,
+                    negative_count=1,
+                    applied=True,
+                    leads_rescored=1,
+                )
+
+            monkeypatch.setenv("SCORING_CALIBRATION_APPLY", "1")
+            with patch(
+                "app.services.outcome_calibration_service.calibrate_scoring_weights",
+                side_effect=_fake_calibrate,
+            ):
+                report = run_scheduled_calibration()
+
+            assert seen == ["default", "owner-a", "owner-b"]
+            assert report.applied is True
+            assert report.leads_rescored == 3
 
 
 class TestDistressCoverageHelpers:
