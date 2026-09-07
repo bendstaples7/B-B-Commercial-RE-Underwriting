@@ -1,6 +1,6 @@
 """Tests for contact quality, public-record distress, and outcome calibration."""
-from datetime import date, datetime, timedelta
-from unittest.mock import MagicMock
+from datetime import date, datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -14,6 +14,7 @@ from app.services.motivation_signal_service import (
 from app.services.outcome_calibration_service import (
     suggest_weights_from_lifts,
     _normalize_weights,
+    collect_outcome_bucket_samples,
 )
 from app.services.scoring_rubric import (
     calculate_residential_score,
@@ -180,3 +181,132 @@ class TestOutcomeCalibration:
             "data_enrichment_weight": 0,
         })
         assert abs(sum(out.values()) - 1.0) < 0.011
+
+    def test_pre_outcome_uses_score_before_transition(self, app):
+        from app.models.lead import Property
+        from app.models.lead_score import LeadScore
+        from app.models.lead_timeline_entry import LeadTimelineEntry
+        from app import db
+
+        with app.app_context():
+            lead = Property(
+                property_street="100 Calibration Ave",
+                property_city="Chicago",
+                property_state="IL",
+                property_zip="60647",
+                lead_category="residential",
+                lead_status="deal_won",
+                owner_user_id="test-user",
+            )
+            db.session.add(lead)
+            db.session.flush()
+
+            early = datetime.utcnow() - timedelta(days=10)
+            transition_at = datetime.utcnow() - timedelta(days=5)
+            late = datetime.utcnow() - timedelta(days=1)
+
+            early_details = {
+                "bucket_property_characteristics": 40.0,
+                "bucket_data_completeness": 50.0,
+                "bucket_owner_situation": 60.0,
+                "bucket_location_desirability": 30.0,
+                "bucket_data_enrichment": 20.0,
+            }
+            late_details = {
+                "bucket_property_characteristics": 90.0,
+                "bucket_data_completeness": 90.0,
+                "bucket_owner_situation": 90.0,
+                "bucket_location_desirability": 90.0,
+                "bucket_data_enrichment": 90.0,
+            }
+            db.session.add(LeadScore(
+                lead_id=lead.id,
+                score_version="unified_v2_residential",
+                total_score=45.0,
+                score_tier="C",
+                data_quality_score=50.0,
+                recommended_action="nurture",
+                top_signals=[],
+                score_details=early_details,
+                missing_data=[],
+                created_at=early,
+            ))
+            db.session.add(LeadScore(
+                lead_id=lead.id,
+                score_version="unified_v2_residential",
+                total_score=90.0,
+                score_tier="A",
+                data_quality_score=90.0,
+                recommended_action="call_ready",
+                top_signals=[],
+                score_details=late_details,
+                missing_data=[],
+                created_at=late,
+            ))
+            db.session.add(LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type="status_changed",
+                occurred_at=transition_at.replace(tzinfo=timezone.utc)
+                if transition_at.tzinfo is None
+                else transition_at,
+                source="system",
+                actor="test",
+                summary="won",
+                event_metadata={
+                    "previous_status": "mailing_no_contact_made",
+                    "new_status": "deal_won",
+                },
+            ))
+            db.session.commit()
+
+            positive, negative, strata = collect_outcome_bucket_samples(
+                lookback_days=30,
+                sample_mode="pre_outcome",
+            )
+            assert len(negative) == 0
+            assert any(
+                abs(row["owner_situation"] - 60.0) < 0.01 for row in positive
+            ), f"expected pre-outcome buckets, got {positive}"
+            assert strata.get("residential", {}).get("positive", 0) >= 1
+
+
+class TestDistressCoverageHelpers:
+    def test_lead_needs_distress_when_pin_and_no_attempt(self, app):
+        from app.models.lead import Property
+        from app import db
+        from app.services.cook_county_enrichment_service import lead_needs_distress_enrichment
+
+        with app.app_context():
+            lead = Property(
+                property_street="200 Distress St",
+                property_city="Chicago",
+                property_state="IL",
+                property_zip="60601",
+                county_assessor_pin="01-02-003-004-0000",
+                tax_distress_data=None,
+                lead_category="residential",
+                owner_user_id="test-user",
+            )
+            db.session.add(lead)
+            db.session.commit()
+            assert lead_needs_distress_enrichment(lead) is True
+
+    def test_lead_does_not_need_distress_when_json_present(self, app):
+        from app.models.lead import Property
+        from app import db
+        from app.services.cook_county_enrichment_service import lead_needs_distress_enrichment
+
+        with app.app_context():
+            lead = Property(
+                property_street="201 Distress St",
+                property_city="Chicago",
+                property_state="IL",
+                property_zip="60601",
+                county_assessor_pin="01-02-003-004-0001",
+                tax_distress_data={"annual_tax_sale": []},
+                lead_category="residential",
+                owner_user_id="test-user",
+            )
+            db.session.add(lead)
+            db.session.commit()
+            assert lead_needs_distress_enrichment(lead) is False

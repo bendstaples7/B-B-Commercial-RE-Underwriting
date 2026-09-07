@@ -875,6 +875,12 @@ def calibrate_scoring_weights():
     rescore = bool(data.get('rescore', True))
     lookback_days = int(data.get('lookback_days', 365))
     learning_rate = float(data.get('learning_rate', 0.15))
+    sample_mode = str(data.get('sample_mode') or 'pre_outcome').strip().lower()
+    if sample_mode not in ('pre_outcome', 'latest'):
+        return jsonify({
+            'error': 'Validation error',
+            'message': "sample_mode must be 'pre_outcome' or 'latest'",
+        }), 400
     if lookback_days < 30 or lookback_days > 2000:
         return jsonify({
             'error': 'Validation error',
@@ -892,6 +898,7 @@ def calibrate_scoring_weights():
         rescore=rescore if apply else False,
         lookback_days=lookback_days,
         learning_rate=learning_rate,
+        sample_mode=sample_mode,
     )
     payload = report.to_dict()
     if apply and report.applied:

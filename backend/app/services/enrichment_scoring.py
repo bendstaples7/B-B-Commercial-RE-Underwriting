@@ -1,7 +1,8 @@
 """Shared data-enrichment sub-score helpers for lead scoring engines.
 
-Both ``LeadScoringEngine`` and ``DeterministicScoringEngine`` delegate to
-these functions so enrichment dimensions stay consistent across scoring paths.
+Both ``LeadScoringEngine`` and the deprecated ``DeterministicScoringEngine``
+test facade delegate to these functions so enrichment dimensions stay
+consistent across scoring paths.
 """
 from datetime import date, datetime
 

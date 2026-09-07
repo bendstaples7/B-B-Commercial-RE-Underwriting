@@ -15,6 +15,7 @@ from app.services.deploy_sync_policy import (
     resolve_deploy_sync_from_manifest,
     resolve_deploy_sync_mode,
     scoring_code_changed_since_last_run,
+    scoring_code_file_hash,
 )
 
 
@@ -25,6 +26,18 @@ class TestClassifyDeploySyncMode:
 
     def test_scoring_paths_rescore_only(self):
         paths = ['backend/app/services/lead_scoring_engine.py']
+        assert classify_deploy_sync_mode(paths) == 'rescore_only'
+
+    def test_scoring_rubric_paths_rescore_only(self):
+        paths = ['backend/app/services/scoring_rubric.py']
+        assert classify_deploy_sync_mode(paths) == 'rescore_only'
+
+    def test_outcome_calibration_paths_rescore_only(self):
+        paths = ['backend/app/services/outcome_calibration_service.py']
+        assert classify_deploy_sync_mode(paths) == 'rescore_only'
+
+    def test_motivation_signal_paths_rescore_only(self):
+        paths = ['backend/app/services/motivation_signal_service.py']
         assert classify_deploy_sync_mode(paths) == 'rescore_only'
 
     def test_outreach_paths_rescore_only(self):
@@ -149,6 +162,11 @@ class TestScoringCodeHash:
     def test_unchanged_when_no_previous_hash(self):
         with patch('app.services.deploy_sync_policy.get_redis_value', return_value=None):
             assert scoring_code_changed_since_last_run() is False
+
+    def test_hash_covers_rubric_and_engine(self):
+        digest = scoring_code_file_hash()
+        assert isinstance(digest, str)
+        assert len(digest) == 64
 
 
 class TestResolveDeploySyncMode:

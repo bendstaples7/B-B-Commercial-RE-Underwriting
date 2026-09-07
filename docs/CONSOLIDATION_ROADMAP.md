@@ -47,6 +47,7 @@ Follow-up work from the [architecture audit](ARCHITECTURE.md). Prefer **one focu
 
 - [x] Decide canonical scoring engine long-term — unified `LeadScoringEngine` (scoring + recommended action)
 - [x] Extract shared rule helpers → `scoring_rubric.py`, `enrichment_scoring.py`
+- [x] Retire live `DeterministicScoringEngine` callers (ingestion / Celery / scripts → `LeadScoringEngine`; facade kept for unit tests only)
 - [x] Contacts as sole people store for CC/queues (`ContactService.upsert_owners_from_lead`)
 - [x] LeadTask + `hubspot_task_id` for CC open tasks (CRM `tasks` dual-write until cleanup)
 - [x] LeadTimelineEntry sole CC activity store; Interaction frozen for product
