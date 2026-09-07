@@ -8,7 +8,6 @@ Stores last calibration run (lifts, sample sizes, prior weights) and timestamp
 so outcome-calibrated weight nudges are auditable.
 """
 from alembic import op
-import sqlalchemy as sa
 
 revision = 'score_cal_20260907'
 down_revision = ('c5d6e7f8a9b0', 'mail_cad_20260905')
@@ -17,16 +16,20 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column(
-        'scoring_weights',
-        sa.Column('calibration_meta', sa.JSON(), nullable=True),
-    )
-    op.add_column(
-        'scoring_weights',
-        sa.Column('last_calibrated_at', sa.DateTime(), nullable=True),
-    )
+    op.execute("""
+        ALTER TABLE scoring_weights
+        ADD COLUMN IF NOT EXISTS calibration_meta JSON
+    """)
+    op.execute("""
+        ALTER TABLE scoring_weights
+        ADD COLUMN IF NOT EXISTS last_calibrated_at TIMESTAMP WITHOUT TIME ZONE
+    """)
 
 
 def downgrade():
-    op.drop_column('scoring_weights', 'last_calibrated_at')
-    op.drop_column('scoring_weights', 'calibration_meta')
+    op.execute(
+        "ALTER TABLE scoring_weights DROP COLUMN IF EXISTS last_calibrated_at"
+    )
+    op.execute(
+        "ALTER TABLE scoring_weights DROP COLUMN IF EXISTS calibration_meta"
+    )

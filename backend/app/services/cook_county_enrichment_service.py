@@ -38,6 +38,18 @@ DISTRESS_TAX_SOURCES = (
     "cook_county_scavenger_tax_sale",
 )
 
+
+def _plugins_run_count(result, *, fallback: int) -> int:
+    """Coerce enrich result plugins_run to a non-negative int (tests / bad returns)."""
+    if not isinstance(result, dict):
+        return fallback
+    raw = result.get("plugins_run", fallback)
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return fallback
+
+
 _PIN_PLUGINS = (
     "cook_county_assessor",
     "cook_county_permits",
@@ -621,7 +633,9 @@ def _enrich_distress_priority_lane(
                     lead.id,
                     lambda _lead: plugin_names,
                 )
-                summary["socrata_calls"] += result.get("plugins_run", len(plugin_names))
+                summary["socrata_calls"] += _plugins_run_count(
+                    result, fallback=len(plugin_names)
+                )
                 if result.get("skipped"):
                     summary["skipped"] += 1
                 else:
@@ -762,7 +776,9 @@ def backfill_cook_county_enrichment(
 
             try:
                 result = enrich_cook_county_lead(lead.id)
-                summary["socrata_calls"] += result.get("plugins_run", estimated_calls)
+                summary["socrata_calls"] += _plugins_run_count(
+                    result, fallback=estimated_calls
+                )
                 if result.get("skipped"):
                     summary["skipped"] += 1
                 else:
@@ -893,7 +909,9 @@ def backfill_sale_date_verification(
 
             try:
                 result = enrich_cook_county_sale_date(lead.id)
-                summary["socrata_calls"] += result.get("plugins_run", estimated_calls)
+                summary["socrata_calls"] += _plugins_run_count(
+                    result, fallback=estimated_calls
+                )
                 if result.get("skipped"):
                     summary["skipped"] += 1
                 else:

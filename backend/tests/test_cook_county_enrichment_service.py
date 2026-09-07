@@ -326,11 +326,14 @@ class TestBackfillEnrichment:
     @patch("app.services.cook_county_enrichment_service.enrich_cook_county_lead")
     def test_backfill_skips_recently_enriched(self, mock_enrich, app):
         with app.app_context():
-            from datetime import datetime, timedelta
+            from datetime import datetime
             from app.models.enrichment import EnrichmentRecord
             from app.services.cook_county_enrichment_service import backfill_cook_county_enrichment
 
             source = _ensure_source("cook_county_commercial_valuation")
+            # Tax-plugin attempt closes the distress-priority coverage hole so
+            # commercial_valuation freshness can skip this lead.
+            tax_source = _ensure_source("cook_county_tax_sales")
 
             lead = Property(
                 property_street="123 N Michigan Ave",
@@ -341,11 +344,18 @@ class TestBackfillEnrichment:
             )
             db.session.add(lead)
             db.session.flush()
+            now = datetime.utcnow()
             db.session.add(EnrichmentRecord(
                 lead_id=lead.id,
                 data_source_id=source.id,
                 status="success",
-                created_at=datetime.utcnow(),
+                created_at=now,
+            ))
+            db.session.add(EnrichmentRecord(
+                lead_id=lead.id,
+                data_source_id=tax_source.id,
+                status="no_results",
+                created_at=now,
             ))
             db.session.commit()
 
