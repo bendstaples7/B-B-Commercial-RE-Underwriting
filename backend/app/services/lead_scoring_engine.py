@@ -164,6 +164,15 @@ ENGAGEMENT_MODIFIERS = {
 ENGAGEMENT_LOOKBACK_DAYS = 90
 RECENT_CONTACT_DAYS = 14
 
+# Persist five weighted buckets on score_details for outcome calibration / UI.
+BUCKET_META_KEYS = (
+    "bucket_property_characteristics",
+    "bucket_data_completeness",
+    "bucket_owner_situation",
+    "bucket_location_desirability",
+    "bucket_data_enrichment",
+)
+
 SCORING_ATTRIBUTES = rubric.SCORING_ATTRIBUTES
 
 
@@ -456,6 +465,7 @@ class LeadScoringEngine:
         engagement_mod = self._score_engagement(lead)
         # HubSpot SIGNAL_ADJUSTMENTS → lead_score engagement, not motivation_score.
         hubspot_mod = self._hubspot_signal_adjustment(signals)
+        contact_quality_mod = rubric.contact_quality_modifier(lead)
 
         from app.services.motivation_signal_service import notes_keywords_points
         extracted = getattr(lead, '_motivation_extracted_signals', None)
@@ -467,11 +477,30 @@ class LeadScoringEngine:
         # notes_keywords (slice of structured_motivation — already in the rubric
         # total via structured_motivation; do not add notes_keywords into total).
         score_details["hubspot_engagement"] = hubspot_mod
+        score_details["contact_quality_modifier"] = contact_quality_mod
         score_details["notes_keywords"] = notes_kw
         # Meta for UI "How we got to N" (excluded from helps/adjustments lists).
         score_details["weighted_base"] = round(base_score, 2)
+        # Bucket snapshots for outcome calibration (meta — not additive helps).
+        score_details["bucket_property_characteristics"] = round(
+            buckets["property_characteristics"], 2,
+        )
+        score_details["bucket_data_completeness"] = round(
+            buckets["data_completeness"], 2,
+        )
+        score_details["bucket_owner_situation"] = round(buckets["owner_situation"], 2)
+        score_details["bucket_location_desirability"] = round(
+            buckets["location_desirability"], 2,
+        )
+        score_details["bucket_data_enrichment"] = round(buckets["data_enrichment"], 2)
 
-        total = base_score + pipeline_bonus + engagement_mod + hubspot_mod
+        total = (
+            base_score
+            + pipeline_bonus
+            + engagement_mod
+            + hubspot_mod
+            + contact_quality_mod
+        )
         if getattr(lead, "suppression_flag", False):
             total = min(total, 10.0)
         total = max(0.0, min(round(total, 2), 100.0))

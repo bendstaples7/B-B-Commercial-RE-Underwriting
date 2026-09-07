@@ -23,7 +23,9 @@ const RESIDENTIAL_MAX: Record<string, number> = {
   absentee_owner: 10,
   owner_mailing_quality: 10,
   years_owned: 10,
-  structured_motivation: 25,
+  structured_motivation: 15,
+  public_record_distress: 20,
+  contact_quality: 15,
   existing_notes_motivation: 10,
   manual_priority: 10,
   source_type_distress: 15,
@@ -37,7 +39,9 @@ const COMMERCIAL_MAX: Record<string, number> = {
   owner_concentration: 10,
   absentee_owner: 10,
   building_size_fit: 5,
-  structured_motivation: 20,
+  structured_motivation: 12,
+  public_record_distress: 15,
+  contact_quality: 15,
   existing_notes_motivation: 5,
   manual_priority: 5,
 }
@@ -83,8 +87,14 @@ const DIMENSION_COPY: Record<string, Omit<ScoreDimensionMeta, 'maxPoints'>> = {
   structured_motivation: {
     label: 'Seller motivation',
     description:
-      'Product motivation score from MotivationSignal rows (tax/violation distress, source type, notes keywords, manual priority, analyst findings such as FSBO), capped. This is lead.motivation_score — not HubSpot engagement.',
-    dataSource: 'motivation_signals table (synced from enrichment JSON and ingestion fields; analyst findings from Command Center)',
+      'Soft seller intent from notes keywords, manual priority, HubSpot motivation text, and analyst findings (e.g. FSBO). Public-record tax/violation distress is scored separately.',
+    dataSource: 'motivation_signals (non-public-record types)',
+  },
+  public_record_distress: {
+    label: 'Public-record distress',
+    description:
+      'Tax sales, building violations, scofflaw, vacant building, and foreclosure auction signals from Cook County / city data — separate budget so they are not capped out by FSBO/notes.',
+    dataSource: 'tax_distress_data, violation_data, permit_data, distress source_type',
   },
   notes_keywords: {
     label: 'Notes Keywords (attribution)',
@@ -103,6 +113,12 @@ const DIMENSION_COPY: Record<string, Omit<ScoreDimensionMeta, 'maxPoints'>> = {
     description:
       'Recent manual call/email/note activity modifiers on lead_score.',
     dataSource: 'Lead timeline entries (manual source, lookback window)',
+  },
+  contact_quality_modifier: {
+    label: 'Contact quality adj.',
+    description:
+      'Bonus for confirmed phones; penalty when contacts look like prior owners after a recent sale or when only non-viable numbers remain.',
+    dataSource: 'Phone confidence + recent-sale contact trust helpers',
   },
   pipeline_stage_bonus: {
     label: 'Pipeline progress',
@@ -168,8 +184,14 @@ const DIMENSION_COPY: Record<string, Omit<ScoreDimensionMeta, 'maxPoints'>> = {
   contactability: {
     label: 'Owner researched',
     description:
-      'Points for skip-trace completion and socials on file. Phone/email presence is scored separately under data quality.',
+      'Points for skip-trace completion and socials on file. Phone/email quality is scored under Contact quality.',
     dataSource: 'Skip-trace date and socials on the lead',
+  },
+  contact_quality: {
+    label: 'Contact quality',
+    description:
+      'Confidence-weighted phone quality plus email (owner/primary bonus). Zero when contacts look like prior owners after a recent sale.',
+    dataSource: 'contact_phones.confidence_score and contact emails',
   },
   ownership_duration: {
     label: 'Long ownership',
@@ -179,8 +201,8 @@ const DIMENSION_COPY: Record<string, Omit<ScoreDimensionMeta, 'maxPoints'>> = {
   },
   engagement: {
     label: 'Recent activity',
-    description: 'Points from recent engagement signals on the lead.',
-    dataSource: 'Engagement fields and related timeline activity',
+    description: 'Mailer history and follow-up date — not raw phone/email presence.',
+    dataSource: 'mailer_history and follow_up_date',
   },
 }
 

@@ -12,7 +12,7 @@ import {
 } from '@mui/material'
 import SaveIcon from '@mui/icons-material/Save'
 import RefreshIcon from '@mui/icons-material/Refresh'
-import type { ScoringWeights } from '@/types'
+import type { ScoringWeights, ScoringCalibrationReport } from '@/types'
 import { leadService } from '@/services/leadApi'
 
 /** Describes a single scoring criterion for the editor. */
@@ -45,7 +45,8 @@ const CRITERIA: CriterionConfig[] = [
   {
     key: 'owner_situation_weight',
     label: 'Owner Situation',
-    description: 'Length of ownership, absentee owner status',
+    description:
+      'Ownership duration, absentee status, soft seller intent, and public-record distress',
   },
   {
     key: 'location_desirability_weight',
@@ -56,7 +57,7 @@ const CRITERIA: CriterionConfig[] = [
     key: 'data_enrichment_weight',
     label: 'Data Enrichment',
     description:
-      'Weight given to contactability, property equity, ownership duration, and engagement signals from enriched data sources',
+      'Contactability, contact quality (phone confidence), equity, ownership duration, and engagement',
     max: 0.5,
   },
 ]
@@ -87,6 +88,9 @@ export const ScoringWeightsEditor: React.FC = () => {
   const [savedWeights, setSavedWeights] = useState<Record<CriterionConfig['key'], number> | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [calibrating, setCalibrating] = useState(false)
+  const [calibrationPreview, setCalibrationPreview] = useState<ScoringCalibrationReport | null>(null)
+  const [lastCalibratedAt, setLastCalibratedAt] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
@@ -114,6 +118,7 @@ export const ScoringWeightsEditor: React.FC = () => {
       }
       setWeights(loaded)
       setSavedWeights(loaded)
+      setLastCalibratedAt(data.last_calibrated_at ?? null)
     } catch (err: any) {
       setError(err.message || 'Failed to load scoring weights.')
     } finally {
@@ -171,6 +176,69 @@ export const ScoringWeightsEditor: React.FC = () => {
       setError(err.message || 'Failed to save scoring weights.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const applySuggestedWeights = (suggested: Record<string, number>) => {
+    const next: Record<CriterionConfig['key'], number> = {
+      property_characteristics_weight: suggested.property_characteristics_weight,
+      data_completeness_weight: suggested.data_completeness_weight,
+      owner_situation_weight: suggested.owner_situation_weight,
+      location_desirability_weight: suggested.location_desirability_weight,
+      data_enrichment_weight: suggested.data_enrichment_weight,
+    }
+    setWeights(next)
+    setSavedWeights(next)
+  }
+
+  const handleCalibratePreview = async () => {
+    setCalibrating(true)
+    setError(null)
+    setSuccessMessage(null)
+    try {
+      const report = await leadService.calibrateScoringWeights({ apply: false })
+      setCalibrationPreview(report)
+      if (report.skipped_reason) {
+        setError(report.skipped_reason)
+      } else {
+        setSuccessMessage(
+          `Calibration preview: ${report.positive_count} wins vs ${report.negative_count} losses. Review suggested weights below.`,
+        )
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to calibrate scoring weights.')
+    } finally {
+      setCalibrating(false)
+    }
+  }
+
+  const handleCalibrateApply = async () => {
+    setCalibrating(true)
+    setError(null)
+    setSuccessMessage(null)
+    try {
+      const report = await leadService.calibrateScoringWeights({
+        apply: true,
+        rescore: true,
+      })
+      setCalibrationPreview(report)
+      if (report.skipped_reason) {
+        setError(report.skipped_reason)
+        return
+      }
+      if (report.suggested_weights) {
+        applySuggestedWeights(report.suggested_weights)
+      }
+      setLastCalibratedAt(report.calibrated_at)
+      setSuccessMessage(
+        `Applied outcome-calibrated weights. ${report.leads_rescored} lead${
+          report.leads_rescored !== 1 ? 's' : ''
+        } rescored.`,
+      )
+    } catch (err: any) {
+      setError(err.message || 'Failed to apply calibrated weights.')
+    } finally {
+      setCalibrating(false)
     }
   }
 
@@ -298,7 +366,7 @@ export const ScoringWeightsEditor: React.FC = () => {
             variant="text"
             startIcon={<RefreshIcon />}
             onClick={handleReset}
-            disabled={!isDirty || saving}
+            disabled={!isDirty || saving || calibrating}
             aria-label="Reset weights to last saved values"
             sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
@@ -308,11 +376,65 @@ export const ScoringWeightsEditor: React.FC = () => {
             variant="contained"
             startIcon={saving ? <CircularProgress size={18} color="inherit" /> : <SaveIcon />}
             onClick={handleSave}
-            disabled={!isSumValid || !isDirty || saving}
+            disabled={!isSumValid || !isDirty || saving || calibrating}
             aria-label="Save scoring weights and rescore all properties"
             sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             {saving ? 'Saving…' : 'Save & Rescore'}
+          </Button>
+        </Box>
+
+        <Divider sx={{ my: 3 }} />
+
+        <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
+          Outcome calibration
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          Nudge weights from pipeline wins vs losses (interested / appointment / offer / deal won
+          vs no interest / lost / suppressed). Keeps the same explainable rubric.
+        </Typography>
+        {lastCalibratedAt && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+            Last applied: {new Date(lastCalibratedAt).toLocaleString()}
+          </Typography>
+        )}
+        {calibrationPreview && !calibrationPreview.skipped_reason && (
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="caption" color="text.secondary" component="div">
+              Suggested — property {formatPercent(calibrationPreview.suggested_weights.property_characteristics_weight)}
+              , completeness {formatPercent(calibrationPreview.suggested_weights.data_completeness_weight)}
+              , owner {formatPercent(calibrationPreview.suggested_weights.owner_situation_weight)}
+              , location {formatPercent(calibrationPreview.suggested_weights.location_desirability_weight)}
+              , enrichment {formatPercent(calibrationPreview.suggested_weights.data_enrichment_weight)}
+            </Typography>
+          </Box>
+        )}
+        <Box
+          sx={{
+            display: 'flex',
+            gap: 1,
+            flexDirection: { xs: 'column', sm: 'row' },
+            flexWrap: 'wrap',
+          }}
+        >
+          <Button
+            variant="outlined"
+            onClick={handleCalibratePreview}
+            disabled={saving || calibrating}
+            aria-label="Preview outcome-calibrated scoring weights"
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
+          >
+            {calibrating ? 'Working…' : 'Preview calibration'}
+          </Button>
+          <Button
+            variant="outlined"
+            color="secondary"
+            onClick={handleCalibrateApply}
+            disabled={saving || calibrating}
+            aria-label="Apply outcome-calibrated scoring weights and rescore"
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
+          >
+            Apply calibration & rescore
           </Button>
         </Box>
       </Paper>

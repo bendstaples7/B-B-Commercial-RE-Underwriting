@@ -695,8 +695,13 @@ class TestMotivationScoreAttribution:
         assert details.get('hubspot_engagement') == LeadScoringEngine.SIGNAL_ADJUSTMENTS['PRIOR_WARM_CONVERSATION']
         # notes_keywords is attribution only — structured already includes it
         assert details['notes_keywords'] <= details['structured_motivation']
-        # HubSpot mods are engagement on lead_score, not a second motivation_score
-        assert lead.motivation_score == details['structured_motivation']
+        # Product motivation_score = soft + public-record (public is 0 here)
+        assert lead.motivation_score == (
+            details['structured_motivation'] + details.get('public_record_distress', 0)
+        )
+        assert 'contact_quality' in details
+        assert 'contact_quality_modifier' in details
+        assert 'bucket_owner_situation' in details
 
 
 class TestRecentlySoldMailGuard:

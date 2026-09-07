@@ -241,7 +241,7 @@ class TestSourceTypeDistressTaxBonus:
 # ---------------------------------------------------------------------------
 
 class TestResidentialScoreStructuredMotivationDimension:
-    """structured_motivation must appear in score_details returned by calculate_residential_score."""
+    """Public-record distress and soft structured_motivation in residential score."""
 
     def setup_method(self):
         self.engine = DeterministicScoringEngine()
@@ -252,11 +252,13 @@ class TestResidentialScoreStructuredMotivationDimension:
         assert "structured_motivation" in result["score_details"], (
             "structured_motivation dimension missing from score_details"
         )
+        assert "public_record_distress" in result["score_details"]
 
     def test_structured_motivation_value_correct_foreclosure(self):
         lead = _make_lead(source_type="foreclosure", tax_distress_data=None)
         result = self.engine.calculate_residential_score(lead)
-        assert result["score_details"]["structured_motivation"] == 10.0
+        assert result["score_details"]["public_record_distress"] == 10.0
+        assert result["score_details"]["structured_motivation"] == 0.0
 
     def test_structured_motivation_includes_tax_sale_rows(self):
         lead = _make_lead(
@@ -264,12 +266,13 @@ class TestResidentialScoreStructuredMotivationDimension:
             tax_distress_data=[{"signal_type": "tax_sale"}],
         )
         result = self.engine.calculate_residential_score(lead)
-        assert result["score_details"]["structured_motivation"] >= 10.0
+        assert result["score_details"]["public_record_distress"] >= 10.0
 
     def test_structured_motivation_value_0_for_null_source_type(self):
         lead = _make_lead(source_type=None)
         result = self.engine.calculate_residential_score(lead)
         assert result["score_details"]["structured_motivation"] == 0.0
+        assert result["score_details"]["public_record_distress"] == 0.0
 
     def test_structured_motivation_contributes_to_total_score(self):
         lead_without = _make_lead(source_type=None)

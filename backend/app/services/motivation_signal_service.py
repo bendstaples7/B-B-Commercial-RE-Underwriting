@@ -123,7 +123,23 @@ POINTS_COMMERCIAL = {
     'OWNER_NOT_SELLING': -8.0,
 }
 
-STRUCTURED_MOTIVATION_CAP = {'residential': 25.0, 'commercial': 20.0}
+STRUCTURED_MOTIVATION_CAP = {'residential': 15.0, 'commercial': 12.0}
+PUBLIC_RECORD_DISTRESS_CAP = {'residential': 20.0, 'commercial': 15.0}
+
+# Tax / violation / foreclosure / distress-source signals — own score budget.
+PUBLIC_RECORD_SIGNAL_TYPES = frozenset({
+    'TAX_SCAVENGER_SALE',
+    'TAX_ANNUAL_SALE',
+    'CHICAGO_SCOFFLAW',
+    'BUILDING_VIOLATION',
+    'BUILDING_VIOLATION_SEVERE',
+    'VACANT_BUILDING',
+    'FORECLOSURE_AUCTION',
+    'BUILDING_COMPLAINT',
+    'SOURCE_TYPE_DISTRESS',
+    'TAX_EXEMPT',
+    'ASSESSMENT_APPEAL',
+})
 
 SEVERE_VIOLATION_CODES = frozenset({'CN', 'EV', 'BLDG', 'FAIL'})
 
@@ -475,12 +491,29 @@ def _cap_score(raw: float, lead_category: str) -> float:
     return max(-cap, min(raw, cap))
 
 
-def compute_structured_motivation_score(lead, *, signals: Optional[list[ExtractedSignal]] = None) -> float:
-    """Sum active signal points with category cap."""
-    category = getattr(lead, 'lead_category', 'residential') or 'residential'
+def _cap_public_record(raw: float, lead_category: str) -> float:
+    cap = PUBLIC_RECORD_DISTRESS_CAP.get(
+        lead_category, PUBLIC_RECORD_DISTRESS_CAP['residential'],
+    )
+    return max(-cap, min(raw, cap))
+
+
+def _is_public_record_signal(signal_type: str) -> bool:
+    if signal_type in PUBLIC_RECORD_SIGNAL_TYPES:
+        return True
+    # Severe variant is scored as BUILDING_VIOLATION_SEVERE points but may
+    # persist as BUILDING_VIOLATION with elevated points.
+    return signal_type == 'BUILDING_VIOLATION_SEVERE'
+
+
+def _load_active_signals(lead, signals: Optional[list[ExtractedSignal]] = None) -> list[ExtractedSignal]:
+    """Resolve active signals from arg, persisted rows, or live extraction."""
     lead_id = getattr(lead, 'id', None)
 
-    if signals is None and isinstance(lead_id, int):
+    if signals is not None:
+        return list(signals)
+
+    if isinstance(lead_id, int):
         try:
             from flask import has_app_context
         except ImportError:
@@ -490,10 +523,54 @@ def compute_structured_motivation_score(lead, *, signals: Optional[list[Extracte
                 MotivationSignal.query.filter_by(lead_id=lead_id, is_active=True).all()
             )
             if rows:
-                return _cap_score(sum(r.points for r in rows), category)
+                return [_row_as_extracted(row) for row in rows]
 
-    extracted = signals if signals is not None else extract_signals_from_lead(lead)
-    return _cap_score(sum(s.points for s in extracted), category)
+    return extract_signals_from_lead(lead)
+
+
+def compute_soft_motivation_score(
+    lead, *, signals: Optional[list[ExtractedSignal]] = None,
+) -> float:
+    """Seller-intent signals only (notes, manual priority, analyst findings, HubSpot)."""
+    category = getattr(lead, 'lead_category', 'residential') or 'residential'
+    extracted = _load_active_signals(lead, signals)
+    raw = sum(
+        s.points for s in extracted
+        if not _is_public_record_signal(s.signal_type)
+    )
+    return _cap_score(raw, category)
+
+
+def compute_public_record_distress_score(
+    lead, *, signals: Optional[list[ExtractedSignal]] = None,
+) -> float:
+    """Tax / violation / foreclosure public-record distress — separate score budget."""
+    category = getattr(lead, 'lead_category', 'residential') or 'residential'
+    extracted = _load_active_signals(lead, signals)
+    raw = sum(
+        s.points for s in extracted
+        if _is_public_record_signal(s.signal_type)
+    )
+    return _cap_public_record(raw, category)
+
+
+def compute_structured_motivation_score(lead, *, signals: Optional[list[ExtractedSignal]] = None) -> float:
+    """Soft seller-intent score for the ``structured_motivation`` rubric dim.
+
+    Public-record distress is scored separately via
+    ``compute_public_record_distress_score`` so tax/violation signals are not
+    starved by FSBO/notes under a shared cap.
+    """
+    return compute_soft_motivation_score(lead, signals=signals)
+
+
+def compute_total_motivation_score(lead, *, signals: Optional[list[ExtractedSignal]] = None) -> float:
+    """Product ``lead.motivation_score``: soft + public-record (each capped)."""
+    extracted = _load_active_signals(lead, signals)
+    return (
+        compute_soft_motivation_score(lead, signals=extracted)
+        + compute_public_record_distress_score(lead, signals=extracted)
+    )
 
 
 def notes_keywords_points(signals: list[ExtractedSignal]) -> float:
@@ -508,14 +585,16 @@ def motivation_component_attribution(
 ) -> dict[str, float]:
     """Named components for score_details / MotivationSignalsPanel.
 
-    ``structured_motivation`` is the capped product score (``lead.motivation_score``).
-    ``notes_keywords`` is a slice of that same total for attribution — do not add
-    it again into lead_score. HubSpot engagement is attributed separately by
-    LeadScoringEngine as ``hubspot_engagement`` on lead_score, not here.
+    ``structured_motivation`` is soft seller intent (capped).
+    ``public_record_distress`` is tax/violation/foreclosure (separate cap).
+    ``notes_keywords`` is a slice of soft motivation — do not add again.
     """
-    extracted = signals if signals is not None else extract_signals_from_lead(lead)
+    extracted = _load_active_signals(lead, signals)
     return {
-        'structured_motivation': compute_structured_motivation_score(lead, signals=extracted),
+        'structured_motivation': compute_soft_motivation_score(lead, signals=extracted),
+        'public_record_distress': compute_public_record_distress_score(
+            lead, signals=extracted,
+        ),
         'notes_keywords': notes_keywords_points(extracted),
     }
 
@@ -693,8 +772,9 @@ class MotivationSignalService:
         if isinstance(lead_id, int):
             combined.extend(load_active_analyst_signals(lead_id))
 
-        # Product motivation number — structured MotivationSignal attribution only.
-        score = compute_structured_motivation_score(lead, signals=combined)
+        # Product motivation = soft seller intent + public-record distress
+        # (each capped separately so distress is not starved).
+        score = compute_total_motivation_score(lead, signals=combined)
         lead.motivation_score = score
         lead.motivation_signal_summary = build_signal_summary(combined)
         # Stash last extracted signals for score_details attribution in the same
@@ -717,7 +797,7 @@ class MotivationSignalService:
         combined = list(extracted)
         if isinstance(lead_id, int):
             combined.extend(load_active_analyst_signals(lead_id))
-        score = compute_structured_motivation_score(lead, signals=combined)
+        score = compute_total_motivation_score(lead, signals=combined)
         lead.motivation_score = score
         lead.motivation_signal_summary = build_signal_summary(combined)
         lead._motivation_extracted_signals = combined  # type: ignore[attr-defined]
@@ -856,14 +936,19 @@ class MotivationSignalService:
             return
         self.copy_signals_to_lead(signal_payload, lead_id)
         extracted = extracted_signals_from_candidate_payload(signal_payload)
-        lead.motivation_score = compute_structured_motivation_score(lead, signals=extracted)
+        lead.motivation_score = compute_total_motivation_score(lead, signals=extracted)
         lead.motivation_signal_summary = build_signal_summary(extracted)
         db.session.add(lead)
 
 
 def structured_motivation_score(lead) -> float:
-    """Rubric entry point — uses persisted signals when available."""
-    return compute_structured_motivation_score(lead)
+    """Rubric entry — soft seller intent only (notes, FSBO, manual priority)."""
+    return compute_soft_motivation_score(lead)
+
+
+def public_record_distress_score(lead) -> float:
+    """Rubric entry — public-record tax/violation/foreclosure distress."""
+    return compute_public_record_distress_score(lead)
 
 
 BACKFILL_BATCH_SIZE = 200

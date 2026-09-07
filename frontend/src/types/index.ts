@@ -620,8 +620,26 @@ export interface ScoringWeights {
   owner_situation_weight: number
   location_desirability_weight: number
   data_enrichment_weight: number
+  calibration_meta?: Record<string, unknown> | null
+  last_calibrated_at?: string | null
   created_at: string | null
   updated_at: string | null
+}
+
+export interface ScoringCalibrationReport {
+  positive_count: number
+  negative_count: number
+  lookback_days: number
+  mean_buckets_positive: Record<string, number>
+  mean_buckets_negative: Record<string, number>
+  lifts: Record<string, number>
+  current_weights: Record<string, number>
+  suggested_weights: Record<string, number>
+  applied: boolean
+  leads_rescored: number
+  skipped_reason: string | null
+  calibrated_at: string | null
+  weights?: ScoringWeights
 }
 
 export interface MarketingList {
