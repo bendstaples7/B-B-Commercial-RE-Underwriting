@@ -594,8 +594,9 @@ def test_mail_cad_migration_routes_orm_through_alembic_bind(app, monkeypatch):
     sentinel = object()
     seen: dict = {}
 
-    def fake_heal(*, commit: bool = True):
+    def fake_heal(*, commit: bool = True, rescore: bool = True):
         seen['commit'] = commit
+        seen['rescore'] = rescore
         seen['bind'] = db.session.get_bind()
         return {
             'rematch_dues_fixed': 0,
@@ -616,6 +617,7 @@ def test_mail_cad_migration_routes_orm_through_alembic_bind(app, monkeypatch):
     with app.app_context():
         migration.upgrade()
         assert seen['commit'] is False
+        assert seen['rescore'] is False
         assert seen['bind'] is sentinel
         # Scoped session restored after migration finally.
         assert db.session.get_bind() is not sentinel

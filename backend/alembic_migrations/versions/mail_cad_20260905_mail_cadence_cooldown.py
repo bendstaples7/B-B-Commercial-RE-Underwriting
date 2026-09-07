@@ -18,25 +18,10 @@ depends_on = None
 def upgrade():
     # Keep the idempotent data heal inside Alembic's transaction.
     #
-    # Current scoring services load the live ScoringWeights model. Ensure
-    # calibration columns exist before this older data migration calls into
-    # that service; the later score_cal migration repeats these as IF NOT
-    # EXISTS so DBs already stamped at mail_cad still get the columns.
-    from alembic import op
-
-    op.execute("""
-        ALTER TABLE scoring_weights
-        ADD COLUMN IF NOT EXISTS calibration_meta JSON
-    """)
-    op.execute("""
-        ALTER TABLE scoring_weights
-        ADD COLUMN IF NOT EXISTS last_calibrated_at TIMESTAMP WITHOUT TIME ZONE
-    """)
-
-    #
     # Flask-SQLAlchemy 3.1 Session.get_bind() always prefers db.engines[None]
     # and ignores session.bind. Install a plain SQLAlchemy Session bound to
     # op.get_bind() into the scoped registry so ORM writes join Alembic's txn.
+    from alembic import op
     from sqlalchemy.orm import Session
 
     from app import db
@@ -47,7 +32,10 @@ def upgrade():
     migration_session = Session(bind=bind)
     db.session.registry.set(migration_session)
     try:
-        result = heal_mail_cadence_cooldown(commit=False)
+        # This revision runs before score_cal_20260907 owns the calibration
+        # columns required by the live ScoringWeights model. Let post-deploy
+        # scoring refresh handle recomputation after the full schema is present.
+        result = heal_mail_cadence_cooldown(commit=False, rescore=False)
         migration_session.flush()
     except Exception:
         migration_session.rollback()

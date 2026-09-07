@@ -108,6 +108,11 @@ class TestEnrichCookCountyLead:
                 source_type="manual_distress",
             )
             db.session.add(lead)
+            db.session.flush()
+            db.session.execute(
+                db.text("UPDATE leads SET tax_distress_data = NULL WHERE id = :lead_id"),
+                {"lead_id": lead.id},
+            )
             db.session.commit()
 
             mock_connector = MagicMock()
@@ -138,6 +143,11 @@ class TestEnrichCookCountyLead:
                 source_type="foreclosure",
             )
             db.session.add(lead)
+            db.session.flush()
+            db.session.execute(
+                db.text("UPDATE leads SET tax_distress_data = NULL WHERE id = :lead_id"),
+                {"lead_id": lead.id},
+            )
             db.session.commit()
 
             result = enrich_cook_county_lead(lead.id)
@@ -283,6 +293,11 @@ class TestBackfillEnrichment:
                 source_type="manual_distress",
             )
             db.session.add(lead)
+            db.session.flush()
+            db.session.execute(
+                db.text("UPDATE leads SET tax_distress_data = NULL WHERE id = :lead_id"),
+                {"lead_id": lead.id},
+            )
             db.session.commit()
 
             mock_enrich.return_value = {"plugins_run": 1, "skipped": False}
@@ -329,6 +344,7 @@ class TestBackfillEnrichment:
                 property_city="Chicago",
                 property_state="IL",
                 county_assessor_pin="01-02-202-113-0000",
+                tax_distress_data=None,
                 source_type="manual_distress",
             )
             db.session.add(lead)
@@ -337,7 +353,11 @@ class TestBackfillEnrichment:
             mock_enrich.return_value = {"plugins_run": 1, "skipped": False}
             with patch(
                 "app.services.cook_county_enrichment_service.distress_plugins_for_lead",
-                return_value=["distress_a", "distress_b", "distress_c", "distress_d", "distress_e"],
+                return_value=[
+                    "distress_a", "distress_b", "distress_c",
+                    "distress_d", "distress_e", "distress_f",
+                    "distress_g", "distress_h", "distress_i",
+                ],
             ), patch(
                 "app.services.cook_county_enrichment_service.plugins_for_lead",
                 return_value=["general_plugin"],
@@ -346,6 +366,45 @@ class TestBackfillEnrichment:
 
             assert summary["distress_lane"]["processed"] == 0
             assert summary["enriched"] == 1
+            mock_enrich.assert_called_once_with(lead.id)
+
+    @patch("app.services.cook_county_enrichment_service.enrich_cook_county_lead")
+    def test_backfill_runs_distress_subset_that_fits_total_cap(self, mock_enrich, app):
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import backfill_cook_county_enrichment
+            _ensure_source("cook_county_commercial_valuation")
+            lead = Property(
+                property_street="15 Distress Total Cap Ave",
+                property_city="Chicago",
+                property_state="IL",
+                county_assessor_pin="01-02-202-114-0000",
+                tax_distress_data=None,
+                source_type="manual_distress",
+            )
+            db.session.add(lead)
+            db.session.flush()
+            db.session.execute(
+                db.text("UPDATE leads SET tax_distress_data = NULL WHERE id = :lead_id"),
+                {"lead_id": lead.id},
+            )
+            db.session.commit()
+            assert Property.query.filter(
+                Property.id == lead.id,
+                Property.tax_distress_data.is_(None),
+            ).count() == 1
+
+            mock_enrich.return_value = {"plugins_run": 5, "skipped": False}
+            with patch(
+                "app.services.cook_county_enrichment_service.lead_needs_distress_enrichment",
+                return_value=True,
+            ), patch(
+                "app.services.cook_county_enrichment_service.distress_plugins_for_lead",
+                return_value=["distress_a", "distress_b", "distress_c", "distress_d", "distress_e"],
+            ):
+                summary = backfill_cook_county_enrichment(batch_size=5, socrata_call_cap=8)
+
+            assert summary["distress_lane"]["enriched"] == 1, summary
+            assert summary["distress_lane"]["socrata_calls"] == 5
             mock_enrich.assert_called_once_with(lead.id)
 
     @patch("app.services.cook_county_enrichment_service.enrich_cook_county_lead")

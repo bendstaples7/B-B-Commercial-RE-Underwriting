@@ -13,6 +13,7 @@ from app.services.motivation_signal_service import (
 )
 from app.services.outcome_calibration_service import (
     CalibrationReport,
+    calibrate_scoring_weights,
     suggest_weights_from_lifts,
     _normalize_weights,
     collect_outcome_bucket_samples,
@@ -509,6 +510,18 @@ class TestOutcomeCalibration:
             ]
             assert report.applied is False
             assert report.skipped_reason is None
+
+    def test_calibration_dry_run_does_not_create_weight_row(self, app):
+        from app.models.lead_scoring import ScoringWeights
+        from app import db
+
+        with app.app_context():
+            report = calibrate_scoring_weights("dry-run-only", apply=False)
+
+            assert report.applied is False
+            assert db.session.query(ScoringWeights).filter_by(
+                user_id="dry-run-only",
+            ).first() is None
 
 
 class TestDistressCoverageHelpers:

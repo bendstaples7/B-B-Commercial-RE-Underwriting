@@ -595,6 +595,7 @@ def _enrich_distress_priority_lane(
     batch_size: int,
     socrata_call_cap: int,
     last_id: int,
+    general_call_reserve: int = 0,
 ) -> dict:
     """Backfill leads that never received tax-distress plugin attempts."""
     summary = {
@@ -655,7 +656,16 @@ def _enrich_distress_priority_lane(
                 _record_handled(lead_id)
                 summary["skipped"] += 1
                 continue
-            if summary["socrata_calls"] + len(plugin_names) > socrata_call_cap:
+            next_call_count = len(plugin_names)
+            if summary["socrata_calls"] + next_call_count > socrata_call_cap:
+                summary["capped"] = True
+                summary["last_id"] = cursor
+                return summary
+            reserved_limit = max(0, socrata_call_cap - max(0, general_call_reserve))
+            if (
+                enriched_count > 0
+                and summary["socrata_calls"] + next_call_count > reserved_limit
+            ):
                 summary["capped"] = True
                 summary["last_id"] = cursor
                 return summary
@@ -729,11 +739,11 @@ def backfill_cook_county_enrichment(
     if distress_priority and remaining_cap > 0:
         distress_budget = max(1, min(batch_size, remaining_cap // 2 or remaining_cap))
         general_call_reserve = remaining_cap // 2 if remaining_cap > 1 else 0
-        distress_call_cap = max(0, remaining_cap - general_call_reserve)
         distress_summary = _enrich_distress_priority_lane(
             batch_size=distress_budget,
-            socrata_call_cap=distress_call_cap,
+            socrata_call_cap=remaining_cap,
             last_id=last_id,
+            general_call_reserve=general_call_reserve,
         )
         distress_processed_ids = set(distress_summary.get("_processed_lead_ids") or [])
         summary["distress_lane"] = {

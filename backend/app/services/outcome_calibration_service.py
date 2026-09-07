@@ -19,6 +19,7 @@ from typing import Literal, Optional
 from app import db
 from app.models.lead import Lead
 from app.models.lead_score import LeadScore
+from app.models.lead_scoring import ScoringWeights
 from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.services.lead_scoring_engine import (
     DEFAULT_WEIGHTS,
@@ -120,6 +121,11 @@ class CalibrationReport:
 
 def _weights_dict(weights) -> dict[str, float]:
     return {key: float(getattr(weights, key)) for key in WEIGHT_KEYS}
+
+
+def _current_weights_for_user(user_id: str) -> dict[str, float]:
+    weights = ScoringWeights.query.filter_by(user_id=user_id).first()
+    return _weights_dict(weights) if weights else dict(DEFAULT_WEIGHTS)
 
 
 def _extract_buckets(score_details: dict | None, data_quality_score: float | None) -> dict[str, float] | None:
@@ -413,8 +419,7 @@ def calibrate_scoring_weights(
 ) -> CalibrationReport:
     """Analyze outcomes and optionally write calibrated weights + rescore."""
     engine = LeadScoringEngine()
-    weights = engine.get_weights(user_id)
-    current = _weights_dict(weights)
+    current = _current_weights_for_user(user_id)
     report = CalibrationReport(
         lookback_days=lookback_days,
         sample_mode=sample_mode,
