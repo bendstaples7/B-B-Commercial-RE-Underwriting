@@ -608,6 +608,9 @@ def test_mail_cad_migration_routes_orm_through_alembic_bind(app, monkeypatch):
         'app.services.mail_task_lifecycle_service.heal_mail_cadence_cooldown',
         fake_heal,
     )
+    # upgrade() also issues ADD COLUMN via op.execute before get_bind; stub
+    # both so this unit test does not need a live Alembic Operations context.
+    monkeypatch.setattr('alembic.op.execute', lambda *_a, **_k: None)
     monkeypatch.setattr('alembic.op.get_bind', lambda: sentinel)
 
     with app.app_context():

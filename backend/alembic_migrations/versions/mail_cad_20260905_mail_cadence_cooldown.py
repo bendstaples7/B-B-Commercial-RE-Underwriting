@@ -65,5 +65,13 @@ def upgrade():
 
 
 def downgrade():
-    # Cooldown is application logic; no schema to reverse.
-    pass
+    # Calibration columns were added early so heal_mail_cadence_cooldown can
+    # load ScoringWeights; drop them when rolling this revision back.
+    from alembic import op
+
+    op.execute(
+        "ALTER TABLE scoring_weights DROP COLUMN IF EXISTS last_calibrated_at"
+    )
+    op.execute(
+        "ALTER TABLE scoring_weights DROP COLUMN IF EXISTS calibration_meta"
+    )
