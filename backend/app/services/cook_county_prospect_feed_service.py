@@ -16,7 +16,7 @@ from app.services.motivation_signal_service import (
     SIGNAL_LABELS,
     _signal_with_recency,
     _violation_severity,
-    compute_structured_motivation_score,
+    compute_total_motivation_score,
 )
 from app.services.plugins.cook_county_permits import VIOLATION_STATUSES, is_permit_violation_row
 from app.services.plugins.cook_county_sheriff_foreclosure import fetch_cook_county_foreclosure_listings
@@ -441,7 +441,7 @@ def _score_signals(signals: list[ExtractedSignal]) -> float:
         stub.violation_data = {'chicago_scofflaw': [s.evidence for s in signals]}
     if any(s.signal_type == 'BUILDING_VIOLATION' for s in signals):
         stub.violation_data = {'chicago_building_violations': [s.evidence for s in signals]}
-    return compute_structured_motivation_score(stub, signals=signals)
+    return compute_total_motivation_score(stub, signals=signals)
 
 
 def _fetch_feed_rows(feed: str, *, since: Optional[datetime], call_budget: int) -> list[dict]:

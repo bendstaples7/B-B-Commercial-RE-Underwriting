@@ -4,11 +4,18 @@ from __future__ import annotations
 import logging
 import os
 
-from app.services.motivation_signal_service import STRUCTURED_MOTIVATION_CAP
-
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROSPECT_MIN_MOTIVATION_PCT = 60.0
+
+# Stable admission scale for Prospect Review %. Independent of the lead-scoring
+# soft/public-record cap split (motivation_score on leads can exceed this).
+# Keep aligned with historical STRUCTURED_MOTIVATION_CAP so tax+violation stacks
+# still clear the 60% gate at 15 raw points.
+PROSPECT_MOTIVATION_SCALE = {
+    'residential': 25.0,
+    'commercial': 20.0,
+}
 
 
 def get_prospect_min_motivation_pct() -> float:
@@ -26,8 +33,10 @@ def get_prospect_min_motivation_pct() -> float:
 
 
 def motivation_pct(motivation_score: float, *, lead_category: str = 'residential') -> float:
-    """Normalize raw structured motivation points to a 0–100 percentage."""
-    cap = STRUCTURED_MOTIVATION_CAP.get(lead_category, STRUCTURED_MOTIVATION_CAP['residential'])
+    """Normalize raw motivation points to a 0–100 percentage for Prospect Review."""
+    cap = PROSPECT_MOTIVATION_SCALE.get(
+        lead_category, PROSPECT_MOTIVATION_SCALE['residential'],
+    )
     if cap <= 0:
         return 0.0
     return round((motivation_score / cap) * 100, 1)
@@ -35,7 +44,9 @@ def motivation_pct(motivation_score: float, *, lead_category: str = 'residential
 
 def min_motivation_score_for_queue(*, lead_category: str = 'residential') -> float:
     """Raw motivation_score floor matching get_prospect_min_motivation_pct()."""
-    cap = STRUCTURED_MOTIVATION_CAP.get(lead_category, STRUCTURED_MOTIVATION_CAP['residential'])
+    cap = PROSPECT_MOTIVATION_SCALE.get(
+        lead_category, PROSPECT_MOTIVATION_SCALE['residential'],
+    )
     return get_prospect_min_motivation_pct() / 100.0 * cap
 
 
