@@ -222,6 +222,12 @@ celery.conf.update(
             'schedule': crontab(hour=5, minute=0),
             'options': {'expires': 7200},
         },
+        # Outcome-calibrated scoring weights (dry-run unless SCORING_CALIBRATION_APPLY=1)
+        'scoring-calibrate-weights': {
+            'task': 'scoring.calibrate_weights',
+            'schedule': crontab(hour=6, minute=45, day_of_week='sunday'),
+            'options': {'expires': 7200},
+        },
         # Commercial building ownership / condo check — after Cook County enrichment
         'building-ownership-backfill-commercial': {
             'task': 'building_ownership.backfill_commercial',
@@ -986,6 +992,26 @@ def motivation_backfill_signals_task(self):
             return summary
     except Exception as exc:
         _logger.error("motivation.backfill_signals failed: %s", exc)
+        raise
+
+
+@celery.task(bind=True, name='scoring.calibrate_weights')
+def scoring_calibrate_weights_task(self):
+    """Weekly pre-outcome calibration dry-run (apply via SCORING_CALIBRATION_APPLY=1)."""
+    import logging
+    _logger = logging.getLogger('celery.scoring.calibrate_weights')
+
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.outcome_calibration_service import run_scheduled_calibration
+            report = run_scheduled_calibration(user_id='default')
+            summary = report.to_dict()
+            _logger.info("scoring.calibrate_weights: %s", summary)
+            return summary
+    except Exception as exc:
+        _logger.error("scoring.calibrate_weights failed: %s", exc)
         raise
 
 
@@ -1944,6 +1970,7 @@ REQUIRED_TASKS = {
     'property_address.heal_incomplete',
     'property_match.resolve_unambiguous_pins',
     'motivation.backfill_signals',
+    'scoring.calibrate_weights',
     'gis.backfill_property_matches',
     'cook_county.prospect_feed_sync',
 }
@@ -2154,8 +2181,8 @@ def pull_dupage_absentee_leads_task(self):
         with app.app_context():
             from app import db
             from app.models.lead import Property
-            from app.services.deterministic_scoring_engine import DeterministicScoringEngine
-            scoring_engine = DeterministicScoringEngine()
+            from app.services.lead_scoring_engine import LeadScoringEngine
+            scoring_engine = LeadScoringEngine()
             new_leads = (
                 db.session.query(Property)
                 .filter(

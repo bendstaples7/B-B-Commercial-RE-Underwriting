@@ -113,6 +113,8 @@ _KNOWN_REVISIONS = frozenset({
     'b4c5d6e7f8a9',
     # Update lead_crm_flags view: include GIS has_property_match in computed flag
     'c5d6e7f8a9b0',
+    # Outcome-calibration metadata on scoring_weights
+    'score_cal_20260907',
     # HubSpot signal dedup uniqueness index (lead_id, signal_type, source_engagement_id)
     'd6e7f8a9b0c1',
     # Ranked fuzzy search — leads.search_document generated column + GIN trgm

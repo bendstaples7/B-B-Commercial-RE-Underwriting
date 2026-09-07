@@ -34,6 +34,11 @@ _FULL_PIPELINE_PATTERNS = (
 # Path globs that require rescoring only (no HubSpot fetch/enrich).
 _RESCORE_ONLY_PATTERNS = (
     'backend/app/services/lead_scoring_engine*',
+    'backend/app/services/scoring_rubric*',
+    'backend/app/services/enrichment_scoring*',
+    'backend/app/services/outcome_calibration*',
+    'backend/app/services/motivation_signal*',
+    'backend/app/services/lead_refresh*',
     'backend/app/services/outreach_method*',
     'backend/app/services/action_engine*',
     'backend/app/services/queue_service*',
@@ -313,17 +318,42 @@ def record_pipeline_completed(rescore_count: int = 0) -> None:
     set_redis_value('deploy:last_rescore_count', str(rescore_count))
 
 
+# Scoring modules hashed together so rubric/calibration-only deploys still
+# trigger the full-rescore fallback when Redis hash differs.
+_SCORING_HASH_FILES = (
+    'lead_scoring_engine.py',
+    'scoring_rubric.py',
+    'enrichment_scoring.py',
+    'outcome_calibration_service.py',
+    'motivation_signal_service.py',
+    'lead_refresh.py',
+)
+
+
 def scoring_code_file_hash() -> str:
-    """SHA-256 of lead_scoring_engine.py for deploy rescore fallback."""
+    """SHA-256 of canonical scoring modules for deploy rescore fallback."""
     import hashlib
     from pathlib import Path
 
-    engine_path = Path(__file__).resolve().parent / 'lead_scoring_engine.py'
-    return hashlib.sha256(engine_path.read_bytes()).hexdigest()
+    services_dir = Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    for name in _SCORING_HASH_FILES:
+        path = services_dir / name
+        if path.is_file():
+            digest.update(name.encode('utf-8'))
+            digest.update(b'\0')
+            digest.update(path.read_bytes())
+            digest.update(b'\0')
+        else:
+            logger.warning(
+                'Scoring module missing from hash, rescore fallback degraded: %s',
+                path,
+            )
+    return digest.hexdigest()
 
 
 def scoring_code_changed_since_last_run() -> bool:
-    """True when scoring engine source differs from the last recorded deploy hash."""
+    """True when scoring source differs from the last recorded deploy hash."""
     current = scoring_code_file_hash()
     previous = get_redis_value('deploy:scoring_code_hash')
     return previous is not None and previous != current

@@ -77,8 +77,8 @@ def _score_lead_after_commit(lead) -> None:
     must never abort an ingestion run.
     """
     try:
-        from app.services.deterministic_scoring_engine import DeterministicScoringEngine
-        engine = DeterministicScoringEngine()
+        from app.services.lead_scoring_engine import LeadScoringEngine
+        engine = LeadScoringEngine()
         engine.recalculate_lead_score(lead)
     except Exception as exc:
         logger.error(
@@ -441,9 +441,9 @@ class LeadIngestionService:
     def _score_imported_leads(self, job_id: int) -> None:
         """Score all leads created or updated in this import job.
 
-        Runs the DeterministicScoringEngine against every lead whose
-        last_import_job_id matches *job_id*.  Errors per lead are caught
-        and logged so a single scoring failure never blocks the rest.
+        Runs LeadScoringEngine against every lead whose last_import_job_id
+        matches *job_id*.  Errors per lead are caught and logged so a single
+        scoring failure never blocks the rest.
 
         This is called automatically after each handler commits so that
         leads are scored the moment they enter the database — no manual
@@ -451,10 +451,10 @@ class LeadIngestionService:
         """
         from app import db
         from app.models.lead import Property
-        from app.services.deterministic_scoring_engine import DeterministicScoringEngine
+        from app.services.lead_scoring_engine import LeadScoringEngine
 
         try:
-            engine = DeterministicScoringEngine()
+            engine = LeadScoringEngine()
             leads = (
                 db.session.query(Property)
                 .filter(Property.last_import_job_id == job_id)

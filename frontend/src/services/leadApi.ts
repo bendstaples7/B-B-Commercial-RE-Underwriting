@@ -165,6 +165,22 @@ export const leadService = {
     return response.data
   },
 
+  /**
+   * Dry-run or apply outcome-calibrated scoring weight nudges.
+   */
+  async calibrateScoringWeights(options?: {
+    apply?: boolean
+    rescore?: boolean
+    lookback_days?: number
+    learning_rate?: number
+  }): Promise<import('@/types').ScoringCalibrationReport> {
+    const response = await api.post<import('@/types').ScoringCalibrationReport>(
+      '/properties/scoring/calibrate',
+      options ?? {},
+    )
+    return response.data
+  },
+
   // ---------------------------------------------------------------------------
   // Import
   // ---------------------------------------------------------------------------

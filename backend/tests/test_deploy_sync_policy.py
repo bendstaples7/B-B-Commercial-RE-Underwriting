@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app.services import deploy_sync_policy
 from app.services.deploy_sync_policy import (
     apply_pipeline_cooldown,
     classify_deploy_sync_mode,
@@ -15,6 +16,7 @@ from app.services.deploy_sync_policy import (
     resolve_deploy_sync_from_manifest,
     resolve_deploy_sync_mode,
     scoring_code_changed_since_last_run,
+    scoring_code_file_hash,
 )
 
 
@@ -25,6 +27,18 @@ class TestClassifyDeploySyncMode:
 
     def test_scoring_paths_rescore_only(self):
         paths = ['backend/app/services/lead_scoring_engine.py']
+        assert classify_deploy_sync_mode(paths) == 'rescore_only'
+
+    def test_scoring_rubric_paths_rescore_only(self):
+        paths = ['backend/app/services/scoring_rubric.py']
+        assert classify_deploy_sync_mode(paths) == 'rescore_only'
+
+    def test_outcome_calibration_paths_rescore_only(self):
+        paths = ['backend/app/services/outcome_calibration_service.py']
+        assert classify_deploy_sync_mode(paths) == 'rescore_only'
+
+    def test_motivation_signal_paths_rescore_only(self):
+        paths = ['backend/app/services/motivation_signal_service.py']
         assert classify_deploy_sync_mode(paths) == 'rescore_only'
 
     def test_outreach_paths_rescore_only(self):
@@ -149,6 +163,35 @@ class TestScoringCodeHash:
     def test_unchanged_when_no_previous_hash(self):
         with patch('app.services.deploy_sync_policy.get_redis_value', return_value=None):
             assert scoring_code_changed_since_last_run() is False
+
+    def test_hash_covers_rubric_and_engine(self):
+        with patch.object(
+            deploy_sync_policy,
+            '_SCORING_HASH_FILES',
+            ('lead_scoring_engine.py',),
+        ):
+            engine_only = scoring_code_file_hash()
+        with patch.object(
+            deploy_sync_policy,
+            '_SCORING_HASH_FILES',
+            ('lead_scoring_engine.py', 'scoring_rubric.py'),
+        ):
+            engine_and_rubric = scoring_code_file_hash()
+
+        assert isinstance(engine_and_rubric, str)
+        assert len(engine_and_rubric) == 64
+        assert engine_and_rubric != engine_only
+
+    def test_missing_hash_file_warns(self, caplog):
+        with patch.object(
+            deploy_sync_policy,
+            '_SCORING_HASH_FILES',
+            ('definitely_missing_scoring_module.py',),
+        ):
+            digest = scoring_code_file_hash()
+
+        assert len(digest) == 64
+        assert 'Scoring module missing from hash' in caplog.text
 
 
 class TestResolveDeploySyncMode:

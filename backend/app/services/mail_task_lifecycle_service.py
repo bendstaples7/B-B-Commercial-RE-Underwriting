@@ -1875,6 +1875,7 @@ def heal_mail_cadence_cooldown(
     commit: bool = True,
     last_mailed_batch_size: int = 200,
     rescore_batch_size: int = 50,
+    rescore: bool = True,
 ) -> dict:
     """Align rematch dues, dequeue staged cadence leads, and rescore stale mail_ready.
 
@@ -1992,7 +1993,7 @@ def heal_mail_cadence_cooldown(
     if commit and (dues_fixed or removed_queue):
         db.session.commit()
 
-    rescore_ids = sorted(cooldown_ids & set(mail_ready_ids))
+    rescore_ids = sorted(cooldown_ids & set(mail_ready_ids)) if rescore else []
     rescored = 0
     for i in range(0, len(rescore_ids), max(1, rescore_batch_size)):
         chunk = rescore_ids[i:i + rescore_batch_size]

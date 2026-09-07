@@ -1,7 +1,8 @@
-"""Backward-compatible DeterministicScoringEngine facade.
+"""Deprecated test/compat facade — do not use in live product paths.
 
-Logic lives in scoring_rubric.py and lead_scoring_engine.py. This module
-preserves the old API surface for tests and scripts.
+Live scoring writes go through ``LeadScoringEngine`` /
+``refresh_lead_scoring`` only. This module preserves the old API surface for
+existing unit tests; new code must not import it.
 """
 from __future__ import annotations
 
@@ -51,12 +52,21 @@ extract_top_signals = rubric.extract_top_signals
 
 
 class DeterministicScoringEngine:
-    """Facade delegating to unified LeadScoringEngine + scoring_rubric."""
+    """Deprecated test facade — delegates to LeadScoringEngine + scoring_rubric."""
 
     SCORING_ATTRIBUTES = SCORING_ATTRIBUTES
     BULK_BATCH_SIZE = 500
 
     _unified = LeadScoringEngine()
+
+    def __init__(self) -> None:
+        import warnings
+        warnings.warn(
+            "DeterministicScoringEngine is a deprecated test facade; "
+            "use LeadScoringEngine for live scoring",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     parse_sale_date_string = staticmethod(parse_sale_date_string)
     effective_acquisition_date = staticmethod(effective_acquisition_date)

@@ -108,6 +108,11 @@ class TestEnrichCookCountyLead:
                 source_type="manual_distress",
             )
             db.session.add(lead)
+            db.session.flush()
+            db.session.execute(
+                db.text("UPDATE leads SET tax_distress_data = NULL WHERE id = :lead_id"),
+                {"lead_id": lead.id},
+            )
             db.session.commit()
 
             mock_connector = MagicMock()
@@ -138,6 +143,11 @@ class TestEnrichCookCountyLead:
                 source_type="foreclosure",
             )
             db.session.add(lead)
+            db.session.flush()
+            db.session.execute(
+                db.text("UPDATE leads SET tax_distress_data = NULL WHERE id = :lead_id"),
+                {"lead_id": lead.id},
+            )
             db.session.commit()
 
             result = enrich_cook_county_lead(lead.id)
@@ -271,6 +281,133 @@ class TestBackfillEnrichment:
             assert mock_enrich.call_count == 2
 
     @patch("app.services.cook_county_enrichment_service.enrich_cook_county_lead")
+    def test_backfill_does_not_reprocess_distress_lane_lead(self, mock_enrich, app):
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import backfill_cook_county_enrichment
+            _ensure_source("cook_county_commercial_valuation")
+            lead = Property(
+                property_street="12 Distress Dup Ave",
+                property_city="Chicago",
+                property_state="IL",
+                county_assessor_pin="01-02-202-111-0000",
+                source_type="manual_distress",
+            )
+            db.session.add(lead)
+            db.session.flush()
+            db.session.execute(
+                db.text("UPDATE leads SET tax_distress_data = NULL WHERE id = :lead_id"),
+                {"lead_id": lead.id},
+            )
+            db.session.commit()
+
+            mock_enrich.return_value = {"plugins_run": 1, "skipped": False}
+
+            summary = backfill_cook_county_enrichment(batch_size=2, socrata_call_cap=200)
+
+            assert summary["enriched"] == 1
+            assert summary["processed"] == 1
+            mock_enrich.assert_called_once_with(lead.id)
+
+    @patch("app.services.cook_county_enrichment_service.enrich_cook_county_lead")
+    def test_backfill_surfaces_distress_lane_cursor_when_budget_filled(self, mock_enrich, app):
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import backfill_cook_county_enrichment
+            _ensure_source("cook_county_commercial_valuation")
+            leads = []
+            for i in range(2):
+                lead = Property(
+                    property_street=f"{20 + i} Distress Cursor Ave",
+                    property_city="Chicago",
+                    property_state="IL",
+                    county_assessor_pin=f"01-02-202-12{i}-0000",
+                    source_type="manual_distress",
+                )
+                db.session.add(lead)
+                leads.append(lead)
+            db.session.commit()
+
+            mock_enrich.return_value = {"plugins_run": 1, "skipped": False}
+
+            summary = backfill_cook_county_enrichment(batch_size=1, socrata_call_cap=200)
+
+            assert summary["capped"] is True
+            assert summary["last_id"] == leads[0].id
+            mock_enrich.assert_called_once_with(leads[0].id)
+
+    @patch("app.services.cook_county_enrichment_service.enrich_cook_county_lead")
+    def test_backfill_retries_unhandled_distress_candidate_in_general_lane(self, mock_enrich, app):
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import backfill_cook_county_enrichment
+            _ensure_source("cook_county_commercial_valuation")
+            lead = Property(
+                property_street="14 Distress Residual Ave",
+                property_city="Chicago",
+                property_state="IL",
+                county_assessor_pin="01-02-202-113-0000",
+                tax_distress_data=None,
+                source_type="manual_distress",
+            )
+            db.session.add(lead)
+            db.session.commit()
+
+            mock_enrich.return_value = {"plugins_run": 1, "skipped": False}
+            with patch(
+                "app.services.cook_county_enrichment_service.distress_plugins_for_lead",
+                return_value=[
+                    "distress_a", "distress_b", "distress_c",
+                    "distress_d", "distress_e", "distress_f",
+                    "distress_g", "distress_h", "distress_i",
+                ],
+            ), patch(
+                "app.services.cook_county_enrichment_service.plugins_for_lead",
+                return_value=["general_plugin"],
+            ):
+                summary = backfill_cook_county_enrichment(batch_size=5, socrata_call_cap=8)
+
+            assert summary["distress_lane"]["processed"] == 0
+            assert summary["enriched"] == 1
+            mock_enrich.assert_called_once_with(lead.id)
+
+    @patch("app.services.cook_county_enrichment_service.enrich_cook_county_lead")
+    def test_backfill_runs_distress_subset_that_fits_total_cap(self, mock_enrich, app):
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import backfill_cook_county_enrichment
+            _ensure_source("cook_county_commercial_valuation")
+            lead = Property(
+                property_street="15 Distress Total Cap Ave",
+                property_city="Chicago",
+                property_state="IL",
+                county_assessor_pin="01-02-202-114-0000",
+                tax_distress_data=None,
+                source_type="manual_distress",
+            )
+            db.session.add(lead)
+            db.session.flush()
+            db.session.execute(
+                db.text("UPDATE leads SET tax_distress_data = NULL WHERE id = :lead_id"),
+                {"lead_id": lead.id},
+            )
+            db.session.commit()
+            assert Property.query.filter(
+                Property.id == lead.id,
+                Property.tax_distress_data.is_(None),
+            ).count() == 1
+
+            mock_enrich.return_value = {"plugins_run": 5, "skipped": False}
+            with patch(
+                "app.services.cook_county_enrichment_service.lead_needs_distress_enrichment",
+                return_value=True,
+            ), patch(
+                "app.services.cook_county_enrichment_service.distress_plugins_for_lead",
+                return_value=["distress_a", "distress_b", "distress_c", "distress_d", "distress_e"],
+            ):
+                summary = backfill_cook_county_enrichment(batch_size=5, socrata_call_cap=8)
+
+            assert summary["distress_lane"]["enriched"] == 1, summary
+            assert summary["distress_lane"]["socrata_calls"] == 5
+            mock_enrich.assert_called_once_with(lead.id)
+
+    @patch("app.services.cook_county_enrichment_service.enrich_cook_county_lead")
     def test_backfill_includes_chicago_leads_without_pin(self, mock_enrich, app):
         with app.app_context():
             from app.services.cook_county_enrichment_service import backfill_cook_county_enrichment
@@ -326,11 +463,14 @@ class TestBackfillEnrichment:
     @patch("app.services.cook_county_enrichment_service.enrich_cook_county_lead")
     def test_backfill_skips_recently_enriched(self, mock_enrich, app):
         with app.app_context():
-            from datetime import datetime, timedelta
+            from datetime import datetime
             from app.models.enrichment import EnrichmentRecord
             from app.services.cook_county_enrichment_service import backfill_cook_county_enrichment
 
             source = _ensure_source("cook_county_commercial_valuation")
+            # Tax-plugin attempt closes the distress-priority coverage hole so
+            # commercial_valuation freshness can skip this lead.
+            tax_source = _ensure_source("cook_county_tax_sales")
 
             lead = Property(
                 property_street="123 N Michigan Ave",
@@ -341,11 +481,18 @@ class TestBackfillEnrichment:
             )
             db.session.add(lead)
             db.session.flush()
+            now = datetime.utcnow()
             db.session.add(EnrichmentRecord(
                 lead_id=lead.id,
                 data_source_id=source.id,
                 status="success",
-                created_at=datetime.utcnow(),
+                created_at=now,
+            ))
+            db.session.add(EnrichmentRecord(
+                lead_id=lead.id,
+                data_source_id=tax_source.id,
+                status="no_results",
+                created_at=now,
             ))
             db.session.commit()
 

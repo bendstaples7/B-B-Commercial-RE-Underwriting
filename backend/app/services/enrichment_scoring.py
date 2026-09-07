@@ -1,7 +1,8 @@
 """Shared data-enrichment sub-score helpers for lead scoring engines.
 
-Both ``LeadScoringEngine`` and ``DeterministicScoringEngine`` delegate to
-these functions so enrichment dimensions stay consistent across scoring paths.
+Both ``LeadScoringEngine`` and the deprecated ``DeterministicScoringEngine``
+test facade delegate to these functions so enrichment dimensions stay
+consistent across scoring paths.
 """
 from datetime import date, datetime
 
@@ -85,21 +86,19 @@ def ownership_duration_score(lead: Lead, max_points: float = 15.0) -> float:
 
 
 def engagement_score(lead: Lead, max_points: float = 10.0) -> float:
-    """Score based on lead engagement signals."""
+    """Score based on outreach engagement (not phone/email presence).
+
+    Phone/email quality lives in ``contact_quality_score`` / data quality so
+    presence is not double-counted here.
+    """
     score = 0.0
 
     mh = safe_attr(lead, "mailer_history")
     if mh is not None and (isinstance(mh, list) and len(mh) > 0):
-        score += max_points * 0.30
-
-    if safe_attr(lead, "has_phone", False):
-        score += max_points * 0.25
-
-    if safe_attr(lead, "has_email", False):
-        score += max_points * 0.25
+        score += max_points * 0.50
 
     if safe_attr(lead, "follow_up_date") is not None:
-        score += max_points * 0.20
+        score += max_points * 0.50
 
     return min(score, max_points)
 

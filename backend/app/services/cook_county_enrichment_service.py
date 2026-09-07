@@ -1,7 +1,9 @@
 """Orchestrate automatic Cook County / Chicago open-data enrichment."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import logging
+import threading
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -23,6 +25,7 @@ from app.services.plugins.address_utils import is_chicago_address
 from app.services.scoring_rubric import is_recently_sold
 
 logger = logging.getLogger(__name__)
+_plugin_resolver_context = threading.local()
 
 COOK_COUNTY_MARKET = "cook_county_il"
 BACKFILL_BATCH_SIZE = 75
@@ -33,6 +36,42 @@ SALE_DATE_BACKFILL_SOCRATA_CALL_CAP = 250
 SALE_DATE_BACKFILL_CURSOR_KEY = "cook_county:sale_date_backfill:last_id"
 COMMERCIAL_VALUATION_SOURCE = "cook_county_commercial_valuation"
 ASSESSOR_SOURCE = "cook_county_assessor"
+DISTRESS_TAX_SOURCES = (
+    "cook_county_tax_sales",
+    "cook_county_scavenger_tax_sale",
+)
+
+
+def _plugins_run_count(result, *, fallback: int) -> int:
+    """Coerce enrich result plugins_run to a non-negative int (tests / bad returns)."""
+    if not isinstance(result, dict):
+        return fallback
+    raw = result.get("plugins_run", fallback)
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return fallback
+
+
+@contextmanager
+def _temporary_plugin_resolver(plugin_resolver):
+    previous = getattr(_plugin_resolver_context, "resolver", None)
+    _plugin_resolver_context.resolver = plugin_resolver
+    try:
+        yield
+    finally:
+        if previous is None:
+            try:
+                delattr(_plugin_resolver_context, "resolver")
+            except AttributeError:
+                pass
+        else:
+            _plugin_resolver_context.resolver = previous
+
+
+def _active_plugin_resolver():
+    return getattr(_plugin_resolver_context, "resolver", plugins_for_lead)
+
 
 _PIN_PLUGINS = (
     "cook_county_assessor",
@@ -221,6 +260,37 @@ def collect_enrichment_supporting_data_invariants() -> dict:
         or 0
     )
 
+    pin_present = (
+        Lead.county_assessor_pin.isnot(None)
+        & (Lead.county_assessor_pin != "")
+    )
+    pin_no_tax_plugin_attempt = (
+        db.session.query(func.count(Lead.id))
+        .filter(
+            pin_present,
+            Lead.property_state.in_(("IL", "Illinois", "il")),
+            ~db.session.query(EnrichmentRecord.id)
+            .join(DataSource, DataSource.id == EnrichmentRecord.data_source_id)
+            .filter(
+                EnrichmentRecord.lead_id == Lead.id,
+                DataSource.name.in_(DISTRESS_TAX_SOURCES),
+            )
+            .exists(),
+        )
+        .scalar()
+        or 0
+    )
+    pin_null_tax_distress = (
+        db.session.query(func.count(Lead.id))
+        .filter(
+            pin_present,
+            Lead.property_state.in_(("IL", "Illinois", "il")),
+            Lead.tax_distress_data.is_(None),
+        )
+        .scalar()
+        or 0
+    )
+
     return {
         'catalog_ok': catalog['ok'],
         'catalog_present_count': catalog['present_count'],
@@ -229,6 +299,8 @@ def collect_enrichment_supporting_data_invariants() -> dict:
         'enrichment_records_last_7d': enrichment_last_7d,
         'chicago_no_pin_with_sale': chicago_no_pin_with_sale,
         'working_set_sale_no_enrichment': working_set_sale_no_enrichment,
+        'pin_no_tax_plugin_attempt': pin_no_tax_plugin_attempt,
+        'pin_null_tax_distress': pin_null_tax_distress,
     }
 
 
@@ -266,7 +338,7 @@ def _ensure_pin_from_gis(lead: Lead) -> bool:
 
 def enrich_cook_county_lead(lead_id: int) -> dict:
     """Run all applicable Cook County plugins for one lead; rescore once."""
-    return _enrich_cook_county_lead_with_plugins(lead_id, plugins_for_lead)
+    return _enrich_cook_county_lead_with_plugins(lead_id, _active_plugin_resolver())
 
 
 def enrich_cook_county_sale_date(lead_id: int) -> dict:
@@ -480,16 +552,167 @@ def lead_recently_sale_checked(lead_id: int, since: datetime) -> bool:
     )
 
 
+def lead_needs_distress_enrichment(lead: Lead) -> bool:
+    """PIN present, Cook market, no tax distress JSON, tax plugins never attempted.
+
+    Distinguishes "no tax sale found" (plugin ran, JSON still null) from
+    "never tried distress plugins" — the latter is a coverage hole even when
+    commercial_valuation recently succeeded.
+    """
+    if not _has_pin(lead):
+        return False
+    if _resolve_market(lead) != COOK_COUNTY_MARKET:
+        return False
+    if getattr(lead, "tax_distress_data", None) is not None:
+        return False
+    attempted = (
+        db.session.query(EnrichmentRecord.id)
+        .join(DataSource, DataSource.id == EnrichmentRecord.data_source_id)
+        .filter(
+            EnrichmentRecord.lead_id == lead.id,
+            DataSource.name.in_(DISTRESS_TAX_SOURCES),
+        )
+        .first()
+    )
+    return attempted is None
+
+
+def distress_plugins_for_lead(lead: Lead) -> list[str]:
+    """Tax/distress-focused plugin subset (plus Chicago violations when in city)."""
+    full = plugins_for_lead(lead)
+    if not full:
+        return []
+    wanted = set(DISTRESS_TAX_SOURCES) | set(_CHICAGO_PLUGINS) | {
+        "cook_county_appeals",
+        "cook_county_tax_exempt",
+        "cook_county_permits",
+    }
+    return [name for name in full if name in wanted]
+
+
+def _enrich_distress_priority_lane(
+    *,
+    batch_size: int,
+    socrata_call_cap: int,
+    last_id: int,
+    general_call_reserve: int = 0,
+) -> dict:
+    """Backfill leads that never received tax-distress plugin attempts."""
+    summary = {
+        "status": "completed",
+        "processed": 0,
+        "enriched": 0,
+        "skipped": 0,
+        "errors": 0,
+        "last_id": last_id,
+        "socrata_calls": 0,
+        "capped": False,
+        "lane": "distress_priority",
+        "_processed_lead_ids": [],
+    }
+    cursor = last_id
+    enriched_count = 0
+    today = date.today()
+
+    def _record_handled(lead_id: int) -> None:
+        nonlocal cursor
+        cursor = lead_id
+        summary["_processed_lead_ids"].append(lead_id)
+        summary["processed"] += 1
+
+    while enriched_count < batch_size and summary["socrata_calls"] < socrata_call_cap:
+        candidates = (
+            db.session.query(Lead)
+            .filter(
+                Lead.id > cursor,
+                Lead.property_state.in_(("IL", "Illinois", "il")),
+                Lead.county_assessor_pin.isnot(None),
+                Lead.county_assessor_pin != "",
+                Lead.tax_distress_data.is_(None),
+            )
+            .order_by(Lead.id)
+            .limit(batch_size * 3)
+            .all()
+        )
+        if not candidates:
+            break
+
+        for lead in candidates:
+            lead_id = lead.id
+
+            if not lead_needs_distress_enrichment(lead):
+                _record_handled(lead_id)
+                summary["skipped"] += 1
+                continue
+
+            has_due = _lead_has_due_open_task(lead.id, today)
+            if is_recently_sold(lead) and not has_due:
+                _record_handled(lead_id)
+                summary["skipped"] += 1
+                continue
+
+            plugin_names = distress_plugins_for_lead(lead)
+            if not plugin_names:
+                _record_handled(lead_id)
+                summary["skipped"] += 1
+                continue
+            next_call_count = len(plugin_names)
+            if summary["socrata_calls"] + next_call_count > socrata_call_cap:
+                summary["capped"] = True
+                summary["last_id"] = cursor
+                return summary
+            reserved_limit = max(0, socrata_call_cap - max(0, general_call_reserve))
+            if (
+                enriched_count > 0
+                and summary["socrata_calls"] + next_call_count > reserved_limit
+            ):
+                summary["capped"] = True
+                summary["last_id"] = cursor
+                return summary
+
+            _record_handled(lead_id)
+            try:
+                with _temporary_plugin_resolver(lambda _lead: plugin_names):
+                    result = enrich_cook_county_lead(lead.id)
+                summary["socrata_calls"] += _plugins_run_count(
+                    result, fallback=len(plugin_names)
+                )
+                if result.get("skipped"):
+                    summary["skipped"] += 1
+                else:
+                    enriched_count += 1
+                    summary["enriched"] += 1
+            except Exception as exc:
+                summary["errors"] += 1
+                logger.warning(
+                    "Distress priority enrichment failed for lead %s: %s",
+                    lead.id,
+                    exc,
+                )
+
+            if enriched_count >= batch_size or summary["socrata_calls"] >= socrata_call_cap:
+                summary["capped"] = True
+                summary["last_id"] = cursor
+                return summary
+
+    summary["last_id"] = cursor
+    return summary
+
+
 def backfill_cook_county_enrichment(
     *,
     batch_size: int = BACKFILL_BATCH_SIZE,
     socrata_call_cap: int = BACKFILL_SOCATA_CALL_CAP,
     last_id: int = 0,
+    distress_priority: bool = True,
 ) -> dict:
     """Enrich Cook County leads that lack recent Cook County verification.
 
     Prioritizes leads with open due LeadTasks. Skips proactive enrichment for
     recently-sold leads that have no due open task (explicit Verify still runs).
+
+    When ``distress_priority`` is True, first spends part of the Socrata budget
+    on PIN leads that never had tax-distress plugins attempted.
     """
     since = datetime.utcnow() - timedelta(days=BACKFILL_STALE_DAYS)
     today = date.today()
@@ -504,6 +727,7 @@ def backfill_cook_county_enrichment(
         "last_id": last_id,
         "socrata_calls": 0,
         "capped": False,
+        "distress_lane": None,
     }
 
     if commercial_source_id is None:
@@ -511,27 +735,61 @@ def backfill_cook_county_enrichment(
         summary["skip_reason"] = "commercial_valuation_source_missing"
         return summary
 
+    remaining_cap = socrata_call_cap
+    if distress_priority and remaining_cap > 0:
+        distress_budget = max(1, min(batch_size, remaining_cap // 2 or remaining_cap))
+        general_call_reserve = remaining_cap // 2 if remaining_cap > 1 else 0
+        distress_summary = _enrich_distress_priority_lane(
+            batch_size=distress_budget,
+            socrata_call_cap=remaining_cap,
+            last_id=last_id,
+            general_call_reserve=general_call_reserve,
+        )
+        distress_processed_ids = set(distress_summary.get("_processed_lead_ids") or [])
+        summary["distress_lane"] = {
+            key: value
+            for key, value in distress_summary.items()
+            if key != "_processed_lead_ids"
+        }
+        summary["socrata_calls"] += distress_summary.get("socrata_calls", 0)
+        summary["processed"] += distress_summary.get("processed", 0)
+        summary["skipped"] += distress_summary.get("skipped", 0)
+        summary["enriched"] += distress_summary.get("enriched", 0)
+        summary["errors"] += distress_summary.get("errors", 0)
+        remaining_cap = max(0, socrata_call_cap - summary["socrata_calls"])
+        if remaining_cap <= 0 or summary["enriched"] >= batch_size:
+            summary["capped"] = True
+            summary["last_id"] = distress_summary.get("last_id", last_id)
+            return summary
+    else:
+        distress_processed_ids = set()
+
     cursor = last_id
     enriched_count = 0
+    distress_last_id = int(
+        (summary.get("distress_lane") or {}).get("last_id") or last_id
+    )
+    general_batch = batch_size - int(summary.get("enriched") or 0)
+    if general_batch <= 0:
+        summary["capped"] = True
+        summary["last_id"] = distress_last_id
+        return summary
 
-    while enriched_count < batch_size and summary["socrata_calls"] < socrata_call_cap:
-        candidates = (
-            db.session.query(Lead)
-            .filter(
-                Lead.id > cursor,
-                Lead.property_state.in_(("IL", "Illinois", "il")),
-                or_(
-                    (
-                        Lead.county_assessor_pin.isnot(None)
-                        & (Lead.county_assessor_pin != "")
-                    ),
-                    func.lower(Lead.property_city) == "chicago",
+    while enriched_count < general_batch and summary["socrata_calls"] < socrata_call_cap:
+        query = db.session.query(Lead).filter(
+            Lead.id > cursor,
+            Lead.property_state.in_(("IL", "Illinois", "il")),
+            or_(
+                (
+                    Lead.county_assessor_pin.isnot(None)
+                    & (Lead.county_assessor_pin != "")
                 ),
-            )
-            .order_by(Lead.id)
-            .limit(batch_size * 2)
-            .all()
+                func.lower(Lead.property_city) == "chicago",
+            ),
         )
+        if distress_processed_ids:
+            query = query.filter(~Lead.id.in_(distress_processed_ids))
+        candidates = query.order_by(Lead.id).limit(batch_size * 2).all()
         if not candidates:
             break
 
@@ -551,7 +809,12 @@ def backfill_cook_county_enrichment(
                 summary["skipped"] += 1
                 continue
 
-            if lead_recently_fully_enriched(lead.id, commercial_source_id, since):
+            # Never-attempted distress overrides the commercial_valuation freshness
+            # skip so tax plugins still run.
+            if (
+                lead_recently_fully_enriched(lead.id, commercial_source_id, since)
+                and not lead_needs_distress_enrichment(lead)
+            ):
                 summary["skipped"] += 1
                 continue
             if not _has_pin(lead) and lead_recently_sale_checked(lead.id, since):
@@ -569,7 +832,9 @@ def backfill_cook_county_enrichment(
 
             try:
                 result = enrich_cook_county_lead(lead.id)
-                summary["socrata_calls"] += result.get("plugins_run", estimated_calls)
+                summary["socrata_calls"] += _plugins_run_count(
+                    result, fallback=estimated_calls
+                )
                 if result.get("skipped"):
                     summary["skipped"] += 1
                 else:
@@ -583,12 +848,12 @@ def backfill_cook_county_enrichment(
                     exc,
                 )
 
-            if enriched_count >= batch_size or summary["socrata_calls"] >= socrata_call_cap:
+            if enriched_count >= general_batch or summary["socrata_calls"] >= socrata_call_cap:
                 summary["capped"] = True
                 summary["last_id"] = cursor
                 return summary
 
-    summary["last_id"] = cursor
+    summary["last_id"] = max(cursor, distress_last_id)
     return summary
 
 
@@ -700,7 +965,9 @@ def backfill_sale_date_verification(
 
             try:
                 result = enrich_cook_county_sale_date(lead.id)
-                summary["socrata_calls"] += result.get("plugins_run", estimated_calls)
+                summary["socrata_calls"] += _plugins_run_count(
+                    result, fallback=estimated_calls
+                )
                 if result.get("skipped"):
                     summary["skipped"] += 1
                 else:

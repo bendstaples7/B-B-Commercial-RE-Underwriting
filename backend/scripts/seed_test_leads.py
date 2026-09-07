@@ -20,7 +20,7 @@ load_dotenv(os.path.join(backend_dir, '.env'))
 from app import create_app, db
 from app.models.lead import Lead
 from app.models.lead_score import LeadScore
-from app.services.deterministic_scoring_engine import DeterministicScoringEngine
+from app.services.lead_scoring_engine import LeadScoringEngine
 
 app = create_app()
 
@@ -172,7 +172,7 @@ def create_leads():
 
 def score_leads(leads):
     """Run the scoring engine on each lead and print results."""
-    engine = DeterministicScoringEngine()
+    engine = LeadScoringEngine()
 
     print("\n" + "=" * 80)
     print("SCORING RESULTS")

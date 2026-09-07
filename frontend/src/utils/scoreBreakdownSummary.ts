@@ -7,13 +7,21 @@ import { getDimensionMeta } from '@/utils/scoreDimensionMeta'
 export const ATTRIBUTION_ONLY_KEYS = new Set(['notes_keywords'])
 
 /** Meta keys stored in score_details for UI math — not factor rows. */
-export const META_SCORE_KEYS = new Set(['weighted_base'])
+export const META_SCORE_KEYS = new Set([
+  'weighted_base',
+  'bucket_property_characteristics',
+  'bucket_data_completeness',
+  'bucket_owner_situation',
+  'bucket_location_desirability',
+  'bucket_data_enrichment',
+])
 
 /** Lead-score modifiers applied after weighted base (not rubric factor dims). */
 export const ADJUSTMENT_KEYS = new Set([
   'pipeline_stage_bonus',
   'hubspot_engagement',
   'timeline_engagement',
+  'contact_quality_modifier',
 ])
 
 /** Short labels for the How-we-got-to-N arithmetic strip. */
@@ -21,6 +29,7 @@ const ADJUSTMENT_SHORT_LABELS: Record<string, string> = {
   pipeline_stage_bonus: 'pipeline',
   hubspot_engagement: 'CRM',
   timeline_engagement: 'outreach',
+  contact_quality_modifier: 'contact',
 }
 
 export function formatSignedPoints(points: number): string {

@@ -117,11 +117,11 @@ class TestStructuredMotivationScoring:
                 distressed_result = engine.compute(distressed, weights)
 
             delta = distressed_result.total_score - base_result.total_score
-            structured_delta = (
-                distressed_result.score_details.get("structured_motivation", 0)
-                - base_result.score_details.get("structured_motivation", 0)
+            distress_delta = (
+                distressed_result.score_details.get("public_record_distress", 0)
+                - base_result.score_details.get("public_record_distress", 0)
             )
-            assert structured_delta >= 15.0, f"Expected >=15 structured motivation delta, got {structured_delta}"
+            assert distress_delta >= 15.0, f"Expected >=15 public_record_distress delta, got {distress_delta}"
             assert delta > 0, f"Expected positive lead_score delta, got {delta}"
 
     def test_commercial_bucket_includes_structured_motivation(self, app):
@@ -143,8 +143,8 @@ class TestStructuredMotivationScoring:
             MotivationSignalService().sync_from_lead(lead)
 
             details = calculate_commercial_score(lead)["score_details"]
-            assert "structured_motivation" in details
-            assert details["structured_motivation"] > 0
+            assert "public_record_distress" in details
+            assert details["public_record_distress"] > 0
 
             buckets = bucket_scores(details, 80.0, "commercial")
             assert buckets["owner_situation"] > 0
@@ -164,11 +164,24 @@ class TestStructuredMotivationScoring:
                 lead=lead,
             )
             labels = " ".join(item["dimension"] for item in signals)
-            assert "Scavenger tax sale" in labels or "structured_motivation" in labels
+            assert (
+                "Scavenger tax sale" in labels
+                or "public_record_distress" in labels
+                or "structured_motivation" in labels
+            )
 
 
 class TestStructuredMotivationCaps:
-    def test_residential_cap_at_25(self):
+    def test_soft_motivation_cap_at_15(self):
+        lead = Property(**_base_lead_kwargs())
+        lead.notes = "probate vacant tired landlord foreclosure"
+        lead.manual_priority = 5
+        score = structured_motivation_score(lead)
+        assert score <= 15.0
+
+    def test_public_record_distress_cap_at_20(self):
+        from app.services.motivation_signal_service import public_record_distress_score
+
         lead = Property(**_base_lead_kwargs())
         lead.tax_distress_data = {
             "scavenger_tax_sale": [{}],
@@ -178,10 +191,9 @@ class TestStructuredMotivationCaps:
             "chicago_building_violations": [{"violation_code": "CN101"}],
             "chicago_scofflaw": [{}],
         }
-        lead.notes = "probate vacant tired landlord foreclosure"
-        lead.manual_priority = 5
-        score = structured_motivation_score(lead)
-        assert score <= 25.0
+        score = public_record_distress_score(lead)
+        assert score <= 20.0
+        assert score > 0
 
 
 class TestAnalystFindings:

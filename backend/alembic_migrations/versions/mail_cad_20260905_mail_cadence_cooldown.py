@@ -32,7 +32,10 @@ def upgrade():
     migration_session = Session(bind=bind)
     db.session.registry.set(migration_session)
     try:
-        result = heal_mail_cadence_cooldown(commit=False)
+        # This revision runs before score_cal_20260907 owns the calibration
+        # columns required by the live ScoringWeights model. Let post-deploy
+        # scoring refresh handle recomputation after the full schema is present.
+        result = heal_mail_cadence_cooldown(commit=False, rescore=False)
         migration_session.flush()
     except Exception:
         migration_session.rollback()

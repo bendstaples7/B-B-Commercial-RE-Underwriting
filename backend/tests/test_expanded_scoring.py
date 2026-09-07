@@ -276,25 +276,24 @@ class TestEngagementScore:
     def test_mailer_history_adds_points(self):
         lead = _make_lead(mailer_history=[{"mailing_id": 1, "sent_at": "2024-01-15"}])
         score = self.engine._engagement_score(lead)
-        expected = self.max_pts * 0.30
+        expected = self.max_pts * 0.50
         assert score == expected, f"Expected {expected}, got {score}"
 
-    def test_has_phone_flag_adds_points(self):
+    def test_has_phone_flag_does_not_add_engagement_points(self):
+        """Phone presence moved to contact_quality — engagement ignores flags."""
         lead = _make_lead(has_phone=True)
         score = self.engine._engagement_score(lead)
-        expected = self.max_pts * 0.25
-        assert score == expected, f"Expected {expected}, got {score}"
+        assert score == 0.0, f"Expected 0, got {score}"
 
-    def test_has_email_flag_adds_points(self):
+    def test_has_email_flag_does_not_add_engagement_points(self):
         lead = _make_lead(has_email=True)
         score = self.engine._engagement_score(lead)
-        expected = self.max_pts * 0.25
-        assert score == expected, f"Expected {expected}, got {score}"
+        assert score == 0.0, f"Expected 0, got {score}"
 
     def test_follow_up_date_adds_points(self):
         lead = _make_lead(follow_up_date=date(2024, 6, 1))
         score = self.engine._engagement_score(lead)
-        expected = self.max_pts * 0.20
+        expected = self.max_pts * 0.50
         assert score == expected, f"Expected {expected}, got {score}"
 
     def test_full_engagement_scores_max(self):
@@ -371,11 +370,13 @@ class TestResidentialScoreIncludesNewDimensions:
             f"ownership_duration: {details['ownership_duration']}"
         assert details["engagement"] == float(RESIDENTIAL_MAX_POINTS["engagement"]), \
             f"engagement: {details['engagement']}"
+        assert "contact_quality" in details
+        assert details["contact_quality"] > 0
 
     def test_score_version_updated(self):
         lead = _make_lead()
         result = self.engine.calculate_residential_score(lead)
-        assert result["score_version"] == "unified_v1_residential"
+        assert result["score_version"] == "unified_v2_residential"
 
     def test_total_score_includes_new_dimensions(self):
         """A fully-loaded lead should have a higher total with new dimensions."""
@@ -439,4 +440,4 @@ class TestCommercialScoreIncludesNewDimensions:
     def test_score_version_updated(self):
         lead = _make_lead(lead_category="commercial", condo_analysis=None)
         result = self.engine.calculate_commercial_score(lead)
-        assert result["score_version"] == "unified_v1_commercial"
+        assert result["score_version"] == "unified_v2_commercial"

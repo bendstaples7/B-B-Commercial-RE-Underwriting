@@ -405,6 +405,10 @@ def _serialize_property_detail(lead):
 
 def _serialize_scoring_weights(weights):
     """Serialize ScoringWeights to dictionary."""
+    last_calibrated_at = getattr(weights, 'last_calibrated_at', None)
+    if last_calibrated_at is not None and last_calibrated_at.tzinfo is None:
+        from datetime import timezone
+        last_calibrated_at = last_calibrated_at.replace(tzinfo=timezone.utc)
     return {
         'id': weights.id,
         'user_id': weights.user_id,
@@ -413,6 +417,11 @@ def _serialize_scoring_weights(weights):
         'owner_situation_weight': weights.owner_situation_weight,
         'location_desirability_weight': weights.location_desirability_weight,
         'data_enrichment_weight': weights.data_enrichment_weight,
+        'calibration_meta': getattr(weights, 'calibration_meta', None),
+        'last_calibrated_at': (
+            last_calibrated_at.isoformat().replace('+00:00', 'Z')
+            if last_calibrated_at else None
+        ),
         'created_at': weights.created_at.isoformat() if weights.created_at else None,
         'updated_at': weights.updated_at.isoformat() if weights.updated_at else None,
     }
@@ -844,6 +853,83 @@ def update_scoring_weights():
     return jsonify(result), 200
 
 
+@properties_bp.route('/scoring/calibrate', methods=['POST'])
+@limiter.limit("5 per minute")
+@handle_errors
+@require_auth
+def calibrate_scoring_weights():
+    """Dry-run or apply outcome-calibrated scoring weight nudges.
+
+    Body (optional):
+      apply (bool, default false) — write suggested weights + optional rescore
+      rescore (bool, default true when apply) — bulk rescore after apply
+      lookback_days (int, default 365)
+      learning_rate (float, default 0.15)
+    """
+    from app.services.outcome_calibration_service import calibrate_scoring_weights as run_calibration
+
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    elif not isinstance(data, dict):
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'Request body must be a JSON object',
+        }), 400
+    user_id = get_current_user_id()
+    if not user_id or user_id == 'anonymous':
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'user_id is required (send X-User-Id header)',
+        }), 400
+
+    apply = data.get('apply', False)
+    rescore = data.get('rescore', True)
+    if not isinstance(apply, bool) or not isinstance(rescore, bool):
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'apply and rescore must be booleans',
+        }), 400
+    try:
+        lookback_days = int(data.get('lookback_days', 365))
+        learning_rate = float(data.get('learning_rate', 0.15))
+    except (TypeError, ValueError):
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'lookback_days and learning_rate must be numeric',
+        }), 400
+    sample_mode = str(data.get('sample_mode') or 'pre_outcome').strip().lower()
+    if sample_mode not in ('pre_outcome', 'latest'):
+        return jsonify({
+            'error': 'Validation error',
+            'message': "sample_mode must be 'pre_outcome' or 'latest'",
+        }), 400
+    if lookback_days < 30 or lookback_days > 2000:
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'lookback_days must be between 30 and 2000',
+        }), 400
+    if learning_rate <= 0 or learning_rate > 0.5:
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'learning_rate must be in (0, 0.5]',
+        }), 400
+
+    report = run_calibration(
+        user_id,
+        apply=apply,
+        rescore=rescore if apply else False,
+        lookback_days=lookback_days,
+        learning_rate=learning_rate,
+        sample_mode=sample_mode,
+    )
+    payload = report.to_dict()
+    if apply and report.applied:
+        weights = scoring_engine.get_weights(user_id)
+        payload['weights'] = _serialize_scoring_weights(weights)
+    return jsonify(payload), 200
+
+
 # ---------------------------------------------------------------------------
 # Legacy Redirect Blueprint — /api/leads/* → /api/properties/* (HTTP 301)
 # ---------------------------------------------------------------------------
@@ -901,6 +987,11 @@ def legacy_get_scoring_weights():
 @leads_legacy_bp.route('/scoring/weights', methods=['PUT'])
 def legacy_update_scoring_weights():
     return redirect(url_for('properties.update_scoring_weights'), 308)
+
+
+@leads_legacy_bp.route('/scoring/calibrate', methods=['POST'])
+def legacy_calibrate_scoring_weights():
+    return redirect(url_for('properties.calibrate_scoring_weights'), 308)
 
 
 # ---------------------------------------------------------------------------

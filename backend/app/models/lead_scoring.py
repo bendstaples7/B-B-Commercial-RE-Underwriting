@@ -18,6 +18,9 @@ class ScoringWeights(db.Model):
     # during the COMPARABLE_REVIEW step.  Defaults to 10 (production standard).
     # Users can lower this to proceed with fewer comparables when data is sparse.
     min_comparables = db.Column(db.Integer, nullable=False, default=10)
+    # Last outcome-calibration run snapshot (lifts, sample sizes, prior weights).
+    calibration_meta = db.Column(db.JSON, nullable=True)
+    last_calibrated_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 

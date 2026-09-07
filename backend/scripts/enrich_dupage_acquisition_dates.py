@@ -168,9 +168,9 @@ def rescore_enriched_leads(dry_run: bool) -> None:
     with app.app_context():
         from app import db
         from app.models.lead import Property
-        from app.services.deterministic_scoring_engine import DeterministicScoringEngine
+        from app.services.lead_scoring_engine import LeadScoringEngine
 
-        engine = DeterministicScoringEngine()
+        engine = LeadScoringEngine()
         leads = (
             db.session.query(Property)
             .filter(

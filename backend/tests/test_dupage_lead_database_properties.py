@@ -1070,9 +1070,9 @@ def _make_scoring_lead(**kwargs):
 
 
 # ---------------------------------------------------------------------------
-# Property 14: structured_motivation is exactly 10 points
+# Property 14: public_record_distress is exactly 10 points
 #              for qualifying source types (with null tax_distress_data)
-# Property 15: annual tax sale signal adds 10 points; residential cap = 25
+# Property 15: annual tax sale signal adds 10 points; public-record cap = 20
 # Feature: dupage-lead-database
 # ---------------------------------------------------------------------------
 
@@ -1081,7 +1081,7 @@ def _make_scoring_lead(**kwargs):
 )
 @settings(max_examples=100, deadline=None)
 def test_property_14_source_type_distress_dimension_exact_10_points(source_type):
-    """Property 14: structured_motivation is exactly 10 points for qualifying
+    """Property 14: public_record_distress is exactly 10 points for qualifying
     source types when tax_distress_data is null.
 
     **Validates: Requirements 12.1**
@@ -1094,13 +1094,13 @@ def test_property_14_source_type_distress_dimension_exact_10_points(source_type)
     result = engine.calculate_residential_score(lead)
     score_details = result["score_details"]
 
-    dim_score = score_details["structured_motivation"]
+    dim_score = score_details["public_record_distress"]
     assert dim_score == 10.0, (
-        f"Expected structured_motivation=10.0 for source_type={source_type!r} "
+        f"Expected public_record_distress=10.0 for source_type={source_type!r} "
         f"with null tax_distress_data, got {dim_score!r}"
     )
-    assert dim_score <= 25.0, (
-        f"structured_motivation must not exceed residential cap of 25, "
+    assert dim_score <= 20.0, (
+        f"public_record_distress must not exceed residential cap of 20, "
         f"got {dim_score!r} for source_type={source_type!r}"
     )
 
@@ -1110,11 +1110,11 @@ def test_property_14_source_type_distress_dimension_exact_10_points(source_type)
 )
 @settings(max_examples=100, deadline=None)
 def test_property_15_tax_distress_data_bonus_adds_exactly_5_points(source_type):
-    """Property 15: annual tax sale data adds 10 points to structured_motivation.
+    """Property 15: annual tax sale data adds 10 points to public_record_distress.
 
     - Lead with annual_tax_sale rows scores exactly 10 more than the equivalent
       lead with tax_distress_data=None (10 base + 10 tax sale).
-    - Combined score never exceeds the residential cap of 25.
+    - Combined score never exceeds the residential public-record cap of 20.
 
     **Validates: Requirements 12.2**
     """
@@ -1124,23 +1124,23 @@ def test_property_15_tax_distress_data_bonus_adds_exactly_5_points(source_type):
 
     lead_no_bonus = _make_scoring_lead(source_type=source_type, tax_distress_data=None)
     result_no_bonus = engine.calculate_residential_score(lead_no_bonus)
-    base_score = result_no_bonus["score_details"]["structured_motivation"]
+    base_score = result_no_bonus["score_details"]["public_record_distress"]
 
     lead_with_bonus = _make_scoring_lead(
         source_type=source_type,
         tax_distress_data={'annual_tax_sale': [{'pin': '01-02-003-004-0000'}]},
     )
     result_with_bonus = engine.calculate_residential_score(lead_with_bonus)
-    bonus_score = result_with_bonus["score_details"]["structured_motivation"]
+    bonus_score = result_with_bonus["score_details"]["public_record_distress"]
 
     assert bonus_score == base_score + 10.0, (
-        f"Expected structured_motivation to increase by exactly 10 when annual_tax_sale "
+        f"Expected public_record_distress to increase by exactly 10 when annual_tax_sale "
         f"is present. source_type={source_type!r}, base={base_score!r}, "
         f"bonus={bonus_score!r} (expected {base_score + 10.0!r})"
     )
 
-    assert bonus_score <= 25.0, (
-        f"structured_motivation must not exceed residential cap of 25, "
+    assert bonus_score <= 20.0, (
+        f"public_record_distress must not exceed residential cap of 20, "
         f"got {bonus_score!r} for source_type={source_type!r}"
     )
 

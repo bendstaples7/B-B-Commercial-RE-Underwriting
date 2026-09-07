@@ -561,6 +561,41 @@ class TestUpdateScoringWeights:
         assert data['leads_rescored'] >= 1
 
 
+class TestCalibrateScoringWeights:
+    """Tests for outcome calibration endpoint validation."""
+
+    def test_calibrate_requires_auth(self, client):
+        resp = client.post(
+            '/api/properties/scoring/calibrate',
+            data=json.dumps({}),
+            content_type='application/json',
+            headers={'X-User-Id': ''},
+        )
+        assert resp.status_code == 401
+
+    def test_calibrate_rejects_non_object_json(self, client):
+        resp = client.post(
+            '/api/properties/scoring/calibrate',
+            data=json.dumps([]),
+            content_type='application/json',
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status_code == 400
+        data = json.loads(resp.data)
+        assert data['message'] == 'Request body must be a JSON object'
+
+    def test_calibrate_rejects_non_boolean_flags(self, client):
+        resp = client.post(
+            '/api/properties/scoring/calibrate',
+            data=json.dumps({'apply': 'false', 'rescore': 1}),
+            content_type='application/json',
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status_code == 400
+        data = json.loads(resp.data)
+        assert data['message'] == 'apply and rescore must be booleans'
+
+
 # ---------------------------------------------------------------------------
 # Tests: Combined filter + sort + pagination
 # ---------------------------------------------------------------------------
