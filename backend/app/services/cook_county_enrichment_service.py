@@ -613,6 +613,12 @@ def _enrich_distress_priority_lane(
     enriched_count = 0
     today = date.today()
 
+    def _record_handled(lead_id: int) -> None:
+        nonlocal cursor
+        cursor = lead_id
+        summary["_processed_lead_ids"].append(lead_id)
+        summary["processed"] += 1
+
     while enriched_count < batch_size and summary["socrata_calls"] < socrata_call_cap:
         candidates = (
             db.session.query(Lead)
@@ -631,21 +637,22 @@ def _enrich_distress_priority_lane(
             break
 
         for lead in candidates:
-            cursor = lead.id
-            summary["_processed_lead_ids"].append(lead.id)
-            summary["processed"] += 1
+            lead_id = lead.id
 
             if not lead_needs_distress_enrichment(lead):
+                _record_handled(lead_id)
                 summary["skipped"] += 1
                 continue
 
             has_due = _lead_has_due_open_task(lead.id, today)
             if is_recently_sold(lead) and not has_due:
+                _record_handled(lead_id)
                 summary["skipped"] += 1
                 continue
 
             plugin_names = distress_plugins_for_lead(lead)
             if not plugin_names:
+                _record_handled(lead_id)
                 summary["skipped"] += 1
                 continue
             if summary["socrata_calls"] + len(plugin_names) > socrata_call_cap:
@@ -653,6 +660,7 @@ def _enrich_distress_priority_lane(
                 summary["last_id"] = cursor
                 return summary
 
+            _record_handled(lead_id)
             try:
                 with _temporary_plugin_resolver(lambda _lead: plugin_names):
                     result = enrich_cook_county_lead(lead.id)
@@ -720,9 +728,11 @@ def backfill_cook_county_enrichment(
     remaining_cap = socrata_call_cap
     if distress_priority and remaining_cap > 0:
         distress_budget = max(1, min(batch_size, remaining_cap // 2 or remaining_cap))
+        general_call_reserve = remaining_cap // 2 if remaining_cap > 1 else 0
+        distress_call_cap = max(0, remaining_cap - general_call_reserve)
         distress_summary = _enrich_distress_priority_lane(
             batch_size=distress_budget,
-            socrata_call_cap=remaining_cap,
+            socrata_call_cap=distress_call_cap,
             last_id=last_id,
         )
         distress_processed_ids = set(distress_summary.get("_processed_lead_ids") or [])

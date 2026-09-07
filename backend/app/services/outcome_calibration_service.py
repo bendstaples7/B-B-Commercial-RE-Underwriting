@@ -273,15 +273,27 @@ def _latest_score_before(lead_id: int, before: datetime) -> LeadScore | None:
     )
 
 
-def _outcome_transition_rows(*, lookback_days: int) -> list[LeadTimelineEntry]:
+def _lead_owner_filter(user_id: str):
+    if user_id == 'default':
+        return Lead.owner_user_id.is_(None)
+    return Lead.owner_user_id == user_id
+
+
+def _outcome_transition_rows(
+    *,
+    lookback_days: int,
+    user_id: str,
+) -> list[LeadTimelineEntry]:
     """Status-changed timeline rows into positive/negative outcomes in window."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
     cutoff_naive = cutoff.replace(tzinfo=None)
     rows = (
-        LeadTimelineEntry.query.filter(
+        LeadTimelineEntry.query.join(Lead, Lead.id == LeadTimelineEntry.lead_id)
+        .filter(
             LeadTimelineEntry.event_type == 'status_changed',
             LeadTimelineEntry.is_deleted.is_(False),
             LeadTimelineEntry.occurred_at >= cutoff_naive,
+            _lead_owner_filter(user_id),
         )
         .order_by(LeadTimelineEntry.occurred_at.asc(), LeadTimelineEntry.id.asc())
         .all()
@@ -320,11 +332,6 @@ def collect_outcome_bucket_samples(
     negative: list[dict[str, float]] = []
     stratum_counts: dict[str, dict[str, int]] = {}
 
-    def _owner_filter():
-        if user_id == 'default':
-            return Lead.owner_user_id.is_(None)
-        return Lead.owner_user_id == user_id
-
     def _lead_belongs_to_weight_user(lead: Lead) -> bool:
         owner_user_id = getattr(lead, 'owner_user_id', None)
         if user_id == 'default':
@@ -347,7 +354,7 @@ def collect_outcome_bucket_samples(
         leads = (
             Lead.query.filter(
                 Lead.lead_status.in_(POSITIVE_OUTCOME_STATUSES | NEGATIVE_OUTCOME_STATUSES),
-                _owner_filter(),
+                _lead_owner_filter(user_id),
                 Lead.updated_at >= cutoff_naive,
             )
             .all()
@@ -370,7 +377,7 @@ def collect_outcome_bucket_samples(
 
     # pre_outcome — one sample per lead (first outcome transition in window).
     seen_leads: set[int] = set()
-    for entry in _outcome_transition_rows(lookback_days=lookback_days):
+    for entry in _outcome_transition_rows(lookback_days=lookback_days, user_id=user_id):
         lead_id = entry.lead_id
         if not isinstance(lead_id, int) or lead_id in seen_leads:
             continue
@@ -529,7 +536,7 @@ def run_scheduled_calibration(
         '1', 'true', 'yes',
     )
     lookback_days = int(os.environ.get('SCORING_CALIBRATION_LOOKBACK_DAYS', '365'))
-    if not apply or user_id != 'default':
+    if user_id != 'default':
         return calibrate_scoring_weights(
             user_id,
             apply=apply,
@@ -542,8 +549,8 @@ def run_scheduled_calibration(
     reports = {
         owner_id: calibrate_scoring_weights(
             owner_id,
-            apply=True,
-            rescore=True,
+            apply=apply,
+            rescore=apply,
             lookback_days=lookback_days,
             sample_mode='pre_outcome',
         ).to_dict()
@@ -559,6 +566,6 @@ def run_scheduled_calibration(
     aggregate.negative_count = sum(r.get('negative_count', 0) for r in reports.values())
     aggregate.leads_rescored = sum(r.get('leads_rescored', 0) for r in reports.values())
     aggregate.applied = any(r.get('applied') for r in reports.values())
-    if not aggregate.applied:
+    if apply and not aggregate.applied:
         aggregate.skipped_reason = 'All owner calibrations skipped.'
     return aggregate

@@ -1,7 +1,7 @@
 """Add outcome-calibration metadata to scoring_weights.
 
 Revision ID: score_cal_20260907
-Revises: chan_roi_cascade_0831
+Revises: mail_cad_20260905
 Create Date: 2026-09-07
 
 Stores last calibration run (lifts, sample sizes, prior weights) and timestamp
@@ -10,7 +10,7 @@ so outcome-calibrated weight nudges are auditable.
 from alembic import op
 
 revision = 'score_cal_20260907'
-down_revision = 'chan_roi_cascade_0831'
+down_revision = 'mail_cad_20260905'
 branch_labels = None
 depends_on = None
 

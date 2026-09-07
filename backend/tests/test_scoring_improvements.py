@@ -359,15 +359,15 @@ class TestOutcomeCalibration:
             ))
             db.session.commit()
 
-            positive, _negative, _strata = collect_outcome_bucket_samples(
+            positive, negative, strata = collect_outcome_bucket_samples(
                 lookback_days=30,
                 sample_mode="pre_outcome",
                 user_id="test-user",
             )
 
-            assert all(
-                abs(row["owner_situation"] - 77.0) > 0.01 for row in positive
-            )
+            assert positive == []
+            assert negative == []
+            assert strata == {}
 
     def test_samples_are_scoped_to_weight_owner(self, app):
         from app.models.lead import Property
@@ -467,6 +467,48 @@ class TestOutcomeCalibration:
             assert seen == ["default", "owner-a", "owner-b"]
             assert report.applied is True
             assert report.leads_rescored == 3
+
+    def test_scheduled_dry_run_calibrates_each_lead_owner(self, app, monkeypatch):
+        from app.models.lead import Property
+        from app import db
+
+        with app.app_context():
+            for owner_id in (None, "owner-a", "owner-b"):
+                db.session.add(Property(
+                    property_street=f"{owner_id or 'default'} Scheduled Dry Cal Ave",
+                    property_city="Chicago",
+                    property_state="IL",
+                    property_zip="60647",
+                    lead_category="residential",
+                    owner_user_id=owner_id,
+                ))
+            db.session.commit()
+
+            seen: list[tuple[str, bool, bool]] = []
+
+            def _fake_calibrate(user_id, **kwargs):
+                seen.append((user_id, kwargs["apply"], kwargs["rescore"]))
+                return CalibrationReport(
+                    positive_count=1,
+                    negative_count=1,
+                    applied=False,
+                    leads_rescored=0,
+                )
+
+            monkeypatch.delenv("SCORING_CALIBRATION_APPLY", raising=False)
+            with patch(
+                "app.services.outcome_calibration_service.calibrate_scoring_weights",
+                side_effect=_fake_calibrate,
+            ):
+                report = run_scheduled_calibration()
+
+            assert seen == [
+                ("default", False, False),
+                ("owner-a", False, False),
+                ("owner-b", False, False),
+            ]
+            assert report.applied is False
+            assert report.skipped_reason is None
 
 
 class TestDistressCoverageHelpers:

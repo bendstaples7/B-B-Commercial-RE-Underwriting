@@ -1,7 +1,7 @@
 """Heal quarterly mail cadence: rematch dues + rescore stale mail_ready.
 
 Revision ID: mail_cad_20260905
-Revises: score_cal_20260907
+Revises: chan_roi_cascade_0831
 Create Date: 2026-09-05
 
 Idempotent data migration: open rematch tasks get due_date = last_mailed + 90,
@@ -10,7 +10,7 @@ and leads still ``mail_ready`` inside that window are rescored out of Ready to M
 
 
 revision = 'mail_cad_20260905'
-down_revision = 'score_cal_20260907'
+down_revision = 'chan_roi_cascade_0831'
 branch_labels = None
 depends_on = None
 
@@ -18,10 +18,25 @@ depends_on = None
 def upgrade():
     # Keep the idempotent data heal inside Alembic's transaction.
     #
+    # Current scoring services load the live ScoringWeights model. Ensure
+    # calibration columns exist before this older data migration calls into
+    # that service; the later score_cal migration repeats these as IF NOT
+    # EXISTS so DBs already stamped at mail_cad still get the columns.
+    from alembic import op
+
+    op.execute("""
+        ALTER TABLE scoring_weights
+        ADD COLUMN IF NOT EXISTS calibration_meta JSON
+    """)
+    op.execute("""
+        ALTER TABLE scoring_weights
+        ADD COLUMN IF NOT EXISTS last_calibrated_at TIMESTAMP WITHOUT TIME ZONE
+    """)
+
+    #
     # Flask-SQLAlchemy 3.1 Session.get_bind() always prefers db.engines[None]
     # and ignores session.bind. Install a plain SQLAlchemy Session bound to
     # op.get_bind() into the scoped registry so ORM writes join Alembic's txn.
-    from alembic import op
     from sqlalchemy.orm import Session
 
     from app import db

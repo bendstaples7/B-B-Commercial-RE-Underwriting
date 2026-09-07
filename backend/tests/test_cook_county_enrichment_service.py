@@ -320,6 +320,35 @@ class TestBackfillEnrichment:
             mock_enrich.assert_called_once_with(leads[0].id)
 
     @patch("app.services.cook_county_enrichment_service.enrich_cook_county_lead")
+    def test_backfill_retries_unhandled_distress_candidate_in_general_lane(self, mock_enrich, app):
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import backfill_cook_county_enrichment
+            _ensure_source("cook_county_commercial_valuation")
+            lead = Property(
+                property_street="14 Distress Residual Ave",
+                property_city="Chicago",
+                property_state="IL",
+                county_assessor_pin="01-02-202-113-0000",
+                source_type="manual_distress",
+            )
+            db.session.add(lead)
+            db.session.commit()
+
+            mock_enrich.return_value = {"plugins_run": 1, "skipped": False}
+            with patch(
+                "app.services.cook_county_enrichment_service.distress_plugins_for_lead",
+                return_value=["distress_a", "distress_b", "distress_c", "distress_d", "distress_e"],
+            ), patch(
+                "app.services.cook_county_enrichment_service.plugins_for_lead",
+                return_value=["general_plugin"],
+            ):
+                summary = backfill_cook_county_enrichment(batch_size=5, socrata_call_cap=8)
+
+            assert summary["distress_lane"]["processed"] == 0
+            assert summary["enriched"] == 1
+            mock_enrich.assert_called_once_with(lead.id)
+
+    @patch("app.services.cook_county_enrichment_service.enrich_cook_county_lead")
     def test_backfill_includes_chicago_leads_without_pin(self, mock_enrich, app):
         with app.app_context():
             from app.services.cook_county_enrichment_service import backfill_cook_county_enrichment
