@@ -373,13 +373,21 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
         run: |
-          echo "Deploy failed — retrying deploy.sh once..."
+          echo "Deploy failed — re-uploading frontend-dist and retrying deploy.sh once..."
+          # First attempt consumes /home/deploy/frontend-dist (mv into app).
+          # Retry must restore the CI build or install fails immediately.
+          umask 022
+          chmod -R a+rX frontend/dist
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "rm -rf /home/deploy/frontend-dist"
+          scp -i ~/.ssh/id_deploy -r frontend/dist $VPS_USER@$VPS_HOST:/home/deploy/frontend-dist
+          scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
+          scp -i ~/.ssh/id_deploy scripts/reclaim-vps-disk.sh $VPS_USER@$VPS_HOST:/home/deploy/reclaim-vps-disk.sh
           ssh -i ~/.ssh/id_deploy \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=20 \
             -o TCPKeepAlive=yes \
             $VPS_USER@$VPS_HOST \
-            "bash /home/deploy/deploy.sh '$TARGET_SHA'"
+            "chmod +x /home/deploy/deploy.sh /home/deploy/reclaim-vps-disk.sh && bash /home/deploy/deploy.sh '$TARGET_SHA'"
 
       - name: Fail job if both deploy attempts failed
         if: steps.deploy_run.outcome == 'failure' && steps.retry_deploy.outcome != 'success'
