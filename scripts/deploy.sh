@@ -637,11 +637,22 @@ FLASK_ENV=production python3.11 scripts/backfill_mail_queued_task_cleanup.py --a
 echo "    Mail batch stale task cleanup complete"
 
 echo "==> (6c) Mail cadence cooldown heal (rescore after full schema)"
-FLASK_ENV=production python3.11 scripts/heal_mail_cadence_cooldown.py || {
-    echo "FAILED: heal_mail_cadence_cooldown.py"
-    exit 1
-}
-echo "    Mail cadence cooldown heal complete"
+# Bounded + non-fatal: Ready-to-Mail runtime already enforces the 90-day gate.
+# A full heal can exceed Deploy's wall clock on large prod tables (see mail_cad timeout).
+BB_MAIL_CADENCE_HEAL_TIMEOUT_SEC="${BB_MAIL_CADENCE_HEAL_TIMEOUT_SEC:-300}"
+set +e
+timeout --signal=TERM --kill-after=30 "${BB_MAIL_CADENCE_HEAL_TIMEOUT_SEC}" \
+    env FLASK_ENV=production python3.11 scripts/heal_mail_cadence_cooldown.py
+HEAL_RC=$?
+set -e
+if [ "$HEAL_RC" -eq 0 ]; then
+    echo "    Mail cadence cooldown heal complete"
+elif [ "$HEAL_RC" -eq 124 ] || [ "$HEAL_RC" -eq 137 ]; then
+    echo "WARNING: mail cadence heal timed out after ${BB_MAIL_CADENCE_HEAL_TIMEOUT_SEC}s — continuing Deploy"
+    echo "    Re-run: cd /home/deploy/app/backend && FLASK_ENV=production python3.11 scripts/heal_mail_cadence_cooldown.py"
+else
+    echo "WARNING: heal_mail_cadence_cooldown.py exited ${HEAL_RC} — continuing Deploy"
+fi
 cd ..
 
 echo "==> (7) Ensure async stack is provisioned and healthy"
