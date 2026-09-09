@@ -251,6 +251,10 @@ jobs:
         run: |
           # Copy deploy script and shared checks
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
+          scp -i ~/.ssh/id_deploy scripts/reclaim-vps-disk.sh $VPS_USER@$VPS_HOST:/home/deploy/reclaim-vps-disk.sh
+          # Free space before uploading frontend-dist (1GB gate was blocking #171+).
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
+            "chmod +x /home/deploy/reclaim-vps-disk.sh && bash /home/deploy/reclaim-vps-disk.sh --min-free-kb 1048576"
           scp -i ~/.ssh/id_deploy scripts/post-deploy-rollback.sh $VPS_USER@$VPS_HOST:/home/deploy/post-deploy-rollback.sh
           scp -i ~/.ssh/id_deploy scripts/ensure_frontend_dist_readable.sh $VPS_USER@$VPS_HOST:/home/deploy/ensure_frontend_dist_readable.sh
           scp -i ~/.ssh/id_deploy scripts/spa-dist-fingerprint.sh $VPS_USER@$VPS_HOST:/home/deploy/spa-dist-fingerprint.sh

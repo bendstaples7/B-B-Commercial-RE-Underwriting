@@ -710,6 +710,23 @@ def main() -> int:
         errors.append(
             "deploy.sh must run backfill_mail_queued_task_cleanup.py after migrations"
         )
+    if "heal_mail_cadence_cooldown.py" not in deploy_text:
+        errors.append(
+            "deploy.sh must run heal_mail_cadence_cooldown.py after migrations "
+            "(mail_cad Alembic heal skips rescore)"
+        )
+    if "reclaim-vps-disk.sh" not in deploy_text:
+        errors.append(
+            "deploy.sh must run reclaim-vps-disk.sh before the 1GB free-space gate"
+        )
+    reclaim_path = REPO_ROOT / "scripts" / "reclaim-vps-disk.sh"
+    if not reclaim_path.exists():
+        errors.append("Missing expected script: scripts/reclaim-vps-disk.sh")
+    deploy_yml = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
+    if "reclaim-vps-disk.sh" not in deploy_yml:
+        errors.append(
+            "deploy.yml must scp/run reclaim-vps-disk.sh before uploading frontend-dist"
+        )
 
     if errors:
         print("Deploy contract validation FAILED:", file=sys.stderr)

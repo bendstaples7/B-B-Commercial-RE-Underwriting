@@ -266,10 +266,26 @@ echo "    gunicorn: active"
 systemctl is-active --quiet postgresql || { echo "FAILED: postgresql is not active before deploy"; exit 1; }
 echo "    postgresql: active"
 
+# Reclaim deploy-owned disk before the 1GB gate (logs, old dumps, caches).
+# CI also scp's this helper to /home/deploy/reclaim-vps-disk.sh.
+RECLAIM_SCRIPT="/home/deploy/reclaim-vps-disk.sh"
+if [[ ! -f "${RECLAIM_SCRIPT}" ]] && [[ -f "${APP_DIR}/scripts/reclaim-vps-disk.sh" ]]; then
+    RECLAIM_SCRIPT="${APP_DIR}/scripts/reclaim-vps-disk.sh"
+fi
+if [[ -f "${RECLAIM_SCRIPT}" ]]; then
+    echo "==> Pre-deploy disk reclaim"
+    bash "${RECLAIM_SCRIPT}" --min-free-kb 1048576 || {
+        echo "WARNING: reclaim-vps-disk.sh exited non-zero — continuing to free-space check"
+    }
+else
+    echo "WARNING: reclaim-vps-disk.sh not found — skipping reclaim"
+fi
+
 # Check disk space (require at least 1GB free)
 FREE_KB=$(df /home/deploy --output=avail | tail -1 | tr -d ' ')
 if [ "$FREE_KB" -lt 1048576 ]; then
     echo "FAILED: Less than 1GB disk space available (${FREE_KB}KB free)"
+    echo "    Ran reclaim but still short — free space under /home/deploy (old dumps/logs) and re-run Deploy."
     exit 1
 fi
 echo "    disk space: ${FREE_KB}KB free (OK)"
@@ -618,8 +634,15 @@ FLASK_ENV=production python3.11 scripts/backfill_mail_queued_task_cleanup.py --a
     echo "FAILED: backfill_mail_queued_task_cleanup.py"
     exit 1
 }
-cd ..
 echo "    Mail batch stale task cleanup complete"
+
+echo "==> (6c) Mail cadence cooldown heal (rescore after full schema)"
+FLASK_ENV=production python3.11 scripts/heal_mail_cadence_cooldown.py || {
+    echo "FAILED: heal_mail_cadence_cooldown.py"
+    exit 1
+}
+echo "    Mail cadence cooldown heal complete"
+cd ..
 
 echo "==> (7) Ensure async stack is provisioned and healthy"
 CHECKS_SCRIPT="${APP_DIR}/scripts/deploy-async-stack-checks.sh"
