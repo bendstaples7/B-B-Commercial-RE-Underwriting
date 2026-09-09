@@ -65,16 +65,14 @@ if [[ -d "$LOG_DIR" ]]; then
   done < <(find "$LOG_DIR" -type f -name '*.log' -print0 2>/dev/null || true)
 fi
 
-# 2) Drop leftover SPA swap / staging trees (live dist stays under app/).
-for leftover in \
-  /home/deploy/frontend-dist-backup-new \
-  /home/deploy/frontend-dist
-do
-  if [[ -e "$leftover" ]]; then
-    rm -rf "$leftover"
-    echo "    removed leftover: $leftover"
-  fi
-done
+# 2) Drop incomplete SPA swap staging only.
+# NEVER delete /home/deploy/frontend-dist — Deploy CI uploads the new build
+# there before deploy.sh runs; removing it fails install with
+# "frontend-dist not found".
+if [[ -e /home/deploy/frontend-dist-backup-new ]]; then
+  rm -rf /home/deploy/frontend-dist-backup-new
+  echo "    removed leftover: /home/deploy/frontend-dist-backup-new"
+fi
 
 # Keep at most one prior SPA dist backup for rollback.
 if [[ -d /home/deploy/frontend-dist-backup ]]; then
