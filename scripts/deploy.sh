@@ -687,11 +687,16 @@ echo "    Mail batch stale task cleanup complete"
 echo "==> (6c) Mail cadence cooldown heal (rescore after full schema)"
 # Bounded + non-fatal: Ready-to-Mail runtime already enforces the 90-day gate.
 # A full heal can exceed Deploy's wall clock on large prod tables (see mail_cad timeout).
+# IMPORTANT: bash ERR traps still fire under `set +e` in this environment, so
+# clear the rollback trap for the heal command or a ModuleNotFoundError aborts Deploy.
 BB_MAIL_CADENCE_HEAL_TIMEOUT_SEC="${BB_MAIL_CADENCE_HEAL_TIMEOUT_SEC:-300}"
 set +e
+trap - ERR
 timeout --signal=TERM --kill-after=30 "${BB_MAIL_CADENCE_HEAL_TIMEOUT_SEC}" \
-    env FLASK_ENV=production python3.11 scripts/heal_mail_cadence_cooldown.py
+    env FLASK_ENV=production PYTHONPATH="${APP_DIR}/backend${PYTHONPATH:+:$PYTHONPATH}" \
+    python3.11 scripts/heal_mail_cadence_cooldown.py
 HEAL_RC=$?
+trap 'rollback $?' ERR
 set -e
 if [ "$HEAL_RC" -eq 0 ]; then
     echo "    Mail cadence cooldown heal complete"

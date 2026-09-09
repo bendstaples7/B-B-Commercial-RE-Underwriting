@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> int:
-    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    # scripts/ → backend/ (app package lives next to scripts/, not inside it)
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if backend_dir not in sys.path:
         sys.path.insert(0, backend_dir)
 
