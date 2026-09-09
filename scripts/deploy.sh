@@ -258,7 +258,21 @@ trap cleanup_deploy_exit EXIT
 # ── Pre-deploy VPS health checks ─────────────────────────────────────────────
 echo "==> Pre-deploy checks"
 
-# Check gunicorn is running
+# Check gunicorn is running (recover if workers died on a prior partial deploy)
+if ! systemctl is-active --quiet gunicorn; then
+    echo "WARNING: gunicorn not active before deploy — attempting recovery"
+    if sudo -n -l /bin/systemctl restart gunicorn >/dev/null 2>&1; then
+        sudo -n systemctl restart gunicorn || true
+    elif sudo -n -l /bin/systemctl start gunicorn >/dev/null 2>&1; then
+        sudo -n systemctl start gunicorn || true
+    fi
+    for _i in $(seq 1 15); do
+        if systemctl is-active --quiet gunicorn; then
+            break
+        fi
+        sleep 2
+    done
+fi
 systemctl is-active --quiet gunicorn || { echo "FAILED: gunicorn is not active before deploy"; exit 1; }
 echo "    gunicorn: active"
 
@@ -584,18 +598,52 @@ fi
 
 cd ..
 
-echo "==> (5) Reload Gunicorn (zero-downtime)"
-if ! sudo -n systemctl reload gunicorn; then
-    if ! sudo -n -l /bin/systemctl reload gunicorn >/dev/null 2>&1; then
-        echo "FAILED: passwordless sudo for 'systemctl reload gunicorn' is missing"
-        echo "Run on VPS as root: sudo bash ${APP_DIR}/scripts/vps-setup/migrate-async-stack.sh"
-        exit 1
-    fi
-    echo "FAILED: systemctl reload gunicorn failed (service error, not sudo)"
+echo "==> (5) Reload Gunicorn (zero-downtime when possible)"
+if sudo -n systemctl reload gunicorn; then
+    echo "    Gunicorn reloaded"
+elif ! sudo -n -l /bin/systemctl reload gunicorn >/dev/null 2>&1; then
+    echo "FAILED: passwordless sudo for 'systemctl reload gunicorn' is missing"
+    echo "Run on VPS as root: sudo bash ${APP_DIR}/scripts/vps-setup/migrate-async-stack.sh"
+    exit 1
+elif systemctl is-active --quiet gunicorn; then
+    echo "FAILED: systemctl reload gunicorn failed while service still active"
     sudo -n systemctl status gunicorn --no-pager -n 20 2>/dev/null || true
     exit 1
+else
+    # Mid-migrate worker crash (exit 3) leaves the unit inactive — reload cannot
+    # resurrect it. Prefer restart/start; otherwise wait for Restart=on-failure.
+    echo "WARNING: gunicorn inactive after migrate — recovering (restart/start)"
+    RECOVERED=0
+    if sudo -n -l /bin/systemctl restart gunicorn >/dev/null 2>&1; then
+        if sudo -n systemctl restart gunicorn; then
+            RECOVERED=1
+            echo "    Gunicorn restarted"
+        fi
+    elif sudo -n -l /bin/systemctl start gunicorn >/dev/null 2>&1; then
+        if sudo -n systemctl start gunicorn; then
+            RECOVERED=1
+            echo "    Gunicorn started"
+        fi
+    else
+        echo "WARNING: no passwordless sudo for gunicorn restart/start — waiting for systemd Restart=on-failure"
+    fi
+    if [ "$RECOVERED" -eq 0 ]; then
+        for _i in $(seq 1 20); do
+            if systemctl is-active --quiet gunicorn; then
+                RECOVERED=1
+                echo "    Gunicorn became active after wait"
+                break
+            fi
+            sleep 2
+        done
+    fi
+    if [ "$RECOVERED" -eq 0 ]; then
+        echo "FAILED: gunicorn inactive and could not be recovered"
+        sudo -n systemctl status gunicorn --no-pager -n 20 2>/dev/null || true
+        exit 1
+    fi
 fi
-echo "    Gunicorn reloaded"
+echo "    Gunicorn ready for health poll"
 
 echo "==> (6) Wait for Gunicorn to be healthy on localhost"
 # Poll localhost directly (bypasses nginx) so the CI health check step can

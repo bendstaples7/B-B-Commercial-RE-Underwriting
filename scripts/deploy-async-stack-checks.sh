@@ -22,7 +22,17 @@ _require_passwordless_sudo() {
 }
 
 assert_gunicorn_sudo_ready() {
-    _require_passwordless_sudo "gunicorn reload" /bin/systemctl reload gunicorn
+    _require_passwordless_sudo "gunicorn reload" /bin/systemctl reload gunicorn \
+        || return 1
+    # restart/start recover when workers exit mid-migrate (reload cannot target inactive).
+    # Soft until sudoers refresh: older VPSes may only have reload until 11-sudoers runs.
+    if ! sudo -n -l /bin/systemctl restart gunicorn >/dev/null 2>&1 \
+        || ! sudo -n -l /bin/systemctl start gunicorn >/dev/null 2>&1; then
+        echo "WARNING: passwordless sudo for 'systemctl restart/start gunicorn' is missing"
+        echo "  Run on VPS as root: sudo bash ${APP_DIR:-/home/deploy/app}/scripts/vps-setup/migrate-async-stack.sh"
+        echo "  Deploy will still try reload + wait for Restart=on-failure."
+    fi
+    return 0
 }
 
 assert_celery_stop_sudo_ready() {

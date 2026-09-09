@@ -49,6 +49,27 @@ cat "${READINESS_LOG}"
 
 if [[ "${READINESS_CODE}" -eq 0 ]]; then
     echo "VPS readiness check passed."
+    # Idempotent sudoers refresh when root key is available so new deploy.sh
+    # sudo needs (e.g. gunicorn restart) land without a manual migrate.
+    if [[ -n "${VPS_ROOT_SSH_KEY:-}" ]]; then
+        echo "Refreshing deploy sudoers from this revision (idempotent)..."
+        ROOT_KEY=$(mktemp)
+        trap 'rm -f "${READINESS_LOG}" "${ROOT_KEY}"' EXIT
+        printf '%s\n' "${VPS_ROOT_SSH_KEY}" > "${ROOT_KEY}"
+        chmod 600 "${ROOT_KEY}"
+        "${SCP_DEPLOY[@]}" -r scripts/vps-setup \
+            "${VPS_USER}@${VPS_HOST}:/home/deploy/ci-vps-setup"
+        ssh -i "${ROOT_KEY}" -o ConnectTimeout=10 -o StrictHostKeyChecking=yes \
+            "root@${VPS_HOST}" bash -s <<EOF
+set -euo pipefail
+APP_DIR="${APP_DIR}"
+mkdir -p "\${APP_DIR}/scripts"
+cp -a /home/deploy/ci-vps-setup/. "\${APP_DIR}/scripts/vps-setup/"
+bash "\${APP_DIR}/scripts/vps-setup/11-sudoers-deploy.sh"
+rm -rf /home/deploy/ci-vps-setup
+EOF
+        echo "Sudoers refresh complete."
+    fi
     exit 0
 fi
 
