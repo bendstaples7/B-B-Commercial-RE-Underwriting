@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
 # 11-sudoers-deploy.sh
-# VPS Setup — Task 4.2: Grant `deploy` passwordless sudo for
-#             `systemctl reload gunicorn`.
+# VPS Setup — Task 4.2: Grant `deploy` passwordless sudo for gunicorn
+#             reload/restart/start and async-stack systemctl commands.
 #
 # Requirements: 6.3, 8.1
 #
@@ -49,7 +49,8 @@ APPLY_SRC="${SCRIPT_DIR}/apply-memory-guard-units.sh"
 APPLY_INSTALL="/usr/local/sbin/apply-memory-guard-units"
 # Exact rules required for zero-downtime deploys and async stack management.
 # is-active uses --quiet to match deploy.sh verification commands.
-SUDOERS_RULE="deploy ALL=(ALL) NOPASSWD: /bin/systemctl reload gunicorn, /bin/systemctl stop celery, /bin/systemctl stop celery-beat, /bin/systemctl restart celery, /bin/systemctl restart celery-beat, /bin/systemctl is-active --quiet redis-server, /bin/systemctl is-active --quiet celery, /bin/systemctl is-active --quiet celery-beat, /usr/local/sbin/bootstrap-async-stack, /usr/local/sbin/apply-memory-guard-units"
+# reload = zero-downtime happy path; restart/start = recover when workers die mid-migrate
+SUDOERS_RULE="deploy ALL=(ALL) NOPASSWD: /bin/systemctl reload gunicorn, /bin/systemctl restart gunicorn, /bin/systemctl start gunicorn, /bin/systemctl stop celery, /bin/systemctl stop celery-beat, /bin/systemctl restart celery, /bin/systemctl restart celery-beat, /bin/systemctl is-active --quiet redis-server, /bin/systemctl is-active --quiet celery, /bin/systemctl is-active --quiet celery-beat, /usr/local/sbin/bootstrap-async-stack, /usr/local/sbin/apply-memory-guard-units"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # ── Verify running as root ────────────────────────────────────────────────────
@@ -201,8 +202,10 @@ info "Step 4: Verifying the sudo rule is effective for the deploy user..."
 # List the deploy user's sudo privileges (non-interactive, no password prompt)
 SUDO_LIST=$(sudo -u "${DEPLOY_USER}" sudo -n -l 2>&1 || true)
 
-if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl reload gunicorn"; then
-    info "  ✓ Rule confirmed: deploy can run 'sudo /bin/systemctl reload gunicorn' without a password."
+if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl reload gunicorn" \
+    && echo "${SUDO_LIST}" | grep -qF "/bin/systemctl restart gunicorn" \
+    && echo "${SUDO_LIST}" | grep -qF "/bin/systemctl start gunicorn"; then
+    info "  ✓ Rule confirmed: deploy can reload/restart/start gunicorn without a password."
 else
     error "  Could not confirm gunicorn reload rule via 'sudo -n -l'."
     error "  sudo -l output:"
