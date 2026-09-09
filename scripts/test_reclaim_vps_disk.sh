@@ -21,6 +21,9 @@ p.write_bytes(b"x" * (6 * 1024 * 1024))
 PY
 mkdir -p "$TMP/home/deploy/frontend-dist-backup-new"
 echo junk > "$TMP/home/deploy/frontend-dist-backup-new/x"
+# Staging upload from CI must survive reclaim (deploy.sh consumes it).
+mkdir -p "$TMP/home/deploy/frontend-dist"
+echo keep > "$TMP/home/deploy/frontend-dist/index.html"
 # Old WAL (write first, then backdate mtime — echo after touch resets mtime)
 echo wal > "$TMP/home/deploy/wal-archive/old.wal"
 touch -d "2026-01-01 12:00:00" "$TMP/home/deploy/wal-archive/old.wal"
@@ -43,6 +46,7 @@ DF_PATH="$TMP" BACKUP_DIR="$TMP/home/deploy/backups" \
 remaining="$(find "$TMP/home/deploy/backups" -name 'backup_*.dump' | wc -l | tr -d ' ')"
 test "$remaining" = "3" || { echo "expected 3 dumps, got $remaining"; exit 1; }
 test ! -e "$TMP/home/deploy/frontend-dist-backup-new" || { echo "leftover frontend-dist-backup-new"; exit 1; }
+test -e "$TMP/home/deploy/frontend-dist/index.html" || { echo "CI frontend-dist was deleted"; exit 1; }
 log_size="$(wc -c < "$TMP/home/deploy/logs/backup.log" | tr -d ' ')"
 test "$log_size" -lt 6000000 || { echo "log not truncated: $log_size"; exit 1; }
 test ! -e "$TMP/home/deploy/wal-archive/old.wal" || { echo "old wal not pruned"; exit 1; }
