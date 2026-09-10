@@ -41,6 +41,25 @@ class TestLastMailedFromMailerHistory:
         result = last_mailed_from_mailer_history([{'date': '2024-01-01', 'type': 'postcard'}])
         assert result == datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
 
+    def test_ignores_silent_omit_and_voided_entries(self):
+        history = [
+            {
+                'olc_order_id': 'ord-1',
+                'sent_at': '2026-09-10T15:34:14+00:00',
+                'voided': True,
+            },
+            {
+                'olc_order_id': 'ord-1',
+                'olc_silent_omit': True,
+                'at': '2026-09-10T16:00:49+00:00',
+            },
+            {
+                'olc_order_id': 'ord-1',
+                'sent_at': '2026-09-10T15:34:14+00:00',
+            },
+        ]
+        assert last_mailed_from_mailer_history(history) is None
+
     def test_list_of_legacy_strings_picks_latest(self):
         history = ['Postcard 1/1/2023', 'OLM 3/26/2024']
         result = last_mailed_from_mailer_history(history)
