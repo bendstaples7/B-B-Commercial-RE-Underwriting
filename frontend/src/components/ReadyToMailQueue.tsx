@@ -54,6 +54,7 @@ import {
   isRecentMailCampaignSubmitted,
 } from '@/utils/mailCampaignStatusColor'
 import { formatMailSubmitReconciliationBanner } from '@/utils/formatMailSubmitReconciliation'
+import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
 
 export function ReadyToMailQueue() {
   const queryClient = useQueryClient()
@@ -83,11 +84,10 @@ export function ReadyToMailQueue() {
     refetchInterval: 60_000,
   })
 
-  const { data: candidatesData, isLoading: candidatesLoading, isFetching: candidatesFetching } = useQuery({
+  const { data: candidatesData, isLoading: candidatesLoading, isFetching: candidatesFetching, isPlaceholderData: candidatesPlaceholder } = useQuery({
     queryKey: ['queue-mail-candidates', candidatesPage],
     queryFn: () => queueService.getMailCandidates(candidatesPage, 20),
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: false,
+    ...queueListQueryDefaults,
   })
 
   const { data: campaignsData } = useQuery({
@@ -470,16 +470,22 @@ export function ReadyToMailQueue() {
 
       <Box
         sx={{
-          opacity: isAddingToBatch ? 0.55 : 1,
+          ...queuePlaceholderTableSx(candidatesPlaceholder),
+          opacity: isAddingToBatch || candidatesPlaceholder ? 0.55 : 1,
           transition: 'opacity 0.2s ease',
-          pointerEvents: isAddingToBatch ? 'none' : 'auto',
+          pointerEvents: isAddingToBatch || candidatesPlaceholder ? 'none' : 'auto',
         }}
         data-testid="mail-candidates-table-shell"
       >
         <QueueTable
           rows={candidateRows}
           total={candidateTotal}
-          disabled={(candidatesLoading && candidateRows.length === 0) || isAddingToBatch}
+          disabled={
+            (candidatesLoading && candidateRows.length === 0)
+            || isAddingToBatch
+            || candidatesPlaceholder
+          }
+          isPlaceholderData={candidatesPlaceholder}
           fromQueue={fromQueue}
           selectedIds={selectedIds}
           onSelectionChange={onSelectionChange}

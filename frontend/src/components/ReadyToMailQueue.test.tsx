@@ -333,6 +333,55 @@ describe('ReadyToMailQueue', () => {
     })
   })
 
+  it('shows loading-more state after page add strips rows while total remains', async () => {
+    const manyCandidates: QueuePage = {
+      ...emptyCandidates,
+      rows: Array.from({ length: 20 }, (_, i) => ({
+        ...emptyCandidates.rows[0],
+        id: 100 + i,
+        owner_last_name: `Lead${i + 1}`,
+      })),
+      total: 1520,
+      per_page: 20,
+    }
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
+    vi.mocked(queueService.getMailCandidates)
+      .mockResolvedValueOnce(manyCandidates)
+      .mockImplementation(
+        () => new Promise(() => {
+          /* keep refetch pending so stripped cache stays visible */
+        }),
+      )
+    vi.mocked(openLetterService.enqueue).mockResolvedValue({
+      ...queueSummary,
+      added: 20,
+      skipped: 0,
+      invalid: 0,
+      results: manyCandidates.rows.map((row) => ({
+        lead_id: row.id,
+        status: 'queued',
+      })),
+    })
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('add-page-candidates-button')).toHaveTextContent(
+        'Add 20 from this page',
+      )
+    })
+    expect(screen.getByText(/\(1520 total\)/)).toBeInTheDocument()
+
+    await userEvent.click(screen.getByTestId('add-page-candidates-button'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('queue-table-refreshing')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('queue-table-empty')).not.toBeInTheDocument()
+    expect(screen.queryByText('No leads in this queue')).not.toBeInTheDocument()
+    expect(screen.getByText(/still in this queue/)).toBeInTheDocument()
+  })
+
   it('shows loading progress while adding the displayed page', async () => {
     let resolveEnqueue: (value: {
       queued_count: number
