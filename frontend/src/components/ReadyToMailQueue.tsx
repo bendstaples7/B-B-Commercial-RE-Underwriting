@@ -46,6 +46,7 @@ import {
   enqueueLeadsAsBulkResult,
   invalidateMailQueries,
   addedLeadIds,
+  workspaceLeadIdsFromEnqueue,
   resolveBulkActions,
   stripMailCandidatesFromCache,
 } from './queueBulkActions'
@@ -138,10 +139,11 @@ export function ReadyToMailQueue() {
     onSuccess: (result) => {
       // Candidates enqueue has no stable requested ID list (limit-based); strip from results only.
       const queuedIds = addedLeadIds(result, [])
+      const workspaceLeadIds = workspaceLeadIdsFromEnqueue(result, [])
       stripMailCandidatesFromCache(queryClient, queuedIds)
       bumpMailQueueAfterEnqueue(queryClient, result)
       invalidateMailQueries(queryClient)
-      afterLeadWorkspaceMutation(queryClient, queuedIds)
+      afterLeadWorkspaceMutation(queryClient, workspaceLeadIds)
       clearSelection()
       setCandidatesPage(1)
       showEnqueueFeedback(result)

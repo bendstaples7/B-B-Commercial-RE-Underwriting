@@ -2,9 +2,11 @@
 """Fail CI when mail mutations forget lead-workspace invalidation.
 
 Mail enqueue / remove / send change open tasks and mail chips on the command
-center. Those paths must call ``afterLeadWorkspaceMutation`` (or
-``invalidateAllCommandCenters`` for full-batch send) so the 60s workspace
+center. Those paths must *call* ``afterLeadWorkspaceMutation(`` (or
+``invalidateAllCommandCenters(`` for full-batch send) so the 60s workspace
 stale window cannot leave cancelled rematch rows completable in the UI.
+
+Imports alone must not satisfy this contract — match call sites (token + '(').
 
 Usage:
     python scripts/check_lead_workspace_invalidation.py
@@ -17,20 +19,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'src'
 
-# Each file must contain at least one of the required tokens.
+# Each file must contain at least one of the required *call* tokens.
 REQUIRED: dict[str, tuple[str, ...]] = {
     'components/MailQueueStagedTable.tsx': (
-        'afterLeadWorkspaceMutation',
+        'afterLeadWorkspaceMutation(',
     ),
     'components/queueBulkActions.tsx': (
-        'afterLeadWorkspaceMutation',
+        'afterLeadWorkspaceMutation(',
     ),
     'components/ReadyToMailQueue.tsx': (
-        'afterLeadWorkspaceMutation',
+        'afterLeadWorkspaceMutation(',
     ),
     'components/MailBatchSummary.tsx': (
-        'afterLeadWorkspaceMutation',
-        'invalidateAllCommandCenters',
+        'afterLeadWorkspaceMutation(',
+        'invalidateAllCommandCenters(',
     ),
 }
 
@@ -56,7 +58,7 @@ def main() -> int:
         print()
         print(
             'Mail mutations that change tasks/RA/mail chips must refresh '
-            'command-center via afterLeadWorkspaceMutation '
+            'command-center via afterLeadWorkspaceMutation(…) '
             '(see frontend/src/utils/afterCommandCenterMutation.ts).'
         )
         return 1

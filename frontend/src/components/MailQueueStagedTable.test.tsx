@@ -8,6 +8,7 @@ import {
   MAIL_QUEUE_BULK_REMOVE_LIMIT,
   chunkIds,
   removeManyInChunks,
+  PartialMailQueueRemoveError,
 } from './MailQueueStagedTable'
 import { NotificationProvider, globalNotify } from '@/context/NotificationContext'
 import openLetterService, { type MailQueueItem } from '@/services/openLetterApi'
@@ -243,6 +244,34 @@ describe('MailQueueStagedTable', () => {
       queryKey: commandCenterQueryKey(101),
     })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['mail-queue'] })
+  })
+
+
+  it('surfaces committed chunk ids when a later bulk-remove chunk fails', async () => {
+    const ids = Array.from({ length: MAIL_QUEUE_BULK_REMOVE_LIMIT + 2 }, (_, i) => i + 1)
+    vi.mocked(openLetterService.removeManyFromQueue)
+      .mockResolvedValueOnce({
+        removed: MAIL_QUEUE_BULK_REMOVE_LIMIT,
+        already_removed: 0,
+        blocked: [],
+        queued_count: 2,
+        batch_minimum: 50,
+        allow_send_below_minimum: false,
+        can_send: false,
+        items: [],
+      })
+      .mockRejectedValueOnce(new Error('network down'))
+
+    try {
+      await removeManyInChunks(ids)
+      expect.unreachable('expected PartialMailQueueRemoveError')
+    } catch (err) {
+      expect(err).toBeInstanceOf(PartialMailQueueRemoveError)
+      expect((err as PartialMailQueueRemoveError).committedIds).toEqual(
+        ids.slice(0, MAIL_QUEUE_BULK_REMOVE_LIMIT),
+      )
+    }
+    expect(openLetterService.removeManyFromQueue).toHaveBeenCalledTimes(2)
   })
 
 })

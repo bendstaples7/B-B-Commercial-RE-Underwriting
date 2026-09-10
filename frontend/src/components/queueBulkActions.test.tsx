@@ -9,6 +9,7 @@ import {
   enqueueLeadsAsBulkResult,
   bumpMailQueueAfterEnqueue,
   stripMailCandidatesFromCache,
+  workspaceLeadIdsFromEnqueue,
   resolveBulkActions,
   createAddToMailBatchBulkAction,
   createSuppressBulkAction,
@@ -116,6 +117,46 @@ describe('queueBulkActions', () => {
       queryKey: ['queue-todays-action'],
     })
   })
+
+
+  it('invalidates command centers for recently_sold leads, not only queued', async () => {
+    vi.mocked(openLetterService.enqueue).mockResolvedValue({
+      added: 1,
+      skipped: 1,
+      invalid: 0,
+      results: [
+        { lead_id: 10, status: 'queued' },
+        { lead_id: 11, status: 'recently_sold', sale_date: '2026-08-01' },
+      ],
+      queued_count: 1,
+      batch_minimum: 50,
+      allow_send_below_minimum: false,
+      can_send: false,
+      items: [],
+    })
+
+    await enqueueLeadsAsBulkResult([10, 11], baseCtx())
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ['commandCenter', 10],
+    })
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ['commandCenter', 11],
+    })
+    expect(workspaceLeadIdsFromEnqueue(
+      {
+        added: 1,
+        skipped: 1,
+        invalid: 0,
+        results: [
+          { lead_id: 10, status: 'queued' },
+          { lead_id: 11, status: 'recently_sold' },
+        ],
+      } as never,
+      [10, 11],
+    )).toEqual([10, 11])
+  })
+
 
   it('stripMailCandidatesFromCache updates every cached candidate page', () => {
     queryClient.setQueryData(['queue-mail-candidates', 1], {

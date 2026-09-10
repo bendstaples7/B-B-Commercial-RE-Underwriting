@@ -93,6 +93,16 @@ export function addedLeadIds(result: EnqueueResult, requestedIds: number[]): num
   return result.added === requestedIds.length ? requestedIds : []
 }
 
+/** Leads whose command-center cache must refresh after enqueue (includes recently_sold heals). */
+export function workspaceLeadIdsFromEnqueue(
+  result: EnqueueResult,
+  requestedIds: number[],
+): number[] {
+  const fromResults = [...new Set((result.results ?? []).map((row) => row.lead_id))]
+  if (fromResults.length > 0) return fromResults
+  return [...new Set(requestedIds)]
+}
+
 function invalidateQueueQueries(
   queryClient: QueryClient,
   queryKey: string,
@@ -118,10 +128,11 @@ export async function enqueueLeadsAsBulkResult(
   try {
     const result = await openLetterService.enqueue(leadIds, ctx.queryKey)
     const queuedIds = addedLeadIds(result, leadIds)
+    const workspaceLeadIds = workspaceLeadIdsFromEnqueue(result, leadIds)
     stripMailCandidatesFromCache(ctx.queryClient, queuedIds)
     bumpMailQueueAfterEnqueue(ctx.queryClient, result)
     invalidateMailQueries(ctx.queryClient)
-    afterLeadWorkspaceMutation(ctx.queryClient, queuedIds)
+    afterLeadWorkspaceMutation(ctx.queryClient, workspaceLeadIds)
     invalidateQueueQueries(ctx.queryClient, ctx.queryKey, ctx.extraQueryKeys)
     ctx.onEnqueueResult?.(result)
     ctx.onAfterAction?.()
