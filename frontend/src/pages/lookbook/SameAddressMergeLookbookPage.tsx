@@ -1,10 +1,10 @@
 /**
- * DEV lookbook — same-address merge entry points (banner vs Merge duplicate…).
+ * DEV lookbook — same-address merge entry points as they appear on Command Center.
  */
 import { useState } from 'react'
-import { Box, Paper, Stack, Typography } from '@mui/material'
+import { Box, Chip, Paper, Stack, Typography } from '@mui/material'
 import { SameAddressMergeBanner } from '@/components/lead-detail/SameAddressMergeBanner'
-import { ccCardSx, ccPageBgSx } from '@/components/lead-detail/commandCenterChrome'
+import { ccCardSx, ccHeroAddressSx, ccPageBgSx } from '@/components/lead-detail/commandCenterChrome'
 import type { SameAddressLeadSummary } from '@/types'
 
 const CURRENT_PEOPLE = ['JAMES E MALONE']
@@ -16,16 +16,70 @@ const TWIN: SameAddressLeadSummary = {
   people_names: ['JAMES E MALONE'],
 }
 
+function FakeCommandCenterHeader() {
+  return (
+    <Box
+      data-testid="merge-lookbook-cc-header"
+      sx={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'space-between',
+        gap: 2,
+        flexWrap: 'wrap',
+        mb: 0.5,
+      }}
+    >
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Typography sx={ccHeroAddressSx}>1867 N Howe St, Chicago, IL 60614</Typography>
+        <Typography variant="body1" sx={{ mt: 0.25, fontWeight: 600 }}>
+          JAMES E MALONE
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          PIN 14-33-303-031-0000
+        </Typography>
+        <Box sx={{ mt: 0.75, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <Chip size="small" color="primary" label="Mailing, No Contact Made" />
+          <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>
+            Last Sale 08/21/1998 · 2 Units · Duplex · Residential
+          </Typography>
+        </Box>
+      </Box>
+      <Box
+        sx={{
+          width: 88,
+          height: 88,
+          borderRadius: '50%',
+          border: '6px solid',
+          borderColor: 'success.light',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+        }}
+      >
+        <Typography variant="h5" fontWeight={700} lineHeight={1}>
+          60
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          Good Fit
+        </Typography>
+      </Box>
+    </Box>
+  )
+}
+
 export default function SameAddressMergeLookbookPage() {
   const [lastMerged, setLastMerged] = useState<string | null>(null)
 
   return (
     <Box sx={{ ...ccPageBgSx, p: 2, minHeight: '100vh' }} data-testid="merge-lookbook">
       <Typography variant="h5" sx={{ mb: 1 }}>
-        Same-address merge lookbook
+        Same-address merge — Command Center placement
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        What you will see on Command Center for leads like 2496 / 2497.
+        On <code>/leads/:id</code>, the merge control sits in the sticky header stack —
+        directly under the property address / owner row, above Action Center.
       </Typography>
       {lastMerged ? (
         <Typography variant="body2" sx={{ mb: 2 }} data-testid="merge-lookbook-last">
@@ -33,29 +87,31 @@ export default function SameAddressMergeLookbookPage() {
         </Typography>
       ) : null}
 
-      <Stack spacing={3} maxWidth={900}>
-        <Paper sx={{ ...ccCardSx, p: 2 }} data-testid="merge-lookbook-manual">
-          <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 0.5 }}>
-            A — No auto-detected twin (today on 2496)
+      <Stack spacing={3} maxWidth={980}>
+        <Paper sx={{ ...ccCardSx, p: 2 }} data-testid="merge-lookbook-cc-placement">
+          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
+            Command Center header (lead 2496) — look here ↓
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Outlined <strong>Merge duplicate…</strong> opens a dialog where you can
-            search by name, address, or lead number.
-          </Typography>
+          <FakeCommandCenterHeader />
           <Box
+            data-testid="merge-lookbook-entry-callout"
             sx={{
-              border: '1px dashed',
-              borderColor: 'divider',
+              mt: 0.5,
+              px: 1,
+              py: 0.75,
               borderRadius: 1,
-              p: 1.5,
-              bgcolor: 'background.paper',
+              border: '2px solid',
+              borderColor: 'warning.main',
+              bgcolor: 'rgba(237, 108, 2, 0.08)',
             }}
           >
-            <Typography variant="h6" sx={{ mb: 0.5 }}>
-              1867 N Howe St, Chicago, IL 60614
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              JAMES E MALONE · PIN 14-33-303-031-0000
+            <Typography
+              variant="caption"
+              fontWeight={700}
+              color="warning.dark"
+              sx={{ display: 'block', mb: 0.5 }}
+            >
+              ENTRY POINT — under the address header, above Action Center
             </Typography>
             <SameAddressMergeBanner
               leadId={2496}
@@ -67,40 +123,43 @@ export default function SameAddressMergeLookbookPage() {
               }}
             />
           </Box>
+          <Box
+            sx={{
+              mt: 1.5,
+              p: 1.5,
+              borderRadius: 1,
+              bgcolor: 'grey.50',
+              border: '1px dashed',
+              borderColor: 'divider',
+            }}
+          >
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+              Action Center
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Log Call · Log Note · Log Email · Mail · Skip Trace · Deprioritize
+            </Typography>
+          </Box>
         </Paper>
 
         <Paper sx={{ ...ccCardSx, p: 2 }} data-testid="merge-lookbook-auto">
           <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 0.5 }}>
-            B — Twin detected (after dual-number matching ships)
+            When a twin is auto-detected
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Blue banner with Merge
+            Same spot becomes a blue banner with <strong>Merge</strong> (search still
+            available in the dialog).
           </Typography>
-          <Box
-            sx={{
-              border: '1px dashed',
-              borderColor: 'divider',
-              borderRadius: 1,
-              p: 1.5,
-              bgcolor: 'background.paper',
+          <FakeCommandCenterHeader />
+          <SameAddressMergeBanner
+            leadId={2496}
+            twins={[TWIN]}
+            currentOwnerLabel="JAMES E MALONE"
+            currentPeopleNames={CURRENT_PEOPLE}
+            onMerged={({ winnerId, loserId }) => {
+              setLastMerged(`#${loserId} → #${winnerId}`)
             }}
-          >
-            <Typography variant="h6" sx={{ mb: 0.5 }}>
-              1867 N Howe St, Chicago, IL 60614
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              JAMES E MALONE · PIN 14-33-303-031-0000
-            </Typography>
-            <SameAddressMergeBanner
-              leadId={2496}
-              twins={[TWIN]}
-              currentOwnerLabel="JAMES E MALONE"
-              currentPeopleNames={CURRENT_PEOPLE}
-              onMerged={({ winnerId, loserId }) => {
-                setLastMerged(`#${loserId} → #${winnerId}`)
-              }}
-            />
-          </Box>
+          />
         </Paper>
       </Stack>
     </Box>

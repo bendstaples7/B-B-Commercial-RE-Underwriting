@@ -126,15 +126,18 @@ async function main() {
 
     await page.goto(`${BASE}/lookbook/same-address-merge`, { waitUntil: 'networkidle' })
     await page.getByTestId('merge-lookbook').waitFor({ timeout: 30000 })
+    await page.getByTestId('merge-lookbook-cc-placement').waitFor({ timeout: 15000 })
 
-    const closedPath = resolve(OUT_DIR, 'same-address-merge-entries.png')
-    await page.screenshot({ path: closedPath, fullPage: true })
+    // Placement shot: CC header + highlighted Merge duplicate entry
+    const placement = page.getByTestId('merge-lookbook-cc-placement')
+    const placementPath = resolve(OUT_DIR, 'cc-merge-entry-point.png')
+    await placement.screenshot({ path: placementPath })
     writeFileSync(
-      resolve(OUT_DIR, 'same-address-merge-entries.json'),
+      resolve(OUT_DIR, 'cc-merge-entry-point.json'),
       JSON.stringify(
         {
           url: `${BASE}/lookbook/same-address-merge`,
-          label: 'same-address-merge-entries',
+          label: 'cc-merge-entry-point',
           loginWall: false,
           capturedAt: new Date().toISOString(),
         },
@@ -143,22 +146,23 @@ async function main() {
       ),
     )
 
-    // Open manual Merge duplicate dialog
-    const manualSection = page.getByTestId('merge-lookbook-manual')
-    await manualSection.getByTestId('same-address-merge-open').click()
+    // Open dialog from the CC placement Merge duplicate button
+    await placement.getByTestId('same-address-merge-open').click()
     await page.getByTestId('same-address-merge-dialog').waitFor()
+    await page.getByTestId('same-address-merge-paste-id').fill('Howe')
+    await page.waitForTimeout(500)
     await page.getByTestId('same-address-merge-paste-id').fill('2497')
     await page.getByTestId('same-address-merge-paste-id').blur()
     await page.waitForTimeout(400)
 
-    const dialogPath = resolve(OUT_DIR, 'same-address-merge-dialog.png')
+    const dialogPath = resolve(OUT_DIR, 'cc-merge-search-dialog.png')
     await page.screenshot({ path: dialogPath, fullPage: false })
     writeFileSync(
-      resolve(OUT_DIR, 'same-address-merge-dialog.json'),
+      resolve(OUT_DIR, 'cc-merge-search-dialog.json'),
       JSON.stringify(
         {
           url: `${BASE}/lookbook/same-address-merge`,
-          label: 'same-address-merge-dialog',
+          label: 'cc-merge-search-dialog',
           loginWall: false,
           capturedAt: new Date().toISOString(),
         },
@@ -167,17 +171,12 @@ async function main() {
       ),
     )
 
-    // Copy into Cursor artifacts for walkthrough
-    for (const name of [
-      'same-address-merge-entries.png',
-      'same-address-merge-dialog.png',
-    ]) {
-      const src = resolve(OUT_DIR, name)
-      const { copyFileSync } = await import('node:fs')
-      copyFileSync(src, resolve(CURSOR_OUT, name))
+    const { copyFileSync } = await import('node:fs')
+    for (const name of ['cc-merge-entry-point.png', 'cc-merge-search-dialog.png']) {
+      copyFileSync(resolve(OUT_DIR, name), resolve(CURSOR_OUT, name))
     }
 
-    console.log(JSON.stringify({ closedPath, dialogPath, ok: true }))
+    console.log(JSON.stringify({ placementPath, dialogPath, ok: true }))
     await browser.close()
   } catch (err) {
     console.error(viteLog.slice(-4000))
