@@ -352,8 +352,12 @@ def _collect_flat_emails(lead: Lead) -> list[str]:
     return emails
 
 
-def _batch_best_phone_by_lead(leads: list[Lead]) -> dict[int, str]:
-    """Best viable phone per lead, resolved with one relational query."""
+def _batch_best_phone_details_by_lead(leads: list[Lead]) -> dict[int, dict]:
+    """Best viable phone per lead with optional contact/phone ids.
+
+    Shared by outreach resolution and the canonical ``dial_target`` payload so
+    Call Now, open call-task titles, and Log Call cannot diverge.
+    """
     from sqlalchemy import bindparam, text
 
     from app import db
@@ -374,7 +378,8 @@ def _batch_best_phone_by_lead(leads: list[Lead]) -> dict[int, str]:
                  WHEN LOWER(COALESCE(cp.notes, '')) LIKE '%hubspot primary%' THEN 0
                  ELSE 1
                END AS hubspot_rank,
-               cp.id
+               cp.id,
+               cp.contact_id
         FROM contact_phones cp
         JOIN property_contacts pc ON pc.contact_id = cp.contact_id
         WHERE pc.property_id IN :lead_ids
@@ -397,14 +402,19 @@ def _batch_best_phone_by_lead(leads: list[Lead]) -> dict[int, str]:
         },
     ).fetchall()
 
-    relational: dict[int, list[tuple[int, str]]] = defaultdict(list)
-    for property_id, value, score, _hubspot_rank, _phone_id in rows:
+    # score, value, phone_id, contact_id — first SQL row per lead already wins
+    # under ORDER BY; keep the list only so flat fallbacks can compete by score.
+    relational: dict[int, list[tuple[int, str, int | None, int | None]]] = defaultdict(list)
+    for property_id, value, score, _hubspot_rank, phone_id, contact_id in rows:
         digits = re.sub(r'\D', '', str(value or ''))
         if len(digits) < 7 or int(score or 0) < MIN_VIABLE_CONFIDENCE:
             continue
-        relational[int(property_id)].append((int(score), str(value).strip()))
+        relational[int(property_id)].append(
+            (int(score), str(value).strip(), int(phone_id) if phone_id is not None else None,
+             int(contact_id) if contact_id is not None else None),
+        )
 
-    result: dict[int, str] = {}
+    result: dict[int, dict] = {}
     for lead in leads:
         lead_id = getattr(lead, 'id', None)
         if not isinstance(lead_id, int):
@@ -414,12 +424,55 @@ def _batch_best_phone_by_lead(leads: list[Lead]) -> dict[int, str]:
             raw = getattr(lead, f'phone_{slot}', None)
             digits = re.sub(r'\D', '', str(raw or ''))
             if len(digits) >= 7:
-                candidates.append((DEFAULT_CONFIDENCE, str(raw).strip()))
+                candidates.append((DEFAULT_CONFIDENCE, str(raw).strip(), None, None))
                 break
-        if candidates:
-            candidates.sort(key=lambda item: -item[0])
-            result[lead_id] = candidates[0][1]
+        if not candidates:
+            continue
+        # Prefer higher score; when tied, relational rows already precede flats
+        # and were ordered by hubspot_rank / id in SQL.
+        candidates.sort(key=lambda item: -item[0])
+        _score, value, phone_id, contact_id = candidates[0]
+        result[lead_id] = {
+            'value': value,
+            'phone_id': phone_id,
+            'contact_id': contact_id,
+        }
     return result
+
+
+def _batch_best_phone_by_lead(leads: list[Lead]) -> dict[int, str]:
+    """Best viable phone value per lead (legacy string map for outreach)."""
+    return {
+        lead_id: details['value']
+        for lead_id, details in _batch_best_phone_details_by_lead(leads).items()
+    }
+
+
+def resolve_dial_target(lead: Lead) -> dict | None:
+    """Canonical dial target for Call Now, call-task titles, and Log Call.
+
+    Always resolves the best viable phone for the lead (including dialed /
+    HubSpot-primary numbers on ``former_owner`` links). Independent of
+    ``recommended_contact_method`` so Log Call can preselect even when the RA
+    channel is mail/email.
+    """
+    lead_id = getattr(lead, 'id', None)
+    if not isinstance(lead_id, int):
+        raw = _first_flat_phone(lead)
+        if not raw:
+            return None
+        payload = _phone_contact_dict(raw, 'phone')
+        payload['contact_id'] = None
+        payload['phone_id'] = None
+        return payload
+
+    details = _batch_best_phone_details_by_lead([lead]).get(lead_id)
+    if not details:
+        return None
+    payload = _phone_contact_dict(details['value'], 'phone')
+    payload['contact_id'] = details.get('contact_id')
+    payload['phone_id'] = details.get('phone_id')
+    return payload
 
 
 def _batch_first_email_by_lead(leads: list[Lead]) -> dict[int, str]:

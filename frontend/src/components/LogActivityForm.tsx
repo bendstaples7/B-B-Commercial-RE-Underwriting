@@ -183,10 +183,11 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
     )
     const resolvedPreferredPhoneDigits = useMemo(() => {
       if (mode !== 'call') return null
-      const fromTask = extractPhoneDigitsFromText(completableTask?.title)
-      if (fromTask) return fromTask
+      // Prefer canonical dial_target digits (passed as preferredPhoneDigits)
+      // over task-title parsing so Log Call cannot invent a parallel ranking.
       const fromProp = normalizePhoneDigits(preferredPhoneDigits)
-      return fromProp.length >= 7 ? fromProp : null
+      if (fromProp.length >= 7) return fromProp
+      return extractPhoneDigitsFromText(completableTask?.title)
     }, [mode, completableTask?.title, preferredPhoneDigits])
     const hasOpenNonCompletableTasks =
       !completableTask && openTasks.some((t) => t.status === 'open' || t.status === 'overdue')

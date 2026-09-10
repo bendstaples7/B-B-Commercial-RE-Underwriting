@@ -256,6 +256,36 @@ describe('ContactMethodFields', () => {
     expect(options[0].contactId).toBe(2)
   })
 
+  it('never hides preferred dial-target digits when a different contact is selected (4490 invariant)', () => {
+    const options = buildMethodOptions(
+      [
+        {
+          ...contacts[0],
+          first_name: 'Sam',
+          last_name: 'FISBO',
+          phones: [
+            { id: 10, contact_id: 1, value: '(773) 454-0106', label: 'other', confidence_score: 50 },
+          ],
+        },
+        {
+          ...contacts[1],
+          first_name: 'Sam',
+          last_name: 'Old Town Square Cbre',
+          is_primary: false,
+          phones: [
+            { id: 11, contact_id: 2, value: '(773) 271-5525', label: 'other', confidence_score: 50 },
+          ],
+        },
+      ],
+      'phone',
+      1, // Sam FISBO selected — must still surface CBRE dial target
+      '7732715525',
+    )
+    expect(options.some((o) => o.value.replace(/\D/g, '').endsWith('7732715525'))).toBe(true)
+    expect(options[0].value.replace(/\D/g, '').endsWith('7732715525')).toBe(true)
+    expect(options[0].contactId).toBe(2)
+  })
+
   it('defaults to the primary contact + first email (emails) even with multiple contacts', async () => {
     const onChange = vi.fn()
     render(

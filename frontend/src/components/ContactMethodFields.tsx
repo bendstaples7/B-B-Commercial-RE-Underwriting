@@ -101,25 +101,35 @@ export function buildMethodOptions(
 
   const options: MethodOption[] = []
 
+  const pushPhone = (
+    contact: PropertyContact,
+    phone: NonNullable<PropertyContact['phones']>[number],
+    includeContactName: boolean,
+  ) => {
+    const contactName =
+      [contact.first_name, contact.last_name].filter(Boolean).join(' ') || 'Unnamed contact'
+    options.push({
+      key: `phone:${phone.id}`,
+      label: formatPhoneLabel(
+        phone.value,
+        phone.label,
+        includeContactName ? contactName : undefined,
+        phone,
+      ),
+      value: phone.value,
+      recordId: phone.id,
+      recordLabel: phone.label,
+      confidenceScore: phone.confidence_score ?? 50,
+      contactId: contact.id,
+      isHubspotPrimary: isHubspotPrimaryPhone(phone),
+    })
+  }
+
   for (const contact of relevantContacts) {
     const contactName = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || 'Unnamed contact'
     if (mode === 'phone') {
       for (const phone of contact.phones ?? []) {
-        options.push({
-          key: `phone:${phone.id}`,
-          label: formatPhoneLabel(
-            phone.value,
-            phone.label,
-            selectedContactId == null ? contactName : undefined,
-            phone,
-          ),
-          value: phone.value,
-          recordId: phone.id,
-          recordLabel: phone.label,
-          confidenceScore: phone.confidence_score ?? 50,
-          contactId: contact.id,
-          isHubspotPrimary: isHubspotPrimaryPhone(phone),
-        })
+        pushPhone(contact, phone, selectedContactId == null)
       }
     } else {
       for (const email of contact.emails ?? []) {
@@ -131,6 +141,22 @@ export function buildMethodOptions(
           recordLabel: email.label,
           contactId: contact.id,
         })
+      }
+    }
+  }
+
+  // Hard invariant: never filter away the dial target. If a contact is selected
+  // that does not own preferredPhoneDigits, still inject that phone so Log Call
+  // cannot hide the open-task / dial_target number.
+  if (mode === 'phone' && preferredPhoneDigits) {
+    const hasPreferred = options.some((o) => phoneDigitsEqual(o.value, preferredPhoneDigits))
+    if (!hasPreferred) {
+      for (const contact of contacts) {
+        for (const phone of contact.phones ?? []) {
+          if (phoneDigitsEqual(phone.value, preferredPhoneDigits)) {
+            pushPhone(contact, phone, true)
+          }
+        }
       }
     }
   }
@@ -322,6 +348,8 @@ export function ContactMethodFields({
     const opt = methodOptions.find((o) => o.key === methodKey)
     onChange({
       ...value,
+      // Selecting a dial-target phone on another contact switches the contact too.
+      contactId: opt?.contactId ?? value.contactId,
       methodKey,
       methodValue: opt?.value ?? null,
       methodLabel: opt?.recordLabel ?? null,

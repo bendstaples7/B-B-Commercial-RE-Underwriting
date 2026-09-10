@@ -32,7 +32,10 @@ from app.services.recommended_action_metadata import (
     get_recommended_action_display,
     get_winning_rule_label,
 )
-from app.services.outreach_method_service import resolve_outreach_contact
+from app.services.outreach_method_service import (
+    resolve_dial_target,
+    resolve_outreach_contact,
+)
 from app.services.lead_scoring_engine import LeadScoringEngine
 from app.services.mail_task_lifecycle_service import (
     resolve_mail_eligibility_hold,
@@ -482,6 +485,7 @@ def get_recommended_action(lead_id: int):
         'explanation': display.get('explanation'),
         'signals': signals,
         'outreach_contact': resolve_outreach_contact(lead, contact_method),
+        'dial_target': resolve_dial_target(lead),
     }), 200
 
 
@@ -1140,6 +1144,8 @@ def get_command_center(lead_id: int):
         'email_5': lead.email_5,
         # Merged deduplicated lists (flat + relational)
         'phones': all_phones,
+        # Canonical dial target (Call Now / call-task titles / Log Call).
+        'dial_target': resolve_dial_target(lead),
         'emails': all_emails,
         # Ownership
         'ownership_type': lead.ownership_type,

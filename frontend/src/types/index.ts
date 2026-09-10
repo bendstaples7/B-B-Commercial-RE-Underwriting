@@ -1236,6 +1236,20 @@ export interface OutreachContact {
   lines?: string[]
 }
 
+/**
+ * Canonical phone dial target for Call Now, open call-task titles, and Log Call.
+ * Produced by backend `resolve_dial_target` — do not re-rank phones in the FE.
+ */
+export interface DialTarget {
+  channel: 'phone'
+  label: string
+  value: string
+  display: string
+  href?: string | null
+  contact_id?: number | null
+  phone_id?: number | null
+}
+
 /** Unified recommended action vocabulary (scoring + workflow). */
 export type UnifiedRecommendedAction =
   | 'enrich_data'
@@ -2304,6 +2318,11 @@ export interface CommandCenterPayload {
   email_4?: string | null;
   email_5?: string | null;
   phones?: LeadPhone[];
+  /**
+   * Canonical dial target from `resolve_dial_target` — Call Now, call-task
+   * titles, and Log Call must consume this instead of re-ranking phones.
+   */
+  dial_target?: DialTarget | null;
   emails?: string[];
   notes?: string | null;
   lead_score: number;
