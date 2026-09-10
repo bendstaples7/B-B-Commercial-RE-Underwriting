@@ -97,30 +97,46 @@ publish_symlink() {
   ln -sfn "$target" "$TMP_LINK"
   if [[ -e "$LIVE_DIST" && ! -L "$LIVE_DIST" ]]; then
     local legacy="${RELEASES_DIR}/legacy-pre-symlink-$$"
-    if python3 - "$LIVE_DIST" "$TMP_LINK" "$legacy" <<'PY'
-import ctypes, os, sys
+    # Python only performs the atomic exchange. If that succeeds, LIVE_DIST is
+    # already the new symlink and TMP_LINK holds the old plain directory — even
+    # when a later legacy rename fails.
+    if python3 - "$LIVE_DIST" "$TMP_LINK" <<'PY'
+import ctypes, sys
 
-live, tmp_link, legacy = sys.argv[1], sys.argv[2], sys.argv[3]
+live, tmp_link = sys.argv[1], sys.argv[2]
 AT_FDCWD = -100
 RENAME_EXCHANGE = 2
 libc = ctypes.CDLL("libc.so.6", use_errno=True)
-# int renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, unsigned int flags);
 libc.renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
 rc = libc.renameat2(
     AT_FDCWD, tmp_link.encode(), AT_FDCWD, live.encode(), RENAME_EXCHANGE
 )
-if rc != 0:
-    sys.exit(1)
-# After exchange: live is the symlink; tmp_link holds the old plain directory.
-os.rename(tmp_link, legacy)
+sys.exit(0 if rc == 0 else 1)
 PY
     then
+      # LIVE_DIST is the new symlink. TMP_LINK is the exchanged old directory
+      # (or a leftover symlink if exchange did not run). Clean symlink-safely.
+      if [[ -L "$TMP_LINK" ]]; then
+        rm -f "$TMP_LINK" 2>/dev/null || true
+      elif [[ -d "$TMP_LINK" ]]; then
+        mv "$TMP_LINK" "$legacy" 2>/dev/null || rm -rf "$TMP_LINK" 2>/dev/null || true
+      elif [[ -e "$TMP_LINK" ]]; then
+        rm -f "$TMP_LINK" 2>/dev/null || true
+      fi
       echo "    Migrated plain ${LIVE_DIST} → symlink via atomic exchange (legacy retained under releases)"
       return 0
     fi
     # Fail closed: a non-atomic mv/mv fallback would expose a missing nginx root.
     echo "FAILED: cannot atomically migrate plain ${LIVE_DIST}; renameat2(RENAME_EXCHANGE) unavailable" >&2
-    rm -f "$TMP_LINK" 2>/dev/null || true
+    # Exchange did not succeed — TMP_LINK should still be our temp symlink.
+    if [[ -L "$TMP_LINK" ]]; then
+      rm -f "$TMP_LINK" 2>/dev/null || true
+    elif [[ -d "$TMP_LINK" ]]; then
+      # Partial exchange left an orphaned directory; remove recursively.
+      rm -rf "$TMP_LINK" 2>/dev/null || true
+    else
+      rm -f "$TMP_LINK" 2>/dev/null || true
+    fi
     return 1
   fi
   # LIVE missing or already a symlink: atomic replace via temp link rename.

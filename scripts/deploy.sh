@@ -17,6 +17,8 @@ export PATH=$PATH:/home/deploy/.local/bin
 TARGET_SHA="${1:?TARGET_SHA argument is required}"
 APP_DIR="/home/deploy/app"
 ROLLBACK_LOG="/home/deploy/rollback.log"
+# Set to 1 only while this invocation's end-of-deploy PREV promote is in flight.
+PREV_ASSETS_PROMOTE_STARTED=0
 
 # Durable helper (Deploy CI copies to /home/deploy/; survives git checkout rollback).
 ensure_frontend_dist_readable() {
@@ -76,10 +78,15 @@ rollback() {
     # Discard deferred asset-grace snapshot from the failed release so the next
     # deploy still graces the rolled-back generation's hashed chunks.
     rm -rf /home/deploy/frontend-assets-prev.next 2>/dev/null || true
-    # Do NOT restore frontend-assets-prev.rollback here. That snapshot is only
-    # created at end-of-deploy promote and may be leftover from a prior success;
-    # restoring it on a pre-promote failure would replace the current good grace
-    # set with a stale generation. post-deploy-rollback.sh owns that restore.
+    # Restore .rollback only if *this* invocation started promote (moved the
+    # live grace set aside). Leftover .rollback from a prior success must not
+    # replace a still-current frontend-assets-prev on pre-promote failures.
+    if [ "${PREV_ASSETS_PROMOTE_STARTED:-0}" = "1" ] \
+        && [ -d /home/deploy/frontend-assets-prev.rollback ]; then
+        rm -rf /home/deploy/frontend-assets-prev
+        mv /home/deploy/frontend-assets-prev.rollback /home/deploy/frontend-assets-prev
+        echo "    Restored frontend-assets-prev from in-progress promote rollback snapshot"
+    fi
     # Always clear soft-lock so canary can heal/alert even when restore failed.
     rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
     sudo -n systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
@@ -816,6 +823,8 @@ fi
 # PREV so post-deploy-rollback.sh can restore grace hashes if CI health fails
 # after this script exits 0.
 if [ -d /home/deploy/frontend-assets-prev.next ]; then
+    # Mark promote in-flight so ERR rollback restores .rollback if we fail mid-promote.
+    PREV_ASSETS_PROMOTE_STARTED=1
     rm -rf /home/deploy/frontend-assets-prev.rollback
     if [ -d /home/deploy/frontend-assets-prev ]; then
         mv /home/deploy/frontend-assets-prev /home/deploy/frontend-assets-prev.rollback

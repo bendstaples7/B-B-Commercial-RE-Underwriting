@@ -474,6 +474,11 @@ def main() -> int:
             "deploy.sh must save frontend-assets-prev.rollback before promoting "
             ".next so post-deploy rollback can restore grace hashes"
         )
+    if "PREV_ASSETS_PROMOTE_STARTED" not in deploy_text:
+        errors.append(
+            "deploy.sh must track PREV_ASSETS_PROMOTE_STARTED and restore "
+            "frontend-assets-prev.rollback only when this invocation's promote started"
+        )
     if "SPA_DEPLOY_IN_PROGRESS" not in deploy_text:
         errors.append(
             "deploy.sh must set SPA_DEPLOY_IN_PROGRESS around frontend dist swap "
