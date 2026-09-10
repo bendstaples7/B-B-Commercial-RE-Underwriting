@@ -118,11 +118,10 @@ PY
       echo "    Migrated plain ${LIVE_DIST} → symlink via atomic exchange (legacy retained under releases)"
       return 0
     fi
-    # Fallback when renameat2 is unavailable: relocate then publish as fast as possible.
-    mv "$LIVE_DIST" "$legacy"
-    mv -Tf "$TMP_LINK" "$LIVE_DIST"
-    echo "    Migrated plain ${LIVE_DIST} → ${legacy} (symlink-published; brief rename window)"
-    return 0
+    # Fail closed: a non-atomic mv/mv fallback would expose a missing nginx root.
+    echo "FAILED: cannot atomically migrate plain ${LIVE_DIST}; renameat2(RENAME_EXCHANGE) unavailable" >&2
+    rm -f "$TMP_LINK" 2>/dev/null || true
+    return 1
   fi
   # LIVE missing or already a symlink: atomic replace via temp link rename.
   mv -Tf "$TMP_LINK" "$LIVE_DIST"

@@ -431,6 +431,25 @@ def main() -> int:
                 "install_frontend_dist_with_asset_grace.sh must atomically migrate a "
                 "plain LIVE_DIST directory via renameat2(RENAME_EXCHANGE) (or equivalent)"
             )
+        # Reject non-atomic plain-dir migration fallbacks (mv LIVE aside then
+        # publish) — that window 404s nginx. Fail closed when renameat2 is missing.
+        if re.search(
+            r'\bmv\s+"\$LIVE_DIST"\s+"\$legacy".*\bmv\s+-Tf\s+"\$TMP_LINK"\s+"\$LIVE_DIST"',
+            grace_text,
+            flags=re.DOTALL,
+        ) or (
+            'Migrated plain' in grace_text
+            and 'brief rename window' in grace_text
+        ):
+            errors.append(
+                "install_frontend_dist_with_asset_grace.sh must not fall back to a "
+                "non-atomic mv/mv plain-dir migration; fail closed if renameat2 is unavailable"
+            )
+        if "cannot atomically migrate" not in grace_text:
+            errors.append(
+                "install_frontend_dist_with_asset_grace.sh must fail closed when "
+                "renameat2(RENAME_EXCHANGE) cannot migrate a plain LIVE_DIST"
+            )
         if re.search(r"\brsync\b", grace_text):
             errors.append(
                 "install_frontend_dist_with_asset_grace.sh must not rsync in-place "
