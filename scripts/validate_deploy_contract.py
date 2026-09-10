@@ -388,6 +388,44 @@ def main() -> int:
             "deploy.sh must install frontend/dist via install_frontend_dist_with_asset_grace "
             "(retain prior hashed assets for one generation)"
         )
+    # PREV_ASSETS must not be promoted until the full deploy succeeds; otherwise
+    # rollback leaves grace pointing at a failed release's hashes.
+    prev_promote_re = (
+        r"mv\s+/home/deploy/frontend-assets-prev\.next\s+/home/deploy/frontend-assets-prev"
+    )
+    promote_matches = list(re.finditer(prev_promote_re, deploy_text))
+    if not promote_matches:
+        errors.append(
+            "deploy.sh must promote frontend-assets-prev.next → frontend-assets-prev "
+            "after a successful deploy"
+        )
+    else:
+        post_hubspot = deploy_text.find("Post-deploy HubSpot")
+        for m in promote_matches:
+            if post_hubspot < 0 or m.start() < post_hubspot:
+                errors.append(
+                    "deploy.sh must promote frontend-assets-prev.next only after "
+                    "post-deploy HubSpot sync succeeds (not before migrations/health)"
+                )
+                break
+    install_grace = REPO_ROOT / "scripts" / "install_frontend_dist_with_asset_grace.sh"
+    if install_grace.exists():
+        grace_text = _read(install_grace)
+        if "-releases" not in grace_text:
+            errors.append(
+                "install_frontend_dist_with_asset_grace.sh must stage under a "
+                "*-releases directory for atomic publish"
+            )
+        if "ln -sfn" not in grace_text:
+            errors.append(
+                "install_frontend_dist_with_asset_grace.sh must atomically publish "
+                "via symlink (ln -sfn + mv)"
+            )
+        if re.search(r"\brsync\b", grace_text):
+            errors.append(
+                "install_frontend_dist_with_asset_grace.sh must not rsync in-place "
+                "into the live dist tree"
+            )
     if "SPA_DEPLOY_IN_PROGRESS" not in deploy_text:
         errors.append(
             "deploy.sh must set SPA_DEPLOY_IN_PROGRESS around frontend dist swap "

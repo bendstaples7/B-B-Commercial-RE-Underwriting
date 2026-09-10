@@ -477,16 +477,8 @@ else
     echo "FAILED: spa-dist-fingerprint.sh not found"
     rollback 1
 fi
-
-# Promote deferred asset-grace snapshot only after install + fingerprint succeed.
-# On rollback, /home/deploy/frontend-assets-prev stays on the prior good generation.
-PREV_ASSETS=/home/deploy/frontend-assets-prev
-PREV_ASSETS_NEXT="${PREV_ASSETS}.next"
-if [ -d "$PREV_ASSETS_NEXT" ]; then
-    rm -rf "$PREV_ASSETS"
-    mv "$PREV_ASSETS_NEXT" "$PREV_ASSETS"
-    echo "    Asset grace snapshot promoted → ${PREV_ASSETS}"
-fi
+# Keep PREV_ASSETS.next unpromoted until Deploy fully succeeds (see end of script).
+# On rollback, frontend-assets-prev stays on the prior good generation.
 rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 
 echo "==> (4) Run database migrations"
@@ -813,6 +805,15 @@ echo "    Post-deploy HubSpot sync dispatched (runs via Celery or subprocess)"
 if [ "$REQ_HASH_UPDATED" = "1" ]; then
     echo "$REQ_HASH" > /home/deploy/.requirements-hash
     echo "    requirements hash updated after successful deploy"
+fi
+
+# Promote deferred PREV_ASSETS only after the full deploy succeeded (migrations,
+# gunicorn health, post-deploy sync). On earlier rollback, .next was discarded
+# and frontend-assets-prev stayed on the prior good generation.
+if [ -d /home/deploy/frontend-assets-prev.next ]; then
+    rm -rf /home/deploy/frontend-assets-prev
+    mv /home/deploy/frontend-assets-prev.next /home/deploy/frontend-assets-prev
+    echo "    Promoted frontend-assets-prev for next deploy's asset grace"
 fi
 
 echo "==> Deploy complete: $TARGET_SHA"

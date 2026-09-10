@@ -6,18 +6,34 @@ export function registerSpaShellServiceWorker(): void {
 
   const maxAttempts = 3
   let attempts = 0
+  let timer: number | null = null
+
+  const clearTimer = () => {
+    if (timer != null) {
+      window.clearTimeout(timer)
+      timer = null
+    }
+  }
 
   const register = () => {
+    // Guard before incrementing so a queued timer cannot overrun maxAttempts
+    // when focus/visibility already consumed remaining attempts.
+    if (attempts >= maxAttempts) return
+    if (navigator.serviceWorker.controller) return
     attempts += 1
     void navigator.serviceWorker
       .register('/spa-shell-sw.js')
+      .then(() => {
+        clearTimer()
+      })
       .catch((err) => {
         console.warn(
           `[spa] service worker registration failed (attempt ${attempts}/${maxAttempts})`,
           err,
         )
         if (attempts >= maxAttempts) return
-        window.setTimeout(register, 1500 * attempts)
+        clearTimer()
+        timer = window.setTimeout(register, 1500 * attempts)
       })
   }
 
@@ -27,6 +43,8 @@ export function registerSpaShellServiceWorker(): void {
     const onVisible = () => {
       if (attempts >= maxAttempts) return
       if (navigator.serviceWorker.controller) return
+      // Cancel a pending timer so we don't double-fire past maxAttempts.
+      clearTimer()
       register()
     }
     window.addEventListener('focus', onVisible)

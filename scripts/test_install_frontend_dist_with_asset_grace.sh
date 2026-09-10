@@ -27,11 +27,14 @@ echo 'vendor-v1' > "$NEW1/assets/vendor-v1.js"
 
 bash "$SCRIPT" "$NEW1" "$LIVE" "$PREV"
 promote_prev "$PREV"
+# Live path must be a symlink to a release dir (atomic publish).
+test -L "$LIVE"
 test -f "$LIVE/index.html"
 test -f "$LIVE/assets/MarketingHub-aaa.js"
 test -f "$PREV/MarketingHub-aaa.js"
 test ! -d "$NEW1"
 test ! -d "${PREV}.next"
+test -d "${LIVE}-releases"
 
 # Second deploy: new hashes + grace retain old MarketingHub
 echo 'index-v2' > "$NEW2/index.html"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   fetchSpaVersion,
   isSpaVersionStale,
@@ -32,18 +32,17 @@ export function useSpaVersionGuard(options?: UseSpaVersionGuardOptions): {
   const readBootId = options?.readBootId ?? readBootSpaBuildId
   const enabled = options?.enabled ?? true
 
-  const bootBuildId = useRef<string | null>(null)
+  // State (not ref) so capturing the boot id after enable flips triggers a render.
+  const [bootBuildId, setBootBuildId] = useState<string | null>(null)
   const [liveBuildId, setLiveBuildId] = useState<string | null>(null)
   const [stale, setStale] = useState(false)
   /** Build id the user dismissed — re-prompt when a newer live id appears. */
   const [dismissedBuildId, setDismissedBuildId] = useState<string | null>(null)
 
-  // Capture boot id when the guard becomes enabled (ref initializers ignore later flips).
+  // Capture boot id when the guard becomes enabled.
   useEffect(() => {
     if (!enabled) return
-    if (bootBuildId.current == null) {
-      bootBuildId.current = readBootId()
-    }
+    setBootBuildId((prev) => prev ?? readBootId())
   }, [enabled, readBootId])
 
   const check = useCallback(async () => {
@@ -51,16 +50,18 @@ export function useSpaVersionGuard(options?: UseSpaVersionGuardOptions): {
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
       return
     }
-    if (bootBuildId.current == null) {
-      bootBuildId.current = readBootId()
+    let boot = bootBuildId
+    if (boot == null) {
+      boot = readBootId()
+      setBootBuildId(boot)
     }
     const live = await fetchVersion()
     if (!live) return
     setLiveBuildId(live.buildId)
-    if (isSpaVersionStale(bootBuildId.current, live)) {
+    if (isSpaVersionStale(boot, live)) {
       setStale(true)
     }
-  }, [enabled, fetchVersion, readBootId])
+  }, [bootBuildId, enabled, fetchVersion, readBootId])
 
   useEffect(() => {
     if (!enabled) return
@@ -93,7 +94,7 @@ export function useSpaVersionGuard(options?: UseSpaVersionGuardOptions): {
 
   return {
     stale: stale && !dismissedForLive,
-    bootBuildId: bootBuildId.current,
+    bootBuildId,
     liveBuildId,
     reload,
     dismiss,
