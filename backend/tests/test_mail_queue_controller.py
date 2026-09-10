@@ -539,6 +539,58 @@ class TestRemoveMailQueueItem:
             assert 'sent' in data['message']
 
 
+class TestBulkRemoveMailQueueItems:
+    def test_bulk_remove_queued_items(self, client, app):
+        with app.app_context():
+            lead_a = _make_lead(app, '14 Bulk Remove A St')
+            lead_b = _make_lead(app, '15 Bulk Remove B St')
+            item_a = MailQueueItem(
+                lead_id=lead_a.id, user_id='test-user', status='queued',
+            )
+            item_b = MailQueueItem(
+                lead_id=lead_b.id, user_id='test-user', status='queued',
+            )
+            db.session.add_all([item_a, item_b])
+            db.session.commit()
+            ids = [item_a.id, item_b.id]
+
+            with patch(
+                'app.services.mail_queue_service.refresh_leads_after_mail_task_changes',
+            ):
+                response = client.post(
+                    '/api/mail-queue/remove',
+                    headers=_AUTH_HEADERS,
+                    json={'item_ids': ids},
+                )
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['removed'] == 2
+            assert data['already_removed'] == 0
+            assert data['blocked'] == []
+            assert data['queued_count'] == 0
+            assert MailQueueItem.query.get(ids[0]).status == 'removed'
+            assert MailQueueItem.query.get(ids[1]).status == 'removed'
+
+    def test_bulk_remove_is_idempotent_for_already_removed(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '16 Bulk Idempotent St')
+            item = MailQueueItem(
+                lead_id=lead.id, user_id='test-user', status='removed',
+            )
+            db.session.add(item)
+            db.session.commit()
+
+            response = client.post(
+                '/api/mail-queue/remove',
+                headers=_AUTH_HEADERS,
+                json={'item_ids': [item.id]},
+            )
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['removed'] == 0
+            assert data['already_removed'] == 1
+
+
 class TestMailCampaignAuth:
     def test_get_campaign_rejects_other_users_campaign(self, client, app):
         from app import db

@@ -173,6 +173,23 @@ def remove_item(item_id: int):
     return jsonify(summary), 200
 
 
+@mail_queue_bp.route('/remove', methods=['POST'])
+@require_auth
+@handle_errors
+def remove_items():
+    """Bulk-remove staged queue rows (idempotent for already-removed)."""
+    data = request.get_json(silent=True) or {}
+    item_ids = data.get('item_ids') or []
+    if not isinstance(item_ids, list):
+        return jsonify({'error': 'item_ids must be a list'}), 400
+    try:
+        parsed_ids = [int(x) for x in item_ids]
+    except (TypeError, ValueError):
+        return jsonify({'error': 'item_ids must contain integers'}), 400
+    result = _queue_service.remove_items(parsed_ids, g.user_id)
+    return jsonify(result), 200
+
+
 @mail_queue_bp.route('/send', methods=['POST'])
 @require_auth
 @handle_errors

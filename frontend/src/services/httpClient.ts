@@ -1,4 +1,6 @@
 import axios, { AxiosError, AxiosInstance } from 'axios'
+import { isApiErrorEnvelope } from '@/services/apiErrorEnvelopes'
+
 type ApiErrorPayload = {
   error?: string | { message?: unknown }
   message?: unknown
@@ -9,18 +11,6 @@ function asApiErrorPayload(value: unknown): ApiErrorPayload {
     ? value as ApiErrorPayload
     : {}
 }
-
-const genericErrorLabels = new Set([
-  'Invalid request',
-  'Validation error',
-  'An error occurred',
-  'Internal server error',
-  'HTTP error',
-  'Provider not configured',
-  // Mail/OLC controllers wrap the real reason in `message`.
-  'Mail queue error',
-  'Application error',
-])
 
 /** Map a backend JSON error body to the sentence shown in the UI. */
 export function userFacingApiErrorMessage(errorData: unknown): string {
@@ -37,7 +27,7 @@ export function userFacingApiErrorMessage(errorData: unknown): string {
       ? errorField.message
       : null)
     || (typeof errorField === 'string'
-      && genericErrorLabels.has(errorField)
+      && isApiErrorEnvelope(errorField)
       && detailedMessage
       ? detailedMessage
       : null)
