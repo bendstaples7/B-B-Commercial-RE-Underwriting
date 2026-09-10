@@ -10,6 +10,10 @@ import { PipelineStatusProvider } from './context/PipelineStatusContext'
 import { ShellStatusProvider } from './context/ShellStatusContext'
 import { AuthProvider } from './context/AuthContext'
 import { QuickAddFabHost } from '@/components/QuickAddFab'
+import { installChunkLoadRecovery } from '@/utils/lazyWithRetry'
+
+// Post-deploy stale hashed chunks (blank page on next navigation) — recover once.
+installChunkLoadRecovery()
 
 // ---------------------------------------------------------------------------
 // Global mutation error handler
