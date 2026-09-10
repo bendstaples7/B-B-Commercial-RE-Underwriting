@@ -609,8 +609,14 @@ class MailQueueService:
             raise MailQueueError('Queue item not found', status_code=404)
         if item.user_id != user_id:
             raise MailQueueError('Queue item not found', status_code=404)
+        # Idempotent: already-removed rows are a no-op success so stale Ready to
+        # Mail UIs (and mid-heal races) do not toast a hard failure.
+        if item.status == 'removed':
+            return item
         if item.status != 'queued':
-            raise MailQueueError('Only queued items can be removed')
+            raise MailQueueError(
+                f'Only queued items can be removed (status is {item.status})',
+            )
 
         item.status = 'removed'
         item.updated_at = datetime.utcnow()
@@ -621,5 +627,102 @@ class MailQueueService:
             cancel_pending_mail_follow_up_tasks(lead.id, actor=user_id)
         db.session.commit()
         if lead:
-            refresh_leads_after_mail_task_changes([lead.id])
+            # Keep DELETE snappy on memory-tight prod — rescore must not block
+            # the user clearing the staged batch. Tests score in-process.
+            if current_app.config.get('TESTING'):
+                refresh_leads_after_mail_task_changes([lead.id])
+            else:
+                try:
+                    from celery_worker import bulk_rescore_task
+                    bulk_rescore_task.delay(user_id, [lead.id])
+                except Exception as exc:
+                    logger.warning(
+                        'Could not dispatch rescore after mail queue remove '
+                        'for lead %s: %s — falling back to in-request refresh',
+                        lead.id,
+                        exc,
+                    )
+                    refresh_leads_after_mail_task_changes([lead.id])
         return item
+
+    def remove_items(self, item_ids: list[int], user_id: str) -> dict:
+        """Remove many staged rows. Already-removed ids succeed (idempotent)."""
+        if not item_ids:
+            raise MailQueueError('item_ids is required')
+        # Preserve caller order while de-duplicating.
+        unique_ids = list(dict.fromkeys(int(i) for i in item_ids))
+        if len(unique_ids) > MAX_MAIL_ENQUEUE_LEADS:
+            raise MailQueueError(
+                f'No more than {MAX_MAIL_ENQUEUE_LEADS} items can be removed at once',
+            )
+
+        items = (
+            MailQueueItem.query
+            .filter(
+                MailQueueItem.id.in_(unique_ids),
+                MailQueueItem.user_id == user_id,
+            )
+            .all()
+        )
+        by_id = {item.id: item for item in items}
+        missing = [item_id for item_id in unique_ids if item_id not in by_id]
+        if missing:
+            raise MailQueueError(
+                f'Queue item not found: {missing[0]}',
+                status_code=404,
+            )
+
+        removed_now = 0
+        already_removed = 0
+        blocked: list[dict] = []
+        lead_ids_to_refresh: set[int] = set()
+
+        for item_id in unique_ids:
+            item = by_id[item_id]
+            if item.status == 'removed':
+                already_removed += 1
+                continue
+            if item.status != 'queued':
+                blocked.append({
+                    'item_id': item.id,
+                    'lead_id': item.lead_id,
+                    'status': item.status,
+                    'error': f'Only queued items can be removed (status is {item.status})',
+                })
+                continue
+            item.status = 'removed'
+            item.updated_at = datetime.utcnow()
+            removed_now += 1
+            lead = Lead.query.get(item.lead_id)
+            if lead and not MailQueueItem.query.filter_by(
+                lead_id=lead.id, status='queued',
+            ).count():
+                lead.up_next_to_mail = False
+                cancel_pending_mail_follow_up_tasks(lead.id, actor=user_id)
+                lead_ids_to_refresh.add(lead.id)
+
+        if removed_now:
+            db.session.commit()
+            lead_id_list = sorted(lead_ids_to_refresh)
+            if lead_id_list:
+                if current_app.config.get('TESTING'):
+                    refresh_leads_after_mail_task_changes(lead_id_list)
+                else:
+                    try:
+                        from celery_worker import bulk_rescore_task
+                        bulk_rescore_task.delay(user_id, lead_id_list)
+                    except Exception as exc:
+                        logger.warning(
+                            'Could not dispatch rescore after bulk mail queue '
+                            'remove for %s leads: %s — falling back inline',
+                            len(lead_id_list),
+                            exc,
+                        )
+                        refresh_leads_after_mail_task_changes(lead_id_list)
+
+        return {
+            'removed': removed_now,
+            'already_removed': already_removed,
+            'blocked': blocked,
+            **self.get_summary(user_id),
+        }

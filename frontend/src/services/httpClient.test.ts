@@ -14,4 +14,11 @@ describe('userFacingApiErrorMessage', () => {
       error: 'Not found',
     })).toBe('Not found')
   })
+
+  it('prefers message when error is the Mail queue error wrapper', () => {
+    expect(userFacingApiErrorMessage({
+      error: 'Mail queue error',
+      message: 'Only queued items can be removed',
+    })).toBe('Only queued items can be removed')
+  })
 })
