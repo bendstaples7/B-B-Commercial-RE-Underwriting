@@ -245,7 +245,7 @@ describe('ReadyToMailQueue', () => {
     await userEvent.click(screen.getByTestId('add-all-candidates-button'))
 
     await waitFor(() => {
-      expect(openLetterService.previewEnqueueCandidates).toHaveBeenCalledWith(undefined)
+      expect(openLetterService.previewEnqueueCandidates).toHaveBeenCalledWith(25)
     })
     expect(openLetterService.enqueueCandidates).not.toHaveBeenCalled()
 
@@ -255,7 +255,7 @@ describe('ReadyToMailQueue', () => {
     await userEvent.click(screen.getByTestId('enqueue-preflight-confirm'))
 
     await waitFor(() => {
-      expect(openLetterService.enqueueCandidates).toHaveBeenCalledWith(undefined)
+      expect(openLetterService.enqueueCandidates).toHaveBeenCalledWith(25)
     })
   })
 
@@ -293,7 +293,7 @@ describe('ReadyToMailQueue', () => {
     expect(screen.getByText('123 Main St')).toBeInTheDocument()
   })
 
-  it('shows reach-minimum button when below batch minimum', async () => {
+  it('offers a minimum preset and custom add-count control when below batch minimum', async () => {
     vi.mocked(openLetterService.getAllQueued).mockResolvedValue({
       ...queueSummary,
       queued_count: 30,
@@ -302,7 +302,43 @@ describe('ReadyToMailQueue', () => {
     renderPage()
 
     await waitFor(() => {
-      expect(screen.getByTestId('add-to-minimum-button')).toHaveTextContent('Add 20 to reach minimum')
+      expect(screen.getByTestId('add-count-preset-20')).toHaveTextContent('Min 20')
+    })
+    expect(screen.getByTestId('add-count-input')).toHaveValue(20)
+    expect(screen.getByTestId('add-count-button')).toHaveTextContent('Add 20 to batch')
+  })
+
+  it('enqueues a custom recommended count via preflight', async () => {
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
+    vi.mocked(queueService.getMailCandidates).mockResolvedValue({
+      ...emptyCandidates,
+      total: 200,
+    })
+    vi.mocked(openLetterService.previewEnqueueCandidates).mockResolvedValue({
+      ...queueSummary,
+      dry_run: true,
+      would_add: 100,
+      would_skip: 0,
+      would_fail: 0,
+      candidate_count: 100,
+      results: [],
+    })
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('add-count-preset-100')).toBeInTheDocument()
+    })
+    await userEvent.click(screen.getByTestId('add-count-preset-100'))
+    expect(screen.getByTestId('add-count-button')).toHaveTextContent('Add 100 to batch')
+    await userEvent.click(screen.getByTestId('add-count-button'))
+
+    await waitFor(() => {
+      expect(openLetterService.previewEnqueueCandidates).toHaveBeenCalledWith(100)
+    })
+    await userEvent.click(screen.getByTestId('enqueue-preflight-confirm'))
+    await waitFor(() => {
+      expect(openLetterService.enqueueCandidates).toHaveBeenCalledWith(100)
     })
   })
 

@@ -6,6 +6,7 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   CircularProgress,
   Dialog,
   DialogActions,
@@ -16,6 +17,7 @@ import {
   LinearProgress,
   Skeleton,
   Stack,
+  TextField,
   Typography,
 } from '@mui/material'
 import { Link as RouterLink } from 'react-router-dom'
@@ -55,6 +57,12 @@ import {
 } from '@/utils/mailCampaignStatusColor'
 import { formatMailSubmitReconciliationBanner } from '@/utils/formatMailSubmitReconciliation'
 import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
+import {
+  clampMailAddCount,
+  defaultMailAddCount,
+  mailAddCountPresets,
+  maxMailCandidateAddCount,
+} from '@/utils/mailCandidateEnqueue'
 
 export function ReadyToMailQueue() {
   const queryClient = useQueryClient()
@@ -68,8 +76,10 @@ export function ReadyToMailQueue() {
   const [isAddingPage, setIsAddingPage] = useState(false)
   const [addingPageCount, setAddingPageCount] = useState<number | null>(null)
   const [pendingCandidatesAction, setPendingCandidatesAction] = useState<
-    'minimum' | 'all' | null
+    'custom' | 'all' | null
   >(null)
+  const [addCountInput, setAddCountInput] = useState('50')
+  const [addCountTouched, setAddCountTouched] = useState(false)
   const [confirmAdd, setConfirmAdd] = useState<{
     limit?: number
     preview: EnqueuePreviewResult
@@ -184,11 +194,19 @@ export function ReadyToMailQueue() {
   const queuedCount = queueData?.queued_count ?? 0
   const batchMinimum = queueData?.batch_minimum ?? 50
   const neededForMinimum = Math.max(0, batchMinimum - queuedCount)
+  const maxAddable = maxMailCandidateAddCount(candidateTotal)
+  const addCountPresets = mailAddCountPresets(maxAddable, neededForMinimum)
+  const parsedAddCount = clampMailAddCount(addCountInput, maxAddable)
   // After page-add strips the current rows, length is 0 while total remains —
   // keep the button label useful during that refresh gap.
   const addPageCount = candidateRows.length > 0
     ? candidateRows.length
     : Math.min(candidatePerPage, candidateTotal)
+
+  useEffect(() => {
+    if (addCountTouched || maxAddable <= 0) return
+    setAddCountInput(String(defaultMailAddCount(candidateTotal, neededForMinimum)))
+  }, [addCountTouched, candidateTotal, neededForMinimum, maxAddable])
 
   const handleCandidatesPageChange = onPageChangeWithClear((newPage) => {
     setCandidatesPage(clampPage(newPage, candidateTotalPages))
@@ -207,7 +225,7 @@ export function ReadyToMailQueue() {
 
   const requestEnqueueCandidates = async (
     limit: number | undefined,
-    action: 'minimum' | 'all',
+    action: 'custom' | 'all',
   ) => {
     setPendingCandidatesAction(action)
     try {
@@ -224,6 +242,11 @@ export function ReadyToMailQueue() {
       // Error is surfaced by previewMutation.onError.
       setPendingCandidatesAction(null)
     }
+  }
+
+  const setAddCountFromPreset = (count: number) => {
+    setAddCountTouched(true)
+    setAddCountInput(String(count))
   }
 
   const fromQueue = { key: 'mail-candidates', label: 'Ready to Mail' }
@@ -397,62 +420,117 @@ export function ReadyToMailQueue() {
             Leads scored as mail-ready that are not yet in your batch ({candidateTotal} total).
           </Typography>
         </Box>
-        <Stack
-          direction={{ xs: 'column', sm: 'row' }}
-          spacing={1}
-          sx={{ justifyContent: 'flex-end' }}
-        >
-          <Button
-            variant="outlined"
-            size="small"
-            disabled={isBusy || neededForMinimum === 0 || candidateTotal === 0}
-            onClick={() => void requestEnqueueCandidates(neededForMinimum, 'minimum')}
-            startIcon={
-              pendingCandidatesAction === 'minimum' && isEnqueueing
-                ? <CircularProgress size={14} color="inherit" />
-                : undefined
-            }
-            data-testid="add-to-minimum-button"
+        <Stack spacing={1} sx={{ alignItems: { xs: 'stretch', md: 'flex-end' }, minWidth: 0 }}>
+          <Stack
+            direction="row"
+            spacing={0.75}
+            useFlexGap
+            flexWrap="wrap"
+            sx={{ justifyContent: { xs: 'flex-start', md: 'flex-end' } }}
+            data-testid="add-count-presets"
           >
-            {pendingCandidatesAction === 'minimum' && candidatesBusyLabel
-              ? candidatesBusyLabel
-              : `Add ${neededForMinimum} to reach minimum`}
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            disabled={isBusy || candidateRows.length === 0 || candidatesRefreshing}
-            onClick={() => void addDisplayedPage()}
-            startIcon={
-              isAddingPage || (candidatesRefreshing && candidatesFetching)
-                ? <CircularProgress size={14} color="inherit" />
-                : undefined
-            }
-            aria-busy={isAddingPage || candidatesRefreshing || undefined}
-            data-testid="add-page-candidates-button"
+            {addCountPresets.map((count) => (
+              <Chip
+                key={count}
+                size="small"
+                label={
+                  count === neededForMinimum && neededForMinimum > 0
+                    ? `Min ${count}`
+                    : count === maxAddable && candidateTotal > maxAddable
+                      ? `Max ${count}`
+                      : String(count)
+                }
+                color={parsedAddCount === count ? 'primary' : 'default'}
+                variant={parsedAddCount === count ? 'filled' : 'outlined'}
+                disabled={isBusy || maxAddable === 0}
+                onClick={() => setAddCountFromPreset(count)}
+                data-testid={`add-count-preset-${count}`}
+              />
+            ))}
+          </Stack>
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            spacing={1}
+            sx={{ justifyContent: 'flex-end', alignItems: { xs: 'stretch', sm: 'center' } }}
           >
-            {isAddingPage
-              ? `Adding ${addPageLabel}…`
-              : candidatesRefreshing
-                ? 'Loading page…'
-                : `Add ${addPageCount} from this page`}
-          </Button>
-          <Button
-            variant="contained"
-            size="small"
-            disabled={isBusy || candidateTotal === 0}
-            onClick={() => void requestEnqueueCandidates(undefined, 'all')}
-            startIcon={
-              pendingCandidatesAction === 'all' && isEnqueueing
-                ? <CircularProgress size={14} color="inherit" />
-                : undefined
-            }
-            data-testid="add-all-candidates-button"
-          >
-            {pendingCandidatesAction === 'all' && candidatesBusyLabel
-              ? candidatesBusyLabel
-              : `Add all ${candidateTotal} to batch`}
-          </Button>
+            <TextField
+              size="small"
+              type="number"
+              label="Add count"
+              value={addCountInput}
+              onChange={(event) => {
+                setAddCountTouched(true)
+                setAddCountInput(event.target.value)
+              }}
+              disabled={isBusy || maxAddable === 0}
+              inputProps={{
+                min: 1,
+                max: Math.max(1, maxAddable),
+                inputMode: 'numeric',
+                'data-testid': 'add-count-input',
+                'aria-label': 'Number of recommended leads to add',
+              }}
+              sx={{ width: { xs: '100%', sm: 120 }, cursor: 'text' }}
+            />
+            <Button
+              variant="contained"
+              size="small"
+              disabled={isBusy || parsedAddCount <= 0}
+              onClick={() => void requestEnqueueCandidates(parsedAddCount, 'custom')}
+              startIcon={
+                pendingCandidatesAction === 'custom' && isEnqueueing
+                  ? <CircularProgress size={14} color="inherit" />
+                  : undefined
+              }
+              data-testid="add-count-button"
+            >
+              {pendingCandidatesAction === 'custom' && candidatesBusyLabel
+                ? candidatesBusyLabel
+                : `Add ${parsedAddCount || 0} to batch`}
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              disabled={isBusy || candidateRows.length === 0 || candidatesRefreshing}
+              onClick={() => void addDisplayedPage()}
+              startIcon={
+                isAddingPage || (candidatesRefreshing && candidatesFetching)
+                  ? <CircularProgress size={14} color="inherit" />
+                  : undefined
+              }
+              aria-busy={isAddingPage || candidatesRefreshing || undefined}
+              data-testid="add-page-candidates-button"
+            >
+              {isAddingPage
+                ? `Adding ${addPageLabel}…`
+                : candidatesRefreshing
+                  ? 'Loading page…'
+                  : `Add ${addPageCount} from this page`}
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              disabled={isBusy || maxAddable === 0}
+              onClick={() => void requestEnqueueCandidates(maxAddable, 'all')}
+              startIcon={
+                pendingCandidatesAction === 'all' && isEnqueueing
+                  ? <CircularProgress size={14} color="inherit" />
+                  : undefined
+              }
+              data-testid="add-all-candidates-button"
+            >
+              {pendingCandidatesAction === 'all' && candidatesBusyLabel
+                ? candidatesBusyLabel
+                : candidateTotal > maxAddable
+                  ? `Add max ${maxAddable}`
+                  : `Add all ${maxAddable}`}
+            </Button>
+          </Stack>
+          {candidateTotal > maxAddable && (
+            <Typography variant="caption" color="text.secondary" sx={{ textAlign: { xs: 'left', md: 'right' } }}>
+              Enqueue is capped at {maxAddable} leads per request.
+            </Typography>
+          )}
         </Stack>
       </Box>
 
