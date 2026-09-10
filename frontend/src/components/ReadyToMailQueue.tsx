@@ -6,12 +6,14 @@ import {
   Alert,
   Box,
   Button,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogContentText,
   DialogTitle,
   Divider,
+  LinearProgress,
   Skeleton,
   Stack,
   Typography,
@@ -63,6 +65,10 @@ export function ReadyToMailQueue() {
   const [snackbarSeverity, setSnackbarSeverity] =
     useState<'success' | 'warning' | 'error'>('success')
   const [isAddingPage, setIsAddingPage] = useState(false)
+  const [addingPageCount, setAddingPageCount] = useState<number | null>(null)
+  const [pendingCandidatesAction, setPendingCandidatesAction] = useState<
+    'minimum' | 'all' | null
+  >(null)
   const [confirmAdd, setConfirmAdd] = useState<{
     limit?: number
     preview: EnqueuePreviewResult
@@ -83,24 +89,6 @@ export function ReadyToMailQueue() {
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
   })
-
-  useEffect(() => {
-    // Background refresh only — first paint uses in-card skeletons, not the AppBar.
-    let label: string | null = null
-    if (queueFetching && queueData) {
-      label = 'Refreshing mail batch…'
-    } else if (candidatesFetching && candidatesData) {
-      label = 'Refreshing mail recommendations…'
-    }
-    setStatusLabel('ready-to-mail', label)
-    return () => setStatusLabel('ready-to-mail', null)
-  }, [
-    queueFetching,
-    queueData,
-    candidatesFetching,
-    candidatesData,
-    setStatusLabel,
-  ])
 
   const { data: campaignsData } = useQuery({
     queryKey: ['mail-campaigns'],
@@ -153,6 +141,42 @@ export function ReadyToMailQueue() {
     onError: showEnqueueError,
   })
 
+  const isEnqueueing =
+    enqueueCandidatesMutation.isPending
+    || previewMutation.isPending
+  const isAddingToBatch = isAddingPage || enqueueCandidatesMutation.isPending
+  const isBusy = isEnqueueing || isAddingPage
+
+  useEffect(() => {
+    // Busy / mutation labels take priority over background refresh.
+    let label: string | null = null
+    if (isAddingPage) {
+      label = addingPageCount != null
+        ? `Adding ${addingPageCount} leads to mail batch…`
+        : 'Adding leads to mail batch…'
+    } else if (enqueueCandidatesMutation.isPending) {
+      label = 'Adding leads to mail batch…'
+    } else if (previewMutation.isPending) {
+      label = 'Checking mail candidates…'
+    } else if (queueFetching && queueData) {
+      label = 'Refreshing mail batch…'
+    } else if (candidatesFetching && candidatesData) {
+      label = 'Refreshing mail recommendations…'
+    }
+    setStatusLabel('ready-to-mail', label)
+    return () => setStatusLabel('ready-to-mail', null)
+  }, [
+    isAddingPage,
+    addingPageCount,
+    enqueueCandidatesMutation.isPending,
+    previewMutation.isPending,
+    queueFetching,
+    queueData,
+    candidatesFetching,
+    candidatesData,
+    setStatusLabel,
+  ])
+
   const candidateRows = candidatesData?.rows ?? []
   const candidateTotal = candidatesData?.total ?? 0
   const candidateTotalPages = computeTotalPages(candidateTotal, candidatesData?.per_page ?? 20)
@@ -170,26 +194,31 @@ export function ReadyToMailQueue() {
       await enqueueCandidatesMutation.mutateAsync(limit)
     } catch {
       // Error is surfaced by enqueueCandidatesMutation.onError.
+    } finally {
+      setPendingCandidatesAction(null)
     }
   }
 
-  const requestEnqueueCandidates = async (limit?: number) => {
+  const requestEnqueueCandidates = async (
+    limit: number | undefined,
+    action: 'minimum' | 'all',
+  ) => {
+    setPendingCandidatesAction(action)
     try {
       const preview = await previewMutation.mutateAsync(limit)
       if (preview.would_add === 0) {
         setSnackbarSeverity('success')
         setSnackbarMessage(formatEnqueuePreview(preview))
+        setPendingCandidatesAction(null)
         return
       }
       setConfirmAdd({ limit, preview })
+      // Keep pending action through confirm so confirm/enqueue stay labeled.
     } catch {
       // Error is surfaced by previewMutation.onError.
+      setPendingCandidatesAction(null)
     }
   }
-
-  const isEnqueueing =
-    enqueueCandidatesMutation.isPending
-    || previewMutation.isPending
 
   const fromQueue = { key: 'mail-candidates', label: 'Ready to Mail' }
 
@@ -209,6 +238,8 @@ export function ReadyToMailQueue() {
 
   const addDisplayedPage = async () => {
     if (candidateRows.length === 0) return
+    const count = candidateRows.length
+    setAddingPageCount(count)
     setIsAddingPage(true)
     try {
       await enqueueLeadsAsBulkResult(candidateRows.map((row) => row.id), bulkCtx)
@@ -216,6 +247,7 @@ export function ReadyToMailQueue() {
       // Error is surfaced through bulkCtx.onEnqueueError.
     } finally {
       setIsAddingPage(false)
+      setAddingPageCount(null)
     }
   }
 
@@ -236,6 +268,12 @@ export function ReadyToMailQueue() {
 
   const preview = confirmAdd?.preview
   const previewWouldAdd = preview?.would_add ?? 0
+  const addPageLabel = addingPageCount ?? candidateRows.length
+  const candidatesBusyLabel = previewMutation.isPending
+    ? 'Checking…'
+    : enqueueCandidatesMutation.isPending
+      ? 'Adding…'
+      : null
 
   return (
     <Box
@@ -326,7 +364,12 @@ export function ReadyToMailQueue() {
           {queueErrorMessage}
         </Alert>
       ) : (
-        <MailBatchSummary title="Next batch" queueData={queueData} isLoading={queueLoading} />
+        <MailBatchSummary
+          title="Next batch"
+          queueData={queueData}
+          isLoading={queueLoading}
+          isUpdating={isAddingToBatch}
+        />
       )}
 
       <Divider sx={{ my: 3 }} />
@@ -355,37 +398,80 @@ export function ReadyToMailQueue() {
           <Button
             variant="outlined"
             size="small"
-            disabled={isEnqueueing || neededForMinimum === 0 || candidateTotal === 0}
-            onClick={() => void requestEnqueueCandidates(neededForMinimum)}
+            disabled={isBusy || neededForMinimum === 0 || candidateTotal === 0}
+            onClick={() => void requestEnqueueCandidates(neededForMinimum, 'minimum')}
+            startIcon={
+              pendingCandidatesAction === 'minimum' && isEnqueueing
+                ? <CircularProgress size={14} color="inherit" />
+                : undefined
+            }
             data-testid="add-to-minimum-button"
           >
-            Add {neededForMinimum} to reach minimum
+            {pendingCandidatesAction === 'minimum' && candidatesBusyLabel
+              ? candidatesBusyLabel
+              : `Add ${neededForMinimum} to reach minimum`}
           </Button>
           <Button
             variant="outlined"
             size="small"
-            disabled={isEnqueueing || isAddingPage || candidateRows.length === 0}
+            disabled={isBusy || candidateRows.length === 0}
             onClick={() => void addDisplayedPage()}
+            startIcon={
+              isAddingPage
+                ? <CircularProgress size={14} color="inherit" />
+                : undefined
+            }
+            aria-busy={isAddingPage || undefined}
             data-testid="add-page-candidates-button"
           >
-            Add {candidateRows.length} from this page
+            {isAddingPage
+              ? `Adding ${addPageLabel}…`
+              : `Add ${candidateRows.length} from this page`}
           </Button>
           <Button
             variant="contained"
             size="small"
-            disabled={isEnqueueing || candidateTotal === 0}
-            onClick={() => void requestEnqueueCandidates(undefined)}
+            disabled={isBusy || candidateTotal === 0}
+            onClick={() => void requestEnqueueCandidates(undefined, 'all')}
+            startIcon={
+              pendingCandidatesAction === 'all' && isEnqueueing
+                ? <CircularProgress size={14} color="inherit" />
+                : undefined
+            }
             data-testid="add-all-candidates-button"
           >
-            {isEnqueueing ? 'Checking…' : `Add all ${candidateTotal} to batch`}
+            {pendingCandidatesAction === 'all' && candidatesBusyLabel
+              ? candidatesBusyLabel
+              : `Add all ${candidateTotal} to batch`}
           </Button>
         </Stack>
       </Box>
 
+      {(isAddingPage || enqueueCandidatesMutation.isPending) && (
+        <Alert
+          severity="info"
+          icon={false}
+          sx={{ mb: 2 }}
+          data-testid="mail-enqueue-progress"
+          role="status"
+          aria-live="polite"
+        >
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            {isAddingPage
+              ? `Adding ${addPageLabel} lead${addPageLabel === 1 ? '' : 's'} from this page to your batch…`
+              : 'Adding leads to your batch…'}
+          </Typography>
+          <LinearProgress
+            aria-label="Adding leads to mail batch"
+            data-testid="mail-enqueue-progress-bar"
+          />
+        </Alert>
+      )}
+
       <QueueTable
         rows={candidateRows}
         total={candidateTotal}
-        disabled={candidatesLoading && candidateRows.length === 0}
+        disabled={(candidatesLoading && candidateRows.length === 0) || isAddingToBatch}
         fromQueue={fromQueue}
         selectedIds={selectedIds}
         onSelectionChange={onSelectionChange}
@@ -441,7 +527,11 @@ export function ReadyToMailQueue() {
 
       <Dialog
         open={confirmAdd !== null}
-        onClose={() => setConfirmAdd(null)}
+        onClose={() => {
+          if (isEnqueueing) return
+          setConfirmAdd(null)
+          setPendingCandidatesAction(null)
+        }}
         data-testid="enqueue-preflight-dialog"
       >
         <DialogTitle>
@@ -471,15 +561,28 @@ export function ReadyToMailQueue() {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setConfirmAdd(null)}>Cancel</Button>
+          <Button
+            onClick={() => {
+              setConfirmAdd(null)
+              setPendingCandidatesAction(null)
+            }}
+            disabled={enqueueCandidatesMutation.isPending}
+          >
+            Cancel
+          </Button>
           {previewWouldAdd > 0 && (
             <Button
               variant="contained"
               onClick={() => void runEnqueueCandidates(confirmAdd?.limit)}
               disabled={isEnqueueing}
+              startIcon={
+                enqueueCandidatesMutation.isPending
+                  ? <CircularProgress size={14} color="inherit" />
+                  : undefined
+              }
               data-testid="enqueue-preflight-confirm"
             >
-              Add to batch
+              {enqueueCandidatesMutation.isPending ? 'Adding…' : 'Add to batch'}
             </Button>
           )}
         </DialogActions>

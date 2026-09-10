@@ -333,6 +333,62 @@ describe('ReadyToMailQueue', () => {
     })
   })
 
+  it('shows loading progress while adding the displayed page', async () => {
+    let resolveEnqueue: (value: {
+      queued_count: number
+      batch_minimum: number
+      allow_send_below_minimum: boolean
+      can_send: boolean
+      estimated_cost_per_piece: number
+      estimated_cost_source_sent_at: string
+      estimated_total: number
+      items: typeof queueSummary.items
+      added: number
+      skipped: number
+      invalid: number
+      results: Array<{ lead_id: number; status: string }>
+    }) => void = () => undefined
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
+    vi.mocked(openLetterService.enqueue).mockImplementation(
+      () => new Promise((resolve) => {
+        resolveEnqueue = resolve
+      }),
+    )
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('add-page-candidates-button')).toBeEnabled()
+    })
+    await userEvent.click(screen.getByTestId('add-page-candidates-button'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-enqueue-progress')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('add-page-candidates-button')).toHaveTextContent('Adding 1…')
+    expect(screen.getByTestId('add-page-candidates-button')).toBeDisabled()
+    expect(screen.getByTestId('mail-batch-updating-label')).toHaveTextContent(
+      'Adding leads to batch…',
+    )
+    expect(screen.getByTestId('mail-batch-progress')).toHaveAttribute(
+      'aria-label',
+      'Adding leads to batch',
+    )
+
+    resolveEnqueue({
+      ...queueSummary,
+      added: 1,
+      skipped: 0,
+      invalid: 0,
+      results: [{ lead_id: 20, status: 'queued' }],
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('mail-enqueue-progress')).not.toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('mail-batch-updating-label')).not.toBeInTheDocument()
+  })
+
   it('shows estimated total with source batch date when cost per piece is set', async () => {
     vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
 
