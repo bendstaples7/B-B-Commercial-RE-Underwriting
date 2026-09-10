@@ -179,10 +179,16 @@ export function ReadyToMailQueue() {
 
   const candidateRows = candidatesData?.rows ?? []
   const candidateTotal = candidatesData?.total ?? 0
-  const candidateTotalPages = computeTotalPages(candidateTotal, candidatesData?.per_page ?? 20)
+  const candidatePerPage = candidatesData?.per_page ?? 20
+  const candidateTotalPages = computeTotalPages(candidateTotal, candidatePerPage)
   const queuedCount = queueData?.queued_count ?? 0
   const batchMinimum = queueData?.batch_minimum ?? 50
   const neededForMinimum = Math.max(0, batchMinimum - queuedCount)
+  // After page-add strips the current rows, length is 0 while total remains —
+  // keep the button label useful during that refresh gap.
+  const addPageCount = candidateRows.length > 0
+    ? candidateRows.length
+    : Math.min(candidatePerPage, candidateTotal)
 
   const handleCandidatesPageChange = onPageChangeWithClear((newPage) => {
     setCandidatesPage(clampPage(newPage, candidateTotalPages))
@@ -268,12 +274,13 @@ export function ReadyToMailQueue() {
 
   const preview = confirmAdd?.preview
   const previewWouldAdd = preview?.would_add ?? 0
-  const addPageLabel = addingPageCount ?? candidateRows.length
+  const addPageLabel = addingPageCount ?? addPageCount
   const candidatesBusyLabel = previewMutation.isPending
     ? 'Checking…'
     : enqueueCandidatesMutation.isPending
       ? 'Adding…'
       : null
+  const candidatesRefreshing = candidateRows.length === 0 && candidateTotal > 0
 
   return (
     <Box
@@ -414,19 +421,21 @@ export function ReadyToMailQueue() {
           <Button
             variant="outlined"
             size="small"
-            disabled={isBusy || candidateRows.length === 0}
+            disabled={isBusy || candidateRows.length === 0 || candidatesRefreshing}
             onClick={() => void addDisplayedPage()}
             startIcon={
-              isAddingPage
+              isAddingPage || (candidatesRefreshing && candidatesFetching)
                 ? <CircularProgress size={14} color="inherit" />
                 : undefined
             }
-            aria-busy={isAddingPage || undefined}
+            aria-busy={isAddingPage || candidatesRefreshing || undefined}
             data-testid="add-page-candidates-button"
           >
             {isAddingPage
               ? `Adding ${addPageLabel}…`
-              : `Add ${candidateRows.length} from this page`}
+              : candidatesRefreshing
+                ? 'Loading page…'
+                : `Add ${addPageCount} from this page`}
           </Button>
           <Button
             variant="contained"
