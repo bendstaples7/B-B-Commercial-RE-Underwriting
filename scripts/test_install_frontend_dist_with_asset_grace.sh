@@ -8,9 +8,12 @@ trap 'rm -rf "$TMP"' EXIT
 
 promote_prev() {
   local prev="$1"
-  # Mirror deploy.sh: promote .next only after a "successful" install.
+  # Mirror deploy.sh: save .rollback then promote .next only after "success".
   if [[ -d "${prev}.next" ]]; then
-    rm -rf "$prev"
+    rm -rf "${prev}.rollback"
+    if [[ -d "$prev" ]]; then
+      mv "$prev" "${prev}.rollback"
+    fi
     mv "${prev}.next" "$prev"
   fi
 }
@@ -20,7 +23,10 @@ NEW1="$TMP/new1"
 NEW2="$TMP/new2"
 PREV="$TMP/prev-assets"
 
-mkdir -p "$NEW1/assets" "$NEW2/assets"
+# Start with a plain directory LIVE (pre-symlink era) to exercise atomic migration.
+mkdir -p "$LIVE/assets" "$NEW1/assets" "$NEW2/assets"
+echo 'index-old' > "$LIVE/index.html"
+echo 'chunk-old' > "$LIVE/assets/old.js"
 echo 'index-v1' > "$NEW1/index.html"
 echo 'chunk-a' > "$NEW1/assets/MarketingHub-aaa.js"
 echo 'vendor-v1' > "$NEW1/assets/vendor-v1.js"
@@ -30,11 +36,14 @@ promote_prev "$PREV"
 # Live path must be a symlink to a release dir (atomic publish).
 test -L "$LIVE"
 test -f "$LIVE/index.html"
+test "$(cat "$LIVE/index.html")" = 'index-v1'
 test -f "$LIVE/assets/MarketingHub-aaa.js"
 test -f "$PREV/MarketingHub-aaa.js"
 test ! -d "$NEW1"
 test ! -d "${PREV}.next"
 test -d "${LIVE}-releases"
+# Legacy plain tree retained under releases (migration).
+compgen -G "${LIVE}-releases/legacy-pre-symlink-*" > /dev/null
 
 # Second deploy: new hashes + grace retain old MarketingHub
 echo 'index-v2' > "$NEW2/index.html"
@@ -58,6 +67,8 @@ test -f "$PREV/MarketingHub-bbb.js"
 test ! -f "$PREV/MarketingHub-aaa.js"
 test -f "$PREV/vendor-v2.js"
 test ! -f "$PREV/vendor-v1.js"
+# .rollback holds pre-promotion grace (post-deploy rollback restore source)
+test -f "${PREV}.rollback/MarketingHub-aaa.js"
 
 # Third deploy: aaa finally drops from live (not in v2 pure prev, not in v3)
 NEW3="$TMP/new3"
@@ -81,5 +92,17 @@ test -f "${PREV}.next/MarketingHub-ddd.js"
 test -f "$PREV/MarketingHub-ccc.js"  # last good still intact
 test ! -f "$PREV/MarketingHub-ddd.js"
 rm -rf "${PREV}.next"  # rollback would discard .next
+
+# Prune protection: current live symlink target must survive many installs.
+for i in 5 6 7 8; do
+  N="$TMP/new$i"
+  mkdir -p "$N/assets"
+  echo "index-v$i" > "$N/index.html"
+  echo "chunk-$i" > "$N/assets/MarketingHub-$i.js"
+  bash "$SCRIPT" "$N" "$LIVE" "$PREV"
+  promote_prev "$PREV"
+done
+test -d "$(readlink -f "$LIVE")"
+test -f "$LIVE/index.html"
 
 echo "OK: install_frontend_dist_with_asset_grace"

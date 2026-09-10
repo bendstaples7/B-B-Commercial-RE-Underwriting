@@ -76,6 +76,11 @@ rollback() {
     # Discard deferred asset-grace snapshot from the failed release so the next
     # deploy still graces the rolled-back generation's hashed chunks.
     rm -rf /home/deploy/frontend-assets-prev.next 2>/dev/null || true
+    # If we somehow promoted mid-flight, restore the pre-promotion grace snapshot.
+    if [ -d /home/deploy/frontend-assets-prev.rollback ]; then
+        rm -rf /home/deploy/frontend-assets-prev
+        mv /home/deploy/frontend-assets-prev.rollback /home/deploy/frontend-assets-prev
+    fi
     # Always clear soft-lock so canary can heal/alert even when restore failed.
     rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
     sudo -n systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
@@ -808,10 +813,14 @@ if [ "$REQ_HASH_UPDATED" = "1" ]; then
 fi
 
 # Promote deferred PREV_ASSETS only after the full deploy succeeded (migrations,
-# gunicorn health, post-deploy sync). On earlier rollback, .next was discarded
-# and frontend-assets-prev stayed on the prior good generation.
+# gunicorn health, post-deploy sync). Keep a .rollback snapshot of the prior
+# PREV so post-deploy-rollback.sh can restore grace hashes if CI health fails
+# after this script exits 0.
 if [ -d /home/deploy/frontend-assets-prev.next ]; then
-    rm -rf /home/deploy/frontend-assets-prev
+    rm -rf /home/deploy/frontend-assets-prev.rollback
+    if [ -d /home/deploy/frontend-assets-prev ]; then
+        mv /home/deploy/frontend-assets-prev /home/deploy/frontend-assets-prev.rollback
+    fi
     mv /home/deploy/frontend-assets-prev.next /home/deploy/frontend-assets-prev
     echo "    Promoted frontend-assets-prev for next deploy's asset grace"
 fi

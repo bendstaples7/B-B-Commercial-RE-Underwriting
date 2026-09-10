@@ -27,6 +27,8 @@ NEW_DIST="${1:?new dist dir required}"
 LIVE_DIST="${2:?live dist dir required}"
 PREV_ASSETS="${3:-/home/deploy/frontend-assets-prev}"
 PREV_ASSETS_NEXT="${PREV_ASSETS}.next"
+# Optional: path that rollback restores from (may be a copy or a symlink into releases).
+DIST_BACKUP="${FRONTEND_DIST_BACKUP:-/home/deploy/frontend-dist-backup}"
 
 if [[ ! -d "$NEW_DIST" ]]; then
   echo "FAILED: new dist missing: $NEW_DIST" >&2
@@ -81,32 +83,99 @@ fi
 rm -rf "$RELEASE_DIR"
 mv "$NEW_DIST" "$RELEASE_DIR"
 
-# First-time migration: if LIVE is a real directory, move it aside so we can
-# replace it with a symlink without a missing-path window for long.
-if [[ -e "$LIVE_DIST" && ! -L "$LIVE_DIST" ]]; then
-  LEGACY="${RELEASES_DIR}/legacy-pre-symlink-$$"
-  mv "$LIVE_DIST" "$LEGACY"
-  echo "    Migrated plain ${LIVE_DIST} → ${LEGACY} (now symlink-published)"
-fi
-
-# Atomic publish: write temp symlink then rename over LIVE (replaces prior link).
 TMP_LINK="${LIVE_PARENT}/.${LIVE_BASE}.newlink.$$"
-ln -sfn "$RELEASE_DIR" "$TMP_LINK"
-mv -Tf "$TMP_LINK" "$LIVE_DIST"
+cleanup_tmp_link() {
+  rm -f "$TMP_LINK" 2>/dev/null || true
+}
+trap cleanup_tmp_link EXIT
 
-# Keep the newest 3 releases; drop older ones (grace assets still cover one gen).
+# Publish LIVE_DIST as a symlink to TARGET. When LIVE is still a plain directory
+# (first migration), exchange it with the new symlink atomically when the kernel
+# supports renameat2(RENAME_EXCHANGE) so nginx never observes a missing path.
+publish_symlink() {
+  local target="$1"
+  ln -sfn "$target" "$TMP_LINK"
+  if [[ -e "$LIVE_DIST" && ! -L "$LIVE_DIST" ]]; then
+    local legacy="${RELEASES_DIR}/legacy-pre-symlink-$$"
+    if python3 - "$LIVE_DIST" "$TMP_LINK" "$legacy" <<'PY'
+import ctypes, os, sys
+
+live, tmp_link, legacy = sys.argv[1], sys.argv[2], sys.argv[3]
+AT_FDCWD = -100
+RENAME_EXCHANGE = 2
+libc = ctypes.CDLL("libc.so.6", use_errno=True)
+# int renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, unsigned int flags);
+libc.renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+rc = libc.renameat2(
+    AT_FDCWD, tmp_link.encode(), AT_FDCWD, live.encode(), RENAME_EXCHANGE
+)
+if rc != 0:
+    sys.exit(1)
+# After exchange: live is the symlink; tmp_link holds the old plain directory.
+os.rename(tmp_link, legacy)
+PY
+    then
+      echo "    Migrated plain ${LIVE_DIST} → symlink via atomic exchange (legacy retained under releases)"
+      return 0
+    fi
+    # Fallback when renameat2 is unavailable: relocate then publish as fast as possible.
+    mv "$LIVE_DIST" "$legacy"
+    mv -Tf "$TMP_LINK" "$LIVE_DIST"
+    echo "    Migrated plain ${LIVE_DIST} → ${legacy} (symlink-published; brief rename window)"
+    return 0
+  fi
+  # LIVE missing or already a symlink: atomic replace via temp link rename.
+  mv -Tf "$TMP_LINK" "$LIVE_DIST"
+}
+
+publish_symlink "$RELEASE_DIR"
+trap - EXIT
+cleanup_tmp_link
+
+# Keep the newest 3 releases, but never delete the live symlink target or the
+# rollback backup target (failed deploys must still be able to restore).
 if command -v python3 >/dev/null 2>&1; then
-  python3 - "$RELEASES_DIR" "$RELEASE_DIR" <<'PY'
+  python3 - "$RELEASES_DIR" "$RELEASE_DIR" "$LIVE_DIST" "$DIST_BACKUP" <<'PY'
 import os, shutil, sys
-releases_dir, keep = sys.argv[1], sys.argv[2]
+
+releases_dir, keep, live_dist, dist_backup = sys.argv[1:5]
+protected = {os.path.abspath(keep)}
+
+def add_protected(path: str) -> None:
+    if not path:
+        return
+    try:
+        if os.path.lexists(path):
+            protected.add(os.path.abspath(path))
+        if os.path.exists(path):
+            protected.add(os.path.abspath(os.path.realpath(path)))
+    except OSError:
+        pass
+
+add_protected(live_dist)
+add_protected(dist_backup)
+
 entries = []
 for name in os.listdir(releases_dir):
     path = os.path.join(releases_dir, name)
     if os.path.isdir(path):
         entries.append((os.path.getmtime(path), path))
 entries.sort(reverse=True)
+
 for _, path in entries[3:]:
-    if os.path.abspath(path) == os.path.abspath(keep):
+    abspath = os.path.abspath(path)
+    if abspath in protected:
+        continue
+    # Also skip if this release is an ancestor of a protected realpath.
+    skip = False
+    for p in protected:
+        try:
+            if os.path.commonpath([abspath, p]) == abspath:
+                skip = True
+                break
+        except ValueError:
+            continue
+    if skip:
         continue
     shutil.rmtree(path, ignore_errors=True)
 PY

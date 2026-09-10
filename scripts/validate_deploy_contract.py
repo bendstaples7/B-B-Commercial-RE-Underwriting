@@ -416,16 +416,45 @@ def main() -> int:
                 "install_frontend_dist_with_asset_grace.sh must stage under a "
                 "*-releases directory for atomic publish"
             )
-        if "ln -sfn" not in grace_text:
+        # Require temp-link + rename publish (not a direct ln -sfn onto LIVE_DIST),
+        # so nginx never observes a missing document root.
+        if "ln -sfn" not in grace_text or not re.search(
+            r'\bmv\s+-Tf\s+"\$TMP_LINK"\s+"\$LIVE_DIST"',
+            grace_text,
+        ):
             errors.append(
                 "install_frontend_dist_with_asset_grace.sh must atomically publish "
-                "via symlink (ln -sfn + mv)"
+                'via ln -sfn to "$TMP_LINK" then mv -Tf "$TMP_LINK" "$LIVE_DIST"'
+            )
+        if "RENAME_EXCHANGE" not in grace_text and "renameat2" not in grace_text:
+            errors.append(
+                "install_frontend_dist_with_asset_grace.sh must atomically migrate a "
+                "plain LIVE_DIST directory via renameat2(RENAME_EXCHANGE) (or equivalent)"
             )
         if re.search(r"\brsync\b", grace_text):
             errors.append(
                 "install_frontend_dist_with_asset_grace.sh must not rsync in-place "
                 "into the live dist tree"
             )
+        if "realpath" not in grace_text and "os.path.realpath" not in grace_text:
+            errors.append(
+                "install_frontend_dist_with_asset_grace.sh must protect the live "
+                "symlink target (and rollback backup target) when pruning releases"
+            )
+    # Post-deploy rollback must restore pre-promotion PREV after deploy.sh promote.
+    post_rollback = REPO_ROOT / "scripts" / "post-deploy-rollback.sh"
+    if post_rollback.exists():
+        post_text = _read(post_rollback)
+        if "frontend-assets-prev.rollback" not in post_text:
+            errors.append(
+                "post-deploy-rollback.sh must restore frontend-assets-prev.rollback "
+                "after a post-deploy health failure (deploy.sh may have already promoted)"
+            )
+    if "frontend-assets-prev.rollback" not in deploy_text:
+        errors.append(
+            "deploy.sh must save frontend-assets-prev.rollback before promoting "
+            ".next so post-deploy rollback can restore grace hashes"
+        )
     if "SPA_DEPLOY_IN_PROGRESS" not in deploy_text:
         errors.append(
             "deploy.sh must set SPA_DEPLOY_IN_PROGRESS around frontend dist swap "

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   fetchSpaVersion,
   isSpaVersionStale,
@@ -32,36 +32,42 @@ export function useSpaVersionGuard(options?: UseSpaVersionGuardOptions): {
   const readBootId = options?.readBootId ?? readBootSpaBuildId
   const enabled = options?.enabled ?? true
 
-  // State (not ref) so capturing the boot id after enable flips triggers a render.
+  // Ref holds the boot id for check() so capturing it does not recreate check
+  // and re-fire the polling effect (avoids double /api/spa-version on mount).
+  const bootBuildIdRef = useRef<string | null>(null)
   const [bootBuildId, setBootBuildId] = useState<string | null>(null)
   const [liveBuildId, setLiveBuildId] = useState<string | null>(null)
   const [stale, setStale] = useState(false)
   /** Build id the user dismissed — re-prompt when a newer live id appears. */
   const [dismissedBuildId, setDismissedBuildId] = useState<string | null>(null)
 
-  // Capture boot id when the guard becomes enabled.
+  const captureBootId = useCallback(() => {
+    if (bootBuildIdRef.current != null) return bootBuildIdRef.current
+    const id = readBootId()
+    bootBuildIdRef.current = id
+    setBootBuildId(id)
+    return id
+  }, [readBootId])
+
+  // Capture boot id when the guard becomes enabled (state for callers; ref for check).
   useEffect(() => {
     if (!enabled) return
-    setBootBuildId((prev) => prev ?? readBootId())
-  }, [enabled, readBootId])
+    captureBootId()
+  }, [captureBootId, enabled])
 
   const check = useCallback(async () => {
     if (!enabled) return
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
       return
     }
-    let boot = bootBuildId
-    if (boot == null) {
-      boot = readBootId()
-      setBootBuildId(boot)
-    }
+    const boot = captureBootId()
     const live = await fetchVersion()
     if (!live) return
     setLiveBuildId(live.buildId)
     if (isSpaVersionStale(boot, live)) {
       setStale(true)
     }
-  }, [bootBuildId, enabled, fetchVersion, readBootId])
+  }, [captureBootId, enabled, fetchVersion])
 
   useEffect(() => {
     if (!enabled) return

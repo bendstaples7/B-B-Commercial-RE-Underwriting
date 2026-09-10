@@ -59,6 +59,13 @@ else
 fi
 # Discard deferred asset-grace snapshot from the failed release.
 rm -rf /home/deploy/frontend-assets-prev.next 2>/dev/null || true
+# deploy.sh may have already promoted PREV after exiting 0; restore the
+# pre-promotion snapshot so the next deploy graces the rolled-back generation.
+if [ -d /home/deploy/frontend-assets-prev.rollback ]; then
+    rm -rf /home/deploy/frontend-assets-prev
+    mv /home/deploy/frontend-assets-prev.rollback /home/deploy/frontend-assets-prev
+    echo "    Restored frontend-assets-prev from pre-promotion rollback snapshot"
+fi
 rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 
 sudo -n systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
