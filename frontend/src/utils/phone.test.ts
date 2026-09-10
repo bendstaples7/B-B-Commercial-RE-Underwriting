@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { formatPhoneNumber, looksLikePhoneNumber, phoneCopyText, phoneTelHref } from './phone'
+import {
+  extractPhoneDigitsFromText,
+  formatPhoneNumber,
+  looksLikePhoneNumber,
+  normalizePhoneDigits,
+  phoneCopyText,
+  phoneDigitsEqual,
+  phoneTelHref,
+} from './phone'
 
 describe('formatPhoneNumber', () => {
   it('formats 10-digit US numbers', () => {
@@ -41,5 +49,23 @@ describe('phoneTelHref', () => {
 describe('phoneCopyText', () => {
   it('copies E.164 for US numbers', () => {
     expect(phoneCopyText('(630) 430-5720')).toBe('+16304305720')
+  })
+})
+
+describe('normalizePhoneDigits / phoneDigitsEqual', () => {
+  it('strips formatting and leading US 1', () => {
+    expect(normalizePhoneDigits('(773) 271-5525')).toBe('7732715525')
+    expect(normalizePhoneDigits('+17732715525')).toBe('7732715525')
+    expect(phoneDigitsEqual('+1 (773) 271-5525', '7732715525')).toBe(true)
+  })
+})
+
+describe('extractPhoneDigitsFromText', () => {
+  it('pulls the dial target from a call task title', () => {
+    expect(extractPhoneDigitsFromText('Call (773) 271-5525')).toBe('7732715525')
+  })
+
+  it('returns null when no phone-shaped digits exist', () => {
+    expect(extractPhoneDigitsFromText('Add to mail queue')).toBeNull()
   })
 })

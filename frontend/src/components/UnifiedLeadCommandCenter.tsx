@@ -2502,6 +2502,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         activityType={activityModal}
         leadId={leadId}
         openTasks={openTasks}
+        preferredPhoneDigits={
+          outreachContact?.channel === 'phone' || outreachContact?.channel === 'text'
+            ? outreachContact.value
+            : null
+        }
         onClose={() => setActivityModal(null)}
         onSaved={handleActivitySaved}
       />

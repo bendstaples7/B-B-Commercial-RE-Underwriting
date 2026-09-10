@@ -48,6 +48,7 @@ import {
 } from '@/utils/followUpPresets'
 import { resolveCreateTaskPayload, type CreateTaskPresetId } from '@/utils/createTaskPresets'
 import { addSentFromAddress, getSentFromAddresses } from '@/utils/emailSentFromAddresses'
+import { extractPhoneDigitsFromText, normalizePhoneDigits } from '@/utils/phone'
 
 const MAX_CALL_NOTES_LENGTH = 2000
 const MAX_BODY_LENGTH = 5000
@@ -149,6 +150,8 @@ export interface LogActivityFormProps {
   contacts?: PropertyContact[]
   contactsLoading?: boolean
   openTasks?: LeadTask[]
+  /** Digits from recommended outreach / open call task — prefer in phone picker. */
+  preferredPhoneDigits?: string | null
   onSaved: (entry: LeadTimelineEntry, meta?: LogCallSavedMeta) => void
   onCancel?: () => void
 }
@@ -159,7 +162,16 @@ export interface LogActivityFormHandle {
 
 export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityFormProps>(
   function LogActivityForm(
-    { mode, leadId, contacts = [], contactsLoading = false, openTasks = [], onSaved, onCancel },
+    {
+      mode,
+      leadId,
+      contacts = [],
+      contactsLoading = false,
+      openTasks = [],
+      preferredPhoneDigits = null,
+      onSaved,
+      onCancel,
+    },
     ref,
   ) {
     const formRef = useRef<HTMLDivElement>(null)
@@ -169,6 +181,13 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       () => findCompletableTaskForMode(mode, openTasks),
       [mode, openTasks],
     )
+    const resolvedPreferredPhoneDigits = useMemo(() => {
+      if (mode !== 'call') return null
+      const fromTask = extractPhoneDigitsFromText(completableTask?.title)
+      if (fromTask) return fromTask
+      const fromProp = normalizePhoneDigits(preferredPhoneDigits)
+      return fromProp.length >= 7 ? fromProp : null
+    }, [mode, completableTask?.title, preferredPhoneDigits])
     const hasOpenNonCompletableTasks =
       !completableTask && openTasks.some((t) => t.status === 'open' || t.status === 'overdue')
 
@@ -630,6 +649,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
                   contactsLoading={contactsLoading}
                   value={contactMethod}
                   onChange={setContactMethod}
+                  preferredPhoneDigits={resolvedPreferredPhoneDigits}
                 />
 
                 <Box sx={{ mb: 1.25 }} data-testid="call-direction-buttons">

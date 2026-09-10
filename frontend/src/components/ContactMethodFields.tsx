@@ -11,7 +11,7 @@ import {
   Typography,
 } from '@mui/material'
 import type { PropertyContact } from '@/types'
-import { formatPhoneNumber } from '@/utils/phone'
+import { formatPhoneNumber, phoneDigitsEqual } from '@/utils/phone'
 import { formatPhoneConfidence } from '@/utils/helpers'
 
 export const CONTACT_NONE = ''
@@ -47,7 +47,7 @@ function formatContactShortLabel(contact: PropertyContact): string {
 
 function formatContactLabel(contact: PropertyContact): string {
   const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || 'Unnamed contact'
-  const role = contact.property_contact_role.replace(/_/g, ' ')
+  const role = (contact.property_contact_role || contact.role || 'contact').replace(/_/g, ' ')
   const primary = contact.is_primary ? ', primary' : ''
   return `${name} (${role}${primary})`
 }
@@ -93,6 +93,7 @@ export function buildMethodOptions(
   contacts: PropertyContact[],
   mode: 'phone' | 'email',
   selectedContactId: number | null,
+  preferredPhoneDigits?: string | null,
 ): MethodOption[] {
   const relevantContacts = selectedContactId != null
     ? contacts.filter((c) => c.id === selectedContactId)
@@ -136,6 +137,11 @@ export function buildMethodOptions(
 
   if (mode === 'phone') {
     return options.sort((a, b) => {
+      if (preferredPhoneDigits) {
+        const aMatch = phoneDigitsEqual(a.value, preferredPhoneDigits)
+        const bMatch = phoneDigitsEqual(b.value, preferredPhoneDigits)
+        if (aMatch !== bMatch) return aMatch ? -1 : 1
+      }
       const scoreDiff = (b.confidenceScore ?? 50) - (a.confidenceScore ?? 50)
       if (scoreDiff !== 0) return scoreDiff
       // Prefer HubSpot-primary when confidence ties (never alphabetical).
@@ -194,6 +200,12 @@ export interface ContactMethodFieldsProps {
   onChange: (value: ContactMethodValue) => void
   /** Tighter vertical spacing for modals (fields still stack full-width). */
   dense?: boolean
+  /**
+   * When set (call mode), prefer the contact/phone matching these digits —
+   * e.g. open call-task title or recommended outreach dial target — over
+   * generic highest-confidence auto-select.
+   */
+  preferredPhoneDigits?: string | null
 }
 
 export function ContactMethodFields({
@@ -203,10 +215,11 @@ export function ContactMethodFields({
   value,
   onChange,
   dense = false,
+  preferredPhoneDigits = null,
 }: ContactMethodFieldsProps) {
   const methodOptions = useMemo(
-    () => buildMethodOptions(contacts, mode, value.contactId),
-    [contacts, mode, value.contactId],
+    () => buildMethodOptions(contacts, mode, value.contactId, preferredPhoneDigits),
+    [contacts, mode, preferredPhoneDigits, value.contactId],
   )
 
   const hasAutoSelected = useRef(false)
@@ -224,8 +237,9 @@ export function ContactMethodFields({
     hasAutoSelected.current = true
 
     if (mode === 'phone') {
-      // Highest-confidence phone across all contacts (HubSpot-primary tie-break).
-      const options = buildMethodOptions(contacts, 'phone', null)
+      // Prefer open-task / outreach dial target, else highest-confidence
+      // (HubSpot-primary tie-break).
+      const options = buildMethodOptions(contacts, 'phone', null, preferredPhoneDigits)
       const opt = options[0]
       if (!opt?.contactId) {
         const fallback = contacts.find((c) => c.is_primary) ?? contacts[0]
@@ -259,7 +273,16 @@ export function ContactMethodFields({
       methodLabel: opt.recordLabel,
       methodRecordId: opt.recordId,
     })
-  }, [contacts, contactsLoading, mode, onChange, value.contactId, value.methodKey, value.methodValue])
+  }, [
+    contacts,
+    contactsLoading,
+    mode,
+    onChange,
+    preferredPhoneDigits,
+    value.contactId,
+    value.methodKey,
+    value.methodValue,
+  ])
 
   const handleContactChange = (contactKey: string) => {
     if (contactKey === CONTACT_NONE) {

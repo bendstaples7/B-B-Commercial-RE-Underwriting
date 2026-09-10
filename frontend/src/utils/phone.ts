@@ -14,6 +14,39 @@ export function formatPhoneNumber(phone: string): string {
   return phone
 }
 
+/** Digits only; strip a leading US country code so 10-digit compares match. */
+export function normalizePhoneDigits(phone: string | null | undefined): string {
+  const digits = String(phone ?? '').replace(/\D/g, '')
+  if (digits.length === 11 && digits.startsWith('1')) return digits.slice(1)
+  return digits
+}
+
+/** True when two phone strings share the same national digits. */
+export function phoneDigitsEqual(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const left = normalizePhoneDigits(a)
+  const right = normalizePhoneDigits(b)
+  return left.length >= 7 && left === right
+}
+
+/**
+ * Pull the first phone-shaped digit run from free text (task titles, notes).
+ * Prefers a 10/11-digit US number when present.
+ */
+export function extractPhoneDigitsFromText(text: string | null | undefined): string | null {
+  if (!text) return null
+  const matches = String(text).match(/\+?[\d\s().-]{7,}/g)
+  if (!matches) return null
+  for (const raw of matches) {
+    const digits = normalizePhoneDigits(raw)
+    if (digits.length === 10) return digits
+    if (digits.length >= 7) return digits
+  }
+  return null
+}
+
 /**
  * True when a string is phone-shaped (not an email), e.g. misfiled into email_*.
  * Rejects values that contain `@` even if they also have digits.
