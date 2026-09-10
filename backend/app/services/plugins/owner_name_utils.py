@@ -319,8 +319,17 @@ _is_entity_name = is_entity_name
 
 
 def contact_display_name(first_name: str | None, last_name: str | None) -> str:
-    """Join contact name parts the same way UI display helpers do."""
-    return " ".join(p for p in ((first_name or "").strip(), (last_name or "").strip()) if p)
+    """Join contact name parts the same way UI display helpers do.
+
+    Non-string values (e.g. MagicMock in unit tests) are treated as empty so
+    scoring/policy helpers stay safe outside a real ORM row.
+    """
+    def _part(value: object) -> str:
+        if not isinstance(value, str):
+            return ""
+        return value.strip()
+
+    return " ".join(p for p in (_part(first_name), _part(last_name)) if p)
 
 
 def is_entity_contact(first_name: str | None, last_name: str | None) -> bool:

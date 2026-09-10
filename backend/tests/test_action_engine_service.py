@@ -82,6 +82,10 @@ def make_lead(
     lead.motivation_score = 0
     lead.acquisition_date = None
     lead.most_recent_sale = None
+    lead.owner_first_name = 'Pat'
+    lead.owner_last_name = 'Owner'
+    lead.ownership_type = None
+    lead.permit_data = None
     return lead
 
 
