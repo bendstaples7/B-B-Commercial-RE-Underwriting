@@ -153,14 +153,22 @@ jobs:
               traceback.print_exc()
           PY
           echo
-          echo "=== nginx/gunicorn access for channel-roi (recent) ==="
-          # nginx access if present
-          for f in /var/log/nginx/access.log /var/log/nginx/bbanalyzer.access.log; do
-            if [ -f "$f" ]; then
+          echo "=== nginx access/error for channel-roi + 502/504 (recent) ==="
+          for f in /var/log/nginx/access.log /var/log/nginx/bbanalyzer.access.log /var/log/nginx/error.log /var/log/nginx/bbanalyzer.error.log; do
+            if [ -r "$f" ]; then
               echo "-- $f --"
-              grep -i 'channel-roi' "$f" | tail -20 || true
+              grep -iE 'channel-roi|502|504|upstream' "$f" | tail -40 || true
+            else
+              echo "-- $f not readable --"
             fi
           done
+          # deploy may have passwordless sudo for journal/nginx
+          sudo -n journalctl -u nginx --since "24 hours ago" --no-pager 2>/dev/null \
+            | grep -iE '502|504|upstream timed out|connect\\(\\) failed' | tail -40 || true
+          echo
+          echo "=== gunicorn restart reason (last 50) ==="
+          journalctl -u gunicorn --since "24 hours ago" --no-pager 2>/dev/null \
+            | grep -iE 'Started|Stopping|Worker|boot|OOM|Killed|signal|ERROR' | tail -50 || true
           echo
           echo "=== gunicorn journal (channel-roi / traceback) last 24h ==="
           journalctl -u gunicorn --since "24 hours ago" --no-pager 2>/dev/null \
