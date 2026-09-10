@@ -32,15 +32,27 @@ export function useSpaVersionGuard(options?: UseSpaVersionGuardOptions): {
   const readBootId = options?.readBootId ?? readBootSpaBuildId
   const enabled = options?.enabled ?? true
 
-  const bootBuildId = useRef<string | null>(enabled ? readBootId() : null)
+  const bootBuildId = useRef<string | null>(null)
   const [liveBuildId, setLiveBuildId] = useState<string | null>(null)
   const [stale, setStale] = useState(false)
-  const [dismissed, setDismissed] = useState(false)
+  /** Build id the user dismissed — re-prompt when a newer live id appears. */
+  const [dismissedBuildId, setDismissedBuildId] = useState<string | null>(null)
+
+  // Capture boot id when the guard becomes enabled (ref initializers ignore later flips).
+  useEffect(() => {
+    if (!enabled) return
+    if (bootBuildId.current == null) {
+      bootBuildId.current = readBootId()
+    }
+  }, [enabled, readBootId])
 
   const check = useCallback(async () => {
     if (!enabled) return
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
       return
+    }
+    if (bootBuildId.current == null) {
+      bootBuildId.current = readBootId()
     }
     const live = await fetchVersion()
     if (!live) return
@@ -48,7 +60,7 @@ export function useSpaVersionGuard(options?: UseSpaVersionGuardOptions): {
     if (isSpaVersionStale(bootBuildId.current, live)) {
       setStale(true)
     }
-  }, [enabled, fetchVersion])
+  }, [enabled, fetchVersion, readBootId])
 
   useEffect(() => {
     if (!enabled) return
@@ -73,15 +85,18 @@ export function useSpaVersionGuard(options?: UseSpaVersionGuardOptions): {
   }, [])
 
   const dismiss = useCallback(() => {
-    setDismissed(true)
-  }, [])
+    setDismissedBuildId(liveBuildId)
+  }, [liveBuildId])
+
+  const dismissedForLive =
+    liveBuildId != null && dismissedBuildId != null && dismissedBuildId === liveBuildId
 
   return {
-    stale: stale && !dismissed,
+    stale: stale && !dismissedForLive,
     bootBuildId: bootBuildId.current,
     liveBuildId,
     reload,
     dismiss,
-    dismissed,
+    dismissed: dismissedForLive,
   }
 }

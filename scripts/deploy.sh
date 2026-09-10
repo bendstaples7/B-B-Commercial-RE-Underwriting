@@ -73,6 +73,9 @@ rollback() {
         echo "ROLLBACK WARNING: restore_frontend_dist_backup.sh not found"
         ROLLBACK_FAILED=1
     fi
+    # Discard deferred asset-grace snapshot from the failed release so the next
+    # deploy still graces the rolled-back generation's hashed chunks.
+    rm -rf /home/deploy/frontend-assets-prev.next 2>/dev/null || true
     # Always clear soft-lock so canary can heal/alert even when restore failed.
     rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
     sudo -n systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
@@ -473,6 +476,16 @@ if [ -f "$FP_SCRIPT" ]; then
 else
     echo "FAILED: spa-dist-fingerprint.sh not found"
     rollback 1
+fi
+
+# Promote deferred asset-grace snapshot only after install + fingerprint succeed.
+# On rollback, /home/deploy/frontend-assets-prev stays on the prior good generation.
+PREV_ASSETS=/home/deploy/frontend-assets-prev
+PREV_ASSETS_NEXT="${PREV_ASSETS}.next"
+if [ -d "$PREV_ASSETS_NEXT" ]; then
+    rm -rf "$PREV_ASSETS"
+    mv "$PREV_ASSETS_NEXT" "$PREV_ASSETS"
+    echo "    Asset grace snapshot promoted → ${PREV_ASSETS}"
 fi
 rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 

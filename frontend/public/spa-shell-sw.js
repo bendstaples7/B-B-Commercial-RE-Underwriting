@@ -1,10 +1,12 @@
-/* spa-shell-sw.js — network-first for HTML navigations; clear stale caches.
+/* spa-shell-sw.js — network-first for HTML navigations only.
  *
  * Hashed /assets/* are intentionally NOT cached here (nginx immutable + browser
  * HTTP cache). This worker keeps document requests off a stale app-shell cache
- * after deploy.
+ * after deploy. It must not intercept API/XHR/fetch (destination often "").
  */
 /* eslint-disable no-restricted-globals */
+const SPA_SHELL_CACHE_PREFIX = 'bb-spa-shell-'
+
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting())
 })
@@ -12,8 +14,13 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
+      // Only clear caches this worker owns — never wipe unrelated origin caches.
       const keys = await caches.keys()
-      await Promise.all(keys.map((key) => caches.delete(key)))
+      await Promise.all(
+        keys
+          .filter((key) => key.startsWith(SPA_SHELL_CACHE_PREFIX))
+          .map((key) => caches.delete(key)),
+      )
       await self.clients.claim()
     })(),
   )
@@ -24,8 +31,9 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return
 
   const dest = req.destination
-  const isDocument =
-    req.mode === 'navigate' || dest === 'document' || dest === ''
+  // Do NOT treat destination === '' as a document — fetch/Axios GETs use that
+  // and must keep normal HTTP caching + not inherit navigation retry policy.
+  const isDocument = req.mode === 'navigate' || dest === 'document'
 
   const url = new URL(req.url)
   const isVersion =

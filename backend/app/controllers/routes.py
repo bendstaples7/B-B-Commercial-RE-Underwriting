@@ -223,6 +223,20 @@ def client_config():
     }), 200
 
 
+def _spa_version_candidates():
+    """Paths probed for spa-version.json (overridable in tests)."""
+    import os
+
+    return [
+        os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__), '..', '..', '..', 'frontend', 'dist', 'spa-version.json'
+            )
+        ),
+        '/home/deploy/app/frontend/dist/spa-version.json',
+    ]
+
+
 @api_bp.route('/spa-version', methods=['GET'])
 def spa_version():
     """Live SPA build id with Cache-Control: no-store for stale-tab recovery.
@@ -231,19 +245,10 @@ def spa_version():
     tabs can detect a newer deploy before lazy chunk imports 404.
     """
     import json
-    import os
     from flask import make_response
 
-    candidates = [
-        os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__), '..', '..', '..', 'frontend', 'dist', 'spa-version.json'
-            )
-        ),
-        '/home/deploy/app/frontend/dist/spa-version.json',
-    ]
     payload = None
-    for candidate in candidates:
+    for candidate in _spa_version_candidates():
         try:
             with open(candidate, encoding='utf-8') as fh:
                 payload = json.load(fh)

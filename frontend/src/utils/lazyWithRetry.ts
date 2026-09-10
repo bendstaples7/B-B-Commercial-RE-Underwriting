@@ -58,6 +58,8 @@ export function clearChunkReloadGuard(): void {
     if (url.searchParams.has('_chunk_reload')) {
       url.searchParams.delete('_chunk_reload')
       window.history.replaceState(window.history.state, '', url.toString())
+      // Keep React Router's location in sync with the cleaned URL.
+      window.dispatchEvent(new PopStateEvent('popstate'))
     }
   } catch {
     // ignore

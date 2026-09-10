@@ -57,6 +57,8 @@ else
     echo "ROLLBACK WARNING: restore_frontend_dist_backup.sh not found"
     ROLLBACK_FAILED=1
 fi
+# Discard deferred asset-grace snapshot from the failed release.
+rm -rf /home/deploy/frontend-assets-prev.next 2>/dev/null || true
 rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 
 sudo -n systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }

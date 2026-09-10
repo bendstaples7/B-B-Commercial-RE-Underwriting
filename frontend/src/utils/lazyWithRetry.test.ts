@@ -32,10 +32,12 @@ describe('isChunkLoadError', () => {
 
 describe('reloadOnceForStaleChunk', () => {
   const reload = vi.fn()
+  let originalLocation: Location
 
   beforeEach(() => {
     sessionStorage.clear()
     reload.mockReset()
+    originalLocation = window.location
     Object.defineProperty(window, 'location', {
       configurable: true,
       value: { reload, href: 'http://localhost/', search: '' },
@@ -44,6 +46,10 @@ describe('reloadOnceForStaleChunk', () => {
 
   afterEach(() => {
     sessionStorage.clear()
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: originalLocation,
+    })
   })
 
   it('reloads once then refuses a second reload', () => {

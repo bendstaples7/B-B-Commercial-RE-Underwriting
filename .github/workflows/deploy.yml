@@ -223,11 +223,15 @@ jobs:
 
       - name: Build frontend on runner (manual deploy fallback)
         if: github.event_name == 'workflow_dispatch'
+        env:
+          TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
         run: |
           cd frontend
           npm ci
           npm install --no-save @rollup/rollup-linux-x64-gnu
-          VITE_SPA_BUILD_ID="${GITHUB_SHA}" GITHUB_SHA="${GITHUB_SHA}" npm run build
+          # Use the resolved target SHA (not workflow_dispatch ref) so spa-version
+          # matches the code that will actually be deployed.
+          VITE_SPA_BUILD_ID="${TARGET_SHA}" GITHUB_SHA="${TARGET_SHA}" npm run build
           echo "Frontend built successfully ($(du -sh dist | cut -f1) total)"
 
       - name: Assert frontend dist asset coupling
