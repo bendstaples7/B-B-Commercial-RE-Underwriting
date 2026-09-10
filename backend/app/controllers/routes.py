@@ -223,6 +223,48 @@ def client_config():
     }), 200
 
 
+@api_bp.route('/spa-version', methods=['GET'])
+def spa_version():
+    """Live SPA build id with Cache-Control: no-store for stale-tab recovery.
+
+    Reads ``frontend/dist/spa-version.json`` emitted by the Vite build so open
+    tabs can detect a newer deploy before lazy chunk imports 404.
+    """
+    import json
+    import os
+    from flask import make_response
+
+    candidates = [
+        os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__), '..', '..', '..', 'frontend', 'dist', 'spa-version.json'
+            )
+        ),
+        '/home/deploy/app/frontend/dist/spa-version.json',
+    ]
+    payload = None
+    for candidate in candidates:
+        try:
+            with open(candidate, encoding='utf-8') as fh:
+                payload = json.load(fh)
+                break
+        except (OSError, json.JSONDecodeError):
+            continue
+
+    if not isinstance(payload, dict):
+        resp = make_response(jsonify({'error': 'spa_version_unavailable'}), 404)
+        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+        return resp
+
+    body = {
+        'buildId': payload.get('buildId') or payload.get('build_id'),
+        'builtAt': payload.get('builtAt') or payload.get('built_at'),
+    }
+    resp = make_response(jsonify(body), 200)
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    return resp
+
+
 @api_bp.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint — verifies DB connectivity, migration state, and data integrity.

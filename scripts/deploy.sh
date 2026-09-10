@@ -426,11 +426,23 @@ if [ -d "frontend/dist" ]; then
     echo "    Previous frontend dist backed up for rollback"
 fi
 
-# Install new dist
+# Install new dist — retain prior hashed /assets for one deploy generation so
+# open tabs do not 404 on lazy chunks mid-session (blank SPA class).
 touch /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
-rm -rf frontend/dist
-mv /home/deploy/frontend-dist frontend/dist
-echo "    Frontend dist installed from CI runner build"
+ASSET_GRACE_SCRIPT=/home/deploy/install_frontend_dist_with_asset_grace.sh
+if [ ! -f "$ASSET_GRACE_SCRIPT" ]; then
+    ASSET_GRACE_SCRIPT="$APP_DIR/scripts/install_frontend_dist_with_asset_grace.sh"
+fi
+if [ ! -f "$ASSET_GRACE_SCRIPT" ]; then
+    echo "FAILED: install_frontend_dist_with_asset_grace.sh not found"
+    rollback 1
+fi
+bash "$ASSET_GRACE_SCRIPT" \
+    /home/deploy/frontend-dist \
+    frontend/dist \
+    /home/deploy/frontend-assets-prev \
+    || { echo "FAILED: frontend dist install with asset grace"; rollback 1; }
+echo "    Frontend dist installed from CI runner build (with asset grace)"
 
 # Inject browser Maps key into index.html. Reads only browser-scoped key names
 # from backend/.env (or repo-root .env) so Places autocomplete works without

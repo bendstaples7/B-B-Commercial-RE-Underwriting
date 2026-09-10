@@ -3,6 +3,7 @@ import { isChunkLoadError, lazyWithRetry, reloadOnceForStaleChunk } from '@/util
 import { Routes, Route, Link, Navigate, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import { BackendRuntimeGuard } from './components/BackendRuntimeGuard'
+import { SpaUpdateSnackbar } from './components/SpaUpdateSnackbar'
 import { LoginPage } from './pages/LoginPage'
 import { SetPasswordPage } from './pages/SetPasswordPage'
 import { useLoadScript } from '@react-google-maps/api'
@@ -2539,6 +2540,7 @@ function App() {
         }}
       >
         <BackendRuntimeGuard />
+        <SpaUpdateSnackbar />
         <RouteErrorBoundary
           recoveryHref="/"
           recoveryLabel="Go Home"

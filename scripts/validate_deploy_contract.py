@@ -38,6 +38,7 @@ SHELL_SCRIPTS = [
     REPO_ROOT / "scripts" / "celery-liveness-check.sh",
     REPO_ROOT / "scripts" / "ops-alert.sh",
     REPO_ROOT / "scripts" / "ensure_frontend_dist_readable.sh",
+    REPO_ROOT / "scripts" / "install_frontend_dist_with_asset_grace.sh",
     REPO_ROOT / "scripts" / "spa-dist-fingerprint.sh",
     REPO_ROOT / "scripts" / "spa-uptime-canary.sh",
     REPO_ROOT / "scripts" / "post-deploy-rollback.sh",
@@ -382,6 +383,11 @@ def main() -> int:
         errors.append(
             "deploy.sh must HTTP-smoke SPA assets via ensure_frontend_dist_readable --http-base"
         )
+    if "install_frontend_dist_with_asset_grace" not in deploy_text:
+        errors.append(
+            "deploy.sh must install frontend/dist via install_frontend_dist_with_asset_grace "
+            "(retain prior hashed assets for one generation)"
+        )
     if "SPA_DEPLOY_IN_PROGRESS" not in deploy_text:
         errors.append(
             "deploy.sh must set SPA_DEPLOY_IN_PROGRESS around frontend dist swap "
@@ -608,6 +614,20 @@ def main() -> int:
         errors.append(
             "deploy.yml must scp scripts/ensure_frontend_dist_readable.sh "
             "to /home/deploy/ensure_frontend_dist_readable.sh"
+        )
+    if not re.search(
+        r"scp\s+[^\n]*scripts/install_frontend_dist_with_asset_grace\.sh\s+[^\n]+:/home/deploy/install_frontend_dist_with_asset_grace\.sh",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/install_frontend_dist_with_asset_grace.sh "
+            "to /home/deploy/install_frontend_dist_with_asset_grace.sh"
+        )
+    if not re.search(
+        r"chmod 750[^\n]*install_frontend_dist_with_asset_grace\.sh", deploy_yml_text
+    ):
+        errors.append(
+            "deploy.yml chmod 750 line must include install_frontend_dist_with_asset_grace.sh"
         )
     # umask 077 for secret JSON must not apply to frontend/dist scp (mode 0700 blank SPA).
     scp_dist_idx = deploy_yml_text.find("scp -i ~/.ssh/id_deploy -r frontend/dist")
