@@ -3,12 +3,12 @@
 Canonical heal for stubs such as ``Taxpayer of`` / ``TAXPAYER OF 123 MAIN``:
 
 1. Null flat ``owner_*`` when the display is placeholder-only
-2. Unlink primary (and other) owner contacts whose display is placeholder-only
-3. Remove staged ``MailQueueItem`` rows (status ``removed``)
+2. Unlink owner contacts whose display is placeholder-only
+3. Remove staged ``MailQueueItem`` rows when cold mail is blocked for the lead
 4. Timeline + optional rescore so ``mail_ready`` becomes ``enrich_data``
 
-Used by Alembic ``gen_own_20260910`` and
-``scripts/heal_generic_owner_names.py``.
+Used by ``scripts/heal_generic_owner_names.py``. Deploy applies the same class
+of fix via Alembic ``gen_own_20260910`` (Core SQL).
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 
 from app import db
 from app.models.contact import Contact
@@ -24,6 +24,7 @@ from app.models.lead import Lead
 from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.models.mail_queue_item import MailQueueItem
 from app.models.property_contact import PropertyContact
+from app.services.entity_owner_policy import cold_mail_block_reason
 from app.services.plugins.owner_name_utils import (
     contact_display_name,
     is_placeholder_owner_name,
@@ -33,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 HEAL_ACTOR = 'heal_generic_owner_names'
 HEAL_REASON = 'generic_owner_placeholder'
+_VALIDATION_ERROR_MAX = 500
+_MARKER = 'generic_owner_placeholder'
 
 
 def _flat_display(lead: Lead) -> str:
@@ -49,39 +52,88 @@ def _owner2_display(lead: Lead) -> str:
     )
 
 
+def _name_column_prefilter(*columns):
+    """SQL OR clauses matching common placeholder substrings on name columns."""
+    clauses = []
+    for col in columns:
+        clauses.extend([
+            col.ilike('%taxpayer%'),
+            col.ilike('%owner of record%'),
+            col.ilike('%unknown owner%'),
+            col.ilike('%current resident%'),
+            col.ilike('%for sale by owner%'),
+            col.ilike('%the taxpayer%'),
+            col.ilike('%owner unknown%'),
+            col.ilike('%name unknown%'),
+            func.lower(func.trim(func.coalesce(col, ''))).in_(
+                ('n/a', 'na', 'fsbo', 'taxpayer'),
+            ),
+        ])
+    return clauses
+
+
+def _concat_prefilter(first_col, last_col):
+    """Match phrases that may split across first/last (e.g. Taxpayer / of)."""
+    joined = func.concat_ws(
+        ' ',
+        func.nullif(func.trim(func.coalesce(first_col, '')), ''),
+        func.nullif(func.trim(func.coalesce(last_col, '')), ''),
+    )
+    return [
+        joined.ilike('%taxpayer of%'),
+        joined.ilike('%owner of record%'),
+        joined.ilike('%unknown owner%'),
+        joined.ilike('%current resident%'),
+        joined.ilike('%for sale by owner%'),
+        joined.ilike('%the taxpayer%'),
+        joined.ilike('%owner unknown%'),
+        joined.ilike('%name unknown%'),
+    ]
+
+
 class GenericOwnerHealService:
     """Remove placeholder owner identities and pull leads out of mail staging."""
 
     def candidate_query(self):
-        """SQL prefilter: names that often contain assessor/listing stubs."""
+        """SQL prefilter: flats, owner_2, and linked owner Contacts."""
+        contact_exists = (
+            db.session.query(PropertyContact.id)
+            .join(Contact, Contact.id == PropertyContact.contact_id)
+            .filter(
+                PropertyContact.property_id == Lead.id,
+                PropertyContact.role == 'owner',
+                or_(
+                    *_name_column_prefilter(Contact.first_name, Contact.last_name),
+                    *_concat_prefilter(Contact.first_name, Contact.last_name),
+                ),
+            )
+            .exists()
+        )
         return (
             Lead.query.filter(
                 or_(
-                    Lead.owner_first_name.ilike('%taxpayer%'),
-                    Lead.owner_last_name.ilike('%taxpayer%'),
-                    Lead.owner_first_name.ilike('%owner of record%'),
-                    Lead.owner_last_name.ilike('%owner of record%'),
-                    Lead.owner_first_name.ilike('%unknown owner%'),
-                    Lead.owner_last_name.ilike('%unknown owner%'),
-                    Lead.owner_first_name.ilike('%current resident%'),
-                    Lead.owner_last_name.ilike('%current resident%'),
-                    Lead.owner_first_name.ilike('%for sale by owner%'),
-                    Lead.owner_last_name.ilike('%for sale by owner%'),
-                    Lead.owner_first_name.ilike('n/a'),
-                    Lead.owner_last_name.ilike('n/a'),
-                    Lead.owner_first_name.ilike('na'),
-                    Lead.owner_last_name.ilike('na'),
-                    Lead.owner_first_name.ilike('fsbo'),
-                    Lead.owner_last_name.ilike('fsbo'),
+                    *_name_column_prefilter(
+                        Lead.owner_first_name,
+                        Lead.owner_last_name,
+                        Lead.owner_2_first_name,
+                        Lead.owner_2_last_name,
+                    ),
+                    *_concat_prefilter(Lead.owner_first_name, Lead.owner_last_name),
+                    *_concat_prefilter(
+                        Lead.owner_2_first_name, Lead.owner_2_last_name,
+                    ),
+                    contact_exists,
                 ),
             )
             .order_by(Lead.id)
         )
 
     def is_heal_candidate(self, lead: Lead) -> bool:
-        if is_placeholder_owner_name(_flat_display(lead)):
+        flat = _flat_display(lead)
+        if flat and is_placeholder_owner_name(flat):
             return True
-        if is_placeholder_owner_name(_owner2_display(lead)):
+        owner2 = _owner2_display(lead)
+        if owner2 and is_placeholder_owner_name(owner2):
             return True
         for link in PropertyContact.query.filter_by(
             property_id=lead.id, role='owner',
@@ -117,19 +169,14 @@ class GenericOwnerHealService:
 
     def _clear_flat_placeholder(self, lead: Lead) -> list[str]:
         cleared: list[str] = []
-        if is_placeholder_owner_name(_flat_display(lead)):
-            if (lead.owner_first_name or '').strip() or (lead.owner_last_name or '').strip():
-                cleared.append(
-                    contact_display_name(lead.owner_first_name, lead.owner_last_name),
-                )
+        flat = _flat_display(lead)
+        if flat and is_placeholder_owner_name(flat):
+            cleared.append(flat)
             lead.owner_first_name = None
             lead.owner_last_name = None
-        if is_placeholder_owner_name(_owner2_display(lead)):
-            if (
-                (getattr(lead, 'owner_2_first_name', None) or '').strip()
-                or (getattr(lead, 'owner_2_last_name', None) or '').strip()
-            ):
-                cleared.append(_owner2_display(lead))
+        owner2 = _owner2_display(lead)
+        if owner2 and is_placeholder_owner_name(owner2):
+            cleared.append(owner2)
             lead.owner_2_first_name = None
             lead.owner_2_last_name = None
         return cleared
@@ -154,7 +201,26 @@ class GenericOwnerHealService:
             db.session.delete(link)
         return removed
 
+    def _should_unstage_mail(self, lead: Lead) -> bool:
+        """Unstage only when cold-mail policy still blocks the lead.
+
+        Commercial entity orgs may cold-mail the LLC address even when the
+        person-name flat was a placeholder — keep their queue items.
+        """
+        return cold_mail_block_reason(lead) == 'generic_owner_name'
+
+    def _append_validation_marker(self, existing: str | None) -> str:
+        if not (existing or '').strip():
+            return _MARKER
+        combined = f'{existing}; {_MARKER}'
+        if len(combined) <= _VALIDATION_ERROR_MAX:
+            return combined
+        keep = _VALIDATION_ERROR_MAX - len(f'; {_MARKER}')
+        return f'{(existing or "")[:max(keep, 0)]}; {_MARKER}'
+
     def _remove_queued_mail(self, lead: Lead) -> int:
+        if not self._should_unstage_mail(lead):
+            return 0
         queued = MailQueueItem.query.filter_by(
             lead_id=lead.id,
             status='queued',
@@ -163,11 +229,8 @@ class GenericOwnerHealService:
         for item in queued:
             item.status = 'removed'
             item.updated_at = now
-            suffix = 'generic_owner_placeholder'
-            item.validation_error = (
-                f'{item.validation_error}; {suffix}'
-                if item.validation_error
-                else suffix
+            item.validation_error = self._append_validation_marker(
+                item.validation_error,
             )
             db.session.add(item)
         if queued:
@@ -204,7 +267,11 @@ class GenericOwnerHealService:
                 'removed_queue_items': 0,
             }
 
-        before = _flat_display(lead) or _owner2_display(lead) or 'placeholder'
+        before = (
+            (_flat_display(lead) if _flat_display(lead) else '')
+            or (_owner2_display(lead) if _owner2_display(lead) else '')
+            or 'placeholder'
+        )
         cleared = self._clear_flat_placeholder(lead)
         unlinked = self._unlink_placeholder_owner_contacts(lead.id)
         removed_queue = self._remove_queued_mail(lead)
@@ -231,7 +298,9 @@ class GenericOwnerHealService:
         )
         db.session.add(lead)
 
-        if commit:
+        # Commit heal before best-effort rescoring so a scoring failure cannot
+        # roll back the cleared names / unstaged queue rows.
+        if commit or rescore:
             db.session.commit()
 
         if rescore:
@@ -273,11 +342,11 @@ class GenericOwnerHealService:
 
         healed = 0
         for lead in candidates:
-            summary = self.heal_lead(lead, rescore=rescore, commit=False)
+            # Commit each heal before optional rescore (see heal_lead).
+            summary = self.heal_lead(lead, rescore=rescore, commit=True)
             if summary['healed']:
                 healed += 1
                 rows.append(summary)
-        db.session.commit()
         return {
             'scanned': len(candidates),
             'healed': healed,

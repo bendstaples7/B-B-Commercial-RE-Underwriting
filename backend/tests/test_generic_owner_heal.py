@@ -60,6 +60,49 @@ class TestGenericOwnerHeal:
             assert item.status == 'removed'
             assert lead.recommended_action != 'mail_ready'
 
+    def test_real_owner_with_empty_owner2_is_not_candidate(self, app):
+        with app.app_context():
+            lead = self._lead(
+                owner_first_name='Pat',
+                owner_last_name='Owner',
+            )
+            assert GenericOwnerHealService().is_heal_candidate(lead) is False
+
+    def test_commercial_entity_clears_name_but_keeps_queue(self, app):
+        with app.app_context():
+            from app.models.organization import Organization
+            from app.models.property_organization_link import PropertyOrganizationLink
+
+            lead = self._lead(lead_category='commercial')
+            org = Organization(name='Stub Holdings LLC', org_type='llc')
+            db.session.add(org)
+            db.session.flush()
+            db.session.add(
+                PropertyOrganizationLink(
+                    property_id=lead.id,
+                    organization_id=org.id,
+                    role='owner',
+                )
+            )
+            item = MailQueueItem(
+                lead_id=lead.id,
+                user_id='user-1',
+                status='queued',
+            )
+            db.session.add(item)
+            db.session.commit()
+
+            assert cold_mail_block_reason(lead) is None
+            summary = GenericOwnerHealService().heal_lead(
+                lead, rescore=False, commit=True,
+            )
+            assert summary['healed'] is True
+            assert summary['removed_queue_items'] == 0
+            db.session.refresh(lead)
+            assert lead.owner_first_name is None
+            item = MailQueueItem.query.filter_by(lead_id=lead.id).first()
+            assert item.status == 'queued'
+
     def test_scoring_routes_placeholder_to_enrich(self, monkeypatch):
         from unittest.mock import MagicMock
 

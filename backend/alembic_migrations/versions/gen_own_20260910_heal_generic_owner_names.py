@@ -10,8 +10,8 @@ unlinks matching placeholder owner contacts, removes staged mail-queue rows,
 and demotes ``mail_ready`` → ``enrich_data`` so candidates leave the queue
 before the next full rescore.
 
-Uses Core SQL + ``is_placeholder_owner_name`` (no nested create_app), matching
-``joint_own_20260821``.
+Uses Core SQL + ``is_placeholder_owner_name`` / ``contact_display_name``
+(no nested create_app), matching ``joint_own_20260821``.
 """
 from __future__ import annotations
 
@@ -25,6 +25,45 @@ down_revision = 'score_cal_20260907'
 branch_labels = None
 depends_on = None
 
+_MARKER = 'generic_owner_placeholder'
+
+
+def _name_match_sql(*cols: str) -> str:
+    """OR clauses for placeholder substrings / sole tokens on name columns."""
+    parts: list[str] = []
+    for col in cols:
+        parts.extend([
+            f"{col} ILIKE '%taxpayer%'",
+            f"{col} ILIKE '%owner of record%'",
+            f"{col} ILIKE '%unknown owner%'",
+            f"{col} ILIKE '%current resident%'",
+            f"{col} ILIKE '%for sale by owner%'",
+            f"{col} ILIKE '%the taxpayer%'",
+            f"{col} ILIKE '%owner unknown%'",
+            f"{col} ILIKE '%name unknown%'",
+            f"lower(trim(coalesce({col}, ''))) IN ('n/a', 'na', 'fsbo', 'taxpayer')",
+        ])
+    return ' OR '.join(parts)
+
+
+def _concat_match_sql(first: str, last: str) -> str:
+    """Match phrases that may split across first/last columns."""
+    joined = (
+        f"concat_ws(' ', "
+        f"nullif(trim(coalesce({first}, '')), ''), "
+        f"nullif(trim(coalesce({last}, '')), ''))"
+    )
+    return ' OR '.join([
+        f"{joined} ILIKE '%taxpayer of%'",
+        f"{joined} ILIKE '%owner of record%'",
+        f"{joined} ILIKE '%unknown owner%'",
+        f"{joined} ILIKE '%current resident%'",
+        f"{joined} ILIKE '%for sale by owner%'",
+        f"{joined} ILIKE '%the taxpayer%'",
+        f"{joined} ILIKE '%owner unknown%'",
+        f"{joined} ILIKE '%name unknown%'",
+    ])
+
 
 def upgrade():
     from app.services.plugins.owner_name_utils import (
@@ -36,28 +75,23 @@ def upgrade():
     now = datetime.utcnow()
     healed_ids: list[int] = []
 
+    lead_where = ' OR '.join([
+        _name_match_sql(
+            'owner_first_name', 'owner_last_name',
+            'owner_2_first_name', 'owner_2_last_name',
+        ),
+        _concat_match_sql('owner_first_name', 'owner_last_name'),
+        _concat_match_sql('owner_2_first_name', 'owner_2_last_name'),
+    ])
     lead_rows = bind.execute(
         sa.text(
-            """
+            f"""
             SELECT id,
                    owner_first_name, owner_last_name,
                    owner_2_first_name, owner_2_last_name,
                    recommended_action
             FROM leads
-            WHERE owner_first_name ILIKE '%taxpayer%'
-               OR owner_last_name ILIKE '%taxpayer%'
-               OR owner_first_name ILIKE '%owner of record%'
-               OR owner_last_name ILIKE '%owner of record%'
-               OR owner_first_name ILIKE '%unknown owner%'
-               OR owner_last_name ILIKE '%unknown owner%'
-               OR owner_first_name ILIKE '%current resident%'
-               OR owner_last_name ILIKE '%current resident%'
-               OR owner_first_name ILIKE '%for sale by owner%'
-               OR owner_last_name ILIKE '%for sale by owner%'
-               OR lower(trim(coalesce(owner_first_name, ''))) IN ('n/a', 'na', 'fsbo', 'taxpayer')
-               OR lower(trim(coalesce(owner_last_name, ''))) IN ('n/a', 'na', 'fsbo', 'taxpayer')
-               OR owner_2_first_name ILIKE '%taxpayer%'
-               OR owner_2_last_name ILIKE '%taxpayer%'
+            WHERE {lead_where}
             """
         )
     ).mappings().all()
@@ -91,22 +125,18 @@ def upgrade():
         )
         healed_ids.append(lead_id)
 
-    # Also unlink placeholder owner contacts (may exist without matching flats).
+    contact_where = ' OR '.join([
+        _name_match_sql('c.first_name', 'c.last_name'),
+        _concat_match_sql('c.first_name', 'c.last_name'),
+    ])
     contact_rows = bind.execute(
         sa.text(
-            """
+            f"""
             SELECT pc.id AS link_id, pc.property_id, c.first_name, c.last_name
             FROM property_contacts pc
             JOIN contacts c ON c.id = pc.contact_id
             WHERE pc.role = 'owner'
-              AND (
-                c.first_name ILIKE '%taxpayer%'
-                OR c.last_name ILIKE '%taxpayer%'
-                OR c.first_name ILIKE '%owner of record%'
-                OR c.last_name ILIKE '%owner of record%'
-                OR lower(trim(coalesce(c.first_name, ''))) IN ('n/a', 'na', 'fsbo', 'taxpayer')
-                OR lower(trim(coalesce(c.last_name, ''))) IN ('n/a', 'na', 'fsbo', 'taxpayer')
-              )
+              AND ({contact_where})
             """
         )
     ).mappings().all()
@@ -123,7 +153,7 @@ def upgrade():
             healed_ids.append(pid)
 
     if healed_ids:
-        # Unstage Ready-to-Mail items for healed leads.
+        marker_len = len(f'; {_MARKER}')
         bind.execute(
             sa.text(
                 """
@@ -132,20 +162,32 @@ def upgrade():
                     updated_at = :now,
                     validation_error = CASE
                         WHEN validation_error IS NULL OR validation_error = ''
-                        THEN 'generic_owner_placeholder'
-                        ELSE validation_error || '; generic_owner_placeholder'
+                        THEN :marker
+                        ELSE left(validation_error, :keep)
+                             || '; ' || :marker
                     END
                 WHERE status = 'queued'
                   AND lead_id IN :ids
                 """
             ).bindparams(sa.bindparam('ids', expanding=True)),
-            {'now': now, 'ids': healed_ids},
+            {
+                'now': now,
+                'ids': healed_ids,
+                'marker': _MARKER,
+                'keep': 500 - marker_len,
+            },
         )
+        # Demote mail_ready for every healed lead (including contact-only heals).
         bind.execute(
             sa.text(
                 """
                 UPDATE leads
-                SET up_next_to_mail = false, updated_at = :now
+                SET recommended_action = CASE
+                        WHEN recommended_action = 'mail_ready' THEN 'enrich_data'
+                        ELSE recommended_action
+                    END,
+                    up_next_to_mail = false,
+                    updated_at = :now
                 WHERE id IN :ids
                 """
             ).bindparams(sa.bindparam('ids', expanding=True)),

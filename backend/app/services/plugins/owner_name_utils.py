@@ -192,7 +192,8 @@ def is_placeholder_owner_name(name: str | None) -> bool:
 
     Blocks cold mail and ingest for ``Taxpayer of`` / ``N/A`` / ``FSBO``, but
     not hybrid listing labels that still carry a real person token
-    (``Sam For Sale By Owner``).
+    (``Sam For Sale By Owner``). Address-only leftovers after stripping a
+    placeholder phrase (``CURRENT RESIDENT 123 MAIN ST``) still count.
     """
     cleaned = re.sub(r"\s+", " ", (name or "").strip())
     if not cleaned:
@@ -207,6 +208,7 @@ def is_placeholder_owner_name(name: str | None) -> bool:
     residual = upper
     for phrase in sorted(_GENERIC_OWNER_PHRASES, key=len, reverse=True):
         residual = residual.replace(phrase, " ")
+    residual = re.sub(r"\s+", " ", residual).strip()
     tokens = {_normalize_token(token) for token in residual.split()}
     tokens.discard("")
     noise = (
@@ -214,7 +216,11 @@ def is_placeholder_owner_name(name: str | None) -> bool:
         | _GENERIC_OWNER_SOLE_TOKENS
         | _PLACEHOLDER_RESIDUAL_NOISE
     )
-    return not (tokens - noise)
+    leftover = tokens - noise
+    if not leftover:
+        return True
+    # Placeholder phrase + situs / mailing fragment only.
+    return bool(residual) and is_address_like_name(residual)
 
 
 def is_marketing_or_listing_noise_last(last_name: str | None) -> bool:

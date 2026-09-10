@@ -70,6 +70,18 @@ def _owner_display_name(lead: Lead, primary: Optional[Contact]) -> str:
     )
 
 
+def owner_display_name_for_policy(lead: Lead) -> str:
+    """Public owner display used by cold-mail policy (primary Contact preferred)."""
+    lead_id = getattr(lead, "id", None)
+    primary: Optional[Contact] = None
+    if isinstance(lead_id, int):
+        try:
+            primary = _primary_contact(lead_id)
+        except Exception:  # noqa: BLE001
+            primary = None
+    return _owner_display_name(lead, primary)
+
+
 def _org_name_is_entity(org: Organization) -> bool:
     if (org.org_type or "") in {
         "llc", "corporation", "trust", "property_management", "brokerage",
@@ -116,6 +128,7 @@ def _cold_mail_block_reason_with_context(
     display = _owner_display_name(lead, primary)
     # Assessor stubs ("Taxpayer of") and blank names are not mailable identities.
     # Commercial entity orgs may still cold-mail the LLC address without a person.
+    # ``display`` already prefers the primary owner Contact when one exists.
     if is_placeholder_owner_name(display):
         has_entity_org = any(_org_name_is_entity(org) for org in owner_orgs)
         category = (getattr(lead, "lead_category", None) or "residential")
@@ -123,10 +136,6 @@ def _cold_mail_block_reason_with_context(
             isinstance(category, str) and category.strip().lower() == "commercial"
         )
         if not (has_entity_org and commercial):
-            return "generic_owner_name"
-    if primary is not None:
-        primary_display = contact_display_name(primary.first_name, primary.last_name)
-        if primary_display and is_placeholder_owner_name(primary_display):
             return "generic_owner_name"
 
     if display and is_institutional_name(display):

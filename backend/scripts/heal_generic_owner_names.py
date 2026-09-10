@@ -27,6 +27,9 @@ def main() -> int:
     parser.add_argument('--skip-rescore', action='store_true')
     args = parser.parse_args()
 
+    from env_loader import load_project_env
+    load_project_env()
+
     from app import create_app
     from app.services.generic_owner_heal_service import GenericOwnerHealService
 

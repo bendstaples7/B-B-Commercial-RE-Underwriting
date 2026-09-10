@@ -56,9 +56,19 @@ def _cold_mail_ready_outcome(lead: Lead) -> tuple[str, str, dict] | None:
     ):
         return 'nurture', mail_block, {'cold_mail_blocked': True}
     if mail_block == 'generic_owner_name':
+        # Distinguish blank identity (mail gate only) from a junk label that
+        # should divert phone work into enrich. Prefer primary Contact display
+        # the same way cold_mail_block_reason does.
+        from app.services.entity_owner_policy import owner_display_name_for_policy
+        from app.services.plugins.owner_name_utils import is_placeholder_owner_name
+
+        display = owner_display_name_for_policy(lead)
         return 'enrich_data', 'generic_owner_name', {
             'cold_mail_blocked': True,
             'requires_owner_name': True,
+            'placeholder_label_present': bool(
+                display and is_placeholder_owner_name(display)
+            ),
         }
     if mail_block == 'unresolved_entity_owner':
         return 'enrich_data', 'research_entity_owner', {
@@ -764,17 +774,8 @@ class LeadScoringEngine:
             entity_research is not None
             and entity_research[1] == 'generic_owner_name'
         ):
-            from app.services.plugins.owner_name_utils import (
-                contact_display_name,
-                is_placeholder_owner_name,
-            )
-
-            display = contact_display_name(
-                getattr(lead, 'owner_first_name', None),
-                getattr(lead, 'owner_last_name', None),
-            )
             # Divert only when a junk label is present (not merely missing).
-            if display and is_placeholder_owner_name(display):
+            if entity_research[2].get('placeholder_label_present'):
                 return entity_research
 
         if score_tier == "D":
