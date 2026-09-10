@@ -186,6 +186,9 @@ const BuildingOwnershipLookbookPage = lazy(
 const CcPinDeprioritizeLookbookPage = lazy(
   () => import('./pages/lookbook/CcPinDeprioritizeLookbookPage'),
 )
+const SameAddressMergeLookbookPage = lazy(
+  () => import('./pages/lookbook/SameAddressMergeLookbookPage'),
+)
 const PipelineConfigAdminPage = lazy(() =>
   import('./pages/PipelineConfigAdminPage').then((m) => ({ default: m.PipelineConfigAdminPage })),
 )
@@ -2608,6 +2611,12 @@ function App() {
             <Route
               path="/lookbook/cc-pin-deprioritize"
               element={<CcPinDeprioritizeLookbookPage />}
+            />
+          )}
+          {import.meta.env.DEV && (
+            <Route
+              path="/lookbook/same-address-merge"
+              element={<SameAddressMergeLookbookPage />}
             />
           )}
           {/* Old /leads/views/* — redirect to new /queues/* routes */}
