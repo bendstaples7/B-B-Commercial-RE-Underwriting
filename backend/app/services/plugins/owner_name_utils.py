@@ -234,11 +234,15 @@ def is_placeholder_owner_name(name: str | None) -> bool:
     if not leftover_ordered or not is_address_like_name(" ".join(leftover_ordered)):
         return False
     # Leading alphabetic tokens before the house number are person/entity names,
-    # except compass directions and street-type tokens (e.g. HIGHWAY 12).
+    # except compass directions and route-style tokens (e.g. HIGHWAY 12).
+    # Do not allow generic street words (LANE/WAY/COURT) — those are also surnames.
+    _route_prefix = frozenset({
+        "HWY", "HIGHWAY", "ROUTE", "RTE", "INTERSTATE", "IH", "FM",
+    })
     _prefix_ok = {
         "N", "S", "E", "W", "NE", "NW", "SE", "SW",
         "NORTH", "SOUTH", "EAST", "WEST",
-    } | _STREET_TOKENS
+    } | _route_prefix
     first_digit = next(
         (i for i, tok in enumerate(leftover_ordered) if re.search(r"\d", tok)),
         None,

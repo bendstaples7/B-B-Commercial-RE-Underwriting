@@ -510,7 +510,7 @@ def test_overdue_llc_search_does_not_force_call_ready():
          patch('app.services.lead_scoring_engine._resolve_crm_flags', return_value=(True, True, True)), \
          patch('app.services.scoring_rubric.is_recently_sold', return_value=False), \
          patch('app.services.scoring_rubric.contacts_likely_prior_owner', return_value=False), \
-         patch('app.services.lead_scoring_engine.cold_mail_block_reason', return_value=None):
+         patch('app.services.lead_scoring_engine.cold_mail_block_context', return_value=(None, '')):
         # Simulate: open overdue LLC search exists, but helper ignores non-call tasks.
         result = ActionEngineService.compute_recommended_action(lead)
     assert result != 'call_ready'
