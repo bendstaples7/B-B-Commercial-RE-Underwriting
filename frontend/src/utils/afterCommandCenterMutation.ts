@@ -33,6 +33,38 @@ export function commandCenterQueryKey(leadId: number): readonly ['commandCenter'
   return ['commandCenter', leadId] as const
 }
 
+/**
+ * Canonical refresh after any write that can change open tasks / RA / mail chip
+ * for one or more leads (mail enqueue/remove/send, task complete, etc.).
+ *
+ * Prefer this over ad-hoc `invalidateQueries({ queryKey: ['commandCenter', id] })`
+ * so mail-queue and queue bulk paths cannot forget the 60s workspace stale window.
+ */
+export function invalidateCommandCentersForLeads(
+  queryClient: QueryClient,
+  leadIds: Iterable<number>,
+): void {
+  const seen = new Set<number>()
+  for (const leadId of leadIds) {
+    if (!Number.isFinite(leadId) || seen.has(leadId)) continue
+    seen.add(leadId)
+    void queryClient.invalidateQueries({ queryKey: commandCenterQueryKey(leadId) })
+  }
+}
+
+/** Alias for mail / queue callers — same contract as invalidateCommandCentersForLeads. */
+export function afterLeadWorkspaceMutation(
+  queryClient: QueryClient,
+  leadIds: Iterable<number>,
+): void {
+  invalidateCommandCentersForLeads(queryClient, leadIds)
+}
+
+/** Bust every cached command-center payload (e.g. after a full mail-batch send). */
+export function invalidateAllCommandCenters(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: ['commandCenter'] })
+}
+
 export async function afterCommandCenterMutation(
   queryClient: QueryClient,
   options: AfterCommandCenterMutationOptions,

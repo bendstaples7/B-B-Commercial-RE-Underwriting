@@ -13,6 +13,7 @@ import {
   formatEnqueueSummary,
   type EnqueueCounts,
 } from '@/utils/formatEnqueueSummary'
+import { afterLeadWorkspaceMutation } from '@/utils/afterCommandCenterMutation'
 import type { BulkActionResult } from '@/types'
 import type { BulkAction, RowAction } from './QueueTable'
 
@@ -116,9 +117,11 @@ export async function enqueueLeadsAsBulkResult(
 ): Promise<BulkActionResult> {
   try {
     const result = await openLetterService.enqueue(leadIds, ctx.queryKey)
-    stripMailCandidatesFromCache(ctx.queryClient, addedLeadIds(result, leadIds))
+    const queuedIds = addedLeadIds(result, leadIds)
+    stripMailCandidatesFromCache(ctx.queryClient, queuedIds)
     bumpMailQueueAfterEnqueue(ctx.queryClient, result)
     invalidateMailQueries(ctx.queryClient)
+    afterLeadWorkspaceMutation(ctx.queryClient, queuedIds)
     invalidateQueueQueries(ctx.queryClient, ctx.queryKey, ctx.extraQueryKeys)
     ctx.onEnqueueResult?.(result)
     ctx.onAfterAction?.()

@@ -49,6 +49,7 @@ import {
   resolveBulkActions,
   stripMailCandidatesFromCache,
 } from './queueBulkActions'
+import { afterLeadWorkspaceMutation } from '@/utils/afterCommandCenterMutation'
 import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { useAuth } from '@/context/AuthContext'
 import {
@@ -136,9 +137,11 @@ export function ReadyToMailQueue() {
     mutationFn: (limit?: number) => openLetterService.enqueueCandidates(limit),
     onSuccess: (result) => {
       // Candidates enqueue has no stable requested ID list (limit-based); strip from results only.
-      stripMailCandidatesFromCache(queryClient, addedLeadIds(result, []))
+      const queuedIds = addedLeadIds(result, [])
+      stripMailCandidatesFromCache(queryClient, queuedIds)
       bumpMailQueueAfterEnqueue(queryClient, result)
       invalidateMailQueries(queryClient)
+      afterLeadWorkspaceMutation(queryClient, queuedIds)
       clearSelection()
       setCandidatesPage(1)
       showEnqueueFeedback(result)

@@ -18,6 +18,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link as RouterLink } from 'react-router-dom'
 import openLetterService, { type MailQueueSummary } from '@/services/openLetterApi'
 import {
+  afterLeadWorkspaceMutation,
+  invalidateAllCommandCenters,
+} from '@/utils/afterCommandCenterMutation'
+import {
   extractOlcListRows,
   getActiveCreativePreset,
   getOlcCatalogSendLines,
@@ -64,9 +68,17 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
     mutationFn: (force: boolean) => openLetterService.sendBatch(force),
     onSuccess: () => {
       setSendDialogOpen(false)
+      // Capture staged lead ids before mail-queue cache is cleared.
+      const staged = queryClient.getQueryData<MailQueueSummary>(['mail-queue'])
+      const stagedLeadIds = (staged?.items ?? []).map((item) => item.lead_id)
       queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
       queryClient.invalidateQueries({ queryKey: ['mail-campaigns'] })
       queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+      if (stagedLeadIds.length > 0) {
+        afterLeadWorkspaceMutation(queryClient, stagedLeadIds)
+      } else {
+        invalidateAllCommandCenters(queryClient)
+      }
     },
     onError: (err: Error) => setSendError(err.message),
   })

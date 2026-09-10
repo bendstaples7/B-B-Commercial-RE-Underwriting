@@ -312,10 +312,15 @@ class LeadTaskService:
                  recompute_action: bool = True) -> LeadTask:
         """Complete an open LeadTask.
 
-        - Validates task is 'open' (raises InvalidTaskStatusTransitionError if already completed)
+        - Validates task is 'open' (raises InvalidTaskStatusTransitionError for
+          unknown non-terminal statuses)
         - Sets status='completed', records completed_at
         - Appends task_completed timeline entry
         - Triggers RA recomputation (unless ``recompute_action=False``)
+
+        Terminal statuses ``completed`` and ``cancelled`` are idempotent no-ops.
+        System flows (mail-batch remove, DNC, supersede) cancel open tasks; a
+        stale command-center UI must not 422 when the user retries complete.
 
         ``recompute_action`` lets a caller that will refresh the lead itself
         afterwards (e.g. via ``refresh_lead_scoring``) suppress the in-service
@@ -326,8 +331,8 @@ class LeadTaskService:
         if task is None:
             raise ValueError(f"Task {task_id} not found for lead {lead_id}")
 
-        if task.status == 'completed':
-            # No-op per spec: completing a completed task is a no-op
+        if task.status in ('completed', 'cancelled'):
+            # Idempotent: already terminal (user complete or system cancel).
             return task
 
         if task.status != 'open':

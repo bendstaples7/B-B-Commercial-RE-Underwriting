@@ -22,6 +22,7 @@ import openLetterService, {
   type MailQueueItem,
   type MailQueueSummary,
 } from '@/services/openLetterApi'
+import { afterLeadWorkspaceMutation } from '@/utils/afterCommandCenterMutation'
 import { formatLastMailedDate, formatLastSaleDate } from '@/utils/formatLastMailedDate'
 
 /** Matches backend MAX_MAIL_ENQUEUE_LEADS for bulk remove. */
@@ -117,6 +118,13 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
   const [selectedIds, setSelectedIds] = useState<number[]>([])
 
   const itemIds = useMemo(() => items.map((item) => item.id), [items])
+  const leadIdByItemId = useMemo(() => {
+    const map = new Map<number, number>()
+    for (const item of items) {
+      map.set(item.id, item.lead_id)
+    }
+    return map
+  }, [items])
 
   useEffect(() => {
     setSelectedIds((prev) => prev.filter((id) => itemIds.includes(id)))
@@ -131,6 +139,13 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
     queryClient.invalidateQueries({ queryKey: ['queue-mail-candidates'] })
   }
 
+  const refreshWorkspacesForItemIds = (itemIdList: number[]) => {
+    const leadIds = itemIdList
+      .map((id) => leadIdByItemId.get(id))
+      .filter((id): id is number => id != null)
+    afterLeadWorkspaceMutation(queryClient, leadIds)
+  }
+
   const removeOneMutation = useMutation({
     mutationFn: (itemId: number) => openLetterService.removeFromQueue(itemId),
     onSuccess: (_data, itemId) => {
@@ -139,6 +154,7 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
       )
       setSelectedIds((prev) => prev.filter((id) => id !== itemId))
       invalidateMailQueries()
+      refreshWorkspacesForItemIds([itemId])
     },
   })
 
@@ -163,6 +179,7 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
         )
       }
       invalidateMailQueries()
+      refreshWorkspacesForItemIds(droppedIds)
     },
   })
 

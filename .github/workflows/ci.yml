@@ -412,6 +412,9 @@ jobs:
       - name: Check API error envelopes unwrap in toasts
         run: python scripts/check_api_error_envelopes.py
 
+      - name: Check mail mutations refresh lead workspaces
+        run: python scripts/check_lead_workspace_invalidation.py
+
       - name: Check Alembic migration purity (no nested create_app / ContactService)
         run: python scripts/check_migration_purity.py
 
