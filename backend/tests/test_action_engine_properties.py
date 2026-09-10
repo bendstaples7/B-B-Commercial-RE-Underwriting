@@ -97,6 +97,14 @@ def make_mock_lead(
     lead.mailing_address = None
     lead.condo_risk_status = None
     lead.motivation_score = 0
+    lead.owner_first_name = 'Pat'
+    lead.owner_last_name = 'Owner'
+    lead.ownership_type = None
+    lead.permit_data = None
+    lead.mailing_city = None
+    lead.mailing_state = None
+    lead.mailing_zip = None
+    lead.returned_addresses = None
     return lead
 
 

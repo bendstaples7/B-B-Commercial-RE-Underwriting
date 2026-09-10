@@ -43,7 +43,7 @@ def _make_lead(app, street, **kwargs):
 
 
 def _make_mail_ready_lead(app, street, **kwargs):
-    """Create a mail-ready lead with a valid mailable address."""
+    """Create a mail-ready lead with a valid mailable address and real owner name."""
     defaults = dict(
         lead_status='mailing_no_contact_made',
         recommended_action='mail_ready',
@@ -52,6 +52,8 @@ def _make_mail_ready_lead(app, street, **kwargs):
         mailing_city='Chicago',
         mailing_state='IL',
         mailing_zip='60601',
+        owner_first_name='Pat',
+        owner_last_name='Owner',
         owner_user_id='test-owner',
     )
     defaults.update(kwargs)

@@ -469,6 +469,8 @@ def _make_mail_ready_lead(app, street, **kwargs):
         mailing_city='Chicago',
         mailing_state='IL',
         mailing_zip='60601',
+        owner_first_name='Pat',
+        owner_last_name='Owner',
     )
     defaults.update(kwargs)
     return _make_lead(app, street, **defaults)

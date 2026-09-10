@@ -58,7 +58,8 @@ _GENERIC_OWNER_TOKENS = frozenset({
     "TBD", "EMPTY",
 })
 # Sole-token placeholders only — "NA" as a surname token (e.g. "Jane Na") is real.
-_GENERIC_OWNER_SOLE_TOKENS = frozenset({"NA"})
+# TAXPAYER alone is a Cook County tax-roll stub, never a real surname here.
+_GENERIC_OWNER_SOLE_TOKENS = frozenset({"NA", "TAXPAYER"})
 _GENERIC_OWNER_PHRASES = (
     "FOR SALE BY OWNER",
     "FOR RENT",
@@ -67,7 +68,19 @@ _GENERIC_OWNER_PHRASES = (
     "CURRENT RESIDENT",
     "CURRENT OWNER",
     "NO OWNER",
+    "TAXPAYER OF",
+    "THE TAXPAYER",
+    "OWNER OF RECORD",
+    "UNKNOWN OWNER",
+    "OWNER UNKNOWN",
+    "NAME UNKNOWN",
 )
+
+# Residual noise after stripping known placeholder phrases (for whole-name checks).
+_PLACEHOLDER_RESIDUAL_NOISE = frozenset({
+    "FOR", "SALE", "BY", "THE", "OF", "NO", "BARE", "CURRENT", "RECORD",
+    "UNKNOWN", "NAME", "A", "AND",
+})
 
 # Assessor / HubSpot / brokerage junk that still carries a real first name
 # (e.g. "Sam" / "Old Town Square Cbre") — not a true ownership change.
@@ -149,11 +162,22 @@ def is_entity_name(cleaned: str) -> bool:
 
 
 def is_generic_owner_name(name: str | None) -> bool:
-    """Return True for placeholder / listing labels, never real owner names."""
+    """Return True for placeholder / listing labels, never real owner names.
+
+    Assessor tax-roll stubs such as ``Taxpayer of`` / ``TAXPAYER OF 123 MAIN``
+    count as generic. Substring phrase matches also flag hybrid labels like
+    ``Sam For Sale By Owner`` (use ``is_placeholder_owner_name`` when the whole
+    display must be placeholder-only for mail / ingest gates).
+    """
     cleaned = re.sub(r"\s+", " ", (name or "").strip())
     if not cleaned:
         return True
     upper = cleaned.upper()
+    # Prefix stubs: "TAXPAYER OF …" / "OWNER OF RECORD …" (address often follows).
+    if upper == "TAXPAYER" or upper.startswith("TAXPAYER OF"):
+        return True
+    if upper == "OWNER OF RECORD" or upper.startswith("OWNER OF RECORD "):
+        return True
     if any(phrase in upper for phrase in _GENERIC_OWNER_PHRASES):
         return True
     tokens = {_normalize_token(token) for token in upper.split()}
@@ -161,6 +185,75 @@ def is_generic_owner_name(name: str | None) -> bool:
     if len(tokens) == 1 and tokens & _GENERIC_OWNER_SOLE_TOKENS:
         return True
     return bool(tokens & _GENERIC_OWNER_TOKENS)
+
+
+_STREET_TOKENS = frozenset({
+    "ST", "STREET", "AVE", "AVENUE", "RD", "ROAD", "BLVD", "BOULEVARD",
+    "DR", "DRIVE", "LN", "LANE", "CT", "COURT", "PL", "PLACE", "WAY",
+    "CIR", "CIRCLE", "PKWY", "PARKWAY", "HWY", "HIGHWAY", "TER", "TERRACE",
+})
+
+def is_placeholder_owner_name(name: str | None) -> bool:
+    """True when the *entire* name is a placeholder — no usable person/entity token.
+
+    Blocks cold mail and ingest for ``Taxpayer of`` / ``N/A`` / ``FSBO``, but
+    not hybrid listing labels that still carry a real person token
+    (``Sam For Sale By Owner``). Address-only leftovers after stripping a
+    placeholder phrase (``CURRENT RESIDENT 123 MAIN ST``) still count.
+    """
+    cleaned = re.sub(r"\s+", " ", (name or "").strip())
+    if not cleaned:
+        return True
+    if not is_generic_owner_name(cleaned):
+        return False
+    upper = cleaned.upper()
+    if upper == "TAXPAYER" or upper.startswith("TAXPAYER OF"):
+        return True
+    if upper == "OWNER OF RECORD" or upper.startswith("OWNER OF RECORD "):
+        return True
+    residual = upper
+    for phrase in sorted(_GENERIC_OWNER_PHRASES, key=len, reverse=True):
+        residual = residual.replace(phrase, " ")
+    residual = re.sub(r"\s+", " ", residual).strip()
+    tokens = {_normalize_token(token) for token in residual.split()}
+    tokens.discard("")
+    noise = (
+        _GENERIC_OWNER_TOKENS
+        | _GENERIC_OWNER_SOLE_TOKENS
+        | _PLACEHOLDER_RESIDUAL_NOISE
+    )
+    leftover = tokens - noise
+    if not leftover:
+        return True
+    # Placeholder phrase + situs / mailing fragment only. Evaluate leftover
+    # tokens (not the full residual) so a real person name + address is kept.
+    leftover_ordered = [
+        tok for tok in residual.split()
+        if _normalize_token(tok) in leftover
+    ]
+    if not leftover_ordered or not is_address_like_name(" ".join(leftover_ordered)):
+        return False
+    # Leading alphabetic tokens before the house number are person/entity names,
+    # except compass directions, route tokens (HIGHWAY 12), and non-surname
+    # street types (AVE/BLVD/…). Exclude LANE/WAY/COURT/PLACE — common surnames.
+    _route_prefix = frozenset({
+        "HWY", "HIGHWAY", "ROUTE", "RTE", "INTERSTATE", "IH", "FM",
+    })
+    _surname_street = frozenset({
+        "LANE", "LN", "WAY", "COURT", "CT", "PLACE", "PL",
+    })
+    _prefix_ok = {
+        "N", "S", "E", "W", "NE", "NW", "SE", "SW",
+        "NORTH", "SOUTH", "EAST", "WEST",
+    } | _route_prefix | (_STREET_TOKENS - _surname_street)
+    first_digit = next(
+        (i for i, tok in enumerate(leftover_ordered) if re.search(r"\d", tok)),
+        None,
+    )
+    if first_digit is None:
+        return True
+    prefix = leftover_ordered[:first_digit]
+    return all(_normalize_token(tok) in _prefix_ok for tok in prefix)
 
 
 def is_marketing_or_listing_noise_last(last_name: str | None) -> bool:
@@ -265,8 +358,17 @@ _is_entity_name = is_entity_name
 
 
 def contact_display_name(first_name: str | None, last_name: str | None) -> str:
-    """Join contact name parts the same way UI display helpers do."""
-    return " ".join(p for p in ((first_name or "").strip(), (last_name or "").strip()) if p)
+    """Join contact name parts the same way UI display helpers do.
+
+    Non-string values (e.g. MagicMock in unit tests) are treated as empty so
+    scoring/policy helpers stay safe outside a real ORM row.
+    """
+    def _part(value: object) -> str:
+        if not isinstance(value, str):
+            return ""
+        return value.strip()
+
+    return " ".join(p for p in (_part(first_name), _part(last_name)) if p)
 
 
 def is_entity_contact(first_name: str | None, last_name: str | None) -> bool:
@@ -276,12 +378,6 @@ def is_entity_contact(first_name: str | None, last_name: str | None) -> bool:
         return False
     return is_entity_name(display)
 
-
-_STREET_TOKENS = frozenset({
-    "ST", "STREET", "AVE", "AVENUE", "RD", "ROAD", "BLVD", "BOULEVARD",
-    "DR", "DRIVE", "LN", "LANE", "CT", "COURT", "PL", "PLACE", "WAY",
-    "CIR", "CIRCLE", "PKWY", "PARKWAY", "HWY", "HIGHWAY", "TER", "TERRACE",
-})
 
 
 def is_address_like_name(cleaned: str) -> bool:
@@ -498,9 +594,15 @@ def is_institutional_contact(first_name: str | None, last_name: str | None) -> b
 
 
 def apply_owner_name_fields(fields: dict, owner_name: str) -> None:
-    """Populate owner_first_name / owner_last_name / ownership_type from a raw name."""
+    """Populate owner_first_name / owner_last_name / ownership_type from a raw name.
+
+    Assessor / listing placeholders (``Taxpayer of``, ``N/A``, …) are skipped so
+    they never become a fake individual identity.
+    """
     cleaned = re.sub(r"\s+", " ", (owner_name or "").strip())
     if not cleaned:
+        return
+    if is_placeholder_owner_name(cleaned):
         return
 
     if is_entity_name(cleaned):

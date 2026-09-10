@@ -2051,6 +2051,7 @@ class ContactService:
             is_address_like_contact,
             is_entity_contact,
             is_generic_owner_name,
+            is_placeholder_owner_name,
         )
 
         display = contact_display_name(contact.first_name, contact.last_name)
@@ -2060,8 +2061,11 @@ class ContactService:
             return True
         if is_address_like_contact(contact.first_name, contact.last_name):
             return True
-        # Listing placeholders with no person first name ("For rent sign").
-        # Do not treat "Sam For Sale By Owner" as junk — that is the dialed person.
+        # Listing / assessor placeholders ("Taxpayer of", "For rent sign").
+        # Preserve hybrid labels that still carry a person token
+        # ("Sam For Sale By Owner") when they have a first name.
+        if is_placeholder_owner_name(display):
+            return True
         if not first:
             return is_generic_owner_name(display) or is_generic_owner_name(last)
         if not last and is_generic_owner_name(first):

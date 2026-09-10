@@ -115,6 +115,8 @@ _KNOWN_REVISIONS = frozenset({
     'c5d6e7f8a9b0',
     # Outcome-calibration metadata on scoring_weights
     'score_cal_20260907',
+    # Clear assessor placeholder owner names (Taxpayer of) + unstage mail
+    'gen_own_20260910',
     # HubSpot signal dedup uniqueness index (lead_id, signal_type, source_engagement_id)
     'd6e7f8a9b0c1',
     # Ranked fuzzy search — leads.search_document generated column + GIN trgm

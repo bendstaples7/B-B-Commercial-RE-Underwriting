@@ -21,6 +21,7 @@ from app.services.open_letter_contact_mapper import (
 from app.services.action_eligibility import (
     evaluate_add_to_mail_batch,
 )
+from app.services.entity_owner_policy import cold_mail_block_reasons_for_leads
 from app.services.scoring_rubric import effective_acquisition_date, is_recently_sold
 from app.services.mail_task_lifecycle_service import (
     cancel_pending_mail_follow_up_tasks,
@@ -238,13 +239,16 @@ class MailQueueService:
         rejected_lead_ids: list[int] = []
         hubspot_sync_ids: list[str] = []
         recent_sale_hubspot_sync: dict[str, str] = {}
-        authorized_lead_ids = [
-            row[0]
-            for row in db.session.query(Lead.id).filter(
+        authorized_leads = (
+            Lead.query.filter(
                 Lead.id.in_(lead_ids),
                 Lead.owner_user_id == user_id,
             ).all()
-        ]
+            if lead_ids
+            else []
+        )
+        authorized_lead_ids = [lead.id for lead in authorized_leads]
+        owner_blocks = cold_mail_block_reasons_for_leads(authorized_leads)
         last_mailed = get_last_mailed_at_by_lead_ids(authorized_lead_ids)
 
         for lead_id in lead_ids:
@@ -323,6 +327,27 @@ class MailQueueService:
                                 'lead_id': lead_id,
                                 'status': 'invalid_address',
                                 'error': error,
+                            }
+                        elif (
+                            owner_block := owner_blocks.get(lead.id)
+                        ) is not None:
+                            error = (
+                                'Owner is not eligible for cold mail '
+                                f'({owner_block})'
+                            )
+                            item = MailQueueItem(
+                                lead_id=lead_id,
+                                user_id=user_id,
+                                status='invalid_address',
+                                validation_error=error,
+                            )
+                            db.session.add(item)
+                            db.session.flush()
+                            outcome = {
+                                'lead_id': lead_id,
+                                'status': 'invalid_address',
+                                'error': error,
+                                'reason': owner_block,
                             }
                         else:
                             fresh_last_mailed = get_last_mailed_at_by_lead_ids(

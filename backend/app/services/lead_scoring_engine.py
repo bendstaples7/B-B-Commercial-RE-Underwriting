@@ -34,7 +34,7 @@ from app.services.outreach_method_service import (
     refine_outreach_action,
     OUTREACH_ACTIONS,
 )
-from app.services.entity_owner_policy import cold_mail_block_reason
+from app.services.entity_owner_policy import cold_mail_block_context
 logger = logging.getLogger(__name__)
 
 # Backward-compatible patch target for tests and integrations; semantics are now
@@ -48,13 +48,26 @@ def _cold_mail_ready_outcome(lead: Lead) -> tuple[str, str, dict] | None:
     Applied only at ``mail_ready`` decision points so warm / follow-up leads
     still surface as ``follow_up_now``.
     """
-    mail_block = cold_mail_block_reason(lead)
+    mail_block, display = cold_mail_block_context(lead)
     if mail_block in (
         'institutional_owner',
         'nonprofit_organization',
         'tax_exempt_owner',
     ):
         return 'nurture', mail_block, {'cold_mail_blocked': True}
+    if mail_block == 'generic_owner_name':
+        # Distinguish blank identity (mail gate only) from a junk label that
+        # should divert phone work into enrich. Reuse display from the block
+        # context so we do not re-query the primary owner Contact.
+        from app.services.plugins.owner_name_utils import is_placeholder_owner_name
+
+        return 'enrich_data', 'generic_owner_name', {
+            'cold_mail_blocked': True,
+            'requires_owner_name': True,
+            'placeholder_label_present': bool(
+                display and is_placeholder_owner_name(display)
+            ),
+        }
     if mail_block == 'unresolved_entity_owner':
         return 'enrich_data', 'research_entity_owner', {
             'cold_mail_blocked': True,
@@ -745,14 +758,23 @@ class LeadScoringEngine:
             }
 
         # Unresolved residential entity owner → Research LLC before phone nurture /
-        # mail_ready. Runs after warm / overdue / engaged so follow-up work wins.
-        # Company phones must not bury Illinois SOS research.
+        # mail_ready. Non-empty placeholder assessor names (Taxpayer of) → enrich
+        # for a real owner. Blank names still block mail_ready via the mail gate
+        # without forcing phone leads into enrich. Runs after warm / overdue /
+        # engaged so follow-up work wins.
         entity_research = _cold_mail_ready_outcome(lead)
         if (
             entity_research is not None
             and entity_research[1] == 'research_entity_owner'
         ):
             return entity_research
+        if (
+            entity_research is not None
+            and entity_research[1] == 'generic_owner_name'
+        ):
+            # Divert only when a junk label is present (not merely missing).
+            if entity_research[2].get('placeholder_label_present'):
+                return entity_research
 
         if score_tier == "D":
             # Low investment score ≠ missing data. Contactable/mailable leads stay relationship work.
