@@ -477,6 +477,39 @@ jobs:
             --data "$(python3 -c "import json,os; print(json.dumps({'text': os.environ['TEXT']}))")" \
             "$SLACK_WEBHOOK_URL"
 
+      # Mirror canary recovery: open-on-failure without close-on-success left #158
+      # open for weeks after backups recovered.
+      - name: Comment recovery on open backup/verify issue
+        if: >
+          always() &&
+          steps.backup_check.outcome == 'success' &&
+          steps.verify_backup.outcome == 'success' &&
+          steps.readiness.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          EXISTING=$(gh issue list --label ops-health --state open \
+            --search "in:title Ops health: backup/verify failing on VPS" \
+            --json number,title --jq '.[0].number // empty')
+          if [ -z "$EXISTING" ]; then
+            echo "No open backup/verify ops-health issue."
+            exit 0
+          fi
+          BODY=$(cat <<EOF
+          ## Backup/verify recovered
+
+          \`backup.sh --check\`, \`verify-backup-health\`, and VPS readiness (soft async) all succeeded.
+
+          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Closing this issue automatically after a successful Ops health backup job.
+          EOF
+          )
+          gh issue comment "$EXISTING" --body "$BODY"
+          gh issue close "$EXISTING" --reason completed
+          echo "Commented recovery and closed issue #$EXISTING"
+
       - name: Fail job when ops checks failed
         if: >
           always() &&

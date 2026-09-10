@@ -167,7 +167,7 @@ Run `tail -20 /home/deploy/logs/backup.log` on the VPS to see the specific error
 |------|----------|
 | **App CI** (`.github/workflows/ci.yml`) | App lint/typecheck/build/tests, migration smoke tests, and deploy-contract validation. Does **not** run VPS backup checks such as `backup.sh --check`. |
 | **Deploy** | Still hard-fails on **pre-deploy** `backup.sh --check` (and `--pre-deploy` backup). Post-deploy `backup.sh --check` is **advisory** (`::warning::` only) — backup breakage alone does not roll back a healthy ship. Before deploy work, waits for public `/api/health` (~10 min, **soft**) then SSH (~15 min, **hard**); see **Deploy SSH / reachability** below. |
-| **Ops health** (`.github/workflows/ops-health.yml`) | **Hourly** SSH + HTTP canary (not on the 6h cron — avoids double-counting); **every 6 hours** (+ after Deploy + manual) full `backup.sh --check`, `verify-backup-health.sh`, soft readiness. Failures open/update a GitHub issue labeled `ops-health` (optional Slack via `SLACK_WEBHOOK_URL`). **Never** triggers or blocks Deploy. |
+| **Ops health** (`.github/workflows/ops-health.yml`) | **Hourly** SSH + HTTP canary (not on the 6h cron — avoids double-counting); **every 6 hours** (+ after Deploy + manual) full `backup.sh --check`, `verify-backup-health.sh`, soft readiness. Failures open/update a GitHub issue labeled `ops-health` (optional Slack via `SLACK_WEBHOOK_URL`). When checks succeed again, comments recovery and **closes** the matching open issue (canary and backup/verify). **Never** triggers or blocks Deploy. |
 
 Branch protection should require **`App CI success`** only (not Ops health).
 
@@ -197,6 +197,12 @@ if the site is down). Confirm the VPS answers on 22 from your machine first.
 - Short budgets (~60s SSH, ~90s HTTP). Does not block App CI or Deploy.
 - After **≥ 2 consecutive** canary job failures, opens/updates an issue titled `Ops health: VPS SSH unreachable` or `Ops health: VPS public /api/health down` (label `ops-health`; optional Slack).
 - When both canaries succeed again, comments **Reachability recovered** and closes that open issue.
+
+**Ops backup/verify (6h)**
+
+- Job **VPS backup and readiness** runs every 6 hours, after non-cancelled Deploy, and on manual dispatch.
+- Failures open/update `Ops health: backup/verify failing on VPS` (label `ops-health`).
+- When `backup.sh --check`, `verify-backup-health`, and soft readiness all succeed again, comments **Backup/verify recovered** and closes that open issue.
 
 Shared helpers: `scripts/ci-ssh-verify.sh`, `scripts/ci-http-health-wait.sh`.
 
