@@ -1,0 +1,81 @@
+# Temporary one-shot: SSH to prod and capture why Channel ROI fails to load.
+# Safe/read-only against the live DB (get_dashboard + log greps only).
+name: Diagnose Channel ROI
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/diagnose-channel-roi.yml'
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    name: Probe Channel ROI on VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          echo "$VPS_HOST_KEY" >> ~/.ssh/known_hosts
+
+      - name: Run Channel ROI diagnostics on VPS
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_deploy -o ConnectTimeout=20 "$VPS_USER@$VPS_HOST" bash -s <<'REMOTE'
+          set -euo pipefail
+          echo "=== host memory ==="
+          awk '/MemAvailable|MemTotal|SwapTotal|SwapFree/ {print}' /proc/meminfo
+          echo
+          echo "=== alembic + channel_roi tables ==="
+          psql -U app_user -h localhost -d real_estate_analysis -c "SELECT version_num FROM alembic_version;"
+          psql -U app_user -h localhost -d real_estate_analysis -c "\dt *channel*"
+          psql -U app_user -h localhost -d real_estate_analysis -c "\dt *facebook*"
+          psql -U app_user -h localhost -d real_estate_analysis -c "SELECT count(*) AS config_rows FROM channel_roi_config;"
+          psql -U app_user -h localhost -d real_estate_analysis -c "SELECT count(*) AS fb_rows FROM facebook_ad_campaigns;"
+          echo
+          echo "=== flask get_dashboard ==="
+          cd /home/deploy/app/backend
+          # Prefer venv python used by gunicorn
+          PY=./.venv/bin/python
+          if [ ! -x "$PY" ]; then PY=python3; fi
+          "$PY" - <<'PY'
+          import traceback
+          import json
+          import os
+          os.chdir('/home/deploy/app/backend')
+          from app import create_app
+          app = create_app()
+          with app.app_context():
+              from app.services.channel_roi_service import ChannelRoiService
+              try:
+                  payload = ChannelRoiService().get_dashboard()
+                  print('DASHBOARD_OK keys=', sorted(payload.keys()))
+                  print('channels=', json.dumps(payload.get('channels'), default=str)[:500])
+              except Exception:
+                  print('DASHBOARD_FAIL')
+                  traceback.print_exc()
+          PY
+          echo
+          echo "=== curl localhost channel-roi (expect 401 without token) ==="
+          curl -sS -m 15 -w "\nHTTP:%{http_code} time:%{time_total}\n" \
+            http://127.0.0.1:5000/api/marketing/channel-roi || true
+          echo
+          echo "=== gunicorn journal (channel-roi / traceback) last 6h ==="
+          journalctl -u gunicorn --since "6 hours ago" --no-pager 2>/dev/null \
+            | grep -iE 'channel.roi|channel_roi|FacebookAdCampaign|Traceback|Error' \
+            | tail -80 || true
+          echo
+          echo "=== errors.log tail ==="
+          tail -80 /home/deploy/app/backend/logs/errors.log 2>/dev/null || echo NO_ERRORS_LOG
+          REMOTE
