@@ -20,6 +20,7 @@ from app.services.plugins.owner_name_utils import (
     is_entity_name,
     is_institutional_contact,
     is_institutional_name,
+    is_placeholder_owner_name,
 )
 
 
@@ -97,6 +98,7 @@ def _cold_mail_block_reason_with_context(
       - institutional_owner: clear institution / nonprofit name markers
       - nonprofit_organization: linked org_type == nonprofit
       - tax_exempt_owner: parcel ownership_type tax_exempt
+      - generic_owner_name: assessor/listing placeholder (e.g. Taxpayer of)
       - unresolved_entity_owner: entity primary with no natural-person primary
     """
     ownership = (getattr(lead, "ownership_type", None) or "").strip().lower()
@@ -112,6 +114,21 @@ def _cold_mail_block_reason_with_context(
         return "nonprofit_organization"
 
     display = _owner_display_name(lead, primary)
+    # Assessor stubs ("Taxpayer of") and blank names are not mailable identities.
+    # Commercial entity orgs may still cold-mail the LLC address without a person.
+    if is_placeholder_owner_name(display):
+        has_entity_org = any(_org_name_is_entity(org) for org in owner_orgs)
+        category = (getattr(lead, "lead_category", None) or "residential")
+        commercial = (
+            isinstance(category, str) and category.strip().lower() == "commercial"
+        )
+        if not (has_entity_org and commercial):
+            return "generic_owner_name"
+    if primary is not None:
+        primary_display = contact_display_name(primary.first_name, primary.last_name)
+        if primary_display and is_placeholder_owner_name(primary_display):
+            return "generic_owner_name"
+
     if display and is_institutional_name(display):
         return "institutional_owner"
     if primary is not None and is_institutional_contact(

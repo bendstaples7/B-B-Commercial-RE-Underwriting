@@ -55,6 +55,11 @@ def _cold_mail_ready_outcome(lead: Lead) -> tuple[str, str, dict] | None:
         'tax_exempt_owner',
     ):
         return 'nurture', mail_block, {'cold_mail_blocked': True}
+    if mail_block == 'generic_owner_name':
+        return 'enrich_data', 'generic_owner_name', {
+            'cold_mail_blocked': True,
+            'requires_owner_name': True,
+        }
     if mail_block == 'unresolved_entity_owner':
         return 'enrich_data', 'research_entity_owner', {
             'cold_mail_blocked': True,
@@ -745,14 +750,32 @@ class LeadScoringEngine:
             }
 
         # Unresolved residential entity owner → Research LLC before phone nurture /
-        # mail_ready. Runs after warm / overdue / engaged so follow-up work wins.
-        # Company phones must not bury Illinois SOS research.
+        # mail_ready. Non-empty placeholder assessor names (Taxpayer of) → enrich
+        # for a real owner. Blank names still block mail_ready via the mail gate
+        # without forcing phone leads into enrich. Runs after warm / overdue /
+        # engaged so follow-up work wins.
         entity_research = _cold_mail_ready_outcome(lead)
         if (
             entity_research is not None
             and entity_research[1] == 'research_entity_owner'
         ):
             return entity_research
+        if (
+            entity_research is not None
+            and entity_research[1] == 'generic_owner_name'
+        ):
+            from app.services.plugins.owner_name_utils import (
+                contact_display_name,
+                is_placeholder_owner_name,
+            )
+
+            display = contact_display_name(
+                getattr(lead, 'owner_first_name', None),
+                getattr(lead, 'owner_last_name', None),
+            )
+            # Divert only when a junk label is present (not merely missing).
+            if display and is_placeholder_owner_name(display):
+                return entity_research
 
         if score_tier == "D":
             # Low investment score ≠ missing data. Contactable/mailable leads stay relationship work.

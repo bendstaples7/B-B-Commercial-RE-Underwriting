@@ -21,6 +21,7 @@ from app.services.open_letter_contact_mapper import (
 from app.services.action_eligibility import (
     evaluate_add_to_mail_batch,
 )
+from app.services.entity_owner_policy import cold_mail_block_reason
 from app.services.scoring_rubric import effective_acquisition_date, is_recently_sold
 from app.services.mail_task_lifecycle_service import (
     cancel_pending_mail_follow_up_tasks,
@@ -323,6 +324,27 @@ class MailQueueService:
                                 'lead_id': lead_id,
                                 'status': 'invalid_address',
                                 'error': error,
+                            }
+                        elif (
+                            owner_block := cold_mail_block_reason(lead)
+                        ) is not None:
+                            error = (
+                                'Owner is not eligible for cold mail '
+                                f'({owner_block})'
+                            )
+                            item = MailQueueItem(
+                                lead_id=lead_id,
+                                user_id=user_id,
+                                status='invalid_address',
+                                validation_error=error,
+                            )
+                            db.session.add(item)
+                            db.session.flush()
+                            outcome = {
+                                'lead_id': lead_id,
+                                'status': 'invalid_address',
+                                'error': error,
+                                'reason': owner_block,
                             }
                         else:
                             fresh_last_mailed = get_last_mailed_at_by_lead_ids(
