@@ -517,17 +517,42 @@ def main() -> int:
                 "prev_assets_promote.sh must restore \"$rollback\" → \"$prev\" only when "
                 'PREV_ASSETS_PROMOTE_STARTED is "1"'
             )
-        # Resumable promote: restore .rollback → prev when prev is missing, before
-        # deleting .rollback (otherwise a mid-promote retry drops the grace set).
-        if not re.search(
-            r'!\s*-d\s+"\$prev"[\s\S]*?-d\s+"\$rollback"[\s\S]*?'
-            r'mv\s+"\$rollback"\s+"\$prev"',
+        # Resumable promote: require the resume conditional block itself, and that
+        # its mv runs before rm -rf "$rollback" inside promote_prev_assets (do not
+        # accept restore_* moves elsewhere in the file).
+        promote_fn = re.search(
+            r"promote_prev_assets\(\)\s*\{([\s\S]*?)\n\}",
             helper_text,
-        ):
+        )
+        if not promote_fn:
             errors.append(
-                "prev_assets_promote.sh must restore \"$rollback\" → \"$prev\" when "
-                "prev is missing before replacing .rollback (resumable promote)"
+                "prev_assets_promote.sh must define promote_prev_assets() with a body"
             )
+        else:
+            promote_body = promote_fn.group(1)
+            resume_block = re.search(
+                r'if\s+\[\[\s+!\s*-d\s+"\$prev"\s*&&\s*-d\s+"\$rollback"\s*\]\];\s*then'
+                r'([\s\S]*?)fi',
+                promote_body,
+            )
+            rm_rollback = re.search(r'rm\s+-rf\s+"\$rollback"', promote_body)
+            if (
+                not resume_block
+                or 'mv "$rollback" "$prev"' not in resume_block.group(1)
+            ):
+                errors.append(
+                    "prev_assets_promote.sh must resume interrupted promote with "
+                    '`if [[ ! -d "$prev" && -d "$rollback" ]]; then mv "$rollback" "$prev"; fi`'
+                )
+            elif not rm_rollback:
+                errors.append(
+                    'prev_assets_promote.sh must rm -rf "$rollback" after the resume block'
+                )
+            elif resume_block.end() > rm_rollback.start():
+                errors.append(
+                    "prev_assets_promote.sh must restore \"$rollback\" → \"$prev\" "
+                    'BEFORE rm -rf "$rollback" (resumable promote)'
+                )
     if "source" not in deploy_text or "prev_assets_promote.sh" not in deploy_text:
         errors.append("deploy.sh must source prev_assets_promote.sh")
     if "promote_prev_assets" not in deploy_text:
