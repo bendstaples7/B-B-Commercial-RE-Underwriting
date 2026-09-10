@@ -750,6 +750,22 @@ jobs:
           fi
           echo "Search smoke test passed."
 
+      # ── Step 9: Post-deploy authenticated critical-route canary ───────────
+      # Catches Channel ROI / schema-contract / worker crash classes that leave
+      # /api/health green while authenticated marketing routes 500.
+      - name: Post-deploy authenticated API canary (channel-roi)
+        if: success() && steps.post_health.outcome == 'success' && steps.spa_boot.outcome == 'success'
+        env:
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+          SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
+          SMOKE_TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+        run: |
+          set -euo pipefail
+          python3 scripts/probe_authenticated_api.py \
+            --base-url "https://${VPS_SUBDOMAIN}.duckdns.org" \
+            --skip-if-no-creds \
+            --timeout 45
+
       # ── One auto re-dispatch after App-CI-triggered SSH preflight exhaustion ─
       # Only workflow_run triggers this; the follow-up is workflow_dispatch so it
       # cannot loop. Manual Dispatch never auto-requeues.

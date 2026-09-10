@@ -717,9 +717,53 @@ def main() -> int:
             "deploy.sh must run heal_mail_cadence_cooldown.py after migrations "
             "(mail_cad Alembic heal skips rescore)"
         )
+    if "check_model_schema.py" not in deploy_text:
+        errors.append(
+            "deploy.sh must run check_model_schema.py after migrate before "
+            "gunicorn reload (schema contract gate)"
+        )
+    # Ordering: schema contract must come after DB smoke and before reload.
+    schema_idx = deploy_text.find("check_model_schema.py")
+    smoke_idx = deploy_text.find("Post-migrate DB-only smoke")
+    reload_idx = deploy_text.find("Reload Gunicorn")
+    if schema_idx < 0 or smoke_idx < 0 or reload_idx < 0:
+        errors.append(
+            "deploy.sh must include post-migrate DB smoke, check_model_schema.py, "
+            "and Reload Gunicorn steps"
+        )
+    elif not (smoke_idx < schema_idx < reload_idx):
+        errors.append(
+            "deploy.sh must run check_model_schema.py after post-migrate DB smoke "
+            "and before Reload Gunicorn"
+        )
     if "reclaim-vps-disk.sh" not in deploy_text:
         errors.append(
             "deploy.sh must run reclaim-vps-disk.sh before the 1GB free-space gate"
+        )
+    probe_path = REPO_ROOT / "scripts" / "probe_authenticated_api.py"
+    if not probe_path.exists():
+        errors.append("Missing expected script: scripts/probe_authenticated_api.py")
+    else:
+        probe_text = _read(probe_path)
+        if "/api/marketing/channel-roi" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must default-probe "
+                "/api/marketing/channel-roi"
+            )
+        if "SMOKE_TEST_EMAIL" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must use SMOKE_TEST_EMAIL credentials"
+            )
+    ops_health_yml = _read(REPO_ROOT / ".github" / "workflows" / "ops-health.yml")
+    if "probe_authenticated_api.py" not in ops_health_yml:
+        errors.append(
+            "ops-health.yml must run probe_authenticated_api.py (auth canary)"
+        )
+    deploy_yml_preview = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
+    if "probe_authenticated_api.py" not in deploy_yml_preview:
+        errors.append(
+            "deploy.yml must run probe_authenticated_api.py after deploy "
+            "(authenticated channel-roi canary)"
         )
     reclaim_path = REPO_ROOT / "scripts" / "reclaim-vps-disk.sh"
     if not reclaim_path.exists():

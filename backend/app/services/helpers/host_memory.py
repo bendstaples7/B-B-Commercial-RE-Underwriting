@@ -195,3 +195,49 @@ def evaluate_host_memory_health(
         "celery": celery,
         "failures": failures,
     }
+
+
+def should_shed_background_work(
+    *,
+    min_available_mib: float | None = None,
+    host: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Decide whether heavy Celery/background work should be skipped.
+
+    Sheds *before* soft-restart / OOM: default floor is higher than the health
+    WARN threshold so beat/manual heavy tasks defer while MemAvailable is still
+    recovering. Env: ``BB_SHED_MIN_AVAILABLE_MIB`` (default 250).
+
+    Returns ``{"shed": bool, "reason": str|None, "host": snapshot}``.
+    """
+    if min_available_mib is None:
+        min_available_mib = float(os.environ.get("BB_SHED_MIN_AVAILABLE_MIB", "250"))
+    host = host if host is not None else host_memory_snapshot()
+    if not host.get("available"):
+        return {"shed": False, "reason": None, "host": host}
+    available = float(host["mem_available_mib"])
+    if available < min_available_mib:
+        reason = (
+            f"MemAvailable {available}MiB < shed floor {min_available_mib}MiB"
+        )
+        return {"shed": True, "reason": reason, "host": host}
+    return {"shed": False, "reason": None, "host": host}
+
+
+def memory_shed_skip_payload(
+    *,
+    min_available_mib: float | None = None,
+    host: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return a Celery-friendly skip dict under memory pressure, else None."""
+    decision = should_shed_background_work(
+        min_available_mib=min_available_mib,
+        host=host,
+    )
+    if not decision["shed"]:
+        return None
+    return {
+        "skipped": True,
+        "reason": "host_memory_pressure",
+        "detail": decision["reason"],
+    }

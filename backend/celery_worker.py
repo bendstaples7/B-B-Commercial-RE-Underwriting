@@ -45,7 +45,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from celery import Celery
-from celery.signals import worker_ready, worker_init
+from celery.exceptions import Ignore
+from celery.signals import worker_ready, worker_init, task_prerun
+import logging as _logging
 
 celery = Celery(
     'real_estate_analysis',
@@ -1601,6 +1603,11 @@ def sync_channel_roi_facebook_campaigns() -> dict:
     """Hourly beat / manual: sync Meta Ads campaigns into facebook_ad_campaigns."""
     from app import create_app
     from app.services.channel_roi_service import ChannelRoiService
+    from app.services.helpers.host_memory import memory_shed_skip_payload
+
+    shed = memory_shed_skip_payload()
+    if shed:
+        return shed
 
     app = create_app()
     with app.app_context():
@@ -1974,6 +1981,66 @@ REQUIRED_TASKS = {
     'gis.backfill_property_matches',
     'cook_county.prospect_feed_sync',
 }
+
+# Heavy / batch tasks deferred when MemAvailable is below BB_SHED_MIN_AVAILABLE_MIB.
+# Keep interactive webhook/user-path tasks off this list.
+MEMORY_SHED_TASK_NAMES = frozenset({
+    'channel_roi.sync_facebook_campaigns',
+    'gis.backfill_property_matches',
+    'cook_county.backfill_enrichment',
+    'cook_county.backfill_sale_dates',
+    'cook_county.prospect_feed_sync',
+    'building_ownership.backfill_commercial',
+    'motivation.backfill_signals',
+    'scoring.calibrate_weights',
+    'dupage.enrich_acquisition_dates',
+    'dupage.pull_absentee_leads',
+    'hubspot.nightly_association_sync',
+    'hubspot.generate_backup',
+    'hubspot.refresh_confirmed_deals',
+    'hubspot.scheduled_engagement_sync',
+    'lead_scoring.bulk_rescore',
+    'enrichment.bulk_enrich',
+    'action_engine.bulk_recompute_all_leads',
+    'open_letter.sync_due_campaign_analytics',
+    'property_address.heal_incomplete',
+    'property_match.resolve_unambiguous_pins',
+})
+
+_shed_log = _logging.getLogger('celery.memory_shed')
+
+
+@task_prerun.connect
+def _shed_heavy_tasks_under_memory_pressure(
+    sender=None, task_id=None, task=None, **_kwargs,
+):
+    """Skip heavy beat/batch work when the host is near OOM.
+
+    Raises Ignore so the task is not marked failed and will be scheduled again
+    on the next beat tick once MemAvailable recovers.
+    """
+    name = getattr(sender, 'name', None)
+    if not name or name not in MEMORY_SHED_TASK_NAMES:
+        return
+    try:
+        from app.services.helpers.host_memory import memory_shed_skip_payload
+        skip = memory_shed_skip_payload()
+    except Exception as exc:  # noqa: BLE001 — never break task dispatch on probe errors
+        _shed_log.warning('memory shed probe failed for %s: %s', name, exc)
+        return
+    if not skip:
+        return
+    _shed_log.warning(
+        'shedding task %s under memory pressure: %s',
+        name,
+        skip.get('detail'),
+    )
+    if task is not None:
+        try:
+            task.update_state(state='SUCCESS', meta=skip)
+        except Exception:  # noqa: BLE001
+            pass
+    raise Ignore()
 
 
 # ---------------------------------------------------------------------------
