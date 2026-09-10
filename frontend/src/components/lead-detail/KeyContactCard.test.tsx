@@ -481,5 +481,11 @@ describe('KeyContactCard', () => {
         }),
       )
     })
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+    expect(
+      await screen.findByText('Gary Carlson cleared from this lead.'),
+    ).toBeInTheDocument()
   })
 })

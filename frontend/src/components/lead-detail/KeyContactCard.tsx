@@ -540,21 +540,6 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
             )}
           </Box>
         )}
-        {!canEditDetails && canClearOwner && (
-          <Box>
-            <Button
-              size="small"
-              variant="text"
-              color="error"
-              onClick={() => setClearDialogOpen(true)}
-              disabled={clearOwnerMutation.isPending}
-              data-testid="key-contact-clear-owner-btn"
-              sx={{ cursor: 'pointer', px: 0.5, ml: -0.5 }}
-            >
-              Clear from lead
-            </Button>
-          </Box>
-        )}
         {extraPeople.length > 0 && (
           <Stack spacing={1} sx={{ pt: 0.5 }} data-testid="key-contact-other-people">
             <Divider />

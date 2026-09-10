@@ -470,7 +470,13 @@ class ContactService:
         contact = db.session.get(Contact, contact_id)
         lead = db.session.get(Property, property_id)
         cleared_slots: list[str] = []
-        if contact is not None and lead is not None:
+        # Only active owner links own the flat owner_* fields. Unlinking a
+        # spouse / attorney / former_owner with the same name must not wipe them.
+        if (
+            link.role == 'owner'
+            and contact is not None
+            and lead is not None
+        ):
             cleared_slots = self._clear_matching_flat_owner_slots(
                 lead,
                 first_name=contact.first_name,
@@ -523,6 +529,15 @@ class ContactService:
                 payload={'property_id': property_id},
             )
 
+        if (
+            (first_name is not None and not isinstance(first_name, str))
+            or (last_name is not None and not isinstance(last_name, str))
+        ):
+            raise ValidationException(
+                'first_name and last_name must be strings.',
+                field='first_name',
+            )
+
         resolved_first = (first_name or '').strip() or None
         resolved_last = (last_name or '').strip() or None
         unlinked_contact_id: int | None = None
@@ -536,9 +551,14 @@ class ContactService:
                 )
             resolved_first = contact.first_name
             resolved_last = contact.last_name
+            # Preserve historical former_owner rows — clear only active links.
             link = (
                 PropertyContact.query
-                .filter_by(property_id=property_id, contact_id=contact_id)
+                .filter(
+                    PropertyContact.property_id == property_id,
+                    PropertyContact.contact_id == contact_id,
+                    PropertyContact.role != 'former_owner',
+                )
                 .first()
             )
             if link is not None:
@@ -547,8 +567,6 @@ class ContactService:
         else:
             # Unlink any linked person that matches the provided name.
             if resolved_first or resolved_last:
-                from app.services.plugins.owner_name_utils import same_person_name_alias
-
                 rows = (
                     db.session.query(Contact, PropertyContact)
                     .join(PropertyContact, PropertyContact.contact_id == Contact.id)
@@ -557,7 +575,7 @@ class ContactService:
                     .all()
                 )
                 for contact, link in rows:
-                    if same_person_name_alias(
+                    if self._flat_owner_slot_matches(
                         contact.first_name, contact.last_name,
                         resolved_first, resolved_last,
                     ):
@@ -568,10 +586,30 @@ class ContactService:
                         break
 
         if not resolved_first and not resolved_last:
-            raise ValidationException(
-                'first_name, last_name, or contact_id is required to clear an owner.',
-                field='first_name',
+            # contact_id with a nameless Contact: unlink alone is a valid clear.
+            if unlinked_contact_id is None:
+                raise ValidationException(
+                    'first_name, last_name, or contact_id is required to clear an owner.',
+                    field='first_name',
+                )
+            display = _contact_display_name(resolved_first, resolved_last)
+            self._record_owner_cleared_timeline(
+                lead,
+                first_name=resolved_first,
+                last_name=resolved_last,
+                cleared_slots=[],
+                contact_id=unlinked_contact_id,
+                reason=reason or 'cleared',
+                actor=actor,
             )
+            db.session.commit()
+            from app.services.lead_refresh import refresh_lead_scoring
+            refresh_lead_scoring(property_id)
+            return {
+                'cleared_slots': [],
+                'unlinked_contact_id': unlinked_contact_id,
+                'display_name': display,
+            }
 
         cleared_slots = self._clear_matching_flat_owner_slots(
             lead,
@@ -609,6 +647,28 @@ class ContactService:
             'display_name': display,
         }
 
+    @staticmethod
+    def _flat_owner_slot_matches(
+        slot_first: str | None,
+        slot_last: str | None,
+        first_name: str | None,
+        last_name: str | None,
+    ) -> bool:
+        """Match full aliases, plus unambiguous first-only / last-only slots."""
+        from app.services.plugins.owner_name_utils import same_person_name_alias
+
+        if same_person_name_alias(slot_first, slot_last, first_name, last_name):
+            return True
+        sf = (slot_first or '').strip()
+        sl = (slot_last or '').strip()
+        rf = (first_name or '').strip()
+        rl = (last_name or '').strip()
+        if sf and not sl and rf and not rl:
+            return sf.casefold() == rf.casefold()
+        if sl and not sf and rl and not rf:
+            return sl.casefold() == rl.casefold()
+        return False
+
     def _clear_matching_flat_owner_slots(
         self,
         lead: Property,
@@ -617,16 +677,14 @@ class ContactService:
         last_name: str | None,
     ) -> list[str]:
         """Null out owner / owner_2 flat name slots that match *first/last*."""
-        from app.services.plugins.owner_name_utils import same_person_name_alias
-
         cleared: list[str] = []
-        if same_person_name_alias(
+        if self._flat_owner_slot_matches(
             lead.owner_first_name, lead.owner_last_name, first_name, last_name,
         ):
             lead.owner_first_name = None
             lead.owner_last_name = None
             cleared.append('owner')
-        if same_person_name_alias(
+        if self._flat_owner_slot_matches(
             lead.owner_2_first_name, lead.owner_2_last_name, first_name, last_name,
         ):
             lead.owner_2_first_name = None

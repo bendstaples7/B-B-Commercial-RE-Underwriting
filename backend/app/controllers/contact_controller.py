@@ -353,10 +353,20 @@ def clear_owner_person(property_id):
       contact_id — optional; unlink this contact and clear matching flat names
       reason — optional timeline note (e.g. ``deceased``)
     """
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'Request body must be a JSON object',
+        }), 400
+
     contact_id = data.get('contact_id')
     if contact_id is not None:
         try:
+            if isinstance(contact_id, bool) or (
+                isinstance(contact_id, float) and not contact_id.is_integer()
+            ):
+                raise ValueError
             contact_id = int(contact_id)
         except (TypeError, ValueError):
             return jsonify({

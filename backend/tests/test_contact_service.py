@@ -792,6 +792,169 @@ class TestClearOwnerPersonFromLead:
                     last_name="Carlson",
                 )
 
+    def test_clear_by_name_unlinks_matching_contact(self, app):
+        """Name-only clear unlinks a linked Contact and clears flat owner slots."""
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property("3120 Name Unlink")
+            prop.owner_first_name = "Gary"
+            prop.owner_last_name = "Carlson"
+            db.session.commit()
+            contact = _make_contact(service, "Gary", "Carlson")
+            service.link_contact_to_property(
+                property_id=prop.id,
+                contact_id=contact.id,
+                role="owner",
+                is_primary=True,
+            )
+
+            result = service.clear_owner_person_from_lead(
+                prop.id,
+                first_name="Gary",
+                last_name="Carlson",
+                reason="deceased",
+            )
+
+            db.session.refresh(prop)
+            assert result["unlinked_contact_id"] == contact.id
+            assert "owner" in result["cleared_slots"]
+            assert PropertyContact.query.filter_by(
+                property_id=prop.id, contact_id=contact.id,
+            ).first() is None
+            assert prop.owner_first_name is None
+            assert prop.owner_last_name is None
+
+    def test_clear_by_contact_id_preserves_former_owner(self, app):
+        """former_owner links stay when clearing by contact_id."""
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property("3121 Former Owner")
+            prop.owner_first_name = "New"
+            prop.owner_last_name = "Owner"
+            db.session.commit()
+            former = _make_contact(service, "Gary", "Carlson")
+            service.link_contact_to_property(
+                property_id=prop.id,
+                contact_id=former.id,
+                role="former_owner",
+                is_primary=False,
+            )
+
+            with pytest.raises(ValidationException):
+                service.clear_owner_person_from_lead(
+                    prop.id,
+                    contact_id=former.id,
+                    reason="deceased",
+                )
+
+            link = PropertyContact.query.filter_by(
+                property_id=prop.id, contact_id=former.id,
+            ).one()
+            assert link.role == "former_owner"
+            db.session.refresh(prop)
+            assert prop.owner_first_name == "New"
+            assert prop.owner_last_name == "Owner"
+
+    def test_clear_first_only_flat_owner(self, app):
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property("3122 First Only")
+            prop.owner_first_name = "Gary"
+            prop.owner_last_name = None
+            db.session.commit()
+
+            result = service.clear_owner_person_from_lead(
+                prop.id,
+                first_name="Gary",
+                last_name=None,
+            )
+            db.session.refresh(prop)
+            assert result["cleared_slots"] == ["owner"]
+            assert prop.owner_first_name is None
+
+    def test_clear_last_only_flat_owner(self, app):
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property("3123 Last Only")
+            prop.owner_first_name = None
+            prop.owner_last_name = "Carlson"
+            db.session.commit()
+
+            result = service.clear_owner_person_from_lead(
+                prop.id,
+                first_name=None,
+                last_name="Carlson",
+            )
+            db.session.refresh(prop)
+            assert result["cleared_slots"] == ["owner"]
+            assert prop.owner_last_name is None
+
+    def test_unlink_non_owner_does_not_clear_flat_slots(self, app):
+        """Unlinking a family member with the same name must not wipe owner_*."""
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property("3124 Family Same Name")
+            prop.owner_first_name = "Gary"
+            prop.owner_last_name = "Carlson"
+            db.session.commit()
+            family = _make_contact(service, "Gary", "Carlson")
+            service.link_contact_to_property(
+                property_id=prop.id,
+                contact_id=family.id,
+                role="family_member",
+                is_primary=False,
+            )
+
+            service.unlink_contact_from_property(
+                property_id=prop.id,
+                contact_id=family.id,
+            )
+            db.session.refresh(prop)
+            assert prop.owner_first_name == "Gary"
+            assert prop.owner_last_name == "Carlson"
+            assert PropertyContact.query.filter_by(
+                property_id=prop.id, contact_id=family.id,
+            ).first() is None
+
+    def test_clear_nameless_contact_by_id(self, app):
+        """contact_id pointing at a nameless linked Contact still unlinks."""
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property("3125 Nameless")
+            db.session.commit()
+            contact = _make_contact(service, "Temp", "Name")
+            contact.first_name = None
+            contact.last_name = None
+            db.session.commit()
+            service.link_contact_to_property(
+                property_id=prop.id,
+                contact_id=contact.id,
+                role="owner",
+                is_primary=True,
+            )
+
+            result = service.clear_owner_person_from_lead(
+                prop.id,
+                contact_id=contact.id,
+            )
+            assert result["unlinked_contact_id"] == contact.id
+            assert result["cleared_slots"] == []
+            assert PropertyContact.query.filter_by(
+                property_id=prop.id, contact_id=contact.id,
+            ).first() is None
+
+    def test_clear_rejects_non_string_names(self, app):
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property("3126 Bad Types")
+            db.session.commit()
+            with pytest.raises(ValidationException):
+                service.clear_owner_person_from_lead(
+                    prop.id,
+                    first_name=123,  # type: ignore[arg-type]
+                    last_name="Carlson",
+                )
+
 
 # ---------------------------------------------------------------------------
 # get_contacts_for_property

@@ -546,6 +546,8 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
         reason: 'cleared_from_contacts',
       }),
     onSuccess: (result) => {
+      setClearUnlinkedDialogOpen(false)
+      setUnlinkedToClear(null)
       queryClient.invalidateQueries({ queryKey: ['propertyContacts', propertyId] })
       queryClient.invalidateQueries({ queryKey: ['commandCenter', propertyId] })
       showSuccess(`${result.display_name} cleared from this lead.`)
@@ -1070,7 +1072,10 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
 
       <Dialog
         open={clearUnlinkedDialogOpen}
-        onClose={() => setClearUnlinkedDialogOpen(false)}
+        onClose={() => {
+          setClearUnlinkedDialogOpen(false)
+          setUnlinkedToClear(null)
+        }}
       >
         <DialogTitle>Clear owner from lead?</DialogTitle>
         <DialogContent>
@@ -1085,7 +1090,14 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setClearUnlinkedDialogOpen(false)}>Cancel</Button>
+          <Button
+            onClick={() => {
+              setClearUnlinkedDialogOpen(false)
+              setUnlinkedToClear(null)
+            }}
+          >
+            Cancel
+          </Button>
           <Button
             color="error"
             variant="contained"
@@ -1093,8 +1105,6 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
             disabled={clearUnlinkedMutation.isPending}
             onClick={() => {
               if (unlinkedToClear) clearUnlinkedMutation.mutate(unlinkedToClear)
-              setClearUnlinkedDialogOpen(false)
-              setUnlinkedToClear(null)
             }}
           >
             Clear from lead
