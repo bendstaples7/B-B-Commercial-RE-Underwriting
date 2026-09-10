@@ -30,12 +30,15 @@ export interface MailBatchSummaryProps {
   title?: string
   queueData?: MailQueueSummary
   isLoading?: boolean
+  /** Indeterminate progress while leads are being added to the batch. */
+  isUpdating?: boolean
 }
 
 export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
   title = 'Next batch',
   queueData,
   isLoading = false,
+  isUpdating = false,
 }) => {
   const queryClient = useQueryClient()
   const [sendDialogOpen, setSendDialogOpen] = useState(false)
@@ -131,7 +134,34 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
                 Sender / creative: <strong>{catalog.senderLine}</strong>
               </Typography>
             )}
-            <LinearProgress variant="determinate" value={progress} sx={{ mb: 2, height: 8, borderRadius: 1 }} />
+            <LinearProgress
+              variant={isUpdating ? 'indeterminate' : 'determinate'}
+              value={isUpdating ? undefined : progress}
+              sx={{
+                mb: isUpdating ? 0.75 : 2,
+                height: 8,
+                borderRadius: 1,
+                ...(isUpdating
+                  ? {
+                      '& .MuiLinearProgress-bar': {
+                        animationDuration: '1.1s',
+                      },
+                    }
+                  : {}),
+              }}
+              aria-label={isUpdating ? 'Adding leads to batch' : 'Batch fill progress'}
+              data-testid="mail-batch-progress"
+            />
+            {isUpdating && (
+              <Typography
+                variant="caption"
+                color="primary"
+                sx={{ display: 'block', mb: 1.5, fontWeight: 600 }}
+                data-testid="mail-batch-updating-label"
+              >
+                Adding leads to batch…
+              </Typography>
+            )}
             <Box
               sx={{
                 display: 'flex',

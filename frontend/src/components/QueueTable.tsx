@@ -10,6 +10,7 @@ import {
   Box,
   Checkbox,
   Chip,
+  CircularProgress,
   IconButton,
   Link,
   Pagination,
@@ -362,14 +363,29 @@ export function QueueTable({
         result={bulkMailResult}
       />
 
-      {/* Empty state */}
-      {rows.length === 0 ? (
+      {/* Empty vs mid-refresh: stripped page rows can be [] while total remains. */}
+      {rows.length === 0 && total <= 0 ? (
         <Box
           sx={{ py: 6, textAlign: 'center' }}
           data-testid="queue-table-empty"
         >
           <Typography variant="body1" color="text.secondary">
             No leads in this queue
+          </Typography>
+        </Box>
+      ) : rows.length === 0 && total > 0 ? (
+        <Box
+          sx={{ py: 6, textAlign: 'center' }}
+          data-testid="queue-table-refreshing"
+          role="status"
+          aria-live="polite"
+        >
+          <CircularProgress size={28} sx={{ mb: 1.5 }} aria-label="Loading queue leads" />
+          <Typography variant="body1" color="text.secondary">
+            Loading more leads…
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            {total.toLocaleString()} still in this queue
           </Typography>
         </Box>
       ) : isMobile ? (

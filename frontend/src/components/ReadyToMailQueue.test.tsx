@@ -245,7 +245,7 @@ describe('ReadyToMailQueue', () => {
     await userEvent.click(screen.getByTestId('add-all-candidates-button'))
 
     await waitFor(() => {
-      expect(openLetterService.previewEnqueueCandidates).toHaveBeenCalledWith(undefined)
+      expect(openLetterService.previewEnqueueCandidates).toHaveBeenCalledWith(25)
     })
     expect(openLetterService.enqueueCandidates).not.toHaveBeenCalled()
 
@@ -255,7 +255,7 @@ describe('ReadyToMailQueue', () => {
     await userEvent.click(screen.getByTestId('enqueue-preflight-confirm'))
 
     await waitFor(() => {
-      expect(openLetterService.enqueueCandidates).toHaveBeenCalledWith(undefined)
+      expect(openLetterService.enqueueCandidates).toHaveBeenCalledWith(25)
     })
   })
 
@@ -293,7 +293,7 @@ describe('ReadyToMailQueue', () => {
     expect(screen.getByText('123 Main St')).toBeInTheDocument()
   })
 
-  it('shows reach-minimum button when below batch minimum', async () => {
+  it('offers a minimum preset and custom add-count control when below batch minimum', async () => {
     vi.mocked(openLetterService.getAllQueued).mockResolvedValue({
       ...queueSummary,
       queued_count: 30,
@@ -302,7 +302,43 @@ describe('ReadyToMailQueue', () => {
     renderPage()
 
     await waitFor(() => {
-      expect(screen.getByTestId('add-to-minimum-button')).toHaveTextContent('Add 20 to reach minimum')
+      expect(screen.getByTestId('add-count-preset-20')).toHaveTextContent('Min 20')
+    })
+    expect(screen.getByTestId('add-count-input')).toHaveValue(20)
+    expect(screen.getByTestId('add-count-button')).toHaveTextContent('Add 20 to batch')
+  })
+
+  it('enqueues a custom recommended count via preflight', async () => {
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
+    vi.mocked(queueService.getMailCandidates).mockResolvedValue({
+      ...emptyCandidates,
+      total: 200,
+    })
+    vi.mocked(openLetterService.previewEnqueueCandidates).mockResolvedValue({
+      ...queueSummary,
+      dry_run: true,
+      would_add: 100,
+      would_skip: 0,
+      would_fail: 0,
+      candidate_count: 100,
+      results: [],
+    })
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('add-count-preset-100')).toBeInTheDocument()
+    })
+    await userEvent.click(screen.getByTestId('add-count-preset-100'))
+    expect(screen.getByTestId('add-count-button')).toHaveTextContent('Add 100 to batch')
+    await userEvent.click(screen.getByTestId('add-count-button'))
+
+    await waitFor(() => {
+      expect(openLetterService.previewEnqueueCandidates).toHaveBeenCalledWith(100)
+    })
+    await userEvent.click(screen.getByTestId('enqueue-preflight-confirm'))
+    await waitFor(() => {
+      expect(openLetterService.enqueueCandidates).toHaveBeenCalledWith(100)
     })
   })
 
@@ -331,6 +367,111 @@ describe('ReadyToMailQueue', () => {
         'queue-mail-candidates',
       )
     })
+  })
+
+  it('shows loading-more state after page add strips rows while total remains', async () => {
+    const manyCandidates: QueuePage = {
+      ...emptyCandidates,
+      rows: Array.from({ length: 20 }, (_, i) => ({
+        ...emptyCandidates.rows[0],
+        id: 100 + i,
+        owner_last_name: `Lead${i + 1}`,
+      })),
+      total: 1520,
+      per_page: 20,
+    }
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
+    vi.mocked(queueService.getMailCandidates)
+      .mockResolvedValueOnce(manyCandidates)
+      .mockImplementation(
+        () => new Promise(() => {
+          /* keep refetch pending so stripped cache stays visible */
+        }),
+      )
+    vi.mocked(openLetterService.enqueue).mockResolvedValue({
+      ...queueSummary,
+      added: 20,
+      skipped: 0,
+      invalid: 0,
+      results: manyCandidates.rows.map((row) => ({
+        lead_id: row.id,
+        status: 'queued',
+      })),
+    })
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('add-page-candidates-button')).toHaveTextContent(
+        'Add 20 from this page',
+      )
+    })
+    expect(screen.getByText(/\(1520 total\)/)).toBeInTheDocument()
+
+    await userEvent.click(screen.getByTestId('add-page-candidates-button'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('queue-table-refreshing')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('queue-table-empty')).not.toBeInTheDocument()
+    expect(screen.queryByText('No leads in this queue')).not.toBeInTheDocument()
+    expect(screen.getByText(/still in this queue/)).toBeInTheDocument()
+  })
+
+  it('shows loading progress while adding the displayed page', async () => {
+    let resolveEnqueue: (value: {
+      queued_count: number
+      batch_minimum: number
+      allow_send_below_minimum: boolean
+      can_send: boolean
+      estimated_cost_per_piece: number
+      estimated_cost_source_sent_at: string
+      estimated_total: number
+      items: typeof queueSummary.items
+      added: number
+      skipped: number
+      invalid: number
+      results: Array<{ lead_id: number; status: string }>
+    }) => void = () => undefined
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
+    vi.mocked(openLetterService.enqueue).mockImplementation(
+      () => new Promise((resolve) => {
+        resolveEnqueue = resolve
+      }),
+    )
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('add-page-candidates-button')).toBeEnabled()
+    })
+    await userEvent.click(screen.getByTestId('add-page-candidates-button'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-enqueue-progress')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('add-page-candidates-button')).toHaveTextContent('Adding 1…')
+    expect(screen.getByTestId('add-page-candidates-button')).toBeDisabled()
+    expect(screen.getByTestId('mail-batch-updating-label')).toHaveTextContent(
+      'Adding leads to batch…',
+    )
+    expect(screen.getByTestId('mail-batch-progress')).toHaveAttribute(
+      'aria-label',
+      'Adding leads to batch',
+    )
+
+    resolveEnqueue({
+      ...queueSummary,
+      added: 1,
+      skipped: 0,
+      invalid: 0,
+      results: [{ lead_id: 20, status: 'queued' }],
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('mail-enqueue-progress')).not.toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('mail-batch-updating-label')).not.toBeInTheDocument()
   })
 
   it('shows estimated total with source batch date when cost per piece is set', async () => {
