@@ -20,6 +20,21 @@ ROLLBACK_LOG="/home/deploy/rollback.log"
 # Set to 1 only while this invocation's end-of-deploy PREV promote is in flight.
 PREV_ASSETS_PROMOTE_STARTED=0
 
+# Shared PREV_ASSETS promote/restore (durable copy preferred; app tree fallback).
+PREV_ASSETS_HELPER=""
+if [ -f /home/deploy/prev_assets_promote.sh ]; then
+    PREV_ASSETS_HELPER=/home/deploy/prev_assets_promote.sh
+elif [ -f "$APP_DIR/scripts/prev_assets_promote.sh" ]; then
+    PREV_ASSETS_HELPER="$APP_DIR/scripts/prev_assets_promote.sh"
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/prev_assets_promote.sh" ]; then
+    PREV_ASSETS_HELPER="$(dirname "${BASH_SOURCE[0]}")/prev_assets_promote.sh"
+else
+    echo "FAILED: prev_assets_promote.sh not found"
+    exit 1
+fi
+# shellcheck source=prev_assets_promote.sh
+source "$PREV_ASSETS_HELPER"
+
 # Durable helper (Deploy CI copies to /home/deploy/; survives git checkout rollback).
 ensure_frontend_dist_readable() {
     local script=""
@@ -75,18 +90,8 @@ rollback() {
         echo "ROLLBACK WARNING: restore_frontend_dist_backup.sh not found"
         ROLLBACK_FAILED=1
     fi
-    # Discard deferred asset-grace snapshot from the failed release so the next
-    # deploy still graces the rolled-back generation's hashed chunks.
-    rm -rf /home/deploy/frontend-assets-prev.next 2>/dev/null || true
-    # Restore .rollback only if *this* invocation started promote (moved the
-    # live grace set aside). Leftover .rollback from a prior success must not
-    # replace a still-current frontend-assets-prev on pre-promote failures.
-    if [ "${PREV_ASSETS_PROMOTE_STARTED:-0}" = "1" ] \
-        && [ -d /home/deploy/frontend-assets-prev.rollback ]; then
-        rm -rf /home/deploy/frontend-assets-prev
-        mv /home/deploy/frontend-assets-prev.rollback /home/deploy/frontend-assets-prev
-        echo "    Restored frontend-assets-prev from in-progress promote rollback snapshot"
-    fi
+    # Discard deferred asset-grace snapshot / restore in-progress promote via shared helper.
+    restore_prev_assets_if_promote_started /home/deploy
     # Always clear soft-lock so canary can heal/alert even when restore failed.
     rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
     sudo -n systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
@@ -822,18 +827,7 @@ fi
 # gunicorn health, post-deploy sync). Keep a .rollback snapshot of the prior
 # PREV so post-deploy-rollback.sh can restore grace hashes if CI health fails
 # after this script exits 0.
-if [ -d /home/deploy/frontend-assets-prev.next ]; then
-    rm -rf /home/deploy/frontend-assets-prev.rollback
-    if [ -d /home/deploy/frontend-assets-prev ]; then
-        mv /home/deploy/frontend-assets-prev /home/deploy/frontend-assets-prev.rollback
-        # Set only after the live grace set has been moved aside. If we marked
-        # earlier and rm -rf .rollback failed, ERR could restore a stale snapshot
-        # over the still-current frontend-assets-prev.
-        PREV_ASSETS_PROMOTE_STARTED=1
-    fi
-    mv /home/deploy/frontend-assets-prev.next /home/deploy/frontend-assets-prev
-    echo "    Promoted frontend-assets-prev for next deploy's asset grace"
-fi
+promote_prev_assets /home/deploy
 
 echo "==> Deploy complete: $TARGET_SHA"
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Deploy successful: $PREVIOUS_SHA -> $TARGET_SHA" >> "$ROLLBACK_LOG"

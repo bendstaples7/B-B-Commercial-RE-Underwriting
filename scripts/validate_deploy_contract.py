@@ -39,6 +39,7 @@ SHELL_SCRIPTS = [
     REPO_ROOT / "scripts" / "ops-alert.sh",
     REPO_ROOT / "scripts" / "ensure_frontend_dist_readable.sh",
     REPO_ROOT / "scripts" / "install_frontend_dist_with_asset_grace.sh",
+    REPO_ROOT / "scripts" / "prev_assets_promote.sh",
     REPO_ROOT / "scripts" / "spa-dist-fingerprint.sh",
     REPO_ROOT / "scripts" / "spa-uptime-canary.sh",
     REPO_ROOT / "scripts" / "post-deploy-rollback.sh",
@@ -359,7 +360,8 @@ def main() -> int:
             )
 
     # 6. deploy.sh uses sudo -n (no bare sudo for systemctl) and always restores celery
-    deploy_text = _read(REPO_ROOT / "scripts" / "deploy.sh")
+    deploy_text_raw = _read(REPO_ROOT / "scripts" / "deploy.sh")
+    deploy_text = _strip_hash_comments(deploy_text_raw)
     if re.search(r'(?<!-n )\bsudo systemctl\b', deploy_text):
         errors.append("deploy.sh contains 'sudo systemctl' without -n — use sudo -n")
     if "trap cleanup_deploy_exit EXIT" not in deploy_text:
@@ -388,26 +390,19 @@ def main() -> int:
             "deploy.sh must install frontend/dist via install_frontend_dist_with_asset_grace "
             "(retain prior hashed assets for one generation)"
         )
-    # PREV_ASSETS must not be promoted until the full deploy succeeds; otherwise
-    # rollback leaves grace pointing at a failed release's hashes.
-    prev_promote_re = (
-        r"mv\s+/home/deploy/frontend-assets-prev\.next\s+/home/deploy/frontend-assets-prev"
-    )
-    promote_matches = list(re.finditer(prev_promote_re, deploy_text))
-    if not promote_matches:
+    # PREV_ASSETS promote must run via the shared helper after post-deploy HubSpot.
+    if "promote_prev_assets" not in deploy_text:
         errors.append(
-            "deploy.sh must promote frontend-assets-prev.next → frontend-assets-prev "
-            "after a successful deploy"
+            "deploy.sh must call promote_prev_assets after a successful deploy"
         )
     else:
         post_hubspot = deploy_text.find("Post-deploy HubSpot")
-        for m in promote_matches:
-            if post_hubspot < 0 or m.start() < post_hubspot:
-                errors.append(
-                    "deploy.sh must promote frontend-assets-prev.next only after "
-                    "post-deploy HubSpot sync succeeds (not before migrations/health)"
-                )
-                break
+        promote_call = deploy_text.find("promote_prev_assets")
+        if post_hubspot < 0 or promote_call < post_hubspot:
+            errors.append(
+                "deploy.sh must call promote_prev_assets only after "
+                "post-deploy HubSpot sync succeeds (not before migrations/health)"
+            )
     install_grace = REPO_ROOT / "scripts" / "install_frontend_dist_with_asset_grace.sh"
     if install_grace.exists():
         grace_text = _read(install_grace)
@@ -469,42 +464,95 @@ def main() -> int:
                 "post-deploy-rollback.sh must restore frontend-assets-prev.rollback "
                 "after a post-deploy health failure (deploy.sh may have already promoted)"
             )
-    if "frontend-assets-prev.rollback" not in deploy_text:
+    if "frontend-assets-prev.rollback" not in deploy_text and "promote_prev_assets" not in deploy_text:
         errors.append(
-            "deploy.sh must save frontend-assets-prev.rollback before promoting "
-            ".next so post-deploy rollback can restore grace hashes"
+            "deploy.sh must promote via promote_prev_assets (which saves "
+            "frontend-assets-prev.rollback before swapping .next)"
         )
-    # Structurally require: mv live→.rollback, THEN PREV_ASSETS_PROMOTE_STARTED=1,
-    # and ERR restore only when that flag is set (not a comment-only mention).
-    mv_to_rollback = re.search(
-        r"mv\s+/home/deploy/frontend-assets-prev\s+/home/deploy/frontend-assets-prev\.rollback",
-        deploy_text,
-    )
-    flag_assign = re.search(
-        r"^\s*PREV_ASSETS_PROMOTE_STARTED=1\s*$",
-        deploy_text,
-        flags=re.MULTILINE,
-    )
-    guarded_restore = re.search(
-        r'PREV_ASSETS_PROMOTE_STARTED:-0[^]]*=\s*"1"[\s\S]*?'
-        r"mv\s+/home/deploy/frontend-assets-prev\.rollback\s+/home/deploy/frontend-assets-prev",
-        deploy_text,
-    )
-    if not mv_to_rollback or not flag_assign:
-        errors.append(
-            "deploy.sh must mv frontend-assets-prev → frontend-assets-prev.rollback "
-            "and assign PREV_ASSETS_PROMOTE_STARTED=1"
+    # Production promote/restore must live in the shared helper (not a comment-only
+    # or duplicated mirror). Strip comments above so these cannot be satisfied by # text.
+    helper_path = REPO_ROOT / "scripts" / "prev_assets_promote.sh"
+    if not helper_path.exists():
+        errors.append("Missing expected script: scripts/prev_assets_promote.sh")
+    else:
+        helper_text = _strip_hash_comments(_read(helper_path))
+        mv_to_rollback = re.search(
+            r'mv\s+"\$prev"\s+"\$rollback"',
+            helper_text,
         )
-    elif flag_assign.start() < mv_to_rollback.start():
-        errors.append(
-            "deploy.sh must set PREV_ASSETS_PROMOTE_STARTED=1 only AFTER "
-            "mv frontend-assets-prev → frontend-assets-prev.rollback succeeds"
+        flag_assign = re.search(
+            r"^\s*PREV_ASSETS_PROMOTE_STARTED=1\s*$",
+            helper_text,
+            flags=re.MULTILINE,
         )
-    if not guarded_restore:
-        errors.append(
-            "deploy.sh must restore frontend-assets-prev.rollback only when "
-            'PREV_ASSETS_PROMOTE_STARTED is "1"'
+        # Require flag assign inside the same `if [[ -d "$prev" ]]` block as the mv.
+        live_block = re.search(
+            r'if\s+\[\[\s+-d\s+"\$prev"\s*\]\];\s*then([\s\S]*?)fi',
+            helper_text,
         )
+        if not live_block or not mv_to_rollback or not flag_assign:
+            errors.append(
+                "prev_assets_promote.sh must mv \"$prev\" → \"$rollback\" and set "
+                "PREV_ASSETS_PROMOTE_STARTED=1 inside the live-prev existence guard"
+            )
+        else:
+            block = live_block.group(1)
+            if 'mv "$prev" "$rollback"' not in block or "PREV_ASSETS_PROMOTE_STARTED=1" not in block:
+                errors.append(
+                    "prev_assets_promote.sh must keep mv-to-rollback and "
+                    "PREV_ASSETS_PROMOTE_STARTED=1 in the same `if [[ -d \"$prev\" ]]` block"
+                )
+            elif block.find("PREV_ASSETS_PROMOTE_STARTED=1") < block.find('mv "$prev" "$rollback"'):
+                errors.append(
+                    "prev_assets_promote.sh must set PREV_ASSETS_PROMOTE_STARTED=1 only AFTER "
+                    'mv "$prev" "$rollback" succeeds'
+                )
+        guarded_restore = re.search(
+            r'PREV_ASSETS_PROMOTE_STARTED:-0[^]]*=\s*"1"[\s\S]*?'
+            r'mv\s+"\$rollback"\s+"\$prev"',
+            helper_text,
+        )
+        if not guarded_restore:
+            errors.append(
+                "prev_assets_promote.sh must restore \"$rollback\" → \"$prev\" only when "
+                'PREV_ASSETS_PROMOTE_STARTED is "1"'
+            )
+    if "source" not in deploy_text or "prev_assets_promote.sh" not in deploy_text:
+        errors.append("deploy.sh must source prev_assets_promote.sh")
+    if "promote_prev_assets" not in deploy_text:
+        errors.append("deploy.sh must call promote_prev_assets")
+    if "restore_prev_assets_if_promote_started" not in deploy_text:
+        errors.append("deploy.sh must call restore_prev_assets_if_promote_started on ERR rollback")
+    # Executable-flow test against the production helper (not a parallel mirror).
+    promote_test = REPO_ROOT / "scripts" / "test_prev_assets_promote_rollback.sh"
+    if not promote_test.exists():
+        errors.append("Missing expected script: scripts/test_prev_assets_promote_rollback.sh")
+    else:
+        test_src = _read(promote_test)
+        if "source" not in test_src or "prev_assets_promote.sh" not in test_src:
+            errors.append(
+                "test_prev_assets_promote_rollback.sh must source prev_assets_promote.sh "
+                "(must not re-implement promote/restore)"
+            )
+        if "promote_with_flag()" in test_src or "restore_on_err()" in test_src:
+            errors.append(
+                "test_prev_assets_promote_rollback.sh must not define a parallel "
+                "promote/restore mirror — call the production helper functions"
+            )
+        result = subprocess.run(
+            ["bash", str(promote_test)],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if result.returncode != 0:
+            errors.append(
+                "test_prev_assets_promote_rollback.sh failed:\n"
+                + (result.stdout or "")
+                + (result.stderr or "")
+            )
     if "SPA_DEPLOY_IN_PROGRESS" not in deploy_text:
         errors.append(
             "deploy.sh must set SPA_DEPLOY_IN_PROGRESS around frontend dist swap "
@@ -741,10 +789,22 @@ def main() -> int:
             "to /home/deploy/install_frontend_dist_with_asset_grace.sh"
         )
     if not re.search(
+        r"scp\s+[^\n]*scripts/prev_assets_promote\.sh\s+[^\n]+:/home/deploy/prev_assets_promote\.sh",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/prev_assets_promote.sh "
+            "to /home/deploy/prev_assets_promote.sh"
+        )
+    if not re.search(
         r"chmod 750[^\n]*install_frontend_dist_with_asset_grace\.sh", deploy_yml_text
     ):
         errors.append(
             "deploy.yml chmod 750 line must include install_frontend_dist_with_asset_grace.sh"
+        )
+    if not re.search(r"chmod 750[^\n]*prev_assets_promote\.sh", deploy_yml_text):
+        errors.append(
+            "deploy.yml chmod 750 line must include prev_assets_promote.sh"
         )
     # umask 077 for secret JSON must not apply to frontend/dist scp (mode 0700 blank SPA).
     scp_dist_idx = deploy_yml_text.find("scp -i ~/.ssh/id_deploy -r frontend/dist")

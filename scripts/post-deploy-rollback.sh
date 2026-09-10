@@ -57,14 +57,24 @@ else
     echo "ROLLBACK WARNING: restore_frontend_dist_backup.sh not found"
     ROLLBACK_FAILED=1
 fi
-# Discard deferred asset-grace snapshot from the failed release.
-rm -rf /home/deploy/frontend-assets-prev.next 2>/dev/null || true
-# deploy.sh may have already promoted PREV after exiting 0; restore the
-# pre-promotion snapshot so the next deploy graces the rolled-back generation.
-if [ -d /home/deploy/frontend-assets-prev.rollback ]; then
-    rm -rf /home/deploy/frontend-assets-prev
-    mv /home/deploy/frontend-assets-prev.rollback /home/deploy/frontend-assets-prev
-    echo "    Restored frontend-assets-prev from pre-promotion rollback snapshot"
+# Discard deferred asset-grace / restore pre-promotion snapshot via shared helper.
+PREV_ASSETS_HELPER=""
+if [ -f /home/deploy/prev_assets_promote.sh ]; then
+    PREV_ASSETS_HELPER=/home/deploy/prev_assets_promote.sh
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/prev_assets_promote.sh" ]; then
+    PREV_ASSETS_HELPER="$(dirname "${BASH_SOURCE[0]}")/prev_assets_promote.sh"
+fi
+if [ -n "$PREV_ASSETS_HELPER" ]; then
+    # shellcheck source=prev_assets_promote.sh
+    source "$PREV_ASSETS_HELPER"
+    restore_prev_assets_from_rollback /home/deploy
+else
+    rm -rf /home/deploy/frontend-assets-prev.next 2>/dev/null || true
+    if [ -d /home/deploy/frontend-assets-prev.rollback ]; then
+        rm -rf /home/deploy/frontend-assets-prev
+        mv /home/deploy/frontend-assets-prev.rollback /home/deploy/frontend-assets-prev
+        echo "    Restored frontend-assets-prev from pre-promotion rollback snapshot"
+    fi
 fi
 rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 
