@@ -219,8 +219,27 @@ def is_placeholder_owner_name(name: str | None) -> bool:
     leftover = tokens - noise
     if not leftover:
         return True
-    # Placeholder phrase + situs / mailing fragment only.
-    return bool(residual) and is_address_like_name(residual)
+    # Placeholder phrase + situs / mailing fragment only. Evaluate leftover
+    # tokens (not the full residual) so a real person name + address is kept.
+    leftover_ordered = [
+        tok for tok in residual.split()
+        if _normalize_token(tok) in leftover
+    ]
+    if not leftover_ordered or not is_address_like_name(" ".join(leftover_ordered)):
+        return False
+    # Leading alphabetic tokens before the house number are person/entity names.
+    _directions = {
+        "N", "S", "E", "W", "NE", "NW", "SE", "SW",
+        "NORTH", "SOUTH", "EAST", "WEST",
+    }
+    first_digit = next(
+        (i for i, tok in enumerate(leftover_ordered) if re.search(r"\d", tok)),
+        None,
+    )
+    if first_digit is None:
+        return True
+    prefix = leftover_ordered[:first_digit]
+    return all(_normalize_token(tok) in _directions for tok in prefix)
 
 
 def is_marketing_or_listing_noise_last(last_name: str | None) -> bool:

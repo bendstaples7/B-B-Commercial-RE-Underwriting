@@ -34,7 +34,7 @@ from app.services.outreach_method_service import (
     refine_outreach_action,
     OUTREACH_ACTIONS,
 )
-from app.services.entity_owner_policy import cold_mail_block_reason
+from app.services.entity_owner_policy import cold_mail_block_context
 logger = logging.getLogger(__name__)
 
 # Backward-compatible patch target for tests and integrations; semantics are now
@@ -48,7 +48,7 @@ def _cold_mail_ready_outcome(lead: Lead) -> tuple[str, str, dict] | None:
     Applied only at ``mail_ready`` decision points so warm / follow-up leads
     still surface as ``follow_up_now``.
     """
-    mail_block = cold_mail_block_reason(lead)
+    mail_block, display = cold_mail_block_context(lead)
     if mail_block in (
         'institutional_owner',
         'nonprofit_organization',
@@ -57,12 +57,10 @@ def _cold_mail_ready_outcome(lead: Lead) -> tuple[str, str, dict] | None:
         return 'nurture', mail_block, {'cold_mail_blocked': True}
     if mail_block == 'generic_owner_name':
         # Distinguish blank identity (mail gate only) from a junk label that
-        # should divert phone work into enrich. Prefer primary Contact display
-        # the same way cold_mail_block_reason does.
-        from app.services.entity_owner_policy import owner_display_name_for_policy
+        # should divert phone work into enrich. Reuse display from the block
+        # context so we do not re-query the primary owner Contact.
         from app.services.plugins.owner_name_utils import is_placeholder_owner_name
 
-        display = owner_display_name_for_policy(lead)
         return 'enrich_data', 'generic_owner_name', {
             'cold_mail_blocked': True,
             'requires_owner_name': True,

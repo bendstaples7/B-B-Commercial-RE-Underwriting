@@ -108,8 +108,9 @@ def upgrade():
         params = {'id': lead_id, 'now': now}
         sets = ['updated_at = :now']
         if clear_flat:
+            # owner_first_name is NOT NULL in the initial schema — use ''.
             sets.extend([
-                'owner_first_name = NULL',
+                "owner_first_name = ''",
                 'owner_last_name = NULL',
             ])
         if clear_o2:

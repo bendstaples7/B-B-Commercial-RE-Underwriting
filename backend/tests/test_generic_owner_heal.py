@@ -54,7 +54,7 @@ class TestGenericOwnerHeal:
             assert summary['removed_queue_items'] == 1
 
             db.session.refresh(lead)
-            assert lead.owner_first_name is None
+            assert lead.owner_first_name == ''
             assert lead.owner_last_name is None
             item = MailQueueItem.query.filter_by(lead_id=lead.id).first()
             assert item.status == 'removed'
@@ -99,7 +99,7 @@ class TestGenericOwnerHeal:
             assert summary['healed'] is True
             assert summary['removed_queue_items'] == 0
             db.session.refresh(lead)
-            assert lead.owner_first_name is None
+            assert lead.owner_first_name == ''
             item = MailQueueItem.query.filter_by(lead_id=lead.id).first()
             assert item.status == 'queued'
 

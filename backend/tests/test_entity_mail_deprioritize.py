@@ -434,8 +434,8 @@ class TestScoringMailGate:
             lambda lead: (False, False, True),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda lead: 'institutional_owner',
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda lead: ('institutional_owner', ''),
         )
         monkeypatch.setattr(
             'app.services.lead_scoring_engine.is_mailable_lead',
@@ -471,8 +471,8 @@ class TestScoringMailGate:
             lambda lead: (True, False, True),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda lead: 'institutional_owner',
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda lead: ('institutional_owner', ''),
         )
         monkeypatch.setattr(
             'app.services.lead_scoring_engine._mail_work_in_flight',
@@ -509,8 +509,8 @@ class TestScoringMailGate:
             lambda lead: (True, False, True),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda lead: 'unresolved_entity_owner',
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda lead: ('unresolved_entity_owner', ''),
         )
         monkeypatch.setattr(
             'app.services.lead_scoring_engine._mail_work_in_flight',
@@ -551,8 +551,8 @@ class TestScoringMailGate:
             lambda lead: (True, False, True),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda lead: 'unresolved_entity_owner',
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda lead: ('unresolved_entity_owner', ''),
         )
         monkeypatch.setattr(
             'app.services.lead_scoring_engine._mail_work_in_flight',
@@ -594,8 +594,8 @@ class TestScoringMailGate:
             lambda lead: (False, False, True),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda lead: 'unresolved_entity_owner',
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda lead: ('unresolved_entity_owner', ''),
         )
         monkeypatch.setattr(
             'app.services.lead_scoring_engine.is_mailable_lead',
@@ -631,8 +631,8 @@ class TestScoringMailGate:
             lambda lead: (False, False, True),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda lead: None,
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda lead: (None, ''),
         )
         monkeypatch.setattr(
             'app.services.lead_scoring_engine.is_mailable_lead',
@@ -669,8 +669,8 @@ class TestScoringMailGate:
             lambda lead: (True, False, True),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda lead: 'institutional_owner',
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda lead: ('institutional_owner', ''),
         )
         monkeypatch.setattr(
             'app.services.lead_scoring_engine._mail_work_in_flight',
@@ -743,8 +743,8 @@ class TestScoringMailGate:
             lambda *_args, **_kwargs: ('mail_ready', 'direct_mail'),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda _lead: 'institutional_owner',
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda _lead: ('institutional_owner', ''),
         )
 
         assert LeadScoringEngine.compute_recommended_action(lead) == 'nurture'

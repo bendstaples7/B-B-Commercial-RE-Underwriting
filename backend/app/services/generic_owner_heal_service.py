@@ -158,21 +158,43 @@ class GenericOwnerHealService:
                 return []
             return [lead]
 
-        q = self.candidate_query()
-        if limit is not None:
-            q = q.limit(max(limit * 5, limit))
-        leads = q.all()
-        out = [lead for lead in leads if self.is_heal_candidate(lead)]
-        if limit is not None:
-            return out[:limit]
-        return out
+        # SQL prefilter is intentionally broad (hybrids like "Sam For Sale By
+        # Owner" match). Page until we collect ``limit`` post-filtered rows.
+        if limit is None:
+            return [
+                lead for lead in self.candidate_query().all()
+                if self.is_heal_candidate(lead)
+            ]
+
+        out: list[Lead] = []
+        offset = 0
+        batch_size = max(limit * 5, 50)
+        while len(out) < limit:
+            batch = (
+                self.candidate_query()
+                .offset(offset)
+                .limit(batch_size)
+                .all()
+            )
+            if not batch:
+                break
+            for lead in batch:
+                if self.is_heal_candidate(lead):
+                    out.append(lead)
+                    if len(out) >= limit:
+                        break
+            offset += len(batch)
+            if len(batch) < batch_size:
+                break
+        return out[:limit]
 
     def _clear_flat_placeholder(self, lead: Lead) -> list[str]:
         cleared: list[str] = []
         flat = _flat_display(lead)
         if flat and is_placeholder_owner_name(flat):
             cleared.append(flat)
-            lead.owner_first_name = None
+            # owner_first_name is NOT NULL in the initial schema — keep ''.
+            lead.owner_first_name = ''
             lead.owner_last_name = None
         owner2 = _owner2_display(lead)
         if owner2 and is_placeholder_owner_name(owner2):
@@ -202,12 +224,13 @@ class GenericOwnerHealService:
         return removed
 
     def _should_unstage_mail(self, lead: Lead) -> bool:
-        """Unstage only when cold-mail policy still blocks the lead.
+        """Unstage when cold-mail policy still blocks the lead for any reason.
 
-        Commercial entity orgs may cold-mail the LLC address even when the
-        person-name flat was a placeholder — keep their queue items.
+        Placeholder heals often sit behind a higher-priority blocker (tax
+        exempt, nonprofit). Still unstage those. Commercial entity orgs return
+        ``None`` and may cold-mail the LLC address — keep their queue items.
         """
-        return cold_mail_block_reason(lead) == 'generic_owner_name'
+        return cold_mail_block_reason(lead) is not None
 
     def _append_validation_marker(self, existing: str | None) -> str:
         if not (existing or '').strip():

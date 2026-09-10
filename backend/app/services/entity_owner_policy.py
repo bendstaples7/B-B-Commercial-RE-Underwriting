@@ -195,8 +195,8 @@ def is_unresolved_entity_owner(lead: Lead) -> bool:
     return bool(entity_shaped and not _has_natural_person_primary(primary))
 
 
-def cold_mail_block_reason(lead: Lead) -> Optional[str]:
-    """Return a reason code when this lead should not be cold-mailed, else None."""
+def cold_mail_block_context(lead: Lead) -> tuple[Optional[str], str]:
+    """Return ``(block_reason, owner_display)`` with one primary-contact fetch."""
     lead_id = getattr(lead, "id", None)
     primary: Optional[Contact] = None
     orgs: list[Organization] = []
@@ -207,7 +207,15 @@ def cold_mail_block_reason(lead: Lead) -> Optional[str]:
         except Exception:  # noqa: BLE001 — scoring unit tests may use MagicMock
             primary = None
             orgs = []
-    return _cold_mail_block_reason_with_context(lead, primary, orgs)
+    display = _owner_display_name(lead, primary)
+    reason = _cold_mail_block_reason_with_context(lead, primary, orgs)
+    return reason, display
+
+
+def cold_mail_block_reason(lead: Lead) -> Optional[str]:
+    """Return a reason code when this lead should not be cold-mailed, else None."""
+    reason, _display = cold_mail_block_context(lead)
+    return reason
 
 
 def cold_mail_block_reasons_for_leads(leads: Iterable[Lead]) -> dict[int, str]:
