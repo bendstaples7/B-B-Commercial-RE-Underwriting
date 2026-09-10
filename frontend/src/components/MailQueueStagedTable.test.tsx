@@ -6,6 +6,8 @@ import { MemoryRouter } from 'react-router-dom'
 import {
   MailQueueStagedTable,
   MAIL_QUEUE_BULK_REMOVE_LIMIT,
+  chunkIds,
+  removeManyInChunks,
 } from './MailQueueStagedTable'
 import { NotificationProvider, globalNotify } from '@/context/NotificationContext'
 import openLetterService, { type MailQueueItem } from '@/services/openLetterApi'
@@ -185,16 +187,18 @@ describe('MailQueueStagedTable', () => {
     })
   })
 
-  it(`chunks bulk remove requests at ${MAIL_QUEUE_BULK_REMOVE_LIMIT} ids`, async () => {
-    const user = userEvent.setup()
-    const many = Array.from({ length: MAIL_QUEUE_BULK_REMOVE_LIMIT + 3 }, (_, i) => ({
-      ...items[0],
-      id: i + 1,
-      lead_id: 1000 + i,
-      property_street: `${i + 1} Chunk St`,
-    }))
-    vi.mocked(openLetterService.removeManyFromQueue).mockImplementation(async (ids) => ({
-      removed: ids.length,
+  it(`chunks ids at the ${MAIL_QUEUE_BULK_REMOVE_LIMIT} bulk-remove limit`, () => {
+    const ids = Array.from({ length: MAIL_QUEUE_BULK_REMOVE_LIMIT + 3 }, (_, i) => i + 1)
+    const chunks = chunkIds(ids, MAIL_QUEUE_BULK_REMOVE_LIMIT)
+    expect(chunks).toHaveLength(2)
+    expect(chunks[0]).toHaveLength(MAIL_QUEUE_BULK_REMOVE_LIMIT)
+    expect(chunks[1]).toHaveLength(3)
+  })
+
+  it('issues one removeManyFromQueue call per chunk without rendering a huge table', async () => {
+    const ids = Array.from({ length: MAIL_QUEUE_BULK_REMOVE_LIMIT + 3 }, (_, i) => i + 1)
+    vi.mocked(openLetterService.removeManyFromQueue).mockImplementation(async (chunk) => ({
+      removed: chunk.length,
       already_removed: 0,
       blocked: [],
       queued_count: 0,
@@ -203,16 +207,14 @@ describe('MailQueueStagedTable', () => {
       can_send: false,
       items: [],
     }))
-    renderTable(many)
 
-    await user.click(screen.getByTestId('mail-queue-staged-select-all'))
-    await user.click(screen.getByTestId('mail-queue-staged-bulk-remove'))
+    const result = await removeManyInChunks(ids)
 
-    await waitFor(() => {
-      expect(openLetterService.removeManyFromQueue).toHaveBeenCalledTimes(2)
-    })
+    expect(openLetterService.removeManyFromQueue).toHaveBeenCalledTimes(2)
     const calls = vi.mocked(openLetterService.removeManyFromQueue).mock.calls
     expect(calls[0][0]).toHaveLength(MAIL_QUEUE_BULK_REMOVE_LIMIT)
     expect(calls[1][0]).toHaveLength(3)
+    expect(result.removed).toBe(MAIL_QUEUE_BULK_REMOVE_LIMIT + 3)
+    expect(result.blocked).toEqual([])
   })
 })

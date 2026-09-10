@@ -74,7 +74,7 @@ function dropItemsFromSummary(
   )
 }
 
-function chunkIds(ids: number[], size: number): number[][] {
+export function chunkIds(ids: number[], size: number): number[][] {
   const chunks: number[][] = []
   for (let i = 0; i < ids.length; i += size) {
     chunks.push(ids.slice(i, i + size))
@@ -82,7 +82,7 @@ function chunkIds(ids: number[], size: number): number[][] {
   return chunks
 }
 
-async function removeManyInChunks(ids: number[]) {
+export async function removeManyInChunks(ids: number[]) {
   const uniqueIds = [...new Set(ids)]
   const chunks = chunkIds(uniqueIds, MAIL_QUEUE_BULK_REMOVE_LIMIT)
   let removed = 0
