@@ -271,14 +271,26 @@ def delete_contact(contact_id):
 
 @contacts_bp.route('/api/properties/<int:property_id>/contacts', methods=['GET'])
 @handle_errors
+@require_auth
 def get_property_contacts(property_id):
     """List all Contacts linked to a Property, including join record metadata.
 
     Returns a list of contact objects each augmented with
     `property_contact_role` and `is_primary` from the join record.
     Returns 404 if the Property does not exist.
+
+    Query params
+    ------------
+    include_former_owners : truthy → include ``former_owner`` links (Log Call
+    needs dialed / HubSpot-primary phones that GIS archived under a rename).
     """
-    rows = contact_service.get_contacts_for_property(property_id)
+    include_former = str(request.args.get('include_former_owners', '')).lower() in (
+        '1', 'true', 'yes',
+    )
+    rows = contact_service.get_contacts_for_property(
+        property_id,
+        include_former_owners=include_former,
+    )
     result = [_serialize_property_contact(contact, pc) for contact, pc in rows]
     return jsonify(result), 200
 

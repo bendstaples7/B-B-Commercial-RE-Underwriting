@@ -162,9 +162,61 @@ class TestGetCommandCenter:
             assert 'open_tasks' in data
             assert 'timeline' in data
             assert 'contacts' in data
+            assert 'dial_target' in data
             assert isinstance(data['contacts'], list)
             assert data['id'] == lead.id
             assert 'assessed_value' in data
+
+    def test_dial_target_prefers_former_owner_hubspot_phone(self, client, app):
+        """4490-shaped: CC dial_target is HubSpot primary on former_owner, not GIS primary."""
+        with app.app_context():
+            from datetime import datetime, timezone
+
+            from app import db
+            from app.models.contact import Contact
+            from app.models.contact_phone import ContactPhone
+            from app.models.property_contact import PropertyContact
+            from app.services.phone_confidence_service import PhoneConfidenceService
+
+            lead = _make_lead(app, '4490 Dial Target St', phone_1='(773) 454-0106')
+            former = Contact(first_name='Sam', last_name='FISBO', role='owner')
+            current = Contact(first_name='Sam', last_name='Old Town Square Cbre', role='owner')
+            db.session.add_all([former, current])
+            db.session.flush()
+            db.session.add(PropertyContact(
+                property_id=lead.id, contact_id=former.id,
+                role='former_owner', is_primary=False,
+            ))
+            db.session.add(PropertyContact(
+                property_id=lead.id, contact_id=current.id,
+                role='owner', is_primary=True,
+            ))
+            # Same confidence so hubspot_rank (HubSpot primary notes) must decide.
+            db.session.add(ContactPhone(
+                contact_id=former.id,
+                value='(773) 271-5525',
+                label='mobile',
+                confidence_score=50,
+                last_called_at=datetime.now(timezone.utc),
+                last_outcome='no_answer',
+                notes='HubSpot primary',
+            ))
+            db.session.add(ContactPhone(
+                contact_id=current.id,
+                value='(773) 454-0106',
+                label='other',
+                confidence_score=50,
+            ))
+            db.session.commit()
+
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            assert response.status_code == 200
+            dial = data['dial_target']
+            assert dial is not None
+            assert PhoneConfidenceService.normalize_phone(dial['value']).endswith('7732715525')
+            assert dial['contact_id'] == former.id
+            assert dial['phone_id'] is not None
 
     def test_assessed_value_serialized_when_present(self, client, app):
         """assessed_value is included on the command center payload when set on the lead."""

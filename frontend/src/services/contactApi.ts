@@ -50,9 +50,13 @@ export const contactService = {
     await api.delete(`/contacts/${id}`)
   },
 
-  /** GET /api/properties/{propertyId}/contacts — list all contacts linked to a property */
-  getPropertyContacts: async (propertyId: number): Promise<PropertyContact[]> => {
-    const response = await api.get<PropertyContact[]>(`/properties/${propertyId}/contacts`)
+  /** GET /api/properties/{propertyId}/contacts — list contacts; pass includeFormerOwners for Log Call dial targets. */
+  getPropertyContacts: async (
+    propertyId: number,
+    options?: { includeFormerOwners?: boolean },
+  ): Promise<PropertyContact[]> => {
+    const params = options?.includeFormerOwners ? { include_former_owners: '1' } : undefined
+    const response = await api.get<PropertyContact[]>(`/properties/${propertyId}/contacts`, { params })
     return response.data
   },
 
