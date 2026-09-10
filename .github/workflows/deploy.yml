@@ -761,10 +761,18 @@ jobs:
           SMOKE_TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
         run: |
           set -euo pipefail
+          set +e
           python3 scripts/probe_authenticated_api.py \
             --base-url "https://${VPS_SUBDOMAIN}.duckdns.org" \
             --skip-if-no-creds \
             --timeout 45
+          RC=$?
+          set -e
+          if [ "$RC" -eq 78 ]; then
+            echo "SMOKE_TEST credentials unset — skipping authenticated API canary."
+            exit 0
+          fi
+          exit "$RC"
 
       # ── One auto re-dispatch after App-CI-triggered SSH preflight exhaustion ─
       # Only workflow_run triggers this; the follow-up is workflow_dispatch so it

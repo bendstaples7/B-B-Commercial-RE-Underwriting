@@ -119,10 +119,22 @@ jobs:
           SMOKE_TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
         run: |
           set -euo pipefail
+          set +e
           python3 scripts/probe_authenticated_api.py \
             --base-url "https://${VPS_SUBDOMAIN}.duckdns.org" \
             --skip-if-no-creds \
             --timeout 45
+          RC=$?
+          set -e
+          # Exit 78 = credentials unset — distinct from success so recovery
+          # does not close an open auth-canary issue on a skipped probe.
+          if [ "$RC" -eq 78 ]; then
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            echo "Auth API canary skipped (no smoke credentials)."
+            exit 0
+          fi
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
+          exit "$RC"
 
       - name: Write canary summary
         if: always()
@@ -290,7 +302,7 @@ jobs:
           steps.http_canary.outcome == 'success' &&
           (steps.spa_html_canary.outcome == 'success' || steps.spa_html_canary.outcome == 'skipped') &&
           (steps.drift_canary.outcome == 'success' || steps.drift_canary.outcome == 'skipped') &&
-          (steps.auth_api_canary.outcome == 'success' || steps.auth_api_canary.outcome == 'skipped')
+          (steps.auth_api_canary.outcome == 'success' && steps.auth_api_canary.outputs.skipped != 'true')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -322,7 +334,8 @@ jobs:
             steps.ssh_canary.outcome == 'failure' ||
             steps.http_canary.outcome == 'failure' ||
             steps.spa_html_canary.outcome == 'failure' ||
-            steps.drift_canary.outcome == 'failure'
+            steps.drift_canary.outcome == 'failure' ||
+            steps.auth_api_canary.outcome == 'failure'
           )
         run: |
           echo "::error::Ops canary failed (advisory — does not block Deploy)."

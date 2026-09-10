@@ -174,3 +174,25 @@ def test_memory_shed_task_names_include_channel_roi():
     from celery_worker import MEMORY_SHED_TASK_NAMES
 
     assert 'channel_roi.sync_facebook_campaigns' in MEMORY_SHED_TASK_NAMES
+
+
+def test_should_shed_rejects_invalid_env_threshold(monkeypatch):
+    """Malformed BB_SHED_MIN_AVAILABLE_MIB must fall back to 250, not crash/disable."""
+    host = {
+        'available': True,
+        'mem_total_mib': 1900.0,
+        'mem_available_mib': 200.0,
+        'swap_total_mib': 0.0,
+        'swap_used_mib': 0.0,
+        'swap_used_pct': 0.0,
+    }
+    monkeypatch.setenv('BB_SHED_MIN_AVAILABLE_MIB', 'not-a-number')
+    decision = should_shed_background_work(host=host)
+    assert decision['shed'] is True  # 200 < default 250
+    monkeypatch.setenv('BB_SHED_MIN_AVAILABLE_MIB', 'nan')
+    decision = should_shed_background_work(host=host)
+    assert decision['shed'] is True
+    monkeypatch.setenv('BB_SHED_MIN_AVAILABLE_MIB', '-5')
+    decision = should_shed_background_work(host=host)
+    assert decision['shed'] is True
+

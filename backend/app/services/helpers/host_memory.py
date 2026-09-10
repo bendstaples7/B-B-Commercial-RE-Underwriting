@@ -211,7 +211,14 @@ def should_shed_background_work(
     Returns ``{"shed": bool, "reason": str|None, "host": snapshot}``.
     """
     if min_available_mib is None:
-        min_available_mib = float(os.environ.get("BB_SHED_MIN_AVAILABLE_MIB", "250"))
+        raw = os.environ.get("BB_SHED_MIN_AVAILABLE_MIB", "250")
+        try:
+            min_available_mib = float(raw)
+            # Reject NaN/inf/negative so bad config cannot disable shedding or crash.
+            if not (min_available_mib >= 0) or min_available_mib != min_available_mib:
+                raise ValueError(raw)
+        except (TypeError, ValueError):
+            min_available_mib = 250.0
     host = host if host is not None else host_memory_snapshot()
     if not host.get("available"):
         return {"shed": False, "reason": None, "host": host}

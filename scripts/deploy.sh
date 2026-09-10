@@ -600,7 +600,8 @@ echo "==> (4e) Post-migrate model schema contract (code vs DB before gunicorn re
 # Fail closed when Alembic applied but ORM-required columns/tables still missing
 # (the Channel ROI / SCHEMA CONTRACT ERROR class). Must run before reload so
 # workers never boot against a drifted schema.
-if ! env FLASK_ENV=production python3.11 scripts/check_model_schema.py; then
+BB_SCHEMA_CHECK_TIMEOUT_SEC="${BB_SCHEMA_CHECK_TIMEOUT_SEC:-120}"
+if ! timeout --signal=TERM --kill-after=30 "${BB_SCHEMA_CHECK_TIMEOUT_SEC}"     env FLASK_ENV=production python3.11 scripts/check_model_schema.py; then
     echo "FAILED: model schema contract after migrate (check_model_schema.py)"
     if [[ -f /home/deploy/ops-alert.sh ]]; then
         # shellcheck source=/dev/null

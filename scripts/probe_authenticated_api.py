@@ -3,6 +3,11 @@
 
 Credentials: SMOKE_TEST_EMAIL / SMOKE_TEST_PASSWORD (required unless --skip-if-no-creds).
 Default path: /api/marketing/channel-roi (the intermittent Channel ROI load banner).
+
+Exit codes:
+  0  — probe succeeded
+  1  — probe failed (login or path error)
+  78 — credentials unset and --skip-if-no-creds was passed (distinct from success)
 """
 from __future__ import annotations
 
@@ -16,6 +21,7 @@ from typing import Any
 
 
 DEFAULT_PATHS = ("/api/marketing/channel-roi",)
+EXIT_SKIPPED_NO_CREDS = 78
 
 
 def _request(
@@ -67,11 +73,15 @@ def login(base_url: str, email: str, password: str, *, timeout: float) -> str:
         body={"email": email, "password": password},
         timeout=timeout,
     )
-    if status != 200 or not isinstance(payload, dict) or not payload.get("token"):
+    # Auth controller returns session_token; accept token for older stubs/tests.
+    token = None
+    if isinstance(payload, dict):
+        token = payload.get("session_token") or payload.get("token")
+    if status != 200 or not token:
         raise SystemExit(
             f"ERROR: login failed (HTTP {status}): {payload!r}"
         )
-    return str(payload["token"])
+    return str(token)
 
 
 def probe_path(
@@ -113,7 +123,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--skip-if-no-creds",
         action="store_true",
-        help="Exit 0 when SMOKE_TEST_EMAIL/PASSWORD unset (Deploy/Ops skip).",
+        help=(
+            "Exit 78 when SMOKE_TEST_EMAIL/PASSWORD unset (Deploy/Ops skip; "
+            "not treated as canary success)."
+        ),
     )
     parser.add_argument(
         "--allow-non-json",
@@ -123,11 +136,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     email = (os.environ.get("SMOKE_TEST_EMAIL") or "").strip()
-    password = (os.environ.get("SMOKE_TEST_PASSWORD") or "").strip()
+    # Preserve password exactly — only emptiness gates the missing-creds path.
+    password = os.environ.get("SMOKE_TEST_PASSWORD") or ""
     if not email or not password:
         if args.skip_if_no_creds:
-            print("SMOKE_TEST_EMAIL/PASSWORD unset — skipping authenticated API probe.")
-            return 0
+            print(
+                "SMOKE_TEST_EMAIL/PASSWORD unset — skipping authenticated API probe "
+                f"(exit {EXIT_SKIPPED_NO_CREDS})."
+            )
+            return EXIT_SKIPPED_NO_CREDS
         print("ERROR: SMOKE_TEST_EMAIL and SMOKE_TEST_PASSWORD are required.", file=sys.stderr)
         return 1
 

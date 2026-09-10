@@ -1605,7 +1605,14 @@ def sync_channel_roi_facebook_campaigns() -> dict:
     from app.services.channel_roi_service import ChannelRoiService
     from app.services.helpers.host_memory import memory_shed_skip_payload
 
-    shed = memory_shed_skip_payload()
+    try:
+        shed = memory_shed_skip_payload()
+    except Exception as exc:  # noqa: BLE001 — fail open; never block ROI sync on probe/config errors
+        import logging
+        logging.getLogger('celery.channel_roi').warning(
+            'memory shed probe failed for channel_roi.sync_facebook_campaigns: %s', exc,
+        )
+        shed = None
     if shed:
         return shed
 
@@ -2004,6 +2011,7 @@ MEMORY_SHED_TASK_NAMES = frozenset({
     'action_engine.bulk_recompute_all_leads',
     'open_letter.sync_due_campaign_analytics',
     'property_address.heal_incomplete',
+    'owner_mailing.heal_incomplete',
     'property_match.resolve_unambiguous_pins',
 })
 
@@ -2012,12 +2020,13 @@ _shed_log = _logging.getLogger('celery.memory_shed')
 
 @task_prerun.connect
 def _shed_heavy_tasks_under_memory_pressure(
-    sender=None, task_id=None, task=None, **_kwargs,
+    sender=None, task_id=None, task=None, args=None, kwargs=None, **_kwargs,
 ):
-    """Skip heavy beat/batch work when the host is near OOM.
+    """Defer heavy beat/batch work when the host is near OOM.
 
-    Raises Ignore so the task is not marked failed and will be scheduled again
-    on the next beat tick once MemAvailable recovers.
+    Requeues with a countdown (capped) so one-off user-triggered bulk jobs are
+    not silently dropped, then raises Ignore so the current attempt is not
+    marked failed. Beat-scheduled tasks also recover on the next tick.
     """
     name = getattr(sender, 'name', None)
     if not name or name not in MEMORY_SHED_TASK_NAMES:
@@ -2035,12 +2044,41 @@ def _shed_heavy_tasks_under_memory_pressure(
         name,
         skip.get('detail'),
     )
+    # Requeue deferred work so manual bulk jobs are not lost under pressure.
+    try:
+        import os
+        request = getattr(task, 'request', None) if task is not None else None
+        headers = dict(getattr(request, 'headers', None) or {})
+        attempts = int(headers.get('bb_memory_shed_attempts') or 0)
+        max_attempts = int(os.environ.get('BB_SHED_REQUEUE_MAX', '6'))
+        countdown = int(os.environ.get('BB_SHED_REQUEUE_SEC', '600'))
+        if task is not None and attempts < max_attempts:
+            headers['bb_memory_shed_attempts'] = attempts + 1
+            task.apply_async(
+                args=args or (),
+                kwargs=kwargs or {},
+                countdown=countdown,
+                headers=headers,
+            )
+            _shed_log.warning(
+                'requeued %s in %ss (shed attempt %s/%s)',
+                name, countdown, attempts + 1, max_attempts,
+            )
+        elif attempts >= max_attempts:
+            _shed_log.error(
+                'dropping %s after %s shed requeues under sustained memory pressure',
+                name, attempts,
+            )
+    except Exception as exc:  # noqa: BLE001 — still Ignore the current attempt
+        _shed_log.warning('failed to requeue shed task %s: %s', name, exc)
     if task is not None:
         try:
             task.update_state(state='SUCCESS', meta=skip)
         except Exception:  # noqa: BLE001
             pass
     raise Ignore()
+
+
 
 
 # ---------------------------------------------------------------------------

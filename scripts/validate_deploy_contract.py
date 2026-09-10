@@ -745,25 +745,64 @@ def main() -> int:
         errors.append("Missing expected script: scripts/probe_authenticated_api.py")
     else:
         probe_text = _read(probe_path)
-        if "/api/marketing/channel-roi" not in probe_text:
+        if "DEFAULT_PATHS = (" not in probe_text or "/api/marketing/channel-roi" not in probe_text:
             errors.append(
-                "probe_authenticated_api.py must default-probe "
+                "probe_authenticated_api.py must assign DEFAULT_PATHS including "
                 "/api/marketing/channel-roi"
+            )
+        if "args.paths) if args.paths else DEFAULT_PATHS" not in probe_text and \
+                "tuple(args.paths) if args.paths else DEFAULT_PATHS" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must fall back to DEFAULT_PATHS when "
+                "--path is omitted"
             )
         if "SMOKE_TEST_EMAIL" not in probe_text:
             errors.append(
                 "probe_authenticated_api.py must use SMOKE_TEST_EMAIL credentials"
+            )
+        if "SMOKE_TEST_PASSWORD" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must use SMOKE_TEST_PASSWORD credentials"
+            )
+        if "session_token" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must read session_token from login response"
+            )
+        if "EXIT_SKIPPED_NO_CREDS" not in probe_text and "return 78" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must exit 78 when skipping for missing creds"
             )
     ops_health_yml = _read(REPO_ROOT / ".github" / "workflows" / "ops-health.yml")
     if "probe_authenticated_api.py" not in ops_health_yml:
         errors.append(
             "ops-health.yml must run probe_authenticated_api.py (auth canary)"
         )
+    if "auth_api_canary.outcome == 'failure'" not in ops_health_yml:
+        errors.append(
+            "ops-health.yml final canary failure gate must include auth_api_canary"
+        )
+    if "outputs.skipped != 'true'" not in ops_health_yml:
+        errors.append(
+            "ops-health.yml recovery must exclude skipped (no-creds) auth canary"
+        )
     deploy_yml_preview = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
     if "probe_authenticated_api.py" not in deploy_yml_preview:
         errors.append(
             "deploy.yml must run probe_authenticated_api.py after deploy "
             "(authenticated channel-roi canary)"
+        )
+    else:
+        probe_idx = deploy_yml_preview.find("probe_authenticated_api.py")
+        post_health_idx = deploy_yml_preview.find("Post-deploy health check")
+        if post_health_idx < 0 or probe_idx < post_health_idx:
+            errors.append(
+                "deploy.yml must run probe_authenticated_api.py after "
+                "Post-deploy health check"
+            )
+    if "BB_SCHEMA_CHECK_TIMEOUT_SEC" not in deploy_text:
+        errors.append(
+            "deploy.sh must wrap check_model_schema.py in a timeout "
+            "(BB_SCHEMA_CHECK_TIMEOUT_SEC)"
         )
     reclaim_path = REPO_ROOT / "scripts" / "reclaim-vps-disk.sh"
     if not reclaim_path.exists():
