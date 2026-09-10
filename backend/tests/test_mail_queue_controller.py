@@ -490,6 +490,55 @@ class TestEnqueueCandidates:
             assert json.loads(queued.data)['items'] == []
 
 
+class TestRemoveMailQueueItem:
+    def test_remove_queued_item_returns_summary(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '12 Remove Queue St')
+            item = MailQueueItem(
+                lead_id=lead.id, user_id='test-user', status='queued',
+            )
+            db.session.add(item)
+            db.session.commit()
+            item_id = item.id
+
+            with patch(
+                'app.services.mail_queue_service.refresh_leads_after_mail_task_changes',
+            ):
+                response = client.delete(
+                    f'/api/mail-queue/{item_id}',
+                    headers=_AUTH_HEADERS,
+                )
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['queued_count'] == 0
+            assert MailQueueItem.query.get(item_id).status == 'removed'
+
+            # Idempotent: second delete succeeds without MailQueueError.
+            response2 = client.delete(
+                f'/api/mail-queue/{item_id}',
+                headers=_AUTH_HEADERS,
+            )
+            assert response2.status_code == 200
+
+    def test_remove_non_queued_item_includes_status_in_message(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '13 Sent Queue St')
+            item = MailQueueItem(
+                lead_id=lead.id, user_id='test-user', status='sent',
+            )
+            db.session.add(item)
+            db.session.commit()
+
+            response = client.delete(
+                f'/api/mail-queue/{item.id}',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 400
+            data = json.loads(response.data)
+            assert data['error'] == 'Mail queue error'
+            assert 'sent' in data['message']
+
+
 class TestMailCampaignAuth:
     def test_get_campaign_rejects_other_users_campaign(self, client, app):
         from app import db

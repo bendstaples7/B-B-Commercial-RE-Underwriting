@@ -1881,6 +1881,10 @@ def heal_mail_cadence_cooldown(
 
     Idempotent. Uses the canonical last-mailed oracle in batches so Deploy stays
     bounded while matching runtime eligibility.
+
+    Staged-queue cleanup runs first and commits early so a Deploy wall-clock
+    timeout still clears Ready-to-Mail cooldown leftovers even when rematch /
+    mail_ready rescans do not finish.
     """
     from sqlalchemy import or_
 
@@ -1911,18 +1915,55 @@ def heal_mail_cadence_cooldown(
             MailQueueItem.status == 'queued',
         ).distinct().all()
     ]
-    candidate_ids = sorted({
-        *mail_ready_ids,
-        *queued_ids,
-        *(task.lead_id for task in rematch_tasks),
-    })
 
+    # --- Phase 1: clear staged cooldown leads (highest user-visible priority) ---
     last_mailed: dict[int, datetime | None] = {}
-    for i in range(0, len(candidate_ids), max(1, last_mailed_batch_size)):
-        chunk = candidate_ids[i:i + last_mailed_batch_size]
+    for i in range(0, len(queued_ids), max(1, last_mailed_batch_size)):
+        chunk = queued_ids[i:i + last_mailed_batch_size]
         last_mailed.update(get_last_mailed_at_by_lead_ids(chunk))
 
-    cooldown_ids: set[int] = set()
+    queued_cooldown_ids: set[int] = set()
+    for lead_id in queued_ids:
+        if mail_cadence_eligible_date_from_last_mailed(
+            last_mailed.get(lead_id),
+        ) is not None:
+            queued_cooldown_ids.add(lead_id)
+
+    removed_queue = 0
+    affected: set[int] = set()
+    if queued_cooldown_ids:
+        queued_items = (
+            MailQueueItem.query
+            .filter(
+                MailQueueItem.lead_id.in_(list(queued_cooldown_ids)),
+                MailQueueItem.status == 'queued',
+            )
+            .all()
+        )
+        for item in queued_items:
+            item.status = 'removed'
+            item.updated_at = datetime.utcnow()
+            db.session.add(item)
+            removed_queue += 1
+            affected.add(item.lead_id)
+            lead = db.session.get(Lead, item.lead_id)
+            if lead is not None and lead.up_next_to_mail:
+                lead.up_next_to_mail = False
+                db.session.add(lead)
+        if commit and removed_queue:
+            db.session.commit()
+
+    # --- Phase 2: rematch dues + stale mail_ready ---
+    candidate_ids = sorted({
+        *mail_ready_ids,
+        *(task.lead_id for task in rematch_tasks),
+    })
+    remaining_ids = [lid for lid in candidate_ids if lid not in last_mailed]
+    for i in range(0, len(remaining_ids), max(1, last_mailed_batch_size)):
+        chunk = remaining_ids[i:i + last_mailed_batch_size]
+        last_mailed.update(get_last_mailed_at_by_lead_ids(chunk))
+
+    cooldown_ids: set[int] = set(queued_cooldown_ids)
     for lead_id in candidate_ids:
         if mail_cadence_eligible_date_from_last_mailed(
             last_mailed.get(lead_id),
@@ -1937,7 +1978,6 @@ def heal_mail_cadence_cooldown(
     } if rematch_lead_ids else {}
 
     dues_fixed = 0
-    affected: set[int] = set()
     now = datetime.now(timezone.utc)
     for task in rematch_tasks:
         lead = leads_by_id.get(task.lead_id)
@@ -1969,28 +2009,7 @@ def heal_mail_cadence_cooldown(
         dues_fixed += 1
         affected.add(task.lead_id)
 
-    removed_queue = 0
-    if cooldown_ids:
-        queued_items = (
-            MailQueueItem.query
-            .filter(
-                MailQueueItem.lead_id.in_(list(cooldown_ids)),
-                MailQueueItem.status == 'queued',
-            )
-            .all()
-        )
-        for item in queued_items:
-            item.status = 'removed'
-            item.updated_at = datetime.utcnow()
-            db.session.add(item)
-            removed_queue += 1
-            affected.add(item.lead_id)
-            lead = db.session.get(Lead, item.lead_id)
-            if lead is not None and lead.up_next_to_mail:
-                lead.up_next_to_mail = False
-                db.session.add(lead)
-
-    if commit and (dues_fixed or removed_queue):
+    if commit and dues_fixed:
         db.session.commit()
 
     rescore_ids = sorted(cooldown_ids & set(mail_ready_ids)) if rescore else []

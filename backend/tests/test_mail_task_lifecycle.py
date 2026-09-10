@@ -2337,6 +2337,8 @@ class TestEnqueueCreatesPendingMailFollowUp:
             ).one()
             with patch('app.services.mail_queue_service.refresh_leads_after_mail_task_changes'):
                 MailQueueService().remove_item(item.id, USER_ID)
+                # Idempotent second remove must not raise.
+                MailQueueService().remove_item(item.id, USER_ID)
 
             open_followups = [
                 t for t in LeadTask.query.filter_by(lead_id=lead.id).all()

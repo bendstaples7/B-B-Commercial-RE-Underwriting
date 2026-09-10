@@ -13,7 +13,7 @@ import {
 import DeleteIcon from '@mui/icons-material/Delete'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link as RouterLink } from 'react-router-dom'
-import openLetterService, { type MailQueueItem } from '@/services/openLetterApi'
+import openLetterService, { type MailQueueItem, type MailQueueSummary } from '@/services/openLetterApi'
 import { formatLastMailedDate, formatLastSaleDate } from '@/utils/formatLastMailedDate'
 
 export interface MailQueueStagedTableProps {
@@ -29,7 +29,21 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
 
   const removeMutation = useMutation({
     mutationFn: (itemId: number) => openLetterService.removeFromQueue(itemId),
-    onSuccess: () => {
+    onSuccess: (_data, itemId) => {
+      queryClient.setQueryData<MailQueueSummary>(['mail-queue'], (current) => {
+        if (!current?.items) return current
+        const nextItems = current.items.filter((row) => row.id !== itemId)
+        const removed = current.items.length - nextItems.length
+        if (removed === 0) return current
+        return {
+          ...current,
+          items: nextItems,
+          queued_count: Math.max(0, current.queued_count - removed),
+          total: typeof current.total === 'number'
+            ? Math.max(0, current.total - removed)
+            : current.total,
+        }
+      })
       queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
       queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
       queryClient.invalidateQueries({ queryKey: ['queue-mail-candidates'] })

@@ -548,6 +548,56 @@ def test_heal_does_not_rewrite_manual_undated_mail_task(app):
         assert manual.workflow_key is None
 
 
+def test_heal_removes_queued_cooldown_leads_before_mail_ready_rescore(app):
+    """Staged batch cleanup must commit even when later rescoring is heavy."""
+    with app.app_context():
+        lead = Lead(
+            property_street='96 Cadence Queued St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            mailing_address='96 Cadence Queued St',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
+            owner_user_id='test-owner',
+            lead_status='mailing_no_contact_made',
+            lead_category='residential',
+            lead_score=80.0,
+            recommended_action='nurture',
+            up_next_to_mail=True,
+        )
+        db.session.add(lead)
+        db.session.flush()
+        item = MailQueueItem(
+            lead_id=lead.id,
+            user_id='test-owner',
+            status='queued',
+        )
+        db.session.add_all([
+            item,
+            LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type='mail_sent',
+                occurred_at=datetime.now(timezone.utc) - timedelta(days=15),
+                source='system',
+                actor='test',
+                summary='Mail sent',
+            ),
+        ])
+        db.session.commit()
+        item_id = item.id
+        lead_id = lead.id
+
+        result = heal_mail_cadence_cooldown(commit=True, rescore=False)
+
+        assert result['removed_queue_items'] == 1
+        assert lead_id in result['affected_lead_ids']
+        refreshed = MailQueueItem.query.get(item_id)
+        assert refreshed.status == 'removed'
+        assert Lead.query.get(lead_id).up_next_to_mail is False
+
+
 def test_heal_commit_false_keeps_rescore_and_weights_uncommitted(app):
     with app.app_context():
         lead = Lead(

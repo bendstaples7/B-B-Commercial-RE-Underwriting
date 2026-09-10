@@ -609,8 +609,14 @@ class MailQueueService:
             raise MailQueueError('Queue item not found', status_code=404)
         if item.user_id != user_id:
             raise MailQueueError('Queue item not found', status_code=404)
+        # Idempotent: already-removed rows are a no-op success so stale Ready to
+        # Mail UIs (and mid-heal races) do not toast a hard failure.
+        if item.status == 'removed':
+            return item
         if item.status != 'queued':
-            raise MailQueueError('Only queued items can be removed')
+            raise MailQueueError(
+                f'Only queued items can be removed (status is {item.status})',
+            )
 
         item.status = 'removed'
         item.updated_at = datetime.utcnow()
@@ -621,5 +627,20 @@ class MailQueueService:
             cancel_pending_mail_follow_up_tasks(lead.id, actor=user_id)
         db.session.commit()
         if lead:
-            refresh_leads_after_mail_task_changes([lead.id])
+            # Keep DELETE snappy on memory-tight prod — rescore must not block
+            # the user clearing the staged batch. Tests score in-process.
+            if current_app.config.get('TESTING'):
+                refresh_leads_after_mail_task_changes([lead.id])
+            else:
+                try:
+                    from celery_worker import bulk_rescore_task
+                    bulk_rescore_task.delay(user_id, [lead.id])
+                except Exception as exc:
+                    logger.warning(
+                        'Could not dispatch rescore after mail queue remove '
+                        'for lead %s: %s — falling back to in-request refresh',
+                        lead.id,
+                        exc,
+                    )
+                    refresh_leads_after_mail_task_changes([lead.id])
         return item

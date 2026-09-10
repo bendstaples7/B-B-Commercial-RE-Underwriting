@@ -17,6 +17,9 @@ const genericErrorLabels = new Set([
   'Internal server error',
   'HTTP error',
   'Provider not configured',
+  // Mail/OLC controllers wrap the real reason in `message`.
+  'Mail queue error',
+  'Application error',
 ])
 
 /** Map a backend JSON error body to the sentence shown in the UI. */
