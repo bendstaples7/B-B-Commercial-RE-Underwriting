@@ -367,7 +367,7 @@ def test_resolve_outreach_phone_matches_key_contact_former_owner_hubspot(app):
         assert PhoneConfidenceService.normalize_phone(dial['value']).endswith('7732715525')
         assert dial['contact_id'] == former.id
         assert dial['phone_id'] is not None
-        assert outreach_contact_task_title(dial).endswith('271-5525') or '271' in outreach_contact_task_title(dial)
+        assert outreach_contact_task_title(dial).endswith('271-5525')
 
 
 def test_resolve_dial_target_independent_of_recommended_channel(app):

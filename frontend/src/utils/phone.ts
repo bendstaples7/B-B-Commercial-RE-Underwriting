@@ -32,8 +32,9 @@ export function phoneDigitsEqual(
 }
 
 /**
- * Pull the first phone-shaped digit run from free text (task titles, notes).
- * Prefers a 10/11-digit US number when present.
+ * Pull the first US phone (10 national digits, optional leading 1) from free
+ * text (task titles, notes). Ignores shorter digit runs and date-like spans
+ * so a title like "Call Sam by 2025-01-15" does not yield a bogus dial target.
  */
 export function extractPhoneDigitsFromText(text: string | null | undefined): string | null {
   if (!text) return null
@@ -42,7 +43,6 @@ export function extractPhoneDigitsFromText(text: string | null | undefined): str
   for (const raw of matches) {
     const digits = normalizePhoneDigits(raw)
     if (digits.length === 10) return digits
-    if (digits.length >= 7) return digits
   }
   return null
 }

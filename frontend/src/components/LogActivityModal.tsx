@@ -92,12 +92,14 @@ export function LogActivityModal({
   const previouslyFocused = useRef<HTMLElement | null>(null)
   const [offset, setOffset] = useState<PanelOffset>({ x: 0, y: 0 })
 
-  // Include former owners so dialed / HubSpot-primary phones that GIS archived
-  // under a rename still appear in the Log Call picker (matches outreach SQL).
+  // Log Call only: include former owners so dialed / HubSpot-primary phones
+  // that GIS archived under a rename still appear (matches outreach SQL).
+  // Log Email keeps active contacts only.
+  const includeFormerOwners = activityType === 'call'
   const { data: contacts = [], isLoading: contactsLoading } = useQuery({
-    queryKey: ['propertyContacts', leadId, { includeFormerOwners: true }],
+    queryKey: ['propertyContacts', leadId, { includeFormerOwners }],
     queryFn: () =>
-      contactService.getPropertyContacts(leadId, { includeFormerOwners: true }),
+      contactService.getPropertyContacts(leadId, { includeFormerOwners }),
     enabled: open && activityType != null && activityType !== 'note',
   })
 

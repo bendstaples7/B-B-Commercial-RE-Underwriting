@@ -248,19 +248,55 @@ export function ContactMethodFields({
     [contacts, mode, preferredPhoneDigits, value.contactId],
   )
 
-  const hasAutoSelected = useRef(false)
+  // none → auto → stop; parent = remount with prior selection; user = picker change.
+  // Auto may re-run when preferredPhoneDigits arrives/changes after contacts load.
+  const selectionSource = useRef<'none' | 'auto' | 'user' | 'parent'>('none')
+  const appliedPreferredDigits = useRef<string | null | undefined>(undefined)
 
   const methodLabel = mode === 'phone' ? 'Phone number' : 'Email address'
 
   useEffect(() => {
-    if (hasAutoSelected.current || contactsLoading || contacts.length === 0) return
-    // Respect a parent-provided selection (e.g. remount with prior dial target).
-    if (value.contactId != null && (value.methodKey || value.methodValue)) {
-      hasAutoSelected.current = true
+    if (contactsLoading || contacts.length === 0) return
+    if (selectionSource.current === 'user') return
+
+    const preferredChanged =
+      mode === 'phone'
+      && preferredPhoneDigits != null
+      && preferredPhoneDigits !== appliedPreferredDigits.current
+    const missingPreferred =
+      mode === 'phone'
+      && Boolean(preferredPhoneDigits)
+      && !phoneDigitsEqual(value.methodValue, preferredPhoneDigits)
+
+    // Remount / controlled value already has a selection. Keep it unless a
+    // canonical preferred dial target arrives later and does not match.
+    if (
+      selectionSource.current === 'none'
+      && value.contactId != null
+      && (value.methodKey || value.methodValue)
+    ) {
+      if (!(preferredChanged && missingPreferred)) {
+        selectionSource.current = 'parent'
+        appliedPreferredDigits.current = preferredPhoneDigits
+        return
+      }
+      // Fall through and adopt the late preferred digits.
+    }
+
+    if (selectionSource.current === 'parent' && !(preferredChanged && missingPreferred)) {
       return
     }
 
-    hasAutoSelected.current = true
+    if (
+      selectionSource.current === 'auto'
+      && !preferredChanged
+      && !missingPreferred
+    ) {
+      return
+    }
+
+    selectionSource.current = 'auto'
+    appliedPreferredDigits.current = preferredPhoneDigits
 
     if (mode === 'phone') {
       // Prefer open-task / outreach dial target, else highest-confidence
@@ -311,6 +347,7 @@ export function ContactMethodFields({
   ])
 
   const handleContactChange = (contactKey: string) => {
+    selectionSource.current = 'user'
     if (contactKey === CONTACT_NONE) {
       onChange({ ...EMPTY_CONTACT_METHOD })
       return
@@ -325,6 +362,7 @@ export function ContactMethodFields({
   }
 
   const handleMethodChange = (methodKey: string) => {
+    selectionSource.current = 'user'
     if (methodKey === METHOD_NONE) {
       onChange({
         ...value,

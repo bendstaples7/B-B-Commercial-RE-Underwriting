@@ -191,11 +191,12 @@ class TestGetCommandCenter:
                 property_id=lead.id, contact_id=current.id,
                 role='owner', is_primary=True,
             ))
+            # Same confidence so hubspot_rank (HubSpot primary notes) must decide.
             db.session.add(ContactPhone(
                 contact_id=former.id,
                 value='(773) 271-5525',
                 label='mobile',
-                confidence_score=85,
+                confidence_score=50,
                 last_called_at=datetime.now(timezone.utc),
                 last_outcome='no_answer',
                 notes='HubSpot primary',

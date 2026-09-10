@@ -33,6 +33,7 @@ from app.services.recommended_action_metadata import (
     get_winning_rule_label,
 )
 from app.services.outreach_method_service import (
+    _batch_best_phone_details_by_lead,
     resolve_dial_target,
     resolve_outreach_contact,
 )
@@ -478,14 +479,28 @@ def get_recommended_action(lead_id: int):
     if contact_method:
         signals = {**signals, 'recommended_contact_method': contact_method}
 
+    # One best-phone SQL for both outreach_contact (phone/text) and dial_target.
+    phone_details_by_lead = (
+        _batch_best_phone_details_by_lead([lead])
+        if isinstance(getattr(lead, 'id', None), int)
+        else {}
+    )
+
     return jsonify({
         'recommended_action': ra,
         'recommended_contact_method': contact_method,
         'label': display.get('label'),
         'explanation': display.get('explanation'),
         'signals': signals,
-        'outreach_contact': resolve_outreach_contact(lead, contact_method),
-        'dial_target': resolve_dial_target(lead),
+        'outreach_contact': resolve_outreach_contact(
+            lead,
+            contact_method,
+            phone_details_by_lead=phone_details_by_lead,
+        ),
+        'dial_target': resolve_dial_target(
+            lead,
+            phone_details_by_lead=phone_details_by_lead,
+        ),
     }), 200
 
 

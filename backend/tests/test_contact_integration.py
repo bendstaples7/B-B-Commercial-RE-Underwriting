@@ -209,7 +209,7 @@ class TestPrimaryDemotion:
         assert resp.status_code == 201
 
         # Verify via HTTP that contact B is now primary
-        resp_list = client.get(f"/api/properties/{prop_id}/contacts")
+        resp_list = client.get(f"/api/properties/{prop_id}/contacts", headers=_AUTH_HEADERS)
         assert resp_list.status_code == 200
         contacts_data = resp_list.get_json()
 
@@ -233,7 +233,10 @@ class TestPrimaryDemotion:
             active_id = active.id
             former_id = former.id
 
-        default_resp = client.get(f"/api/properties/{prop_id}/contacts")
+        anon = client.get(f"/api/properties/{prop_id}/contacts")
+        assert anon.status_code == 401
+
+        default_resp = client.get(f"/api/properties/{prop_id}/contacts", headers=_AUTH_HEADERS)
         assert default_resp.status_code == 200
         default_ids = {c["id"] for c in default_resp.get_json()}
         assert active_id in default_ids
@@ -242,6 +245,7 @@ class TestPrimaryDemotion:
         included = client.get(
             f"/api/properties/{prop_id}/contacts",
             query_string={"include_former_owners": "1"},
+            headers=_AUTH_HEADERS,
         )
         assert included.status_code == 200
         included_ids = {c["id"] for c in included.get_json()}
@@ -338,7 +342,7 @@ class TestDeletePrimaryNoAutoPromotion:
         assert resp.status_code == 204
 
         # Verify via HTTP that secondary is still not primary
-        resp_list = client.get(f"/api/properties/{prop_id}/contacts")
+        resp_list = client.get(f"/api/properties/{prop_id}/contacts", headers=_AUTH_HEADERS)
         assert resp_list.status_code == 200
         contacts_data = resp_list.get_json()
 

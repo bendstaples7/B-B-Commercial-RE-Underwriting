@@ -257,9 +257,15 @@ def check_dial_target_contract() -> list[str]:
         errors.append("command_center_controller.py missing")
     else:
         cc_text = cc.read_text(encoding="utf-8")
-        if "resolve_dial_target" not in cc_text or "'dial_target'" not in cc_text:
+        cc_fn = re.search(
+            r"def get_command_center\b.*?(?=\n@|\ndef |\Z)",
+            cc_text,
+            re.DOTALL,
+        )
+        if not cc_fn or "'dial_target': resolve_dial_target(lead)" not in cc_fn.group(0):
             errors.append(
-                "command_center_controller must attach dial_target from resolve_dial_target"
+                "get_command_center must attach dial_target via "
+                "resolve_dial_target(lead)"
             )
 
     ulcc = ROOT / "frontend" / "src" / "components" / "UnifiedLeadCommandCenter.tsx"
@@ -280,11 +286,16 @@ def check_dial_target_contract() -> list[str]:
         fields_text = fields.read_text(encoding="utf-8")
         if "preferredPhoneDigits" not in fields_text:
             errors.append("ContactMethodFields must accept preferredPhoneDigits")
-        if "never filter away the dial target" not in fields_text and (
-            "Hard invariant" not in fields_text
-        ):
+        # Behavioral never-hide path (not comment text).
+        if "phoneDigitsEqual(phone.value, preferredPhoneDigits)" not in fields_text:
             errors.append(
-                "ContactMethodFields must keep the never-hide dial-target invariant"
+                "ContactMethodFields must inject preferredPhoneDigits via "
+                "phoneDigitsEqual when the selected contact would hide it"
+            )
+        if "phoneDigitsEqual(a.value, preferredPhoneDigits)" not in fields_text:
+            errors.append(
+                "ContactMethodFields must rank preferredPhoneDigits first in "
+                "buildMethodOptions sort"
             )
 
     fields_test = ROOT / "frontend" / "src" / "components" / "ContactMethodFields.test.tsx"
@@ -292,9 +303,17 @@ def check_dial_target_contract() -> list[str]:
         errors.append("ContactMethodFields.test.tsx missing")
     else:
         test_text = fields_test.read_text(encoding="utf-8")
-        if "4490" not in test_text or "never hid" not in test_text.lower():
+        if "4490" not in test_text:
             errors.append(
-                "ContactMethodFields.test.tsx must keep a 4490 never-hide dial-target gate"
+                "ContactMethodFields.test.tsx must keep a 4490 dial-target gate"
+            )
+        if "never hides preferred dial-target" not in test_text.lower():
+            errors.append(
+                "ContactMethodFields.test.tsx must keep a never-hide dial-target test"
+            )
+        if "7732715525" not in test_text or "toBe(true)" not in test_text:
+            errors.append(
+                "ContactMethodFields.test.tsx must assert the 4490 dial digits stay visible"
             )
 
     outreach_test = ROOT / "backend" / "tests" / "test_outreach_method_service.py"
@@ -306,6 +325,10 @@ def check_dial_target_contract() -> list[str]:
             errors.append(
                 "test_outreach_method_service.py must assert resolve_dial_target "
                 "on a 4490-shaped former-owner HubSpot phone"
+            )
+        if "7732715525" not in ot:
+            errors.append(
+                "test_outreach_method_service.py must assert the 4490 dial digits"
             )
 
     arch = ROOT / "docs" / "ARCHITECTURE.md"

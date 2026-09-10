@@ -271,6 +271,7 @@ def delete_contact(contact_id):
 
 @contacts_bp.route('/api/properties/<int:property_id>/contacts', methods=['GET'])
 @handle_errors
+@require_auth
 def get_property_contacts(property_id):
     """List all Contacts linked to a Property, including join record metadata.
 

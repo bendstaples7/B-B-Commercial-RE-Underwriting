@@ -192,7 +192,7 @@ describe('ContactMethodFields', () => {
             contact_id: 1,
             value: '(773) 454-0106',
             label: 'other',
-            confidence_score: 50,
+            confidence_score: 85,
           },
         ],
       },
@@ -254,6 +254,79 @@ describe('ContactMethodFields', () => {
     )
     expect(options[0].value.replace(/\D/g, '').endsWith('7732715525')).toBe(true)
     expect(options[0].contactId).toBe(2)
+  })
+
+  
+  it('adopts preferredPhoneDigits that arrive after contacts load (4490 late dial_target)', async () => {
+    const onChange = vi.fn()
+    const mixed: PropertyContact[] = [
+      {
+        ...contacts[0],
+        first_name: 'Sam',
+        last_name: 'FISBO',
+        phones: [
+          {
+            id: 10,
+            contact_id: 1,
+            value: '(773) 454-0106',
+            label: 'other',
+            confidence_score: 85,
+          },
+        ],
+      },
+      {
+        ...contacts[1],
+        first_name: 'Sam',
+        last_name: 'Old Town Square Cbre',
+        is_primary: false,
+        phones: [
+          {
+            id: 11,
+            contact_id: 2,
+            value: '(773) 271-5525',
+            label: 'other',
+            confidence_score: 50,
+          },
+        ],
+      },
+    ]
+    const { rerender } = render(
+      <ContactMethodFields
+        mode="phone"
+        contacts={mixed}
+        value={EMPTY_CONTACT_METHOD}
+        onChange={onChange}
+      />,
+    )
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled())
+    // Without preferred digits, higher-confidence GIS dump wins.
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        contactId: 1,
+        methodValue: '(773) 454-0106',
+      }),
+    )
+
+    const latest = onChange.mock.calls.at(-1)?.[0] ?? EMPTY_CONTACT_METHOD
+    onChange.mockClear()
+    rerender(
+      <ContactMethodFields
+        mode="phone"
+        contacts={mixed}
+        value={latest}
+        onChange={onChange}
+        preferredPhoneDigits="7732715525"
+      />,
+    )
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled())
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        contactId: 2,
+        methodValue: '(773) 271-5525',
+      }),
+    )
   })
 
   it('never hides preferred dial-target digits when a different contact is selected (4490 invariant)', () => {

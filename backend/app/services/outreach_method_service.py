@@ -448,13 +448,21 @@ def _batch_best_phone_by_lead(leads: list[Lead]) -> dict[int, str]:
     }
 
 
-def resolve_dial_target(lead: Lead) -> dict | None:
+def resolve_dial_target(
+    lead: Lead,
+    *,
+    phone_details_by_lead: dict[int, dict] | None = None,
+) -> dict | None:
     """Canonical dial target for Call Now, call-task titles, and Log Call.
 
     Always resolves the best viable phone for the lead (including dialed /
     HubSpot-primary numbers on ``former_owner`` links). Independent of
     ``recommended_contact_method`` so Log Call can preselect even when the RA
     channel is mail/email.
+
+    Pass ``phone_details_by_lead`` from a shared
+    ``_batch_best_phone_details_by_lead`` call when the same request also
+    resolves outreach contact for phone/text (avoids a duplicate SQL).
     """
     lead_id = getattr(lead, 'id', None)
     if not isinstance(lead_id, int):
@@ -466,7 +474,12 @@ def resolve_dial_target(lead: Lead) -> dict | None:
         payload['phone_id'] = None
         return payload
 
-    details = _batch_best_phone_details_by_lead([lead]).get(lead_id)
+    details_map = (
+        phone_details_by_lead
+        if phone_details_by_lead is not None
+        else _batch_best_phone_details_by_lead([lead])
+    )
+    details = details_map.get(lead_id)
     if not details:
         return None
     payload = _phone_contact_dict(details['value'], 'phone')
@@ -560,9 +573,25 @@ def resolve_outreach_contacts_for_leads(leads: list[Lead]) -> dict[int, dict | N
     return resolved
 
 
-def _resolve_phone_contact(lead: Lead, *, channel: str) -> dict | None:
+def _resolve_phone_contact(
+    lead: Lead,
+    *,
+    channel: str,
+    phone_details_by_lead: dict[int, dict] | None = None,
+) -> dict | None:
     lead_id = getattr(lead, 'id', None)
     if isinstance(lead_id, int):
+        if phone_details_by_lead is not None:
+            details = phone_details_by_lead.get(lead_id)
+            if details:
+                return _phone_contact_dict(details['value'], channel)
+            if lead.recommended_contact_method not in ('phone', 'text'):
+                raw = _first_flat_phone(lead)
+            else:
+                raw = None
+            if not raw:
+                return None
+            return _phone_contact_dict(raw, channel)
         if lead.recommended_contact_method in ('phone', 'text'):
             cached = resolve_outreach_contacts_for_leads([lead]).get(lead_id)
             if lead.recommended_contact_method == channel:
@@ -611,12 +640,21 @@ def _resolve_mail_contact(lead: Lead) -> dict | None:
     }
 
 
-def resolve_outreach_contact(lead: Lead, contact_method: str | None) -> dict | None:
+def resolve_outreach_contact(
+    lead: Lead,
+    contact_method: str | None,
+    *,
+    phone_details_by_lead: dict[int, dict] | None = None,
+) -> dict | None:
     """Pick the concrete phone, email, or address for an outreach channel."""
     if not contact_method or contact_method not in VALID_CONTACT_CHANNELS:
         return None
     if contact_method in ('phone', 'text'):
-        return _resolve_phone_contact(lead, channel=contact_method)
+        return _resolve_phone_contact(
+            lead,
+            channel=contact_method,
+            phone_details_by_lead=phone_details_by_lead,
+        )
     if contact_method == 'email':
         return _resolve_email_contact(lead)
     if contact_method == 'direct_mail':

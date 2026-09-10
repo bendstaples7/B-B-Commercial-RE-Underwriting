@@ -65,6 +65,14 @@ describe('extractPhoneDigitsFromText', () => {
     expect(extractPhoneDigitsFromText('Call (773) 271-5525')).toBe('7732715525')
   })
 
+  it('prefers a later 10-digit phone over an earlier short digit run', () => {
+    expect(extractPhoneDigitsFromText('Unit 1234567 Call (773) 271-5525')).toBe('7732715525')
+  })
+
+  it('ignores date-like digit runs that are not US phones', () => {
+    expect(extractPhoneDigitsFromText('Call Sam by 2025-01-15')).toBeNull()
+  })
+
   it('returns null when no phone-shaped digits exist', () => {
     expect(extractPhoneDigitsFromText('Add to mail queue')).toBeNull()
   })
