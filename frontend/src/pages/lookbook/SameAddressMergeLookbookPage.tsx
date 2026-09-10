@@ -39,7 +39,8 @@ export default function SameAddressMergeLookbookPage() {
             A — No auto-detected twin (today on 2496)
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Top-right of the header stack: Merge duplicate…
+            Outlined <strong>Merge duplicate…</strong> opens a dialog where you can
+            search by name, address, or lead number.
           </Typography>
           <Box
             sx={{
