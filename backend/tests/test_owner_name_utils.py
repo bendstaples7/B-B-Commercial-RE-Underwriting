@@ -183,6 +183,7 @@ class TestOwnerNamesEquivalent:
         assert is_placeholder_owner_name('CURRENT RESIDENT 123 MAIN ST')
         assert not is_placeholder_owner_name('CURRENT RESIDENT John Smith 123 MAIN ST')
         assert not is_placeholder_owner_name('John Smith For Sale By Owner 123 Main St')
+        assert is_placeholder_owner_name('CURRENT RESIDENT HIGHWAY 12')
         assert is_placeholder_owner_name('N/A')
         assert is_placeholder_owner_name('For Sale By Owner +')
         assert is_placeholder_owner_name('current resident')

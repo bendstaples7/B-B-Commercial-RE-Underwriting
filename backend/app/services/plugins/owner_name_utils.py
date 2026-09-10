@@ -187,6 +187,12 @@ def is_generic_owner_name(name: str | None) -> bool:
     return bool(tokens & _GENERIC_OWNER_TOKENS)
 
 
+_STREET_TOKENS = frozenset({
+    "ST", "STREET", "AVE", "AVENUE", "RD", "ROAD", "BLVD", "BOULEVARD",
+    "DR", "DRIVE", "LN", "LANE", "CT", "COURT", "PL", "PLACE", "WAY",
+    "CIR", "CIRCLE", "PKWY", "PARKWAY", "HWY", "HIGHWAY", "TER", "TERRACE",
+})
+
 def is_placeholder_owner_name(name: str | None) -> bool:
     """True when the *entire* name is a placeholder — no usable person/entity token.
 
@@ -227,11 +233,12 @@ def is_placeholder_owner_name(name: str | None) -> bool:
     ]
     if not leftover_ordered or not is_address_like_name(" ".join(leftover_ordered)):
         return False
-    # Leading alphabetic tokens before the house number are person/entity names.
-    _directions = {
+    # Leading alphabetic tokens before the house number are person/entity names,
+    # except compass directions and street-type tokens (e.g. HIGHWAY 12).
+    _prefix_ok = {
         "N", "S", "E", "W", "NE", "NW", "SE", "SW",
         "NORTH", "SOUTH", "EAST", "WEST",
-    }
+    } | _STREET_TOKENS
     first_digit = next(
         (i for i, tok in enumerate(leftover_ordered) if re.search(r"\d", tok)),
         None,
@@ -239,7 +246,7 @@ def is_placeholder_owner_name(name: str | None) -> bool:
     if first_digit is None:
         return True
     prefix = leftover_ordered[:first_digit]
-    return all(_normalize_token(tok) in _directions for tok in prefix)
+    return all(_normalize_token(tok) in _prefix_ok for tok in prefix)
 
 
 def is_marketing_or_listing_noise_last(last_name: str | None) -> bool:
@@ -364,12 +371,6 @@ def is_entity_contact(first_name: str | None, last_name: str | None) -> bool:
         return False
     return is_entity_name(display)
 
-
-_STREET_TOKENS = frozenset({
-    "ST", "STREET", "AVE", "AVENUE", "RD", "ROAD", "BLVD", "BOULEVARD",
-    "DR", "DRIVE", "LN", "LANE", "CT", "COURT", "PL", "PLACE", "WAY",
-    "CIR", "CIRCLE", "PKWY", "PARKWAY", "HWY", "HIGHWAY", "TER", "TERRACE",
-})
 
 
 def is_address_like_name(cleaned: str) -> bool:

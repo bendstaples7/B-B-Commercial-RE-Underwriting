@@ -34,7 +34,10 @@ from app.services.outreach_method_service import (
     refine_outreach_action,
     OUTREACH_ACTIONS,
 )
-from app.services.entity_owner_policy import cold_mail_block_context
+from app.services.entity_owner_policy import (
+    cold_mail_block_context,
+    cold_mail_block_reason,  # noqa: F401 — patch target for action-engine tests
+)
 logger = logging.getLogger(__name__)
 
 # Backward-compatible patch target for tests and integrations; semantics are now
