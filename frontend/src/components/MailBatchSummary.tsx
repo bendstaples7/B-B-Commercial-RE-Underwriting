@@ -137,15 +137,26 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
             <LinearProgress
               variant={isUpdating ? 'indeterminate' : 'determinate'}
               value={isUpdating ? undefined : progress}
-              sx={{ mb: 2, height: 8, borderRadius: 1 }}
+              sx={{
+                mb: isUpdating ? 0.75 : 2,
+                height: 8,
+                borderRadius: 1,
+                ...(isUpdating
+                  ? {
+                      '& .MuiLinearProgress-bar': {
+                        animationDuration: '1.1s',
+                      },
+                    }
+                  : {}),
+              }}
               aria-label={isUpdating ? 'Adding leads to batch' : 'Batch fill progress'}
               data-testid="mail-batch-progress"
             />
             {isUpdating && (
               <Typography
                 variant="caption"
-                color="text.secondary"
-                sx={{ display: 'block', mb: 1.5, mt: -1 }}
+                color="primary"
+                sx={{ display: 'block', mb: 1.5, fontWeight: 600 }}
                 data-testid="mail-batch-updating-label"
               >
                 Adding leads to batch…

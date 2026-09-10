@@ -468,24 +468,33 @@ export function ReadyToMailQueue() {
         </Alert>
       )}
 
-      <QueueTable
-        rows={candidateRows}
-        total={candidateTotal}
-        disabled={(candidatesLoading && candidateRows.length === 0) || isAddingToBatch}
-        fromQueue={fromQueue}
-        selectedIds={selectedIds}
-        onSelectionChange={onSelectionChange}
-        rowActions={rowActions}
-        bulkActions={bulkActions}
-        extraColumns={[lastMailedColumn, lastSaleColumn]}
-        {...(candidateTotalPages > 1
-          ? {
-              page: candidatesPage,
-              totalPages: candidateTotalPages,
-              onPageChange: handleCandidatesPageChange,
-            }
-          : {})}
-      />
+      <Box
+        sx={{
+          opacity: isAddingToBatch ? 0.55 : 1,
+          transition: 'opacity 0.2s ease',
+          pointerEvents: isAddingToBatch ? 'none' : 'auto',
+        }}
+        data-testid="mail-candidates-table-shell"
+      >
+        <QueueTable
+          rows={candidateRows}
+          total={candidateTotal}
+          disabled={(candidatesLoading && candidateRows.length === 0) || isAddingToBatch}
+          fromQueue={fromQueue}
+          selectedIds={selectedIds}
+          onSelectionChange={onSelectionChange}
+          rowActions={rowActions}
+          bulkActions={bulkActions}
+          extraColumns={[lastMailedColumn, lastSaleColumn]}
+          {...(candidateTotalPages > 1
+            ? {
+                page: candidatesPage,
+                totalPages: candidateTotalPages,
+                onPageChange: handleCandidatesPageChange,
+              }
+            : {})}
+        />
+      </Box>
 
       <Divider sx={{ my: 3 }} />
 
