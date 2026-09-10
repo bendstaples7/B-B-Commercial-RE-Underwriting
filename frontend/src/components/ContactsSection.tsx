@@ -38,6 +38,7 @@ import {
   personIdentityKeyFromFullName,
   splitDisplayName,
   unlinkedPeopleFromLead,
+  type UnlinkedLeadPerson,
 } from '@/utils/propertyContacts'
 import { ContactNameInlineEdit } from '@/components/ContactNameInlineEdit'
 import { PhoneList } from '@/components/PhoneRow'
@@ -144,6 +145,8 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
 
   const [removeDialogOpen, setRemoveDialogOpen] = useState(false)
   const [contactToRemove, setContactToRemove] = useState<PropertyContact | null>(null)
+  const [clearUnlinkedDialogOpen, setClearUnlinkedDialogOpen] = useState(false)
+  const [unlinkedToClear, setUnlinkedToClear] = useState<UnlinkedLeadPerson | null>(null)
 
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
@@ -535,6 +538,21 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
     onError: (err: Error) => showError(err.message || 'Failed to remove contact.'),
   })
 
+  const clearUnlinkedMutation = useMutation({
+    mutationFn: (person: UnlinkedLeadPerson) =>
+      contactService.clearOwnerPerson(propertyId, {
+        first_name: person.first_name,
+        last_name: person.last_name,
+        reason: 'cleared_from_contacts',
+      }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['propertyContacts', propertyId] })
+      queryClient.invalidateQueries({ queryKey: ['commandCenter', propertyId] })
+      showSuccess(`${result.display_name} cleared from this lead.`)
+    },
+    onError: (err: Error) => showError(err.message || 'Failed to clear owner from lead.'),
+  })
+
   const saveNameMutation = useMutation({
     mutationFn: async ({
       row,
@@ -869,6 +887,21 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
                     >
                       Save as contact
                     </Button>
+                    {person.source === 'flat_owner' && (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        color="error"
+                        onClick={() => {
+                          setUnlinkedToClear(person)
+                          setClearUnlinkedDialogOpen(true)
+                        }}
+                        disabled={clearUnlinkedMutation.isPending}
+                        data-testid="clear-unlinked-person-btn"
+                      >
+                        Clear from lead
+                      </Button>
+                    )}
                   </Box>
                 </ListItem>
               </React.Fragment>
@@ -1031,6 +1064,40 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
             }}
           >
             Remove
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={clearUnlinkedDialogOpen}
+        onClose={() => setClearUnlinkedDialogOpen(false)}
+      >
+        <DialogTitle>Clear owner from lead?</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Remove{' '}
+            {unlinkedToClear
+              ? [unlinkedToClear.first_name, unlinkedToClear.last_name].filter(Boolean).join(' ')
+              : 'this person'}{' '}
+            from this lead&apos;s owner fields. Use this when the person is deceased, sold, or
+            otherwise no longer the owner. You can then Move to Skip Trace to find the current
+            owner.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setClearUnlinkedDialogOpen(false)}>Cancel</Button>
+          <Button
+            color="error"
+            variant="contained"
+            data-testid="confirm-clear-unlinked-person-btn"
+            disabled={clearUnlinkedMutation.isPending}
+            onClick={() => {
+              if (unlinkedToClear) clearUnlinkedMutation.mutate(unlinkedToClear)
+              setClearUnlinkedDialogOpen(false)
+              setUnlinkedToClear(null)
+            }}
+          >
+            Clear from lead
           </Button>
         </DialogActions>
       </Dialog>

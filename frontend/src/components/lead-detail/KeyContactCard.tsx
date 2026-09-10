@@ -1,6 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Box, Button, Chip, Divider, Link, Paper, Stack, Typography } from '@mui/material'
-import { useQuery } from '@tanstack/react-query'
+import {
+  Box,
+  Button,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  Link,
+  Paper,
+  Stack,
+  Typography,
+} from '@mui/material'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import EmailOutlinedIcon from '@mui/icons-material/EmailOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import LocalPostOfficeOutlinedIcon from '@mui/icons-material/LocalPostOfficeOutlined'
@@ -22,6 +35,7 @@ import {
   primaryEditablePersonContact,
   splitDisplayName,
   unlinkedPeopleFromLead,
+  type UnlinkedLeadPerson,
 } from '@/utils/propertyContacts'
 import { ContactNameInlineEdit } from '@/components/ContactNameInlineEdit'
 import {
@@ -181,11 +195,17 @@ function channelsToInitialValues(
  * On lg+ this is the single outreach contact surface.
  */
 export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyContactCardProps) {
+  const queryClient = useQueryClient()
   const [addOpen, setAddOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [editDetailsLoading, setEditDetailsLoading] = useState(false)
   const [prefetchedEditContact, setPrefetchedEditContact] = useState<Contact | null>(null)
-  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string }>({
+  const [clearDialogOpen, setClearDialogOpen] = useState(false)
+  const [snackbar, setSnackbar] = useState<{
+    open: boolean
+    message: string
+    severity?: 'error' | 'success'
+  }>({
     open: false,
     message: '',
   })
@@ -223,7 +243,52 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
     (c): c is Extract<KeyContactChannel, { kind: 'email' }> => c.kind === 'email',
   )
   const contactsUntrusted = Boolean(commandCenterData.contacts_likely_prior_owner)
+  const flatOwnerGhost: UnlinkedLeadPerson | null =
+    ghostPeople.find((p) => p.source === 'flat_owner') ?? null
   const canEditDetails = !contactsUntrusted && (Boolean(editablePerson) || ghostPeople.length > 0)
+  const canClearOwner = (
+    !contactsUntrusted
+    && displayName !== 'No contact on file'
+    && (Boolean(editablePerson) || Boolean(flatOwnerGhost))
+  )
+
+  const clearOwnerMutation = useMutation({
+    mutationFn: () => {
+      if (editablePerson) {
+        return contactService.clearOwnerPerson(commandCenterData.id, {
+          contact_id: editablePerson.id,
+          first_name: editablePerson.first_name,
+          last_name: editablePerson.last_name,
+          reason: 'cleared_from_key_contact',
+        })
+      }
+      if (!flatOwnerGhost) {
+        return Promise.reject(new Error('No owner to clear'))
+      }
+      return contactService.clearOwnerPerson(commandCenterData.id, {
+        first_name: flatOwnerGhost.first_name,
+        last_name: flatOwnerGhost.last_name,
+        reason: 'cleared_from_key_contact',
+      })
+    },
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
+      void queryClient.invalidateQueries({ queryKey: ['propertyContacts', commandCenterData.id] })
+      setClearDialogOpen(false)
+      setSnackbar({
+        open: true,
+        message: `${result.display_name} cleared from this lead.`,
+        severity: 'success',
+      })
+    },
+    onError: (err: Error) => {
+      setSnackbar({
+        open: true,
+        message: err.message || 'Failed to clear owner from lead.',
+        severity: 'error',
+      })
+    },
+  })
 
   const {
     data: editableContactDetail,
@@ -447,7 +512,7 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
           )}
         </Box>
         {canEditDetails && (
-          <Box>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
             <Button
               size="small"
               variant="text"
@@ -459,6 +524,34 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
               sx={{ cursor: 'pointer', px: 0.5, ml: -0.5 }}
             >
               {editDetailsLoading ? 'Loading details…' : 'Edit phone & details'}
+            </Button>
+            {canClearOwner && (
+              <Button
+                size="small"
+                variant="text"
+                color="error"
+                onClick={() => setClearDialogOpen(true)}
+                disabled={clearOwnerMutation.isPending}
+                data-testid="key-contact-clear-owner-btn"
+                sx={{ cursor: 'pointer', px: 0.5 }}
+              >
+                Clear from lead
+              </Button>
+            )}
+          </Box>
+        )}
+        {!canEditDetails && canClearOwner && (
+          <Box>
+            <Button
+              size="small"
+              variant="text"
+              color="error"
+              onClick={() => setClearDialogOpen(true)}
+              disabled={clearOwnerMutation.isPending}
+              data-testid="key-contact-clear-owner-btn"
+              sx={{ cursor: 'pointer', px: 0.5, ml: -0.5 }}
+            >
+              Clear from lead
             </Button>
           </Box>
         )}
@@ -573,12 +666,34 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
           linkAsPrimary={!editablePerson}
           allowLinkExisting={false}
         />
+        <Dialog open={clearDialogOpen} onClose={() => setClearDialogOpen(false)}>
+          <DialogTitle>Clear owner from lead?</DialogTitle>
+          <DialogContent>
+            <Typography>
+              Remove {displayName} from this lead. Use this when the person is deceased, sold, or
+              otherwise no longer the owner. You can then Move to Skip Trace to find the current
+              owner.
+            </Typography>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setClearDialogOpen(false)}>Cancel</Button>
+            <Button
+              color="error"
+              variant="contained"
+              data-testid="confirm-key-contact-clear-owner-btn"
+              disabled={clearOwnerMutation.isPending}
+              onClick={() => clearOwnerMutation.mutate()}
+            >
+              Clear from lead
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Paper>
       <AppSnackbar
         open={snackbar.open}
         onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
         message={snackbar.message}
-        severity="error"
+        severity={snackbar.severity ?? 'error'}
       />
     </>
   )

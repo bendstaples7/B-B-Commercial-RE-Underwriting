@@ -669,6 +669,31 @@ class TestUnlinkContactFromProperty:
             ).one()
             assert link_secondary.is_primary is False
 
+    def test_unlink_primary_clears_matching_flat_owner_names(self, app):
+        """Unlinking a matching primary clears flat owner fields so ghosts die."""
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property("304 Clear Ave")
+            prop.owner_first_name = "Gary"
+            prop.owner_last_name = "Carlson"
+            db.session.commit()
+
+            primary = _make_contact(service, "Gary", "Carlson")
+            service.link_contact_to_property(
+                property_id=prop.id,
+                contact_id=primary.id,
+                role="owner",
+                is_primary=True,
+            )
+            # Link does not sync flat names; they already match.
+            service.unlink_contact_from_property(
+                property_id=prop.id,
+                contact_id=primary.id,
+            )
+            db.session.refresh(prop)
+            assert prop.owner_first_name is None
+            assert prop.owner_last_name is None
+
     def test_unlink_nonexistent_link_raises_404(self, app):
         """Unlinking a contact that is not linked raises ResourceNotFoundError."""
         with app.app_context():
@@ -680,6 +705,91 @@ class TestUnlinkContactFromProperty:
                 service.unlink_contact_from_property(
                     property_id=prop.id,
                     contact_id=contact.id,
+                )
+
+
+class TestClearOwnerPersonFromLead:
+    def test_clear_flat_owner_ghost(self, app):
+        """Clearing a flat-only owner removes owner_first/last without a contact row."""
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property("3116 Saint Louis")
+            prop.owner_first_name = "Gary"
+            prop.owner_last_name = "Carlson"
+            db.session.commit()
+
+            result = service.clear_owner_person_from_lead(
+                prop.id,
+                first_name="Gary",
+                last_name="Carlson",
+                reason="deceased",
+            )
+            db.session.refresh(prop)
+            assert result["cleared_slots"] == ["owner"]
+            assert result["unlinked_contact_id"] is None
+            assert prop.owner_first_name is None
+            assert prop.owner_last_name is None
+
+    def test_clear_owner_2_slot_only(self, app):
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property("3117 Dual Owner")
+            prop.owner_first_name = "Alice"
+            prop.owner_last_name = "Alive"
+            prop.owner_2_first_name = "Gary"
+            prop.owner_2_last_name = "Carlson"
+            db.session.commit()
+
+            service.clear_owner_person_from_lead(
+                prop.id,
+                first_name="Gary",
+                last_name="Carlson",
+            )
+            db.session.refresh(prop)
+            assert prop.owner_first_name == "Alice"
+            assert prop.owner_last_name == "Alive"
+            assert prop.owner_2_first_name is None
+            assert prop.owner_2_last_name is None
+
+    def test_clear_with_contact_id_unlinks_and_clears(self, app):
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property("3118 Linked Clear")
+            prop.owner_first_name = "Gary"
+            prop.owner_last_name = "Carlson"
+            db.session.commit()
+            contact = _make_contact(service, "Gary", "Carlson")
+            service.link_contact_to_property(
+                property_id=prop.id,
+                contact_id=contact.id,
+                role="owner",
+                is_primary=True,
+            )
+            result = service.clear_owner_person_from_lead(
+                prop.id,
+                contact_id=contact.id,
+                reason="deceased",
+            )
+            db.session.refresh(prop)
+            assert result["unlinked_contact_id"] == contact.id
+            assert "owner" in result["cleared_slots"]
+            assert PropertyContact.query.filter_by(
+                property_id=prop.id, contact_id=contact.id,
+            ).first() is None
+            assert prop.owner_first_name is None
+
+    def test_clear_no_match_raises(self, app):
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property("3119 Nomatch")
+            prop.owner_first_name = "Alice"
+            prop.owner_last_name = "Smith"
+            db.session.commit()
+            with pytest.raises(ValidationException):
+                service.clear_owner_person_from_lead(
+                    prop.id,
+                    first_name="Gary",
+                    last_name="Carlson",
                 )
 
 

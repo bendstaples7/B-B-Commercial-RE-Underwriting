@@ -15,6 +15,7 @@ Routes:
   GET    /api/properties/<id>/contacts
   POST   /api/properties/<id>/contacts
   DELETE /api/properties/<id>/contacts/<contact_id>
+  POST   /api/properties/<id>/clear-owner-person
 """
 import logging
 from functools import wraps
@@ -339,3 +340,35 @@ def unlink_contact_from_property(property_id, contact_id):
     """
     contact_service.unlink_contact_from_property(property_id, contact_id)
     return '', 204
+
+
+@contacts_bp.route('/api/properties/<int:property_id>/clear-owner-person', methods=['POST'])
+@handle_errors
+@require_auth
+def clear_owner_person(property_id):
+    """Clear a flat / linked owner person from a lead (deceased, wrong owner, etc.).
+
+    Body (JSON):
+      first_name / last_name — match flat owner slots (and linked contacts)
+      contact_id — optional; unlink this contact and clear matching flat names
+      reason — optional timeline note (e.g. ``deceased``)
+    """
+    data = request.get_json(silent=True) or {}
+    contact_id = data.get('contact_id')
+    if contact_id is not None:
+        try:
+            contact_id = int(contact_id)
+        except (TypeError, ValueError):
+            return jsonify({
+                'error': 'Validation error',
+                'message': 'contact_id must be an integer',
+            }), 400
+
+    result = contact_service.clear_owner_person_from_lead(
+        property_id,
+        first_name=data.get('first_name'),
+        last_name=data.get('last_name'),
+        contact_id=contact_id,
+        reason=data.get('reason'),
+    )
+    return jsonify(result), 200

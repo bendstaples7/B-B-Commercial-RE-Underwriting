@@ -443,6 +443,10 @@ class ContactService:
     def unlink_contact_from_property(self, property_id: int, contact_id: int) -> None:
         """Remove a PropertyContact association without deleting the Contact.
 
+        When the unlinked contact matches a flat owner name slot
+        (``owner_first_name`` / ``owner_last_name`` or owner_2), those fields
+        are cleared so the person does not reappear as an unlinked ghost.
+
         Parameters
         ----------
         property_id : int
@@ -463,17 +467,209 @@ class ContactService:
                 f"No link found between Property id={property_id} and Contact id={contact_id}.",
                 payload={'property_id': property_id, 'contact_id': contact_id},
             )
+        contact = db.session.get(Contact, contact_id)
+        lead = db.session.get(Property, property_id)
+        cleared_slots: list[str] = []
+        if contact is not None and lead is not None:
+            cleared_slots = self._clear_matching_flat_owner_slots(
+                lead,
+                first_name=contact.first_name,
+                last_name=contact.last_name,
+            )
+            if cleared_slots:
+                self._record_owner_cleared_timeline(
+                    lead,
+                    first_name=contact.first_name,
+                    last_name=contact.last_name,
+                    cleared_slots=cleared_slots,
+                    contact_id=contact_id,
+                    reason='unlinked',
+                )
         db.session.delete(link)
         db.session.commit()
         logger.info(
-            "Unlinked Contact id=%d from Property id=%d",
-            contact_id, property_id,
+            "Unlinked Contact id=%d from Property id=%d (cleared_slots=%s)",
+            contact_id, property_id, cleared_slots,
         )
 
         # Removing an owner contact lowers data-completeness / owner-situation
         # inputs — refresh lead_score + recommended_action (error-isolated).
         from app.services.lead_refresh import refresh_lead_scoring
         refresh_lead_scoring(property_id)
+
+    def clear_owner_person_from_lead(
+        self,
+        property_id: int,
+        *,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        contact_id: int | None = None,
+        reason: str | None = None,
+        actor: str | None = None,
+    ) -> dict:
+        """Remove a person from a lead: unlink matching contact + clear flat owner slots.
+
+        Used when an assessor/GIS owner name is on the lead with no PropertyContact
+        (ghost / unlinked person), or when the user dismisses a deceased / wrong
+        owner from Key Contact / Contacts.
+
+        Returns a summary dict: ``cleared_slots``, ``unlinked_contact_id``,
+        ``display_name``.
+        """
+        lead = db.session.get(Property, property_id)
+        if lead is None:
+            raise ResourceNotFoundError(
+                f"Property id={property_id} not found.",
+                payload={'property_id': property_id},
+            )
+
+        resolved_first = (first_name or '').strip() or None
+        resolved_last = (last_name or '').strip() or None
+        unlinked_contact_id: int | None = None
+
+        if contact_id is not None:
+            contact = db.session.get(Contact, contact_id)
+            if contact is None:
+                raise ResourceNotFoundError(
+                    f"Contact id={contact_id} not found.",
+                    payload={'contact_id': contact_id},
+                )
+            resolved_first = contact.first_name
+            resolved_last = contact.last_name
+            link = (
+                PropertyContact.query
+                .filter_by(property_id=property_id, contact_id=contact_id)
+                .first()
+            )
+            if link is not None:
+                db.session.delete(link)
+                unlinked_contact_id = contact_id
+        else:
+            # Unlink any linked person that matches the provided name.
+            if resolved_first or resolved_last:
+                from app.services.plugins.owner_name_utils import same_person_name_alias
+
+                rows = (
+                    db.session.query(Contact, PropertyContact)
+                    .join(PropertyContact, PropertyContact.contact_id == Contact.id)
+                    .filter(PropertyContact.property_id == property_id)
+                    .filter(PropertyContact.role != 'former_owner')
+                    .all()
+                )
+                for contact, link in rows:
+                    if same_person_name_alias(
+                        contact.first_name, contact.last_name,
+                        resolved_first, resolved_last,
+                    ):
+                        db.session.delete(link)
+                        unlinked_contact_id = contact.id
+                        resolved_first = contact.first_name
+                        resolved_last = contact.last_name
+                        break
+
+        if not resolved_first and not resolved_last:
+            raise ValidationException(
+                'first_name, last_name, or contact_id is required to clear an owner.',
+                field='first_name',
+            )
+
+        cleared_slots = self._clear_matching_flat_owner_slots(
+            lead,
+            first_name=resolved_first,
+            last_name=resolved_last,
+        )
+        if not cleared_slots and unlinked_contact_id is None:
+            raise ValidationException(
+                'No matching owner name or linked contact found on this lead.',
+                field='first_name',
+            )
+
+        display = _contact_display_name(resolved_first, resolved_last)
+        self._record_owner_cleared_timeline(
+            lead,
+            first_name=resolved_first,
+            last_name=resolved_last,
+            cleared_slots=cleared_slots,
+            contact_id=unlinked_contact_id,
+            reason=reason or 'cleared',
+            actor=actor,
+        )
+        db.session.commit()
+        logger.info(
+            "Cleared owner person %r from Property id=%d slots=%s unlinked=%s",
+            display, property_id, cleared_slots, unlinked_contact_id,
+        )
+
+        from app.services.lead_refresh import refresh_lead_scoring
+        refresh_lead_scoring(property_id)
+
+        return {
+            'cleared_slots': cleared_slots,
+            'unlinked_contact_id': unlinked_contact_id,
+            'display_name': display,
+        }
+
+    def _clear_matching_flat_owner_slots(
+        self,
+        lead: Property,
+        *,
+        first_name: str | None,
+        last_name: str | None,
+    ) -> list[str]:
+        """Null out owner / owner_2 flat name slots that match *first/last*."""
+        from app.services.plugins.owner_name_utils import same_person_name_alias
+
+        cleared: list[str] = []
+        if same_person_name_alias(
+            lead.owner_first_name, lead.owner_last_name, first_name, last_name,
+        ):
+            lead.owner_first_name = None
+            lead.owner_last_name = None
+            cleared.append('owner')
+        if same_person_name_alias(
+            lead.owner_2_first_name, lead.owner_2_last_name, first_name, last_name,
+        ):
+            lead.owner_2_first_name = None
+            lead.owner_2_last_name = None
+            cleared.append('owner_2')
+        return cleared
+
+    def _record_owner_cleared_timeline(
+        self,
+        lead: Property,
+        *,
+        first_name: str | None,
+        last_name: str | None,
+        cleared_slots: list[str],
+        contact_id: int | None,
+        reason: str,
+        actor: str | None = None,
+    ) -> None:
+        from datetime import datetime, timezone
+
+        from app.models.lead_timeline_entry import LeadTimelineEntry
+
+        display = _contact_display_name(first_name, last_name)
+        if display == '(No name)' and not cleared_slots:
+            return
+        db.session.add(LeadTimelineEntry(
+            lead_id=lead.id,
+            event_type='owner_name_changed',
+            occurred_at=datetime.now(timezone.utc),
+            source='manual',
+            actor=actor or _request_actor(),
+            summary=f"Owner '{display}' removed from lead.",
+            event_metadata={
+                'previous_first_name': first_name,
+                'previous_last_name': last_name,
+                'new_first_name': None,
+                'new_last_name': None,
+                'contact_id': contact_id,
+                'cleared_slots': cleared_slots,
+                'reason': reason,
+                'cleared': True,
+            },
+        ))
 
     # ------------------------------------------------------------------
     # Query
