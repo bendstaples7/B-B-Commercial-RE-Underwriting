@@ -59,6 +59,30 @@ class TestDedupStreetKey:
     def test_cardinal_street_name_is_not_collapsed(self):
         assert dedup_street_key('123 North Street') != dedup_street_key('123 N Street')
 
+    def test_dual_house_number_range_shares_key_with_primary(self):
+        """Duplex spellings must not glue into a fake house number (18671869)."""
+        primary = dedup_street_key('1867 N Howe St')
+        assert primary == dedup_street_key('1867-1869 N Howe St')
+        assert primary == dedup_street_key('1867/1869 N Howe')
+        assert primary == dedup_street_key('1867 & 1869 N Howe St')
+        assert primary == dedup_street_key('1867–1869 N Howe')
+        assert primary == dedup_street_key('1867-69 N Howe St')
+        # Distinct neighboring house numbers stay distinct.
+        assert primary != dedup_street_key('1869 N Howe St')
+
+    def test_dual_house_range_matches_same_situs_as_primary(self):
+        from app.services.lead_merge_utils import streets_match_same_situs
+
+        assert streets_match_same_situs('1867 N Howe St', '1867-1869 N Howe St')
+        assert streets_match_same_situs('1867 N Howe St', '1867/1869 N Howe St')
+        assert not streets_match_same_situs('1867 N Howe St', '1869 N Howe St')
+
+    def test_legacy_glued_range_key_for_stale_index_rows(self):
+        from app.services.lead_merge_utils import legacy_glued_house_range_key
+
+        assert legacy_glued_house_range_key('1867-1869 N Howe St') == '18671869 N HOWE'
+        assert legacy_glued_house_range_key('1867 N Howe St') == ''
+
 
 class TestCitiesCompatible:
     def test_missing_either_side_is_compatible(self):
@@ -603,6 +627,44 @@ class TestSameBuildingBannerAndAdditivePeople:
             ids = {item.id for item in twins}
             assert both.id in ids
             assert other_block.id not in ids
+
+    def test_find_same_building_matches_dual_house_number_range(self, app):
+        """Primary house number and duplex range spelling are the same building."""
+        from app.services.lead_dedup_service import (
+            find_same_building_leads,
+            refresh_lead_dedup_fields,
+        )
+
+        with app.app_context():
+            primary = Lead(
+                property_street='1867 N Howe St',
+                owner_first_name='James',
+                owner_last_name='Malone',
+            )
+            ranged = Lead(
+                property_street='1867-1869 N Howe St',
+                owner_first_name='James',
+                owner_last_name='Malone',
+            )
+            neighbor = Lead(
+                property_street='1869 N Howe St',
+                owner_first_name='Other',
+                owner_last_name='Neighbor',
+            )
+            db.session.add_all([primary, ranged, neighbor])
+            for item in (primary, ranged, neighbor):
+                refresh_lead_dedup_fields(item)
+            # Simulate a stale pre-fix index row that glued 1867-1869 → 18671869.
+            ranged.normalized_street = '18671869 N HOWE'
+            db.session.commit()
+
+            twins = find_same_building_leads(primary)
+            ids = {item.id for item in twins}
+            assert ranged.id in ids
+            assert neighbor.id not in ids
+
+            reverse_twins = find_same_building_leads(ranged)
+            assert primary.id in {item.id for item in reverse_twins}
 
     def test_find_same_building_not_dropped_when_many_streets_share_house_1(self, app):
         from app.services.lead_dedup_service import (

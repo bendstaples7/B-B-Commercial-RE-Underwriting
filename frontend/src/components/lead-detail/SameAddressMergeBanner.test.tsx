@@ -78,6 +78,51 @@ describe('SameAddressMergeBanner', () => {
     expect(onMerged).toHaveBeenCalledWith({ winnerId: 200, loserId: 100 })
   })
 
+  it('always offers Merge duplicate when no twin is auto-detected', async () => {
+    const user = userEvent.setup()
+    const onMerged = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(commandCenterService.getMergePreview).mockResolvedValue({
+      same_building: true,
+      current: {
+        id: 100,
+        property_street: '1867 N Howe St',
+        owner_display_name: 'Current',
+        people_names: ['Current'],
+      },
+      other: {
+        id: 2497,
+        property_street: '1867-1869 N Howe St',
+        owner_display_name: 'Twin range',
+        people_names: ['Twin'],
+      },
+    } satisfies MergePreviewResponse)
+    vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
+      winner_id: 100,
+      loser_id: 2497,
+      merged: true,
+    })
+    render(
+      <MemoryRouter>
+        <SameAddressMergeBanner
+          leadId={100}
+          currentOwnerLabel="Current"
+          currentPeopleNames={['Current']}
+          twins={[]}
+          onMerged={onMerged}
+        />
+      </MemoryRouter>,
+    )
+    expect(screen.queryByTestId('same-address-merge-banner')).not.toBeInTheDocument()
+    expect(screen.getByTestId('same-address-merge-open')).toHaveTextContent('Merge duplicate')
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    await user.type(screen.getByTestId('same-address-merge-paste-id'), '2497')
+    await user.click(screen.getByTestId('same-address-merge-confirm'))
+    await waitFor(() => {
+      expect(commandCenterService.mergeInto).toHaveBeenCalledWith(2497, 100)
+    })
+    expect(onMerged).toHaveBeenCalledWith({ winnerId: 100, loserId: 2497 })
+  })
+
   it('when winner differs from current lead, onMerged still runs (navigate owned by helper)', async () => {
     const user = userEvent.setup()
     const navigate = vi.fn()

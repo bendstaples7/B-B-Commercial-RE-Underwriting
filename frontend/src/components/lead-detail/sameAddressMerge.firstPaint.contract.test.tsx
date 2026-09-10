@@ -63,4 +63,26 @@ describe('first-paint settle — same-address merge banner', () => {
       'Combine these records',
     )
   })
+
+  it('manual Merge duplicate settles when no twin payload is present', async () => {
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <SameAddressMergeBanner
+          leadId={1}
+          currentOwnerLabel="Current"
+          currentPeopleNames={['Current']}
+          twins={[]}
+          onMerged={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    expect(screen.queryByTestId('same-address-merge-banner')).not.toBeInTheDocument()
+    expect(screen.getByTestId('same-address-merge-open')).toHaveTextContent('Merge duplicate')
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    expect(screen.getByTestId('same-address-merge-dialog')).toHaveTextContent(
+      'Combine these records',
+    )
+    expect(screen.getByTestId('same-address-merge-paste-id')).toBeInTheDocument()
+  })
 })

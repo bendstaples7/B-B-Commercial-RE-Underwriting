@@ -20,6 +20,13 @@ _CARDINAL_TO_ABBREV = {
     'WEST': 'W',
 }
 
+# Leading duplex / multi-unit house ranges: "1867-1869", "1867/1869", "1867 & 1869".
+# HubSpotMatcherService.normalize_address strips "-"/"/" without inserting a space, which
+# otherwise glues the range into a fake house number ("18671869") and hides same-building twins.
+_LEADING_HOUSE_RANGE_RE = re.compile(
+    r'^(\d+)\s*(?:[-–—/]|\&)\s*(\d+)(?=\s|$)',
+)
+
 # Higher rank = more advanced pipeline stage (winner preference).
 LEAD_STATUS_RANK: dict[str, int] = {
     'deal_won': 100,
@@ -80,6 +87,52 @@ def _collapse_cardinal_after_house(norm: str) -> str:
     return norm
 
 
+def _expand_abbreviated_range_end(start: str, end: str) -> str:
+    """Expand ``1867-69`` → ``1869`` when the end token is a short suffix."""
+    if len(end) >= len(start):
+        return end
+    return start[: len(start) - len(end)] + end
+
+
+def collapse_leading_house_range(line: str) -> str:
+    """Replace a leading house-number range with its primary (lower) number.
+
+    ``1867-1869 N Howe`` and ``1867 N Howe`` must share a building-level key so
+    the command-center merge banner can surface the twin.
+    """
+    text = (line or '').strip()
+    if not text:
+        return ''
+
+    match = _LEADING_HOUSE_RANGE_RE.match(text)
+    if not match:
+        return text
+
+    start = match.group(1)
+    end = _expand_abbreviated_range_end(start, match.group(2))
+    try:
+        primary = start if int(start) <= int(end) else end
+    except ValueError:
+        primary = start
+    return f'{primary}{text[match.end():]}'
+
+
+def legacy_glued_house_range_key(street: Optional[str]) -> str:
+    """Pre-fix key when ``1867-1869`` was glued to ``18671869`` by punct strip.
+
+    Used only to locate still-indexed twin rows until ``normalized_street`` is
+    recomputed with :func:`collapse_leading_house_range`.
+    """
+    line = street_line_from_address(street) or (street or '')
+    match = _LEADING_HOUSE_RANGE_RE.match(line.strip())
+    if not match:
+        return ''
+    start = match.group(1)
+    end = _expand_abbreviated_range_end(start, match.group(2))
+    glued_line = f'{start}{end}{line.strip()[match.end():]}'
+    return dedup_street_key(glued_line) if glued_line else ''
+
+
 def normalized_street_key(street: Optional[str]) -> str:
     """Return normalized address for grouping duplicate leads."""
     return HubSpotMatcherService.normalize_address(street or '')
@@ -89,6 +142,7 @@ def dedup_street_key(street: Optional[str]) -> str:
     """Building-level street key used for DB uniqueness (strips trailing street type)."""
     # Prefer the street line when callers pass a Places "street, city, state ZIP" value.
     line = street_line_from_address(street) or (street or '')
+    line = collapse_leading_house_range(line)
     norm = _collapse_cardinal_after_house(normalized_street_key(line))
     if not norm:
         return ''
@@ -109,7 +163,6 @@ def streets_match_normalized(a: Optional[str], b: Optional[str]) -> bool:
         return True
     # Unit-suffix variants (e.g. bare building vs "Apt 1")
     return ka.startswith(kb + ' ') or kb.startswith(ka + ' ')
-
 
 _SITUS_UNIT_RE = re.compile(
     r'(?:\b(?:unit|apt|apartment|suite|ste)\b|#)\s*([a-z0-9-]+)\s*$'

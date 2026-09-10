@@ -1,5 +1,9 @@
 /**
  * Same-address duplicate banner + pick-who-stays merge dialog.
+ *
+ * When auto-detected twins exist, show the info banner. When they do not
+ * (e.g. dual house-number spellings that the API has not paired yet), still
+ * expose "Merge duplicate…" so the user can paste the other lead id.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -142,7 +146,7 @@ export function SameAddressMergeBanner({
       setPastePreview(null)
       setPasteError(null)
       setValidatedPasteId('')
-      return true
+      return !hasTwins ? false : true
     }
     const parsed = Number(raw)
     if (!Number.isInteger(parsed) || parsed <= 0 || parsed === leadId) {
@@ -202,12 +206,20 @@ export function SameAddressMergeBanner({
 
   const handleMerge = async () => {
     const rawPasteId = pasteId.trim()
+    if (!hasTwins && !rawPasteId) {
+      setPasteError('Paste the other lead number.')
+      setError('Paste the other lead number to combine.')
+      return
+    }
     if (rawPasteId && rawPasteId !== validatedPasteId) {
       const validPaste = await validatePasteId()
       if (!validPaste) return
     } else if (pasteLookupPromise.current) {
       const validPaste = await pasteLookupPromise.current
       if (!validPaste) return
+    } else if (!hasTwins && !rawPasteId) {
+      setPasteError('Paste the other lead number.')
+      return
     }
     const stayId = winnerId
     const otherId = removeIdRef.current
@@ -241,47 +253,72 @@ export function SameAddressMergeBanner({
     }
   }
 
-  if (!hasTwins) return null
+  const bannerDetail = hasTwins
+    ? extra
+      ? `${first.owner_display_name} (#${first.id}) and ${extra} more`
+      : `${first.owner_display_name} (#${first.id})`
+    : null
 
-  const bannerDetail = extra
-    ? `${first.owner_display_name} (#${first.id}) and ${extra} more`
-    : `${first.owner_display_name} (#${first.id})`
+  const pasteHelper = pasteLookupPending
+    ? 'Checking lead...'
+    : (pasteError
+      ?? (hasTwins ? undefined : 'Required when no automatic twin is listed.'))
 
   return (
     <>
-      <Alert
-        severity="info"
-        data-testid="same-address-merge-banner"
-        sx={{
-          cursor: 'auto',
-          py: 0.5,
-          alignItems: 'center',
-          '& .MuiAlert-message': { width: '100%', py: 0.25 },
-        }}
-      >
+      {hasTwins ? (
+        <Alert
+          severity="info"
+          data-testid="same-address-merge-banner"
+          sx={{
+            cursor: 'auto',
+            py: 0.5,
+            alignItems: 'center',
+            '& .MuiAlert-message': { width: '100%', py: 0.25 },
+          }}
+        >
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 1,
+              flexWrap: 'wrap',
+            }}
+          >
+            <Typography variant="body2" sx={{ minWidth: 0 }}>
+              Another record for this address: {bannerDetail}
+            </Typography>
+            <Button
+              size="small"
+              variant="contained"
+              data-testid="same-address-merge-open"
+              onClick={() => setOpen(true)}
+              sx={{ cursor: 'pointer', flexShrink: 0 }}
+            >
+              Merge
+            </Button>
+          </Box>
+        </Alert>
+      ) : (
         <Box
           sx={{
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 1,
-            flexWrap: 'wrap',
+            justifyContent: 'flex-end',
+            py: 0.25,
           }}
         >
-          <Typography variant="body2" sx={{ minWidth: 0 }}>
-            Another record for this address: {bannerDetail}
-          </Typography>
           <Button
             size="small"
-            variant="contained"
+            variant="text"
             data-testid="same-address-merge-open"
             onClick={() => setOpen(true)}
             sx={{ cursor: 'pointer', flexShrink: 0 }}
           >
-            Merge
+            Merge duplicate…
           </Button>
         </Box>
-      </Alert>
+      )}
 
       <Dialog
         open={open}
@@ -295,8 +332,9 @@ export function SameAddressMergeBanner({
         <DialogTitle id="same-address-merge-title">Combine these records</DialogTitle>
         <DialogContent sx={{ cursor: 'auto' }}>
           <Typography variant="body2" sx={{ mb: 1.5 }}>
-            Pick which lead stays. The other one is removed. Every person is kept;
-            if two rows are the same person they become one person with all phone numbers.
+            {hasTwins
+              ? 'Pick which lead stays. The other one is removed. Every person is kept; if two rows are the same person they become one person with all phone numbers.'
+              : 'Paste the other lead number for this same building. Pick which lead stays; the other is removed. Every person is kept; if two rows are the same person they become one person with all phone numbers.'}
           </Typography>
           <FormControl component="fieldset">
             <FormLabel id="same-address-merge-stay-label" sx={{ mb: 0.5 }}>
@@ -354,7 +392,7 @@ export function SameAddressMergeBanner({
           <TextField
             size="small"
             fullWidth
-            label="Or paste another lead number"
+            label={hasTwins ? 'Or paste another lead number' : 'Paste the other lead number'}
             value={pasteId}
             onChange={(event) => {
               pasteIdRef.current = event.target.value
@@ -368,7 +406,7 @@ export function SameAddressMergeBanner({
               void validatePasteId()
             }}
             error={Boolean(pasteError)}
-            helperText={pasteLookupPending ? 'Checking lead...' : (pasteError ?? undefined)}
+            helperText={pasteHelper}
             inputProps={{
               'data-testid': 'same-address-merge-paste-id',
               style: { cursor: 'text' },
