@@ -762,17 +762,32 @@ jobs:
           SMOKE_TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
         run: |
           set -euo pipefail
-          set +e
-          python3 scripts/probe_authenticated_api.py \
-            --base-url "https://${VPS_SUBDOMAIN}.duckdns.org" \
-            --skip-if-no-creds \
-            --timeout 45
-          RC=$?
-          set -e
-          if [ "$RC" -eq 78 ]; then
-            echo "SMOKE_TEST credentials unset — skipping authenticated API canary."
-            exit 0
-          fi
+          # Retry transient timeouts/blips before treating as hard canary failure
+          # (avoids rolling back a healthy deploy on a single flaky probe).
+          ATTEMPTS=3
+          RC=1
+          for ATTEMPT in $(seq 1 "$ATTEMPTS"); do
+            set +e
+            python3 scripts/probe_authenticated_api.py \
+              --base-url "https://${VPS_SUBDOMAIN}.duckdns.org" \
+              --skip-if-no-creds \
+              --timeout 45
+            RC=$?
+            set -e
+            if [ "$RC" -eq 0 ]; then
+              echo "Authenticated API canary passed on attempt ${ATTEMPT}."
+              exit 0
+            fi
+            if [ "$RC" -eq 78 ]; then
+              echo "SMOKE_TEST credentials unset — skipping authenticated API canary."
+              exit 0
+            fi
+            if [ "$ATTEMPT" -lt "$ATTEMPTS" ]; then
+              echo "Canary attempt ${ATTEMPT}/${ATTEMPTS} failed (rc=${RC}); retrying in 15s..."
+              sleep 15
+            fi
+          done
+          echo "Authenticated API canary failed after ${ATTEMPTS} attempts (rc=${RC})."
           exit "$RC"
 
       - name: Rollback after authenticated API canary failure

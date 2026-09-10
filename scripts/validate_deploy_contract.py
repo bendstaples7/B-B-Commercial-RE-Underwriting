@@ -142,6 +142,17 @@ def _bash_syntax_check_available() -> bool:
     return probe.returncode == 0
 
 
+
+def _executable_shell_lines(text: str) -> list[str]:
+    """Return non-empty shell lines with full-line comments removed."""
+    out: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        out.append(stripped)
+    return out
+
 def main() -> int:
     errors: list[str] = []
 
@@ -723,20 +734,27 @@ def main() -> int:
             "gunicorn reload (schema contract gate)"
         )
     # Require the live timeout invocation (not merely the string in a message).
-    if not re.search(
-        r'timeout\b[^\n]*\$\{?BB_SCHEMA_CHECK_TIMEOUT_SEC\}?[^\n]*check_model_schema\.py',
-        deploy_text,
+    exec_deploy_lines = _executable_shell_lines(deploy_text)
+    if not any(
+        re.search(
+            r'(?:^|\s)timeout\b.*\$\{?BB_SCHEMA_CHECK_TIMEOUT_SEC\}?.*check_model_schema\.py',
+            line,
+        )
+        for line in exec_deploy_lines
     ):
         errors.append(
-            "deploy.sh must wrap check_model_schema.py in timeout "
-            "(BB_SCHEMA_CHECK_TIMEOUT_SEC) — not only mention it in an error string"
+            "deploy.sh must wrap check_model_schema.py in an executable timeout "
+            "line (BB_SCHEMA_CHECK_TIMEOUT_SEC) — comments/echo alone are not enough"
         )
     # Ordering: schema contract must come after DB smoke and before reload.
-    schema_cmd = re.search(
-        r'timeout\b[^\n]*check_model_schema\.py',
-        deploy_text,
+    schema_idx = next(
+        (
+            deploy_text.find(line)
+            for line in exec_deploy_lines
+            if re.search(r'(?:^|\s)timeout\b.*check_model_schema\.py', line)
+        ),
+        deploy_text.find("check_model_schema.py"),
     )
-    schema_idx = schema_cmd.start() if schema_cmd else deploy_text.find("check_model_schema.py")
     smoke_idx = deploy_text.find("Post-migrate DB-only smoke")
     reload_idx = deploy_text.find("Reload Gunicorn")
     if schema_idx < 0 or smoke_idx < 0 or reload_idx < 0:
@@ -794,14 +812,27 @@ def main() -> int:
         errors.append(
             "ops-health.yml final canary failure gate must include auth_api_canary"
         )
-    if "AUTH_SKIPPED" not in ops_health_yml or "authenticated API canary" not in ops_health_yml:
-        errors.append(
-            "ops-health.yml recovery must branch on AUTH_SKIPPED so no-creds skips "
-            "still close non-auth issues while leaving auth-canary issues open"
-        )
     if "skipped (no credentials)" not in ops_health_yml:
         errors.append(
             "ops-health.yml canary summary must render skipped auth probes distinctly"
+        )
+    # Recovery must branch on AUTH_SKIPPED with both TITLE_RE variants present.
+    recovery_ok = bool(
+        re.search(
+            r'AUTH_SKIPPED:\s*\$\{\{\s*steps\.auth_api_canary\.outputs\.skipped\s*\}\}'
+            r'[\s\S]*?'
+            r'if \[ "\$\{AUTH_SKIPPED:-\}" = "true" \]; then\s*'
+            r'TITLE_RE="[^"]*main↔prod SHA drift"\s*'
+            r'else\s*'
+            r'TITLE_RE="[^"]*authenticated API canary[^"]*main↔prod SHA drift"',
+            ops_health_yml,
+        )
+    )
+    if not recovery_ok:
+        errors.append(
+            "ops-health.yml recovery must branch on AUTH_SKIPPED with distinct "
+            "TITLE_RE values (non-auth titles when skipped; include authenticated "
+            "API canary when not skipped)"
         )
     deploy_yml_preview = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
     if "probe_authenticated_api.py" not in deploy_yml_preview:
@@ -822,6 +853,11 @@ def main() -> int:
                 "deploy.yml must roll back via post-deploy-rollback.sh when the "
                 "authenticated API canary fails"
             )
+        if "ATTEMPTS=3" not in deploy_yml_preview and "Canary attempt" not in deploy_yml_preview:
+            errors.append(
+                "deploy.yml authenticated API canary must retry transient failures "
+                "before rollback"
+            )
         if "session_token" not in deploy_yml_preview:
             errors.append(
                 "deploy.yml ownership/search smoke must read session_token from login"
@@ -838,6 +874,22 @@ def main() -> int:
     if "reclaim-vps-disk.sh" not in deploy_yml:
         errors.append(
             "deploy.yml must scp/run reclaim-vps-disk.sh before uploading frontend-dist"
+        )
+
+    celery_worker = _read(REPO_ROOT / "backend" / "celery_worker.py")
+    if "class MemoryShedTask" not in celery_worker or "celery.Task = MemoryShedTask" not in celery_worker:
+        errors.append(
+            "celery_worker.py must use MemoryShedTask (Task.__call__) for memory shed "
+            "— task_prerun Ignore/Reject does not short-circuit execution"
+        )
+    if "@task_prerun.connect" in celery_worker and "_shed_heavy_tasks_under_memory_pressure" in celery_worker:
+        errors.append(
+            "celery_worker.py must not shed via task_prerun "
+            "(_shed_heavy_tasks_under_memory_pressure)"
+        )
+    if "bb_beat" not in celery_worker:
+        errors.append(
+            "celery_worker.py must stamp bb_beat headers on beat_schedule shed tasks"
         )
 
     if errors:
