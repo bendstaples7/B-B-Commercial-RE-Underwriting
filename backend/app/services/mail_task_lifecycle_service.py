@@ -1882,14 +1882,70 @@ def heal_mail_cadence_cooldown(
     Idempotent. Uses the canonical last-mailed oracle in batches so Deploy stays
     bounded while matching runtime eligibility.
 
-    Staged-queue cleanup runs first and commits early so a Deploy wall-clock
-    timeout still clears Ready-to-Mail cooldown leftovers even when rematch /
-    mail_ready rescans do not finish.
+    Phase 1 clears staged cooldown queue rows first, committing each chunk so a
+    Deploy wall-clock timeout still drains Ready-to-Mail leftovers even when
+    rematch / mail_ready rescans never start or finish.
     """
     from sqlalchemy import or_
 
     from app.services.last_mailed_service import get_last_mailed_at_by_lead_ids
 
+    batch_size = max(1, last_mailed_batch_size)
+    queued_ids = [
+        row[0]
+        for row in db.session.query(MailQueueItem.lead_id).filter(
+            MailQueueItem.status == 'queued',
+        ).distinct().all()
+    ]
+
+    # --- Phase 1: clear staged cooldown leads (highest user-visible priority) ---
+    # Lookup + remove + commit per chunk so a timeout mid-scan still persists
+    # progress instead of leaving the whole staged cooldown batch queued.
+    last_mailed: dict[int, datetime | None] = {}
+    queued_cooldown_ids: set[int] = set()
+    removed_queue = 0
+    affected: set[int] = set()
+
+    for i in range(0, len(queued_ids), batch_size):
+        chunk = queued_ids[i:i + batch_size]
+        last_mailed.update(get_last_mailed_at_by_lead_ids(chunk))
+        chunk_cooldown = [
+            lead_id
+            for lead_id in chunk
+            if mail_cadence_eligible_date_from_last_mailed(
+                last_mailed.get(lead_id),
+            ) is not None
+        ]
+        if not chunk_cooldown:
+            continue
+        queued_cooldown_ids.update(chunk_cooldown)
+        queued_items = (
+            MailQueueItem.query
+            .filter(
+                MailQueueItem.lead_id.in_(chunk_cooldown),
+                MailQueueItem.status == 'queued',
+            )
+            .all()
+        )
+        chunk_removed = 0
+        for item in queued_items:
+            item.status = 'removed'
+            item.updated_at = datetime.utcnow()
+            db.session.add(item)
+            chunk_removed += 1
+            removed_queue += 1
+            affected.add(item.lead_id)
+            lead = db.session.get(Lead, item.lead_id)
+            if lead is not None and lead.up_next_to_mail:
+                lead.up_next_to_mail = False
+                db.session.add(lead)
+        if commit and chunk_removed:
+            db.session.commit()
+
+    # --- Phase 2: rematch dues + stale mail_ready (after queue cleanup commits) ---
+    # Load these scans only after Phase 1 so a slow rematch/mail_ready query cannot
+    # block draining the staged cooldown batch. Loading after commit also avoids
+    # expired ORM instances from the early commits above.
     rematch_tasks = (
         LeadTask.query
         .filter(
@@ -1909,58 +1965,14 @@ def heal_mail_cadence_cooldown(
             Lead.recommended_action == 'mail_ready',
         ).all()
     ]
-    queued_ids = [
-        row[0]
-        for row in db.session.query(MailQueueItem.lead_id).filter(
-            MailQueueItem.status == 'queued',
-        ).distinct().all()
-    ]
 
-    # --- Phase 1: clear staged cooldown leads (highest user-visible priority) ---
-    last_mailed: dict[int, datetime | None] = {}
-    for i in range(0, len(queued_ids), max(1, last_mailed_batch_size)):
-        chunk = queued_ids[i:i + last_mailed_batch_size]
-        last_mailed.update(get_last_mailed_at_by_lead_ids(chunk))
-
-    queued_cooldown_ids: set[int] = set()
-    for lead_id in queued_ids:
-        if mail_cadence_eligible_date_from_last_mailed(
-            last_mailed.get(lead_id),
-        ) is not None:
-            queued_cooldown_ids.add(lead_id)
-
-    removed_queue = 0
-    affected: set[int] = set()
-    if queued_cooldown_ids:
-        queued_items = (
-            MailQueueItem.query
-            .filter(
-                MailQueueItem.lead_id.in_(list(queued_cooldown_ids)),
-                MailQueueItem.status == 'queued',
-            )
-            .all()
-        )
-        for item in queued_items:
-            item.status = 'removed'
-            item.updated_at = datetime.utcnow()
-            db.session.add(item)
-            removed_queue += 1
-            affected.add(item.lead_id)
-            lead = db.session.get(Lead, item.lead_id)
-            if lead is not None and lead.up_next_to_mail:
-                lead.up_next_to_mail = False
-                db.session.add(lead)
-        if commit and removed_queue:
-            db.session.commit()
-
-    # --- Phase 2: rematch dues + stale mail_ready ---
     candidate_ids = sorted({
         *mail_ready_ids,
         *(task.lead_id for task in rematch_tasks),
     })
     remaining_ids = [lid for lid in candidate_ids if lid not in last_mailed]
-    for i in range(0, len(remaining_ids), max(1, last_mailed_batch_size)):
-        chunk = remaining_ids[i:i + last_mailed_batch_size]
+    for i in range(0, len(remaining_ids), batch_size):
+        chunk = remaining_ids[i:i + batch_size]
         last_mailed.update(get_last_mailed_at_by_lead_ids(chunk))
 
     cooldown_ids: set[int] = set(queued_cooldown_ids)
@@ -2026,3 +2038,4 @@ def heal_mail_cadence_cooldown(
         'removed_queue_items': removed_queue,
         'affected_lead_ids': sorted(affected),
     }
+

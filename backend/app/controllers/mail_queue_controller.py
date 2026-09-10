@@ -178,14 +178,18 @@ def remove_item(item_id: int):
 @handle_errors
 def remove_items():
     """Bulk-remove staged queue rows (idempotent for already-removed)."""
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Request body must be a JSON object'}), 400
     item_ids = data.get('item_ids') or []
     if not isinstance(item_ids, list):
         return jsonify({'error': 'item_ids must be a list'}), 400
-    try:
-        parsed_ids = [int(x) for x in item_ids]
-    except (TypeError, ValueError):
-        return jsonify({'error': 'item_ids must contain integers'}), 400
+    parsed_ids: list[int] = []
+    for value in item_ids:
+        # Reject bools/floats: bool is a subclass of int, and int(1.9) truncates.
+        if isinstance(value, bool) or not isinstance(value, int):
+            return jsonify({'error': 'item_ids must contain integers'}), 400
+        parsed_ids.append(value)
     result = _queue_service.remove_items(parsed_ids, g.user_id)
     return jsonify(result), 200
 

@@ -17,15 +17,39 @@ import {
 import DeleteIcon from '@mui/icons-material/Delete'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link as RouterLink } from 'react-router-dom'
+import { globalNotify } from '@/context/NotificationContext'
 import openLetterService, {
   type MailQueueItem,
   type MailQueueSummary,
 } from '@/services/openLetterApi'
 import { formatLastMailedDate, formatLastSaleDate } from '@/utils/formatLastMailedDate'
 
+/** Matches backend MAX_MAIL_ENQUEUE_LEADS for bulk remove. */
+export const MAIL_QUEUE_BULK_REMOVE_LIMIT = 1000
+
 export interface MailQueueStagedTableProps {
   items: MailQueueItem[]
   emptyMessage?: string
+}
+
+function withDerivedSummaryFields(
+  summary: MailQueueSummary,
+  queuedCount: number,
+): MailQueueSummary {
+  const canSend = Boolean(
+    queuedCount > 0
+    && (queuedCount >= summary.batch_minimum || summary.allow_send_below_minimum),
+  )
+  const estimatedTotal =
+    summary.estimated_cost_per_piece != null
+      ? summary.estimated_cost_per_piece * queuedCount
+      : summary.estimated_total
+  return {
+    ...summary,
+    queued_count: queuedCount,
+    can_send: canSend,
+    estimated_total: estimatedTotal,
+  }
 }
 
 function dropItemsFromSummary(
@@ -37,13 +61,51 @@ function dropItemsFromSummary(
   const nextItems = current.items.filter((row) => !removeSet.has(row.id))
   const removed = current.items.length - nextItems.length
   if (removed === 0) return current
+  const queuedCount = Math.max(0, current.queued_count - removed)
+  return withDerivedSummaryFields(
+    {
+      ...current,
+      items: nextItems,
+      total: typeof current.total === 'number'
+        ? Math.max(0, current.total - removed)
+        : current.total,
+    },
+    queuedCount,
+  )
+}
+
+function chunkIds(ids: number[], size: number): number[][] {
+  const chunks: number[][] = []
+  for (let i = 0; i < ids.length; i += size) {
+    chunks.push(ids.slice(i, i + size))
+  }
+  return chunks
+}
+
+async function removeManyInChunks(ids: number[]) {
+  const uniqueIds = [...new Set(ids)]
+  const chunks = chunkIds(uniqueIds, MAIL_QUEUE_BULK_REMOVE_LIMIT)
+  let removed = 0
+  let alreadyRemoved = 0
+  const blocked: Array<{ item_id: number; lead_id: number; status: string; error: string }> = []
+  let summary: MailQueueSummary | null = null
+
+  for (const chunk of chunks) {
+    const result = await openLetterService.removeManyFromQueue(chunk)
+    removed += result.removed
+    alreadyRemoved += result.already_removed
+    blocked.push(...(result.blocked ?? []))
+    summary = result
+  }
+
+  if (!summary) {
+    throw new Error('No queue items were selected to remove.')
+  }
   return {
-    ...current,
-    items: nextItems,
-    queued_count: Math.max(0, current.queued_count - removed),
-    total: typeof current.total === 'number'
-      ? Math.max(0, current.total - removed)
-      : current.total,
+    ...summary,
+    removed,
+    already_removed: alreadyRemoved,
+    blocked,
   }
 }
 
@@ -81,7 +143,7 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
   })
 
   const removeManyMutation = useMutation({
-    mutationFn: (ids: number[]) => openLetterService.removeManyFromQueue(ids),
+    mutationFn: removeManyInChunks,
     onSuccess: (data, ids) => {
       const blockedIds = new Set((data.blocked ?? []).map((row) => row.item_id))
       const droppedIds = ids.filter((id) => !blockedIds.has(id))
@@ -89,6 +151,17 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
         dropItemsFromSummary(current, droppedIds),
       )
       setSelectedIds((prev) => prev.filter((id) => blockedIds.has(id)))
+      if (data.blocked?.length) {
+        const reasons = data.blocked
+          .map((row) => row.error)
+          .filter(Boolean)
+        const uniqueReasons = [...new Set(reasons)]
+        globalNotify.showError(
+          uniqueReasons.length === 1
+            ? uniqueReasons[0]
+            : `Could not remove ${data.blocked.length} selected item(s): ${uniqueReasons.join('; ')}`,
+        )
+      }
       invalidateMailQueries()
     },
   })

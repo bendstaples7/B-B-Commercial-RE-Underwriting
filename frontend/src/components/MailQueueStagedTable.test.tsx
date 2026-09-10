@@ -3,7 +3,10 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
-import { MailQueueStagedTable } from './MailQueueStagedTable'
+import {
+  MailQueueStagedTable,
+  MAIL_QUEUE_BULK_REMOVE_LIMIT,
+} from './MailQueueStagedTable'
 import { NotificationProvider, globalNotify } from '@/context/NotificationContext'
 import openLetterService, { type MailQueueItem } from '@/services/openLetterApi'
 import { userFacingApiErrorMessage } from '@/services/httpClient'
@@ -84,11 +87,16 @@ describe('MailQueueStagedTable', () => {
     })).toBe('Only queued items can be removed (status is sent)')
   })
 
-  it('toasts the server message when single remove fails', async () => {
+  it('toasts the unwrapped API message when single remove fails', async () => {
     const user = userEvent.setup()
-    vi.mocked(openLetterService.removeFromQueue).mockRejectedValue(
-      new Error('Only queued items can be removed (status is sent)'),
-    )
+    // Simulate httpClient interceptor: unwrap envelope → Error(message).
+    const envelope = {
+      error: 'Mail queue error',
+      message: 'Only queued items can be removed (status is sent)',
+    }
+    const unwrapped = userFacingApiErrorMessage(envelope)
+    expect(unwrapped).toBe('Only queued items can be removed (status is sent)')
+    vi.mocked(openLetterService.removeFromQueue).mockRejectedValue(new Error(unwrapped))
     renderTable()
 
     await user.click(screen.getAllByRole('button', { name: 'Remove from batch' })[0])
@@ -146,5 +154,65 @@ describe('MailQueueStagedTable', () => {
     await waitFor(() => {
       expect(openLetterService.removeManyFromQueue).toHaveBeenCalledWith([11])
     })
+  })
+
+  it('toasts blocked bulk-remove reasons instead of silently dropping them', async () => {
+    const user = userEvent.setup()
+    vi.mocked(openLetterService.removeManyFromQueue).mockResolvedValue({
+      removed: 1,
+      already_removed: 0,
+      blocked: [{
+        item_id: 12,
+        lead_id: 102,
+        status: 'sent',
+        error: 'Only queued items can be removed (status is sent)',
+      }],
+      queued_count: 0,
+      batch_minimum: 50,
+      allow_send_below_minimum: false,
+      can_send: false,
+      items: [],
+    })
+    renderTable()
+
+    await user.click(screen.getByTestId('mail-queue-staged-select-all'))
+    await user.click(screen.getByTestId('mail-queue-staged-bulk-remove'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('global-notification-snackbar')).toHaveTextContent(
+        'Only queued items can be removed (status is sent)',
+      )
+    })
+  })
+
+  it(`chunks bulk remove requests at ${MAIL_QUEUE_BULK_REMOVE_LIMIT} ids`, async () => {
+    const user = userEvent.setup()
+    const many = Array.from({ length: MAIL_QUEUE_BULK_REMOVE_LIMIT + 3 }, (_, i) => ({
+      ...items[0],
+      id: i + 1,
+      lead_id: 1000 + i,
+      property_street: `${i + 1} Chunk St`,
+    }))
+    vi.mocked(openLetterService.removeManyFromQueue).mockImplementation(async (ids) => ({
+      removed: ids.length,
+      already_removed: 0,
+      blocked: [],
+      queued_count: 0,
+      batch_minimum: 50,
+      allow_send_below_minimum: false,
+      can_send: false,
+      items: [],
+    }))
+    renderTable(many)
+
+    await user.click(screen.getByTestId('mail-queue-staged-select-all'))
+    await user.click(screen.getByTestId('mail-queue-staged-bulk-remove'))
+
+    await waitFor(() => {
+      expect(openLetterService.removeManyFromQueue).toHaveBeenCalledTimes(2)
+    })
+    const calls = vi.mocked(openLetterService.removeManyFromQueue).mock.calls
+    expect(calls[0][0]).toHaveLength(MAIL_QUEUE_BULK_REMOVE_LIMIT)
+    expect(calls[1][0]).toHaveLength(3)
   })
 })

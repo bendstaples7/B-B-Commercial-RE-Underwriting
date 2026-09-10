@@ -591,6 +591,81 @@ class TestBulkRemoveMailQueueItems:
             assert data['already_removed'] == 1
 
 
+    def test_bulk_remove_reports_blocked_non_queued_items(self, client, app):
+        with app.app_context():
+            lead_q = _make_lead(app, '17 Bulk Blocked Queued St')
+            lead_s = _make_lead(app, '18 Bulk Blocked Sent St')
+            item_q = MailQueueItem(
+                lead_id=lead_q.id, user_id='test-user', status='queued',
+            )
+            item_s = MailQueueItem(
+                lead_id=lead_s.id, user_id='test-user', status='sent',
+            )
+            db.session.add_all([item_q, item_s])
+            db.session.commit()
+            ids = [item_q.id, item_s.id]
+
+            with patch(
+                'app.services.mail_queue_service.refresh_leads_after_mail_task_changes',
+            ):
+                response = client.post(
+                    '/api/mail-queue/remove',
+                    headers=_AUTH_HEADERS,
+                    json={'item_ids': ids},
+                )
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['removed'] == 1
+            assert data['already_removed'] == 0
+            assert len(data['blocked']) == 1
+            blocked = data['blocked'][0]
+            assert blocked['item_id'] == ids[1]
+            assert blocked['lead_id'] == lead_s.id
+            assert blocked['status'] == 'sent'
+            assert 'sent' in blocked['error']
+            assert MailQueueItem.query.get(ids[0]).status == 'removed'
+            assert MailQueueItem.query.get(ids[1]).status == 'sent'
+
+    def test_bulk_remove_missing_id_returns_404(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '19 Bulk Missing St')
+            item = MailQueueItem(
+                lead_id=lead.id, user_id='test-user', status='queued',
+            )
+            db.session.add(item)
+            db.session.commit()
+
+            response = client.post(
+                '/api/mail-queue/remove',
+                headers=_AUTH_HEADERS,
+                json={'item_ids': [item.id, 9_999_999]},
+            )
+            assert response.status_code == 404
+            data = json.loads(response.data)
+            assert data['error'] == 'Mail queue error'
+            assert 'not found' in data['message'].lower()
+
+    def test_bulk_remove_rejects_non_object_body(self, client, app):
+        response = client.post(
+            '/api/mail-queue/remove',
+            headers=_AUTH_HEADERS,
+            json=[1, 2, 3],
+        )
+        assert response.status_code == 400
+        data = json.loads(response.data)
+        assert 'JSON object' in data['error']
+
+    def test_bulk_remove_rejects_non_integer_ids(self, client, app):
+        response = client.post(
+            '/api/mail-queue/remove',
+            headers=_AUTH_HEADERS,
+            json={'item_ids': [1.9, True]},
+        )
+        assert response.status_code == 400
+        data = json.loads(response.data)
+        assert 'integers' in data['error']
+
+
 class TestMailCampaignAuth:
     def test_get_campaign_rejects_other_users_campaign(self, client, app):
         from app import db

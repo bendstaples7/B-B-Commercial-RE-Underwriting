@@ -29,6 +29,11 @@ HANDLER_FILES = (
 )
 
 # jsonify({'error': 'Mail queue error', 'message': ...}) and close variants
+# Dynamic HTTPException wrappers (must use fixed "HTTP error", not e.name).
+DYNAMIC_HTTP_ENVELOPE = re.compile(
+    r"""['"]error['"]\s*:\s*getattr\(\s*\w+\s*,\s*['"]name['"]""",
+)
+
 ENVELOPE_PATTERN = re.compile(
     r"""['\"]error['\"]\s*:\s*['\"]([^'\"]+)['\"]"""
     r"""[^}]{0,200}"""
@@ -73,6 +78,18 @@ def main() -> int:
             print(f'  - {label!r}  ({path})')
         print()
         print('Add the label to apiErrorEnvelopes.json so toasts show `message`.')
+        return 1
+
+    dynamic_hits: list[str] = []
+    for path in HANDLER_FILES:
+        text = path.read_text(encoding='utf-8')
+        if DYNAMIC_HTTP_ENVELOPE.search(text):
+            dynamic_hits.append(str(path.relative_to(ROOT)))
+    if dynamic_hits:
+        print('Dynamic HTTP error envelopes still use getattr(..., "name"):')
+        for path in dynamic_hits:
+            print(f'  - {path}')
+        print('Use a fixed label like "HTTP error" so toasts can unwrap `message`.')
         return 1
 
     all_labels = sorted({label for labels in backend.values() for label in labels})
