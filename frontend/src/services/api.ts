@@ -1212,76 +1212,9 @@ export const crmTaskService = {
 }
 
 // ---------------------------------------------------------------------------
-// Contact API Service (Property-Contact Model)
+// Contact API Service (Property-Contact Model) — see contactApi.ts
 // ---------------------------------------------------------------------------
-import type {
-  Contact,
-  PropertyContact,
-  ContactCreatePayload,
-  ContactUpdatePayload,
-  PropertyContactLinkRequest,
-} from '@/types'
-
-export const contactService = {
-  /** POST /api/contacts/ — create a new contact */
-  createContact: async (data: ContactCreatePayload): Promise<Contact> => {
-    const response = await api.post<Contact>('/contacts/', data)
-    return response.data
-  },
-
-  /** GET /api/contacts/search — find contacts by name for linking */
-  searchContacts: async (params: {
-    q: string
-    limit?: number
-    excludePropertyId?: number
-  }): Promise<Contact[]> => {
-    const response = await api.get<{ results: Contact[] }>('/contacts/search', {
-      params: {
-        q: params.q,
-        limit: params.limit ?? 20,
-        exclude_property_id: params.excludePropertyId,
-      },
-    })
-    return response.data.results ?? []
-  },
-
-  /** GET /api/contacts/{id} — get a contact with phones, emails, and linked properties */
-  getContact: async (id: number): Promise<Contact> => {
-    const response = await api.get<Contact>(`/contacts/${id}`)
-    return response.data
-  },
-
-  /** PUT /api/contacts/{id} — update a contact */
-  updateContact: async (id: number, data: ContactUpdatePayload): Promise<Contact> => {
-    const response = await api.put<Contact>(`/contacts/${id}`, data)
-    return response.data
-  },
-
-  /** DELETE /api/contacts/{id} — delete a contact (cascades to phones, emails, property links) */
-  deleteContact: async (id: number): Promise<void> => {
-    await api.delete(`/contacts/${id}`)
-  },
-
-  /** GET /api/properties/{propertyId}/contacts — list all contacts linked to a property */
-  getPropertyContacts: async (propertyId: number): Promise<PropertyContact[]> => {
-    const response = await api.get<PropertyContact[]>(`/properties/${propertyId}/contacts`)
-    return response.data
-  },
-
-  /** POST /api/properties/{propertyId}/contacts — link a contact to a property */
-  linkContactToProperty: async (
-    propertyId: number,
-    data: PropertyContactLinkRequest
-  ): Promise<PropertyContact> => {
-    const response = await api.post<PropertyContact>(`/properties/${propertyId}/contacts`, data)
-    return response.data
-  },
-
-  /** DELETE /api/properties/{propertyId}/contacts/{contactId} — unlink a contact from a property */
-  unlinkContactFromProperty: async (propertyId: number, contactId: number): Promise<void> => {
-    await api.delete(`/properties/${propertyId}/contacts/${contactId}`)
-  },
-}
+export { contactService } from '@/services/contactApi'
 
 // ── Actionable Lead Command Center API Services ───────────────────────────
 import type {
