@@ -548,6 +548,89 @@ def test_heal_does_not_rewrite_manual_undated_mail_task(app):
         assert manual.workflow_key is None
 
 
+def test_heal_removes_queued_cooldown_leads_before_mail_ready_rescore(app):
+    """Staged batch cleanup must commit before later rescoring work runs."""
+    from sqlalchemy.orm import sessionmaker
+
+    with app.app_context():
+        lead = Lead(
+            property_street='96 Cadence Queued St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            mailing_address='96 Cadence Queued St',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
+            owner_user_id='test-owner',
+            lead_status='mailing_no_contact_made',
+            lead_category='residential',
+            lead_score=80.0,
+            recommended_action='mail_ready',
+            up_next_to_mail=True,
+        )
+        db.session.add(lead)
+        db.session.flush()
+        item = MailQueueItem(
+            lead_id=lead.id,
+            user_id='test-owner',
+            status='queued',
+        )
+        db.session.add_all([
+            item,
+            LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type='mail_sent',
+                occurred_at=datetime.now(timezone.utc) - timedelta(days=15),
+                source='system',
+                actor='test',
+                summary='Mail sent',
+            ),
+        ])
+        db.session.commit()
+        item_id = item.id
+        lead_id = lead.id
+
+        phase1_committed = {'seen': False}
+
+        def _assert_queue_already_committed(lead_ids, commit=True):
+            # Independent session must see Phase 1's early commit even while
+            # this request session still has later-phase work in flight.
+            Session = sessionmaker(bind=db.engine)
+            other = Session()
+            try:
+                row = other.get(MailQueueItem, item_id)
+                assert row is not None
+                assert row.status == 'removed'
+                phase1_committed['seen'] = True
+            finally:
+                other.close()
+            return None
+
+        with patch(
+            'app.services.mail_task_lifecycle_service.refresh_leads_after_mail_task_changes',
+            side_effect=_assert_queue_already_committed,
+        ):
+            result = heal_mail_cadence_cooldown(commit=True, rescore=True)
+
+        assert result['removed_queue_items'] == 1
+        assert lead_id in result['affected_lead_ids']
+        assert phase1_committed['seen'] is True
+
+        # Drop identity-map state and re-read through a fresh session.
+        db.session.expire_all()
+        Session = sessionmaker(bind=db.engine)
+        other = Session()
+        try:
+            refreshed = other.get(MailQueueItem, item_id)
+            assert refreshed.status == 'removed'
+            lead_row = other.get(Lead, lead_id)
+            assert lead_row.up_next_to_mail is False
+        finally:
+            other.close()
+
+
+
 def test_heal_commit_false_keeps_rescore_and_weights_uncommitted(app):
     with app.app_context():
         lead = Lead(

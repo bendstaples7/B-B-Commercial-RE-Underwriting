@@ -1,0 +1,10 @@
+[
+  "Invalid request",
+  "Validation error",
+  "An error occurred",
+  "Internal server error",
+  "HTTP error",
+  "Provider not configured",
+  "Mail queue error",
+  "Application error"
+]
