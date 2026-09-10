@@ -1473,6 +1473,12 @@ def create_pending_mail_follow_up_task(
 ) -> LeadTask:
     """Ensure an open rematch task with due_date=NULL (awaiting send).
 
+    Staged-batch membership no longer creates this row — queue status + the
+    command-center chip are the source of truth while a lead is queued.
+    Prefer :func:`schedule_mail_follow_up_task` after a successful send (dated
+    +90d rematch). This helper remains for legacy heal/tests and abort paths
+    that still need an undated placeholder.
+
     If an open rematch already exists (pending or dated from a prior send), leave
     it alone — do not clear a scheduled due date.
     """

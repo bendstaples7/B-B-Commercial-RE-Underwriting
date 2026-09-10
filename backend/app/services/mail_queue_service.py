@@ -26,7 +26,6 @@ from app.services.scoring_rubric import effective_acquisition_date, is_recently_
 from app.services.mail_task_lifecycle_service import (
     cancel_pending_mail_follow_up_tasks,
     complete_tasks_superseded_by_mail,
-    create_pending_mail_follow_up_task,
     mail_cadence_eligible_date_from_last_mailed,
     reconcile_recent_sale_mail_tasks_for_lead,
     refresh_leads_after_mail_task_changes,
@@ -401,7 +400,10 @@ class MailQueueService:
                                 _completed, pending_sync = complete_tasks_superseded_by_mail(
                                     lead_id, actor=user_id, commit=False,
                                 )
-                                create_pending_mail_follow_up_task(lead, actor=user_id)
+                                # Do not create a rematch LeadTask while staged —
+                                # queue membership + mail_queue_status chip are the
+                                # source of truth. schedule_mail_follow_up_task on
+                                # send creates the dated +90d rematch.
                                 from app.services.lead_status_service import (
                                     unpark_deprioritize_for_active_work,
                                 )

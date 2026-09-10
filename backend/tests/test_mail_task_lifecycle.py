@@ -2306,10 +2306,11 @@ class TestScheduleMailFollowUpTask:
                 )
 
 
-class TestEnqueueCreatesPendingMailFollowUp:
-    def test_enqueue_creates_pending_follow_up_task(self, app):
+class TestEnqueueDoesNotCreatePendingMailFollowUp:
+    def test_enqueue_does_not_create_pending_follow_up_task(self, app):
+        """Staged batch membership is the source of truth — no rematch LeadTask yet."""
         with app.app_context():
-            lead = _make_lead(app, '2c Enqueue Pending St')
+            lead = _make_lead(app, '2c Enqueue No Pending St')
             prep = _make_task(app, lead.id)
 
             with patch('app.services.mail_queue_service.refresh_leads_after_mail_task_changes'):
@@ -2318,21 +2319,29 @@ class TestEnqueueCreatesPendingMailFollowUp:
 
             assert result['added'] == 1
             assert LeadTask.query.get(prep.id).status == 'completed'
-            pending = LeadTask.query.filter_by(lead_id=lead.id, status='open').all()
-            assert len(pending) == 1
-            assert pending[0].due_date is None
-            assert 'Add to next mailer' in pending[0].title
-            assert pending[0].task_type == 'add_to_mail_batch'
-            assert pending[0].mirror_task_id is not None
+            open_tasks = LeadTask.query.filter_by(lead_id=lead.id, status='open').all()
+            rematch = [
+                t for t in open_tasks
+                if 'Add to next mailer' in (t.title or '')
+                or 'Follow up after mailer' in (t.title or '')
+                or t.task_type == 'add_to_mail_batch'
+            ]
+            assert rematch == []
 
-    def test_remove_from_batch_cancels_pending_follow_up(self, app):
+    def test_remove_from_batch_cancels_legacy_pending_follow_up(self, app):
+        """Legacy undated rematch rows (from older enqueue) still cancel on remove."""
         with app.app_context():
             from app import db
+            from app.services.mail_task_lifecycle_service import (
+                create_pending_mail_follow_up_task,
+            )
 
             lead = _make_lead(app, '2d Remove Pending St')
             with patch('app.services.mail_queue_service.refresh_leads_after_mail_task_changes'):
                 with patch('app.services.mail_queue_service.sync_pending_hubspot_completions'):
                     MailQueueService().enqueue_leads([lead.id], USER_ID)
+            pending = create_pending_mail_follow_up_task(lead, actor=USER_ID)
+            db.session.commit()
 
             item = MailQueueItem.query.filter_by(
                 lead_id=lead.id, user_id=USER_ID, status='queued',
@@ -2342,13 +2351,9 @@ class TestEnqueueCreatesPendingMailFollowUp:
                 # Idempotent second remove must not raise.
                 MailQueueService().remove_item(item.id, USER_ID)
 
-            open_followups = [
-                t for t in LeadTask.query.filter_by(lead_id=lead.id).all()
-                if 'Add to next mailer' in (t.title or '')
-                    or 'Follow up after mailer' in (t.title or '')
-            ]
-            assert open_followups
-            assert all(t.status == 'cancelled' for t in open_followups)
+            refreshed = LeadTask.query.get(pending.id)
+            assert refreshed is not None
+            assert refreshed.status == 'cancelled'
     def test_preserves_pending_mail_follow_up_and_mirror_on_enqueue(self, app):
         with app.app_context():
             from app import db

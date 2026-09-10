@@ -21,4 +21,12 @@ describe('userFacingApiErrorMessage', () => {
       message: 'Only queued items can be removed',
     })).toBe('Only queued items can be removed')
   })
+
+  it('prefers message over Exception class-name error wrappers', () => {
+    expect(userFacingApiErrorMessage({
+      error: 'InvalidTaskStatusTransitionError',
+      message: "Cannot transition task 42 from 'cancelled' to 'completed'.",
+      error_type: 'invalid_task_status_transition',
+    })).toBe("Cannot transition task 42 from 'cancelled' to 'completed'.")
+  })
 })

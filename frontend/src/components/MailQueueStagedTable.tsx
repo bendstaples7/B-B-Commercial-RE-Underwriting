@@ -22,6 +22,7 @@ import openLetterService, {
   type MailQueueItem,
   type MailQueueSummary,
 } from '@/services/openLetterApi'
+import { afterLeadWorkspaceMutation } from '@/utils/afterCommandCenterMutation'
 import { formatLastMailedDate, formatLastSaleDate } from '@/utils/formatLastMailedDate'
 
 /** Matches backend MAX_MAIL_ENQUEUE_LEADS for bulk remove. */
@@ -82,6 +83,15 @@ export function chunkIds(ids: number[], size: number): number[][] {
   return chunks
 }
 
+export class PartialMailQueueRemoveError extends Error {
+  committedIds: number[]
+  constructor(message: string, committedIds: number[]) {
+    super(message)
+    this.name = 'PartialMailQueueRemoveError'
+    this.committedIds = committedIds
+  }
+}
+
 export async function removeManyInChunks(ids: number[]) {
   const uniqueIds = [...new Set(ids)]
   const chunks = chunkIds(uniqueIds, MAIL_QUEUE_BULK_REMOVE_LIMIT)
@@ -89,13 +99,24 @@ export async function removeManyInChunks(ids: number[]) {
   let alreadyRemoved = 0
   const blocked: Array<{ item_id: number; lead_id: number; status: string; error: string }> = []
   let summary: MailQueueSummary | null = null
+  const committedIds: number[] = []
 
-  for (const chunk of chunks) {
-    const result = await openLetterService.removeManyFromQueue(chunk)
-    removed += result.removed
-    alreadyRemoved += result.already_removed
-    blocked.push(...(result.blocked ?? []))
-    summary = result
+  try {
+    for (const chunk of chunks) {
+      const result = await openLetterService.removeManyFromQueue(chunk)
+      removed += result.removed
+      alreadyRemoved += result.already_removed
+      blocked.push(...(result.blocked ?? []))
+      summary = result
+      const blockedIds = new Set((result.blocked ?? []).map((row) => row.item_id))
+      committedIds.push(...chunk.filter((id) => !blockedIds.has(id)))
+    }
+  } catch (err) {
+    if (committedIds.length > 0) {
+      const message = err instanceof Error ? err.message : 'Bulk remove failed after partial success.'
+      throw new PartialMailQueueRemoveError(message, committedIds)
+    }
+    throw err
   }
 
   if (!summary) {
@@ -106,6 +127,7 @@ export async function removeManyInChunks(ids: number[]) {
     removed,
     already_removed: alreadyRemoved,
     blocked,
+    committedIds,
   }
 }
 
@@ -117,6 +139,13 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
   const [selectedIds, setSelectedIds] = useState<number[]>([])
 
   const itemIds = useMemo(() => items.map((item) => item.id), [items])
+  const leadIdByItemId = useMemo(() => {
+    const map = new Map<number, number>()
+    for (const item of items) {
+      map.set(item.id, item.lead_id)
+    }
+    return map
+  }, [items])
 
   useEffect(() => {
     setSelectedIds((prev) => prev.filter((id) => itemIds.includes(id)))
@@ -131,6 +160,13 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
     queryClient.invalidateQueries({ queryKey: ['queue-mail-candidates'] })
   }
 
+  const refreshWorkspacesForItemIds = (itemIdList: number[]) => {
+    const leadIds = itemIdList
+      .map((id) => leadIdByItemId.get(id))
+      .filter((id): id is number => id != null)
+    afterLeadWorkspaceMutation(queryClient, leadIds)
+  }
+
   const removeOneMutation = useMutation({
     mutationFn: (itemId: number) => openLetterService.removeFromQueue(itemId),
     onSuccess: (_data, itemId) => {
@@ -139,6 +175,7 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
       )
       setSelectedIds((prev) => prev.filter((id) => id !== itemId))
       invalidateMailQueries()
+      refreshWorkspacesForItemIds([itemId])
     },
   })
 
@@ -163,6 +200,18 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
         )
       }
       invalidateMailQueries()
+      refreshWorkspacesForItemIds(droppedIds)
+    },
+    onError: (err) => {
+      const committedIds =
+        err instanceof PartialMailQueueRemoveError ? err.committedIds : []
+      if (committedIds.length === 0) return
+      queryClient.setQueryData<MailQueueSummary>(['mail-queue'], (current) =>
+        dropItemsFromSummary(current, committedIds),
+      )
+      setSelectedIds((prev) => prev.filter((id) => !committedIds.includes(id)))
+      invalidateMailQueries()
+      refreshWorkspacesForItemIds(committedIds)
     },
   })
 
