@@ -474,10 +474,36 @@ def main() -> int:
             "deploy.sh must save frontend-assets-prev.rollback before promoting "
             ".next so post-deploy rollback can restore grace hashes"
         )
-    if "PREV_ASSETS_PROMOTE_STARTED" not in deploy_text:
+    # Structurally require: mv live→.rollback, THEN PREV_ASSETS_PROMOTE_STARTED=1,
+    # and ERR restore only when that flag is set (not a comment-only mention).
+    mv_to_rollback = re.search(
+        r"mv\s+/home/deploy/frontend-assets-prev\s+/home/deploy/frontend-assets-prev\.rollback",
+        deploy_text,
+    )
+    flag_assign = re.search(
+        r"^\s*PREV_ASSETS_PROMOTE_STARTED=1\s*$",
+        deploy_text,
+        flags=re.MULTILINE,
+    )
+    guarded_restore = re.search(
+        r'PREV_ASSETS_PROMOTE_STARTED:-0[^]]*=\s*"1"[\s\S]*?'
+        r"mv\s+/home/deploy/frontend-assets-prev\.rollback\s+/home/deploy/frontend-assets-prev",
+        deploy_text,
+    )
+    if not mv_to_rollback or not flag_assign:
         errors.append(
-            "deploy.sh must track PREV_ASSETS_PROMOTE_STARTED and restore "
-            "frontend-assets-prev.rollback only when this invocation's promote started"
+            "deploy.sh must mv frontend-assets-prev → frontend-assets-prev.rollback "
+            "and assign PREV_ASSETS_PROMOTE_STARTED=1"
+        )
+    elif flag_assign.start() < mv_to_rollback.start():
+        errors.append(
+            "deploy.sh must set PREV_ASSETS_PROMOTE_STARTED=1 only AFTER "
+            "mv frontend-assets-prev → frontend-assets-prev.rollback succeeds"
+        )
+    if not guarded_restore:
+        errors.append(
+            "deploy.sh must restore frontend-assets-prev.rollback only when "
+            'PREV_ASSETS_PROMOTE_STARTED is "1"'
         )
     if "SPA_DEPLOY_IN_PROGRESS" not in deploy_text:
         errors.append(

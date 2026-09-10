@@ -823,11 +823,13 @@ fi
 # PREV so post-deploy-rollback.sh can restore grace hashes if CI health fails
 # after this script exits 0.
 if [ -d /home/deploy/frontend-assets-prev.next ]; then
-    # Mark promote in-flight so ERR rollback restores .rollback if we fail mid-promote.
-    PREV_ASSETS_PROMOTE_STARTED=1
     rm -rf /home/deploy/frontend-assets-prev.rollback
     if [ -d /home/deploy/frontend-assets-prev ]; then
         mv /home/deploy/frontend-assets-prev /home/deploy/frontend-assets-prev.rollback
+        # Set only after the live grace set has been moved aside. If we marked
+        # earlier and rm -rf .rollback failed, ERR could restore a stale snapshot
+        # over the still-current frontend-assets-prev.
+        PREV_ASSETS_PROMOTE_STARTED=1
     fi
     mv /home/deploy/frontend-assets-prev.next /home/deploy/frontend-assets-prev
     echo "    Promoted frontend-assets-prev for next deploy's asset grace"
