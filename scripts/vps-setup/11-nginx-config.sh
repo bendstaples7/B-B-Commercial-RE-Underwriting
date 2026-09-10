@@ -202,10 +202,32 @@ server {
         try_files  \$uri =404;
     }
 
-    # React SPA — no-cache for index.html, SPA fallback (Requirements 4.2, 4.3, 4.5)
+    # HTML shell + version manifest must never be cached (stale-tab class).
+    location = /index.html {
+        root       /home/deploy/app/frontend/dist;
+        add_header Cache-Control "no-store, no-cache, must-revalidate";
+        add_header Pragma "no-cache";
+    }
+
+    location = /spa-version.json {
+        root       /home/deploy/app/frontend/dist;
+        add_header Cache-Control "no-store, no-cache, must-revalidate";
+        add_header Pragma "no-cache";
+        try_files  \$uri =404;
+    }
+
+    location = /spa-shell-sw.js {
+        root       /home/deploy/app/frontend/dist;
+        add_header Cache-Control "no-store, no-cache, must-revalidate";
+        add_header Service-Worker-Allowed "/";
+        try_files  \$uri =404;
+    }
+
+    # React SPA — no-store for navigations / index fallback (Requirements 4.2, 4.3, 4.5)
     location / {
         root       /home/deploy/app/frontend/dist;
-        add_header Cache-Control "no-cache";
+        add_header Cache-Control "no-store, no-cache, must-revalidate";
+        add_header Pragma "no-cache";
         try_files  \$uri \$uri/ /index.html;
     }
 }

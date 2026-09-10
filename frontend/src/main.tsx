@@ -10,6 +10,14 @@ import { PipelineStatusProvider } from './context/PipelineStatusContext'
 import { ShellStatusProvider } from './context/ShellStatusContext'
 import { AuthProvider } from './context/AuthContext'
 import { QuickAddFabHost } from '@/components/QuickAddFab'
+import { installChunkLoadRecovery } from '@/utils/lazyWithRetry'
+import { registerSpaShellServiceWorker } from '@/utils/registerSpaShellServiceWorker'
+import { preloadCriticalRouteChunks } from '@/utils/preloadCriticalRoutes'
+
+// Post-deploy stale hashed chunks (blank page on next navigation) — recover once.
+installChunkLoadRecovery()
+registerSpaShellServiceWorker()
+preloadCriticalRouteChunks()
 
 // ---------------------------------------------------------------------------
 // Global mutation error handler
