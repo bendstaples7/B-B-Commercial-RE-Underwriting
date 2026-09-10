@@ -142,6 +142,17 @@ def _bash_syntax_check_available() -> bool:
     return probe.returncode == 0
 
 
+
+def _executable_shell_lines(text: str) -> list[str]:
+    """Return non-empty shell lines with full-line comments removed."""
+    out: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        out.append(stripped)
+    return out
+
 def main() -> int:
     errors: list[str] = []
 
@@ -717,9 +728,144 @@ def main() -> int:
             "deploy.sh must run heal_mail_cadence_cooldown.py after migrations "
             "(mail_cad Alembic heal skips rescore)"
         )
+    if "check_model_schema.py" not in deploy_text:
+        errors.append(
+            "deploy.sh must run check_model_schema.py after migrate before "
+            "gunicorn reload (schema contract gate)"
+        )
+    # Require the live timeout invocation (not merely the string in a message).
+    exec_deploy_lines = _executable_shell_lines(deploy_text)
+    if not any(
+        re.search(
+            r'(?:^|\s)timeout\b.*\$\{?BB_SCHEMA_CHECK_TIMEOUT_SEC\}?.*check_model_schema\.py',
+            line,
+        )
+        for line in exec_deploy_lines
+    ):
+        errors.append(
+            "deploy.sh must wrap check_model_schema.py in an executable timeout "
+            "line (BB_SCHEMA_CHECK_TIMEOUT_SEC) — comments/echo alone are not enough"
+        )
+    # Ordering: schema contract must come after DB smoke and before reload.
+    schema_idx = next(
+        (
+            deploy_text.find(line)
+            for line in exec_deploy_lines
+            if re.search(r'(?:^|\s)timeout\b.*check_model_schema\.py', line)
+        ),
+        deploy_text.find("check_model_schema.py"),
+    )
+    smoke_idx = deploy_text.find("Post-migrate DB-only smoke")
+    reload_idx = deploy_text.find("Reload Gunicorn")
+    if schema_idx < 0 or smoke_idx < 0 or reload_idx < 0:
+        errors.append(
+            "deploy.sh must include post-migrate DB smoke, check_model_schema.py, "
+            "and Reload Gunicorn steps"
+        )
+    elif not (smoke_idx < schema_idx < reload_idx):
+        errors.append(
+            "deploy.sh must run check_model_schema.py after post-migrate DB smoke "
+            "and before Reload Gunicorn"
+        )
     if "reclaim-vps-disk.sh" not in deploy_text:
         errors.append(
             "deploy.sh must run reclaim-vps-disk.sh before the 1GB free-space gate"
+        )
+    probe_path = REPO_ROOT / "scripts" / "probe_authenticated_api.py"
+    if not probe_path.exists():
+        errors.append("Missing expected script: scripts/probe_authenticated_api.py")
+    else:
+        probe_text = _read(probe_path)
+        if "DEFAULT_PATHS = (" not in probe_text or "/api/marketing/channel-roi" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must assign DEFAULT_PATHS including "
+                "/api/marketing/channel-roi"
+            )
+        if "args.paths) if args.paths else DEFAULT_PATHS" not in probe_text and \
+                "tuple(args.paths) if args.paths else DEFAULT_PATHS" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must fall back to DEFAULT_PATHS when "
+                "--path is omitted"
+            )
+        if "SMOKE_TEST_EMAIL" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must use SMOKE_TEST_EMAIL credentials"
+            )
+        if "SMOKE_TEST_PASSWORD" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must use SMOKE_TEST_PASSWORD credentials"
+            )
+        if "session_token" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must read session_token from login response"
+            )
+        if "EXIT_SKIPPED_NO_CREDS" not in probe_text and "return 78" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must exit 78 when skipping for missing creds"
+            )
+    ops_health_yml = _read(REPO_ROOT / ".github" / "workflows" / "ops-health.yml")
+    if "probe_authenticated_api.py" not in ops_health_yml:
+        errors.append(
+            "ops-health.yml must run probe_authenticated_api.py (auth canary)"
+        )
+    if "auth_api_canary.outcome == 'failure'" not in ops_health_yml:
+        errors.append(
+            "ops-health.yml final canary failure gate must include auth_api_canary"
+        )
+    if "skipped (no credentials)" not in ops_health_yml:
+        errors.append(
+            "ops-health.yml canary summary must render skipped auth probes distinctly"
+        )
+    # Recovery must branch on AUTH_SKIPPED with both TITLE_RE variants present.
+    recovery_ok = bool(
+        re.search(
+            r'AUTH_SKIPPED:\s*\$\{\{\s*steps\.auth_api_canary\.outputs\.skipped\s*\}\}'
+            r'[\s\S]*?'
+            r'if \[ "\$\{AUTH_SKIPPED:-\}" = "true" \]; then\s*'
+            r'TITLE_RE="[^"]*main↔prod SHA drift"\s*'
+            r'else\s*'
+            r'TITLE_RE="[^"]*authenticated API canary[^"]*main↔prod SHA drift"',
+            ops_health_yml,
+        )
+    )
+    if not recovery_ok:
+        errors.append(
+            "ops-health.yml recovery must branch on AUTH_SKIPPED with distinct "
+            "TITLE_RE values (non-auth titles when skipped; include authenticated "
+            "API canary when not skipped)"
+        )
+    deploy_yml_preview = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
+    if "probe_authenticated_api.py" not in deploy_yml_preview:
+        errors.append(
+            "deploy.yml must run probe_authenticated_api.py after deploy "
+            "(authenticated channel-roi canary)"
+        )
+    else:
+        probe_idx = deploy_yml_preview.find("probe_authenticated_api.py")
+        post_health_idx = deploy_yml_preview.find("Post-deploy health check")
+        if post_health_idx < 0 or probe_idx < post_health_idx:
+            errors.append(
+                "deploy.yml must run probe_authenticated_api.py after "
+                "Post-deploy health check"
+            )
+        if "Rollback after authenticated API canary failure" not in deploy_yml_preview:
+            errors.append(
+                "deploy.yml must roll back via post-deploy-rollback.sh when the "
+                "authenticated API canary fails"
+            )
+        if "ATTEMPTS=3" not in deploy_yml_preview and "Canary attempt" not in deploy_yml_preview:
+            errors.append(
+                "deploy.yml authenticated API canary must retry transient failures "
+                "before rollback"
+            )
+        if "session_token" not in deploy_yml_preview:
+            errors.append(
+                "deploy.yml ownership/search smoke must read session_token from login"
+            )
+    if "BB_SCHEMA_CHECK_TIMEOUT_SEC" not in deploy_text:
+        errors.append(
+            "deploy.sh must wrap check_model_schema.py in a timeout "
+            "(BB_SCHEMA_CHECK_TIMEOUT_SEC)"
         )
     reclaim_path = REPO_ROOT / "scripts" / "reclaim-vps-disk.sh"
     if not reclaim_path.exists():
@@ -728,6 +874,22 @@ def main() -> int:
     if "reclaim-vps-disk.sh" not in deploy_yml:
         errors.append(
             "deploy.yml must scp/run reclaim-vps-disk.sh before uploading frontend-dist"
+        )
+
+    celery_worker = _read(REPO_ROOT / "backend" / "celery_worker.py")
+    if "class MemoryShedTask" not in celery_worker or "celery.Task = MemoryShedTask" not in celery_worker:
+        errors.append(
+            "celery_worker.py must use MemoryShedTask (Task.__call__) for memory shed "
+            "— task_prerun Ignore/Reject does not short-circuit execution"
+        )
+    if "@task_prerun.connect" in celery_worker and "_shed_heavy_tasks_under_memory_pressure" in celery_worker:
+        errors.append(
+            "celery_worker.py must not shed via task_prerun "
+            "(_shed_heavy_tasks_under_memory_pressure)"
+        )
+    if "bb_beat" not in celery_worker:
+        errors.append(
+            "celery_worker.py must stamp bb_beat headers on beat_schedule shed tasks"
         )
 
     if errors:

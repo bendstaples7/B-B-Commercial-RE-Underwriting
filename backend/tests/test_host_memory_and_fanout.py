@@ -9,7 +9,9 @@ from app.services.helpers.host_memory import (
     _is_celery_worker_cmdline,
     evaluate_host_memory_health,
     host_memory_snapshot,
+    memory_shed_skip_payload,
     read_meminfo,
+    should_shed_background_work,
 )
 
 
@@ -134,3 +136,63 @@ def test_celery_worker_cmdline_filter():
         '/usr/bin/python3.11 celery -A celery_worker.celery beat --loglevel=info'
     )
     assert not _is_celery_worker_cmdline('grep celery something')
+
+
+def test_should_shed_background_work_when_mem_low():
+    host = {
+        'available': True,
+        'mem_total_mib': 1900.0,
+        'mem_available_mib': 120.0,
+        'swap_total_mib': 2000.0,
+        'swap_used_mib': 100.0,
+        'swap_used_pct': 5.0,
+    }
+    decision = should_shed_background_work(min_available_mib=250, host=host)
+    assert decision['shed'] is True
+    assert 'MemAvailable' in (decision['reason'] or '')
+    payload = memory_shed_skip_payload(min_available_mib=250, host=host)
+    assert payload is not None
+    assert payload['skipped'] is True
+    assert payload['reason'] == 'host_memory_pressure'
+
+
+def test_should_not_shed_when_mem_ok():
+    host = {
+        'available': True,
+        'mem_total_mib': 1900.0,
+        'mem_available_mib': 800.0,
+        'swap_total_mib': 2000.0,
+        'swap_used_mib': 100.0,
+        'swap_used_pct': 5.0,
+    }
+    decision = should_shed_background_work(min_available_mib=250, host=host)
+    assert decision['shed'] is False
+    assert memory_shed_skip_payload(min_available_mib=250, host=host) is None
+
+
+def test_memory_shed_task_names_include_channel_roi():
+    from celery_worker import MEMORY_SHED_TASK_NAMES
+
+    assert 'channel_roi.sync_facebook_campaigns' in MEMORY_SHED_TASK_NAMES
+
+
+def test_should_shed_rejects_invalid_env_threshold(monkeypatch):
+    """Malformed BB_SHED_MIN_AVAILABLE_MIB must fall back to 250, not crash/disable."""
+    host = {
+        'available': True,
+        'mem_total_mib': 1900.0,
+        'mem_available_mib': 200.0,
+        'swap_total_mib': 0.0,
+        'swap_used_mib': 0.0,
+        'swap_used_pct': 0.0,
+    }
+    monkeypatch.setenv('BB_SHED_MIN_AVAILABLE_MIB', 'not-a-number')
+    decision = should_shed_background_work(host=host)
+    assert decision['shed'] is True  # 200 < default 250
+    monkeypatch.setenv('BB_SHED_MIN_AVAILABLE_MIB', 'nan')
+    decision = should_shed_background_work(host=host)
+    assert decision['shed'] is True
+    monkeypatch.setenv('BB_SHED_MIN_AVAILABLE_MIB', '-5')
+    decision = should_shed_background_work(host=host)
+    assert decision['shed'] is True
+

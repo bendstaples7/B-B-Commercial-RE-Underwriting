@@ -108,6 +108,34 @@ jobs:
             --base-url "https://${VPS_SUBDOMAIN}.duckdns.org" \
             --grace-minutes 45
 
+      # Authenticated critical-route canary (Channel ROI load class). Advisory only.
+      - name: Authenticated API canary (channel-roi)
+        id: auth_api_canary
+        continue-on-error: true
+        if: steps.http_canary.outcome == 'success'
+        env:
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+          SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
+          SMOKE_TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+        run: |
+          set -euo pipefail
+          set +e
+          python3 scripts/probe_authenticated_api.py \
+            --base-url "https://${VPS_SUBDOMAIN}.duckdns.org" \
+            --skip-if-no-creds \
+            --timeout 45
+          RC=$?
+          set -e
+          # Exit 78 = credentials unset — distinct from success so recovery
+          # does not close an open auth-canary issue on a skipped probe.
+          if [ "$RC" -eq 78 ]; then
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            echo "Auth API canary skipped (no smoke credentials)."
+            exit 0
+          fi
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
+          exit "$RC"
+
       - name: Write canary summary
         if: always()
         run: |
@@ -120,6 +148,11 @@ jobs:
             echo "| HTTP canary | ${{ steps.http_canary.outcome }} |"
             echo "| Live SPA HTML contract | ${{ steps.spa_html_canary.outcome }} |"
             echo "| Main↔prod SHA drift | ${{ steps.drift_canary.outcome }} |"
+            AUTH_ROW="${{ steps.auth_api_canary.outcome }}"
+            if [ "${{ steps.auth_api_canary.outputs.skipped }}" = "true" ]; then
+              AUTH_ROW="skipped (no credentials)"
+            fi
+            echo "| Auth API canary (channel-roi) | ${AUTH_ROW} |"
             echo ""
             echo "Does **not** block App CI or Deploy."
             echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -132,7 +165,8 @@ jobs:
             steps.ssh_canary.outcome == 'failure' ||
             steps.http_canary.outcome == 'failure' ||
             steps.spa_html_canary.outcome == 'failure' ||
-            steps.drift_canary.outcome == 'failure'
+            steps.drift_canary.outcome == 'failure' ||
+            steps.auth_api_canary.outcome == 'failure'
           )
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -140,6 +174,7 @@ jobs:
           HTTP_OUTCOME: ${{ steps.http_canary.outcome }}
           SPA_OUTCOME: ${{ steps.spa_html_canary.outcome }}
           DRIFT_OUTCOME: ${{ steps.drift_canary.outcome }}
+          AUTH_OUTCOME: ${{ steps.auth_api_canary.outcome }}
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
         run: |
           set -euo pipefail
@@ -205,6 +240,8 @@ jobs:
             ISSUE_TITLE="Ops health: VPS public /api/health down"
           elif [ "$SPA_OUTCOME" = "failure" ]; then
             ISSUE_TITLE="Ops health: live SPA HTML contract failed"
+          elif [ "$AUTH_OUTCOME" = "failure" ]; then
+            ISSUE_TITLE="Ops health: authenticated API canary failed"
           else
             ISSUE_TITLE="Ops health: main↔prod SHA drift"
           fi
@@ -219,6 +256,7 @@ jobs:
           | HTTP canary | ${HTTP_OUTCOME} |
           | Live SPA HTML contract | ${SPA_OUTCOME} |
           | Main↔prod SHA drift | ${DRIFT_OUTCOME} |
+          | Auth API canary (channel-roi) | ${AUTH_OUTCOME} |
 
           **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
@@ -226,9 +264,10 @@ jobs:
           1. Confirm VPS is up and \`sshd\` is listening on port 22
           2. Confirm public \`/api/health\` at https://${VPS_SUBDOMAIN}.duckdns.org/api/health
           3. Confirm live HTML has no standalone \`/assets/react-*.js\` and includes boot watchdog
-          4. If SHA drift: check App CI on main (hung pytest?) then Deploy; or \`workflow_dispatch\` Deploy
-          5. See docs/vps-config.md — Deploy SSH / reachability
-          6. Re-run **Ops health** via workflow_dispatch after recovery
+          4. If auth API canary: confirm \`GET /api/marketing/channel-roi\` with smoke-test user (schema contract / memory / gunicorn)
+          5. If SHA drift: check App CI on main (hung pytest?) then Deploy; or \`workflow_dispatch\` Deploy
+          6. See docs/vps-config.md — Deploy SSH / reachability
+          7. Re-run **Ops health** via workflow_dispatch after recovery
 
           App CI and Deploy are **not** blocked by this issue. Deploy soft-waits ~10m on HTTP then hard-waits ~15m on SSH.
           EOF
@@ -236,7 +275,7 @@ jobs:
 
           EXISTING=$(gh issue list --label ops-health --state open \
             --search "in:title Ops health:" \
-            --json number,title --jq '[.[] | select(.title | test("SSH unreachable|public /api/health down|live SPA HTML|main↔prod SHA drift"))] | .[0].number // empty')
+            --json number,title --jq '[.[] | select(.title | test("SSH unreachable|public /api/health down|live SPA HTML|authenticated API canary|main↔prod SHA drift"))] | .[0].number // empty')
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body "$BODY"
             echo "Updated issue #$EXISTING"
@@ -249,7 +288,7 @@ jobs:
         if: always() && steps.canary_alert.outputs.alert == '1'
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          TEXT: "Ops canary: VPS/SPA/drift alert (${{ steps.canary_alert.outputs.consec }} consecutive) on ${{ github.repository }}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TEXT: "Ops canary: VPS/SPA/drift/auth-api alert (${{ steps.canary_alert.outputs.consec }} consecutive) on ${{ github.repository }}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
           set -euo pipefail
           if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
@@ -266,16 +305,25 @@ jobs:
           steps.ssh_canary.outcome == 'success' &&
           steps.http_canary.outcome == 'success' &&
           (steps.spa_html_canary.outcome == 'success' || steps.spa_html_canary.outcome == 'skipped') &&
-          (steps.drift_canary.outcome == 'success' || steps.drift_canary.outcome == 'skipped')
+          (steps.drift_canary.outcome == 'success' || steps.drift_canary.outcome == 'skipped') &&
+          (steps.auth_api_canary.outcome == 'success' || steps.auth_api_canary.outcome == 'skipped')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUTH_SKIPPED: ${{ steps.auth_api_canary.outputs.skipped }}
         run: |
           set -euo pipefail
+          # When smoke creds are unset the auth probe is skipped — still allow
+          # recovery of SSH/HTTP/SPA/drift issues, but leave auth-canary issues open.
+          if [ "${AUTH_SKIPPED:-}" = "true" ]; then
+            TITLE_RE="SSH unreachable|public /api/health down|live SPA HTML|main↔prod SHA drift"
+          else
+            TITLE_RE="SSH unreachable|public /api/health down|live SPA HTML|authenticated API canary|main↔prod SHA drift"
+          fi
           EXISTING=$(gh issue list --label ops-health --state open \
             --search "in:title Ops health:" \
-            --json number,title --jq '[.[] | select(.title | test("SSH unreachable|public /api/health down|live SPA HTML|main↔prod SHA drift"))] | .[0].number // empty')
+            --json number,title --jq "[.[] | select(.title | test(\"${TITLE_RE}\"))] | .[0].number // empty")
           if [ -z "$EXISTING" ]; then
-            echo "No open reachability/SPA/drift issue."
+            echo "No open reachability/SPA/drift issue matching recovery filter."
             exit 0
           fi
           BODY=$(cat <<EOF
@@ -298,7 +346,8 @@ jobs:
             steps.ssh_canary.outcome == 'failure' ||
             steps.http_canary.outcome == 'failure' ||
             steps.spa_html_canary.outcome == 'failure' ||
-            steps.drift_canary.outcome == 'failure'
+            steps.drift_canary.outcome == 'failure' ||
+            steps.auth_api_canary.outcome == 'failure'
           )
         run: |
           echo "::error::Ops canary failed (advisory — does not block Deploy)."
