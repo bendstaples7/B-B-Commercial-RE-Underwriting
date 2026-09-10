@@ -558,8 +558,8 @@ describe('ContactsSection', () => {
             id: PROPERTY_ID,
             owner_first_name: 'Gregory',
             owner_last_name: 'Shek',
-            phones: [],
-            organizations: [],
+            phones: [] as CommandCenterPayload['phones'],
+            organizations: [] as CommandCenterPayload['organizations'],
           } as CommandCenterPayload
         }
       />,
