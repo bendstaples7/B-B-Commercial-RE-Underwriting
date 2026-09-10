@@ -722,8 +722,21 @@ def main() -> int:
             "deploy.sh must run check_model_schema.py after migrate before "
             "gunicorn reload (schema contract gate)"
         )
+    # Require the live timeout invocation (not merely the string in a message).
+    if not re.search(
+        r'timeout\b[^\n]*\$\{?BB_SCHEMA_CHECK_TIMEOUT_SEC\}?[^\n]*check_model_schema\.py',
+        deploy_text,
+    ):
+        errors.append(
+            "deploy.sh must wrap check_model_schema.py in timeout "
+            "(BB_SCHEMA_CHECK_TIMEOUT_SEC) — not only mention it in an error string"
+        )
     # Ordering: schema contract must come after DB smoke and before reload.
-    schema_idx = deploy_text.find("check_model_schema.py")
+    schema_cmd = re.search(
+        r'timeout\b[^\n]*check_model_schema\.py',
+        deploy_text,
+    )
+    schema_idx = schema_cmd.start() if schema_cmd else deploy_text.find("check_model_schema.py")
     smoke_idx = deploy_text.find("Post-migrate DB-only smoke")
     reload_idx = deploy_text.find("Reload Gunicorn")
     if schema_idx < 0 or smoke_idx < 0 or reload_idx < 0:
@@ -781,9 +794,14 @@ def main() -> int:
         errors.append(
             "ops-health.yml final canary failure gate must include auth_api_canary"
         )
-    if "outputs.skipped != 'true'" not in ops_health_yml:
+    if "AUTH_SKIPPED" not in ops_health_yml or "authenticated API canary" not in ops_health_yml:
         errors.append(
-            "ops-health.yml recovery must exclude skipped (no-creds) auth canary"
+            "ops-health.yml recovery must branch on AUTH_SKIPPED so no-creds skips "
+            "still close non-auth issues while leaving auth-canary issues open"
+        )
+    if "skipped (no credentials)" not in ops_health_yml:
+        errors.append(
+            "ops-health.yml canary summary must render skipped auth probes distinctly"
         )
     deploy_yml_preview = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
     if "probe_authenticated_api.py" not in deploy_yml_preview:
@@ -798,6 +816,15 @@ def main() -> int:
             errors.append(
                 "deploy.yml must run probe_authenticated_api.py after "
                 "Post-deploy health check"
+            )
+        if "Rollback after authenticated API canary failure" not in deploy_yml_preview:
+            errors.append(
+                "deploy.yml must roll back via post-deploy-rollback.sh when the "
+                "authenticated API canary fails"
+            )
+        if "session_token" not in deploy_yml_preview:
+            errors.append(
+                "deploy.yml ownership/search smoke must read session_token from login"
             )
     if "BB_SCHEMA_CHECK_TIMEOUT_SEC" not in deploy_text:
         errors.append(

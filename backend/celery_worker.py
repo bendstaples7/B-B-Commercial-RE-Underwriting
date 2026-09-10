@@ -2022,12 +2022,14 @@ _shed_log = _logging.getLogger('celery.memory_shed')
 def _shed_heavy_tasks_under_memory_pressure(
     sender=None, task_id=None, task=None, args=None, kwargs=None, **_kwargs,
 ):
-    """Defer heavy beat/batch work when the host is near OOM.
+    """Defer heavy work when the host is near OOM.
 
-    Requeues with a countdown (capped) so one-off user-triggered bulk jobs are
-    not silently dropped, then raises Ignore so the current attempt is not
-    marked failed. Beat-scheduled tasks also recover on the next tick.
+    Beat-scheduled tasks are Ignore'd only (beat re-fires on the next tick).
+    One-off / manual bulk jobs are requeued with a countdown; if republish
+    fails the original delivery is Reject(requeue=True) so it is not dropped.
     """
+    from celery.exceptions import Ignore, Reject
+
     name = getattr(sender, 'name', None)
     if not name or name not in MEMORY_SHED_TASK_NAMES:
         return
@@ -2044,38 +2046,66 @@ def _shed_heavy_tasks_under_memory_pressure(
         name,
         skip.get('detail'),
     )
-    # Requeue deferred work so manual bulk jobs are not lost under pressure.
-    try:
-        import os
-        request = getattr(task, 'request', None) if task is not None else None
-        headers = dict(getattr(request, 'headers', None) or {})
-        attempts = int(headers.get('bb_memory_shed_attempts') or 0)
-        max_attempts = int(os.environ.get('BB_SHED_REQUEUE_MAX', '6'))
-        countdown = int(os.environ.get('BB_SHED_REQUEUE_SEC', '600'))
-        if task is not None and attempts < max_attempts:
-            headers['bb_memory_shed_attempts'] = attempts + 1
-            task.apply_async(
-                args=args or (),
-                kwargs=kwargs or {},
-                countdown=countdown,
-                headers=headers,
-            )
-            _shed_log.warning(
-                'requeued %s in %ss (shed attempt %s/%s)',
-                name, countdown, attempts + 1, max_attempts,
-            )
-        elif attempts >= max_attempts:
-            _shed_log.error(
-                'dropping %s after %s shed requeues under sustained memory pressure',
-                name, attempts,
-            )
-    except Exception as exc:  # noqa: BLE001 — still Ignore the current attempt
-        _shed_log.warning('failed to requeue shed task %s: %s', name, exc)
-    if task is not None:
+
+    # Beat recovers on the next tick — do not republish (avoids duplicates).
+    beat_schedule = getattr(getattr(celery, 'conf', None), 'beat_schedule', None) or {}
+    is_beat = any(
+        isinstance(entry, dict) and entry.get('task') == name
+        for entry in beat_schedule.values()
+    )
+    if is_beat:
+        if task is not None:
+            try:
+                task.update_state(state='SUCCESS', meta=skip)
+            except Exception:  # noqa: BLE001
+                pass
+        raise Ignore()
+
+    # One-off / manual bulk jobs: requeue with countdown + original expires.
+    request = getattr(task, 'request', None) if task is not None else None
+    headers = dict(getattr(request, 'headers', None) or {})
+    attempts = int(headers.get('bb_memory_shed_attempts') or 0)
+    import os
+    max_attempts = int(os.environ.get('BB_SHED_REQUEUE_MAX', '6'))
+    countdown = int(os.environ.get('BB_SHED_REQUEUE_SEC', '600'))
+    expires = getattr(request, 'expires', None) if request is not None else None
+    if task is None:
+        raise Ignore()
+    if attempts >= max_attempts:
+        _shed_log.error(
+            'dropping %s after %s shed requeues under sustained memory pressure',
+            name, attempts,
+        )
         try:
             task.update_state(state='SUCCESS', meta=skip)
         except Exception:  # noqa: BLE001
             pass
+        raise Ignore()
+    headers['bb_memory_shed_attempts'] = attempts + 1
+    apply_kwargs = {
+        'args': args or (),
+        'kwargs': kwargs or {},
+        'countdown': countdown,
+        'headers': headers,
+    }
+    if expires is not None:
+        apply_kwargs['expires'] = expires
+    try:
+        task.apply_async(**apply_kwargs)
+    except Exception as exc:  # noqa: BLE001
+        _shed_log.error(
+            'failed to requeue shed task %s — rejecting original for redelivery: %s',
+            name, exc,
+        )
+        raise Reject(f'memory shed requeue failed: {exc}', requeue=True) from exc
+    _shed_log.warning(
+        'requeued %s in %ss (shed attempt %s/%s)',
+        name, countdown, attempts + 1, max_attempts,
+    )
+    try:
+        task.update_state(state='SUCCESS', meta=skip)
+    except Exception:  # noqa: BLE001
+        pass
     raise Ignore()
 
 

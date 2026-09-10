@@ -22,6 +22,29 @@ from typing import Any
 
 DEFAULT_PATHS = ("/api/marketing/channel-roi",)
 EXIT_SKIPPED_NO_CREDS = 78
+_SENSITIVE_LOGIN_KEYS = frozenset(
+    {
+        "setup_token",
+        "session_token",
+        "token",
+        "password",
+        "access_token",
+        "refresh_token",
+    }
+)
+
+
+def _redact_login_payload(payload: Any) -> Any:
+    """Return a log-safe view of a login response (never emit setup/session tokens)."""
+    if not isinstance(payload, dict):
+        return type(payload).__name__
+    safe: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key in _SENSITIVE_LOGIN_KEYS:
+            safe[key] = "<redacted>"
+        else:
+            safe[key] = value
+    return safe
 
 
 def _request(
@@ -52,7 +75,8 @@ def _request(
     except urllib.error.HTTPError as exc:
         raw = exc.read() if exc.fp is not None else b""
         status = int(exc.code)
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, TimeoutError) as exc:
+        # TimeoutError is OSError, not URLError — catch both for clean canary logs.
         raise SystemExit(f"ERROR: request failed for {url}: {exc}") from exc
 
     payload: Any
@@ -79,7 +103,7 @@ def login(base_url: str, email: str, password: str, *, timeout: float) -> str:
         token = payload.get("session_token") or payload.get("token")
     if status != 200 or not token:
         raise SystemExit(
-            f"ERROR: login failed (HTTP {status}): {payload!r}"
+            f"ERROR: login failed (HTTP {status}): {_redact_login_payload(payload)!r}"
         )
     return str(token)
 
@@ -145,7 +169,10 @@ def main(argv: list[str] | None = None) -> int:
                 f"(exit {EXIT_SKIPPED_NO_CREDS})."
             )
             return EXIT_SKIPPED_NO_CREDS
-        print("ERROR: SMOKE_TEST_EMAIL and SMOKE_TEST_PASSWORD are required.", file=sys.stderr)
+        print(
+            "ERROR: SMOKE_TEST_EMAIL and SMOKE_TEST_PASSWORD are required.",
+            file=sys.stderr,
+        )
         return 1
 
     paths = tuple(args.paths) if args.paths else DEFAULT_PATHS

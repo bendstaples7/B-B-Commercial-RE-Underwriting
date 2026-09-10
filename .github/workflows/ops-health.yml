@@ -148,7 +148,11 @@ jobs:
             echo "| HTTP canary | ${{ steps.http_canary.outcome }} |"
             echo "| Live SPA HTML contract | ${{ steps.spa_html_canary.outcome }} |"
             echo "| Main↔prod SHA drift | ${{ steps.drift_canary.outcome }} |"
-            echo "| Auth API canary (channel-roi) | ${{ steps.auth_api_canary.outcome }} |"
+            AUTH_ROW="${{ steps.auth_api_canary.outcome }}"
+            if [ "${{ steps.auth_api_canary.outputs.skipped }}" = "true" ]; then
+              AUTH_ROW="skipped (no credentials)"
+            fi
+            echo "| Auth API canary (channel-roi) | ${AUTH_ROW} |"
             echo ""
             echo "Does **not** block App CI or Deploy."
             echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -302,16 +306,24 @@ jobs:
           steps.http_canary.outcome == 'success' &&
           (steps.spa_html_canary.outcome == 'success' || steps.spa_html_canary.outcome == 'skipped') &&
           (steps.drift_canary.outcome == 'success' || steps.drift_canary.outcome == 'skipped') &&
-          (steps.auth_api_canary.outcome == 'success' && steps.auth_api_canary.outputs.skipped != 'true')
+          (steps.auth_api_canary.outcome == 'success' || steps.auth_api_canary.outcome == 'skipped')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUTH_SKIPPED: ${{ steps.auth_api_canary.outputs.skipped }}
         run: |
           set -euo pipefail
+          # When smoke creds are unset the auth probe is skipped — still allow
+          # recovery of SSH/HTTP/SPA/drift issues, but leave auth-canary issues open.
+          if [ "${AUTH_SKIPPED:-}" = "true" ]; then
+            TITLE_RE="SSH unreachable|public /api/health down|live SPA HTML|main↔prod SHA drift"
+          else
+            TITLE_RE="SSH unreachable|public /api/health down|live SPA HTML|authenticated API canary|main↔prod SHA drift"
+          fi
           EXISTING=$(gh issue list --label ops-health --state open \
             --search "in:title Ops health:" \
-            --json number,title --jq '[.[] | select(.title | test("SSH unreachable|public /api/health down|live SPA HTML|authenticated API canary|main↔prod SHA drift"))] | .[0].number // empty')
+            --json number,title --jq "[.[] | select(.title | test(\"${TITLE_RE}\"))] | .[0].number // empty")
           if [ -z "$EXISTING" ]; then
-            echo "No open reachability/SPA/drift issue."
+            echo "No open reachability/SPA/drift issue matching recovery filter."
             exit 0
           fi
           BODY=$(cat <<EOF

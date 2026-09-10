@@ -39,11 +39,7 @@ def test_probe_preserves_password_whitespace(monkeypatch):
         return "t-test"
 
     monkeypatch.setattr(probe, "login", fake_login)
-    monkeypatch.setattr(
-        probe,
-        "probe_path",
-        lambda *a, **k: None,
-    )
+    monkeypatch.setattr(probe, "probe_path", lambda *a, **k: None)
     rc = probe.main(["--base-url", "https://example.test"])
     assert rc == 0
     assert seen["password"] == "  secret  "
@@ -97,3 +93,36 @@ def test_login_accepts_session_token(monkeypatch):
 
     monkeypatch.setattr(probe, "_request", fake_request)
     assert probe.login("https://example.test", "a", "b", timeout=5) == "sess-abc"
+
+
+def test_login_failure_redacts_setup_token(monkeypatch):
+    probe = _load_probe()
+
+    def fake_request(method, url, token=None, body=None, timeout=30.0):
+        return 200, {
+            "setup_required": True,
+            "setup_token": "live-secret-setup-token",
+        }
+
+    monkeypatch.setattr(probe, "_request", fake_request)
+    with pytest.raises(SystemExit) as exc:
+        probe.login("https://example.test", "a", "b", timeout=5)
+    msg = str(exc.value)
+    assert "live-secret-setup-token" not in msg
+    assert "<redacted>" in msg
+    assert "setup_required" in msg
+
+
+def test_request_timeout_exits_cleanly(monkeypatch):
+    probe = _load_probe()
+    import urllib.request as ur
+
+    def boom(*a, **k):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(ur, "urlopen", boom)
+    with pytest.raises(SystemExit) as exc:
+        probe._request("GET", "https://example.test/api/health", timeout=1)
+    msg = str(exc.value)
+    assert "ERROR: request failed" in msg
+    assert "timed out" in msg
