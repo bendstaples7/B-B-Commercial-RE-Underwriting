@@ -80,4 +80,14 @@ restore_prev_assets_from_rollback "$HOME_DEPLOY"
 test "$(cat "$PREV/chunk.js")" = "current"
 test ! -d "$PREV_ROLLBACK"
 
+# --- Case 6: interrupted promote left prev missing + .rollback present —
+# retry must restore .rollback before replacing it (resumable promote)
+rm -rf "$PREV" "$PREV_NEXT" "$PREV_ROLLBACK"
+mkdir -p "$PREV_ROLLBACK" "$PREV_NEXT"
+echo interrupted-live > "$PREV_ROLLBACK/chunk.js"
+echo next2 > "$PREV_NEXT/chunk.js"
+promote_prev_assets "$HOME_DEPLOY"
+test "$(cat "$PREV/chunk.js")" = "next2"
+test "$(cat "$PREV_ROLLBACK/chunk.js")" = "interrupted-live"
+
 echo "OK: prev_assets_promote_rollback"

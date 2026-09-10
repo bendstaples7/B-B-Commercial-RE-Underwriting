@@ -25,6 +25,14 @@ promote_prev_assets() {
     return 41
   fi
 
+  # Resumable promote: if a prior attempt moved live → .rollback and then died,
+  # prev is missing. Restore that snapshot before replacing .rollback, or a
+  # retry would delete the only copy of the prior grace set.
+  if [[ ! -d "$prev" && -d "$rollback" ]]; then
+    mv "$rollback" "$prev"
+    echo "    Resumed interrupted promote: restored frontend-assets-prev from .rollback"
+  fi
+
   rm -rf "$rollback"
 
   if [[ "${PREV_ASSETS_PROMOTE_FAIL_AFTER:-}" == "before_mv_live" ]]; then

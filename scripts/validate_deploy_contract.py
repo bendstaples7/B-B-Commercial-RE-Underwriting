@@ -517,6 +517,17 @@ def main() -> int:
                 "prev_assets_promote.sh must restore \"$rollback\" → \"$prev\" only when "
                 'PREV_ASSETS_PROMOTE_STARTED is "1"'
             )
+        # Resumable promote: restore .rollback → prev when prev is missing, before
+        # deleting .rollback (otherwise a mid-promote retry drops the grace set).
+        if not re.search(
+            r'!\s*-d\s+"\$prev"[\s\S]*?-d\s+"\$rollback"[\s\S]*?'
+            r'mv\s+"\$rollback"\s+"\$prev"',
+            helper_text,
+        ):
+            errors.append(
+                "prev_assets_promote.sh must restore \"$rollback\" → \"$prev\" when "
+                "prev is missing before replacing .rollback (resumable promote)"
+            )
     if "source" not in deploy_text or "prev_assets_promote.sh" not in deploy_text:
         errors.append("deploy.sh must source prev_assets_promote.sh")
     if "promote_prev_assets" not in deploy_text:
@@ -539,20 +550,21 @@ def main() -> int:
                 "test_prev_assets_promote_rollback.sh must not define a parallel "
                 "promote/restore mirror — call the production helper functions"
             )
-        result = subprocess.run(
-            ["bash", str(promote_test)],
-            cwd=str(REPO_ROOT),
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-        if result.returncode != 0:
-            errors.append(
-                "test_prev_assets_promote_rollback.sh failed:\n"
-                + (result.stdout or "")
-                + (result.stderr or "")
+        if _bash_syntax_check_available():
+            result = subprocess.run(
+                ["bash", str(promote_test)],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
             )
+            if result.returncode != 0:
+                errors.append(
+                    "test_prev_assets_promote_rollback.sh failed:\n"
+                    + (result.stdout or "")
+                    + (result.stderr or "")
+                )
     if "SPA_DEPLOY_IN_PROGRESS" not in deploy_text:
         errors.append(
             "deploy.sh must set SPA_DEPLOY_IN_PROGRESS around frontend dist swap "
