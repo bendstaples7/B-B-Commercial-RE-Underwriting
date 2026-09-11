@@ -271,13 +271,10 @@ def list_address_problems():
     last_mailed = {lid: format_last_mailed_at(ts) for lid, ts in raw_last.items()}
     serialized = []
     for item in items:
-        problem_kind = (
-            'address_failed' if item.status == 'failed' else 'invalid_address'
-        )
         payload = _serialize_queue_item(
             item, last_mailed_at=last_mailed.get(item.lead_id),
         )
-        payload['problem_kind'] = problem_kind
+        payload['problem_kind'] = _queue_service.problem_kind_for_item(item)
         serialized.append(payload)
     return jsonify({'items': serialized, 'total': len(serialized)}), 200
 

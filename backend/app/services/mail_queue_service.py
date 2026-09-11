@@ -132,13 +132,43 @@ class MailQueueService:
 
     @staticmethod
     def _is_address_problem_failure(validation_error: str | None) -> bool:
-        """True when a failed queue row is an address/USPS problem (not omit/other)."""
+        """True when validation_error is an address/USPS problem (not omit/transport/eligibility)."""
         err = str(validation_error or '').strip()
-        if not err or err.startswith('OLC omitted'):
+        if not err:
             return False
-        if err == 'Lead not found':
+        if err.startswith(('OLC omitted', 'Lead not found', 'Owner is not eligible')):
+            return False
+        lower = err.lower()
+        if any(
+            token in lower
+            for token in (
+                'timed out',
+                'timeout',
+                'connection refused',
+                'connection reset',
+                'http 5',
+                'http 4',
+                '503',
+                '502',
+                '504',
+            )
+        ):
             return False
         return True
+
+    @staticmethod
+    def _is_usps_address_failure(validation_error: str | None) -> bool:
+        """True when the persisted error is a USPS/OLC address failure (not local invalid)."""
+        if not MailQueueService._is_address_problem_failure(validation_error):
+            return False
+        return 'usps' in str(validation_error or '').lower()
+
+    @classmethod
+    def _is_address_problem_row(cls, item: MailQueueItem) -> bool:
+        err = str(item.validation_error or '').strip()
+        if item.status == 'invalid_address' and not err:
+            return True
+        return cls._is_address_problem_failure(err)
 
     def list_address_problems(
         self,
@@ -150,10 +180,13 @@ class MailQueueService:
         from sqlalchemy import and_, or_
 
         limit = max(1, min(int(limit or 100), 500))
-        # Over-fetch failed rows then filter non-address failures so limit is
-        # applied to the visible problem set (not raw status mix).
-        fetch_n = min(limit * 3, 500)
-        candidates = (
+        # Page through newest rows until we fill `limit` address problems (or
+        # exhaust candidates). A fixed over-fetch of 3x can skip real USPS
+        # failures buried under omit/transport noise.
+        page_size = min(max(limit, 50), 200)
+        offset = 0
+        out: list[MailQueueItem] = []
+        base = (
             MailQueueItem.query
             .filter(
                 MailQueueItem.user_id == user_id,
@@ -168,18 +201,27 @@ class MailQueueService:
             )
             .options(selectinload(MailQueueItem.lead))
             .order_by(MailQueueItem.updated_at.desc(), MailQueueItem.id.desc())
-            .limit(fetch_n)
-            .all()
         )
-        out: list[MailQueueItem] = []
-        for item in candidates:
-            if item.status == 'invalid_address':
-                out.append(item)
-            elif self._is_address_problem_failure(item.validation_error):
-                out.append(item)
-            if len(out) >= limit:
+        while len(out) < limit:
+            batch = base.offset(offset).limit(page_size).all()
+            if not batch:
+                break
+            offset += len(batch)
+            for item in batch:
+                if self._is_address_problem_row(item):
+                    out.append(item)
+                    if len(out) >= limit:
+                        break
+            if len(batch) < page_size:
                 break
         return out
+
+    @staticmethod
+    def problem_kind_for_item(item: MailQueueItem) -> str:
+        """UI kind: address_failed (USPS) vs invalid_address (local / unknown)."""
+        if MailQueueService._is_usps_address_failure(item.validation_error):
+            return 'address_failed'
+        return 'invalid_address'
 
     @staticmethod
     def serialize_attempt(

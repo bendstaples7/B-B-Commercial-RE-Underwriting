@@ -96,14 +96,16 @@ def _normalize_one(entry: Any, idx: int) -> dict[str, Any] | None:
         creative = _creative_display_label(entry.get('creative'))
         label_parts = [p for p in (template_name, creative) if p]
         label = ', '.join(label_parts) if label_parts else None
+        # Prefer explicit silent-omit label before order/campaign ids (those are
+        # always stamped on omit rows and would otherwise hide this branch).
+        if not label and entry.get('olc_silent_omit'):
+            label = 'OLC silent omit'
         if not label and entry.get('olc_order_id'):
             label = f"OLC order {entry.get('olc_order_id')}"
         if not label and entry.get('campaign_id') is not None:
             label = f"Campaign {entry.get('campaign_id')}"
         if not label and entry.get('address_feedback'):
             label = f"Address feedback: {entry.get('address_feedback')}"
-        if not label and entry.get('olc_silent_omit'):
-            label = 'OLC silent omit'
         if not label:
             label = 'Mailer'
         source = 'olc' if (

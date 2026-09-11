@@ -34,4 +34,24 @@ describe('mailBatchDuplicates', () => {
     expect(info.duplicateItemIds.has(2)).toBe(true)
     expect(info.duplicateItemIds.has(3)).toBe(false)
   })
+
+  it('falls back to normalized street type so St/Street collide without API key', () => {
+    const items = [
+      base({
+        id: 1,
+        lead_id: 10,
+        mailing_dedupe_key: undefined,
+        mailing_address: '100 Main St',
+      }),
+      base({
+        id: 2,
+        lead_id: 20,
+        mailing_dedupe_key: undefined,
+        mailing_address: '100 Main Street',
+      }),
+    ]
+    const info = analyzeMailBatchDuplicates(items)
+    expect(info.duplicateGroupCount).toBe(1)
+    expect(info.duplicateExtraCount).toBe(1)
+  })
 })

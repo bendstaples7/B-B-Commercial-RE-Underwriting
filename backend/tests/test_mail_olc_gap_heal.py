@@ -304,6 +304,40 @@ def test_list_gap_leads_address_failed(app):
         assert 'USPS' in (rows[0]['reason'] or '')
 
 
+def test_list_gap_leads_address_failed_includes_invalid_address_status(app):
+    """Cancel/requeue path stores USPS fails as invalid_address — still list them."""
+    with app.app_context():
+        lead = _lead(
+            property_street='5 USPS Queued',
+            mailing_address='9 Bad',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60618',
+        )
+        campaign = MailCampaign(
+            status='submitted',
+            lead_count=1,
+            submitted_count=1,
+            olc_order_id='ord-usps-2',
+            created_by='user-1',
+        )
+        db.session.add(campaign)
+        db.session.flush()
+        _queue(
+            'user-1', lead.id,
+            status='invalid_address',
+            campaign_id=campaign.id,
+            validation_error='Address failed USPS validation',
+        )
+        db.session.commit()
+
+        rows = MailCampaignService().list_gap_leads(
+            campaign.id, 'user-1', kind='address_failed',
+        )
+        assert len(rows) == 1
+        assert rows[0]['lead_id'] == lead.id
+
+
 def test_list_gap_leads_omitted_does_not_call_olc_sync(app):
     """Opening the omit dialog must not block on sync_campaign_analytics."""
     with app.app_context():

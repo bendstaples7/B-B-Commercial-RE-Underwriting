@@ -93,6 +93,7 @@ function normalizeOne(entry: unknown, idx: number): MailerHistoryRow | null {
       .map((p) => (typeof p === 'string' ? p.trim() : p))
       .filter(Boolean)
     let label = labelParts.length ? labelParts.join(', ') : null
+    if (!label && obj.olc_silent_omit) label = 'OLC silent omit'
     if (!label && obj.olc_order_id) label = `OLC order ${obj.olc_order_id}`
     if (!label && obj.campaign_id != null) label = `Campaign ${obj.campaign_id}`
     if (!label && obj.address_feedback) label = `Address feedback: ${obj.address_feedback}`

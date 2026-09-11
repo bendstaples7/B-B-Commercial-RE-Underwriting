@@ -2058,27 +2058,31 @@ class MailCampaignService:
             return rows
 
         if kind_norm == 'address_failed':
+            from app.services.mail_queue_service import MailQueueService
+
             items = (
                 MailQueueItem.query
-                .filter_by(campaign_id=campaign.id, status='failed')
+                .filter(
+                    MailQueueItem.campaign_id == campaign.id,
+                    MailQueueItem.status.in_(('failed', 'invalid_address')),
+                )
                 .order_by(MailQueueItem.id.asc())
                 .all()
             )
             rows = []
             for item in items:
-                err = str(item.validation_error or '').strip()
-                if not err or err.startswith('OLC omitted'):
-                    continue
-                if err == 'Lead not found':
+                if not MailQueueService._is_usps_address_failure(item.validation_error):
                     continue
                 lead = Lead.query.get(item.lead_id)
                 rows.append(self._serialize_gap_lead_row(
                     lead,
                     lead_id=item.lead_id,
-                    reason=err,
+                    reason=str(item.validation_error or '').strip(),
                     disposition='address_failed',
                     queue_status=item.status,
-                    resolution='Needs address fix — won’t mail until mailing address is corrected',
+                    resolution=(
+                        'Needs address fix — won’t mail until mailing address is corrected'
+                    ),
                 ))
             return rows
 
