@@ -21,9 +21,8 @@ import { Link as RouterLink } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import openLetterService, {
   type MailCampaignGapKind,
-  type MailCampaignGapLead,
 } from '@/services/openLetterApi'
-import { formatGapLeadsTsv } from '@/utils/formatGapLeadsTsv'
+import { formatGapLeadsTsv, gapDispositionLabel } from '@/utils/formatGapLeadsTsv'
 
 export type MailCampaignGapLeadsDialogProps = {
   open: boolean
@@ -35,14 +34,28 @@ export type MailCampaignGapLeadsDialogProps = {
 function titleFor(kind: MailCampaignGapKind | null, campaignId: number | null): string {
   const batch = campaignId != null ? ` — batch #${campaignId}` : ''
   if (kind === 'olc_omitted') return `Not on OLC order${batch}`
+  if (kind === 'address_failed') return `USPS address failed${batch}`
   return `Invalid addresses${batch}`
 }
 
-function dispositionLabel(row: MailCampaignGapLead): string {
-  if (row.disposition === 'requeued') return 'Requeued'
-  if (row.disposition === 'support') return 'Support'
-  if (row.disposition === 'invalid_local') return 'Invalid'
-  return row.disposition || '—'
+function subtitleFor(kind: MailCampaignGapKind | null): string | null {
+  if (kind === 'olc_omitted') {
+    return 'Open Letter accepted the batch but these contacts were missing from the order. First omit: returned to Ready to Mail. Second omit: support task — do not keep re-mailing blindly.'
+  }
+  if (kind === 'address_failed') {
+    return 'These pieces are on the Open Letter order but failed USPS validation, so they will not mail. Fix the address (or skip-trace), then stage again.'
+  }
+  return null
+}
+
+function emptyCopy(kind: MailCampaignGapKind | null): string {
+  if (kind === 'olc_omitted') {
+    return 'No cached OLC-omitted list for this batch yet. Click Refresh on Mail Batches to sync analytics, then reopen.'
+  }
+  if (kind === 'address_failed') {
+    return 'No USPS address failures recorded for this batch yet. Click Refresh on Mail Batches after Open Letter validates addresses.'
+  }
+  return 'No leads in this gap.'
 }
 
 export function MailCampaignGapLeadsDialog({
@@ -107,6 +120,16 @@ export function MailCampaignGapLeadsDialog({
             Copy for Excel
           </Button>
         </Stack>
+        {subtitleFor(kind) ? (
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ mt: 1, fontWeight: 400 }}
+            data-testid="mail-campaign-gap-subtitle"
+          >
+            {subtitleFor(kind)}
+          </Typography>
+        ) : null}
       </DialogTitle>
       <DialogContent dividers>
         {copyNote ? (
@@ -134,9 +157,7 @@ export function MailCampaignGapLeadsDialog({
           </Alert>
         ) : leads.length === 0 ? (
           <Typography color="text.secondary" data-testid="mail-campaign-gap-leads-empty">
-            {kind === 'olc_omitted'
-              ? 'No cached OLC-omitted list for this batch yet. Click Refresh on Mail Batches to sync analytics, then reopen.'
-              : 'No leads in this gap.'}
+            {emptyCopy(kind)}
           </Typography>
         ) : (
           <Table size="small" data-testid="mail-campaign-gap-leads-table">
@@ -165,10 +186,10 @@ export function MailCampaignGapLeadsDialog({
                   <TableCell>{row.property_street || '—'}</TableCell>
                   <TableCell>{row.mailing_address || '—'}</TableCell>
                   <TableCell>{row.reason || '—'}</TableCell>
-                  <TableCell>{row.resolution || dispositionLabel(row)}</TableCell>
+                  <TableCell>{row.resolution || gapDispositionLabel(row)}</TableCell>
                   {kind === 'olc_omitted' ? (
                     <TableCell>
-                      {row.omit_count != null ? `${row.omit_count}×` : dispositionLabel(row)}
+                      {row.omit_count != null ? `${row.omit_count}×` : gapDispositionLabel(row)}
                     </TableCell>
                   ) : null}
                 </TableRow>

@@ -88,6 +88,21 @@ const queueSummary = {
       last_mailed_at: '2025-11-15T10:00:00Z',
       last_sale_at: '2025-04-11',
     },
+    {
+      id: 2,
+      lead_id: 20,
+      user_id: 'test-user',
+      status: 'queued',
+      owner_name: 'John Roe',
+      property_street: '456 Oak Ave',
+      mailing_address: '456 Oak Ave',
+      mailing_city: 'Chicago',
+      mailing_state: 'IL',
+      mailing_zip: '60602',
+      created_at: '2026-07-01T12:05:00Z',
+      last_mailed_at: null,
+      last_sale_at: null,
+    },
   ],
 }
 
@@ -180,7 +195,7 @@ describe('ReadyToMailQueue', () => {
     expect(screen.getByTestId('mail-batch-summary')).toBeInTheDocument()
     expect(screen.getByTestId('mail-queue-staged-accordion')).toBeInTheDocument()
     expect(screen.queryByTestId('mail-queue-staged-table')).not.toBeInTheDocument()
-    expect(screen.getByText('Staged for next batch (1)')).toBeInTheDocument()
+    expect(screen.getByText('Staged for next batch (2)')).toBeInTheDocument()
   })
 
   it('shows last mailed on recommended candidates', async () => {
