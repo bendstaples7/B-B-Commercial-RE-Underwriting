@@ -1,7 +1,7 @@
 """Tests for mailing-address dedupe and OLC silent-omit heal."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -59,8 +59,52 @@ def test_dedupe_key_normalizes(app):
         )
         key = owner_mailing_dedupe_key(lead)
         assert key is not None
-        assert 'n main st' in key
+        assert 'n main' in key
         assert key.endswith('|60614')
+
+
+def test_dedupe_key_collapses_av_ave_and_missing_suffix(app):
+    """Prod class: ELMDALE AV vs Ave, and Kenmore vs Kenmore Ave."""
+    with app.app_context():
+        a = _lead(
+            mailing_address='1345 W ELMDALE AV',
+            mailing_city='CHICAGO',
+            mailing_state='IL',
+            mailing_zip='60660',
+        )
+        b = _lead(
+            mailing_address='1345 W Elmdale Ave',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60660-4194',
+        )
+        c = _lead(
+            mailing_address='2717 N KENMORE',
+            mailing_city='CHICAGO',
+            mailing_state='IL',
+            mailing_zip='60614',
+        )
+        d = _lead(
+            mailing_address='2717 N Kenmore Ave',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60614-1377',
+        )
+        assert owner_mailing_dedupe_key(a) == owner_mailing_dedupe_key(b)
+        assert owner_mailing_dedupe_key(c) == owner_mailing_dedupe_key(d)
+        way = _lead(
+            mailing_address='100 Main Way',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60614',
+        )
+        bare = _lead(
+            mailing_address='100 Main',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60614',
+        )
+        assert owner_mailing_dedupe_key(way) == owner_mailing_dedupe_key(bare)
 
 
 def test_first_omit_requeues_and_stamps(app):
@@ -215,7 +259,7 @@ def test_list_gap_leads_invalid_and_omitted(app):
         assert len(omitted_rows) == 1
         assert omitted_rows[0]['lead_id'] == omitted_lead.id
         assert omitted_rows[0]['disposition'] == 'requeued'
-        assert omitted_rows[0]['resolution'] == 'Ready to Mail'
+        assert 'Ready to Mail' in (omitted_rows[0]['resolution'] or '')
 
 
 def test_list_gap_leads_omitted_does_not_call_olc_sync(app):
@@ -243,7 +287,7 @@ def test_list_gap_leads_omitted_does_not_call_olc_sync(app):
             rows = svc.list_gap_leads(campaign.id, 'user-1', kind='olc_omitted')
             sync.assert_not_called()
         assert len(rows) == 1
-        assert rows[0]['resolution'] == 'Ready to Mail'
+        assert 'Ready to Mail' in (rows[0]['resolution'] or '')
 
 
 def test_omitted_cache_probe_is_scoped_to_campaign_owner(app):
@@ -508,8 +552,158 @@ def test_submit_dedupes_duplicate_mailing_address(app, monkeypatch):
         db.session.refresh(item_b)
         winner = item_a if item_a.id < item_b.id else item_b
         loser = item_b if winner is item_a else item_a
-        assert winner.status == 'sent'
+        assert winner.status == 'submitted'
         assert winner.campaign_id == campaign.id
         assert loser.status == 'queued'
         assert loser.campaign_id is None
         assert DUPLICATE_MAILING_REASON in (result.submit_drop_summary or {})
+
+
+def test_analytics_confirms_submitted_then_omits_other(app):
+    """Tracked submitted → sent + mail_sent/rematch; missing → omit + Ready to Mail."""
+    from app.services.mail_task_lifecycle_service import MAIL_REMATCH_WORKFLOW_KEY
+
+    with app.app_context():
+        kept = _lead(property_street='10 Kept St', mailing_address='10 Kept St')
+        dropped = _lead(property_street='11 Drop St', mailing_address='11 Drop St')
+        campaign = MailCampaign(
+            status='submitted',
+            lead_count=2,
+            submitted_count=2,
+            staged_count=2,
+            olc_order_id='ord-confirm',
+            created_by='user-1',
+            submitted_at=__import__('datetime').datetime(2026, 9, 10, 15, 0, tzinfo=__import__('datetime').timezone.utc),
+        )
+        db.session.add(campaign)
+        db.session.flush()
+        item_kept = _queue('user-1', kept.id, status='submitted', campaign_id=campaign.id)
+        item_drop = _queue('user-1', dropped.id, status='submitted', campaign_id=campaign.id)
+        db.session.commit()
+
+        client = MagicMock()
+        client.get_order_analytics.return_value = {
+            'data': {
+                'orderItemStatuses': {},
+                'geoChart': {'scannedOrderItems': 0, 'notScannedOrderItems': 1},
+            },
+        }
+        client.iter_order_contacts.return_value = [
+            {
+                'recipient': {
+                    'address1': '10 Kept St',
+                    'city': 'Chicago',
+                    'state': 'IL',
+                    'postalCode': '60614',
+                    'addressStatus': 'Verified',
+                    'meta_data': {'lead_id': kept.id},
+                },
+            },
+        ]
+
+        svc = MailCampaignService()
+        svc._timeline = MagicMock()
+        svc._config_service = MagicMock()
+        svc._config_service.get_client.return_value = client
+
+        with patch(
+            'app.services.mail_campaign_service.refresh_leads_after_mail_task_changes',
+        ) as mock_refresh:
+            svc.sync_campaign_analytics(campaign.id)
+
+        db.session.refresh(item_kept)
+        db.session.refresh(item_drop)
+        db.session.refresh(kept)
+        db.session.refresh(dropped)
+        db.session.refresh(campaign)
+
+        assert item_kept.status == 'sent'
+        assert any(
+            isinstance(e, dict) and e.get('sent_at')
+            for e in (kept.mailer_history or [])
+        )
+        timeline_kwargs = [
+            (c.kwargs if c.kwargs else {})
+            for c in svc._timeline.append.call_args_list
+        ]
+        assert any(
+            kw.get('event_type') == 'mail_sent' and kw.get('lead_id') == kept.id
+            for kw in timeline_kwargs
+        )
+        rematch = LeadTask.query.filter_by(
+            lead_id=kept.id,
+            workflow_key=MAIL_REMATCH_WORKFLOW_KEY,
+            status='open',
+        ).first()
+        assert rematch is not None
+
+        assert item_drop.status == 'queued'
+        assert item_drop.campaign_id is None
+        assert dropped.up_next_to_mail is True
+        assert campaign.olc_omitted_lead_ids == [dropped.id]
+        assert any(
+            isinstance(e, dict) and e.get('olc_silent_omit')
+            for e in (dropped.mailer_history or [])
+        )
+        assert any(
+            kw.get('lead_id') == dropped.id
+            and (kw.get('metadata') or {}).get('olc_silent_omit')
+            for kw in timeline_kwargs
+        )
+        mock_refresh.assert_called()
+        refreshed = set(mock_refresh.call_args.args[0])
+        assert kept.id in refreshed
+        assert dropped.id in refreshed
+
+
+def test_silent_omit_voids_legacy_sent_evidence(app):
+    """Legacy mail_sent + sent_at for an omitted order must not drive cadence."""
+    with app.app_context():
+        from datetime import datetime, timezone
+        from app.models.lead_timeline_entry import LeadTimelineEntry
+        from app.services.last_mailed_service import get_last_mailed_at_by_lead_ids
+
+        lead = _lead()
+        lead.mailer_history = [{
+            'campaign_id': 4,
+            'olc_order_id': 'ord-void',
+            'sent_at': '2026-09-10T15:34:14+00:00',
+        }]
+        campaign = MailCampaign(
+            status='submitted',
+            lead_count=1,
+            submitted_count=1,
+            olc_order_id='ord-void',
+            created_by='user-1',
+            submitted_at=datetime(2026, 9, 10, 15, 34, tzinfo=timezone.utc),
+        )
+        db.session.add(campaign)
+        db.session.flush()
+        item = _queue('user-1', lead.id, status='sent', campaign_id=campaign.id)
+        db.session.add(LeadTimelineEntry(
+            lead_id=lead.id,
+            event_type='mail_sent',
+            occurred_at=datetime(2026, 9, 10, 15, 34, tzinfo=timezone.utc),
+            source='system',
+            actor='user-1',
+            summary='Mailer sent',
+            event_metadata={'campaign_id': campaign.id, 'olc_order_id': 'ord-void'},
+            is_deleted=False,
+        ))
+        db.session.commit()
+
+        assert get_last_mailed_at_by_lead_ids([lead.id])[lead.id] is not None
+
+        svc = MailCampaignService()
+        svc._timeline = MagicMock()
+        svc._detect_and_heal_silent_omits(campaign, tracked_lead_ids=set())
+        db.session.commit()
+
+        db.session.refresh(lead)
+        db.session.refresh(item)
+        assert item.status == 'queued'
+        assert get_last_mailed_at_by_lead_ids([lead.id])[lead.id] is None
+        tl = LeadTimelineEntry.query.filter_by(
+            lead_id=lead.id, event_type='mail_sent', is_deleted=False,
+        ).count()
+        assert tl == 0

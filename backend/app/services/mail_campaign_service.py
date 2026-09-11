@@ -53,7 +53,12 @@ from app.services.hubspot_task_completion_service import sync_pending_hubspot_co
 logger = logging.getLogger(__name__)
 
 _STATUS_PRIORITY = {'Failed': 3, 'Corrected': 2, 'Verified': 1}
-_FEEDBACK_QUEUE_STATUSES = ('queued', 'sent', 'failed', 'invalid_address')
+# Include interim ``submitted`` (placed on OLC, not yet confirmed on order).
+_FEEDBACK_QUEUE_STATUSES = ('queued', 'submitted', 'sent', 'failed', 'invalid_address')
+_OMIT_CANDIDATE_STATUSES = ('submitted', 'sent', 'failed')
+_ATTACHED_REQUEUE_STATUSES = (
+    'queued', 'submitted', 'sent', 'failed', 'invalid_address',
+)
 
 
 def _lead_id_from_olc_recipient(recip: dict[str, Any]) -> int | None:
@@ -527,7 +532,7 @@ class MailCampaignService:
     def _requeue_campaign_items(self, campaign: MailCampaign, user_id: str) -> int:
         items = MailQueueItem.query.filter(
             MailQueueItem.campaign_id == campaign.id,
-            MailQueueItem.status.in_(('queued', 'sent', 'failed', 'invalid_address')),
+            MailQueueItem.status.in_(_ATTACHED_REQUEUE_STATUSES),
         ).all()
         lead_ids: list[int] = []
         for item in items:
@@ -966,68 +971,41 @@ class MailCampaignService:
                 campaign.cost_per_piece = campaign.cost / campaign.lead_count
                 config.estimated_cost_per_piece = campaign.cost_per_piece
 
-        now_iso = campaign.submitted_at.isoformat()
-        sent_lead_ids: list[int] = []
-        hubspot_sync_ids: list[str] = []
+        submitted_lead_ids: list[int] = []
         for item in items:
             if item.status != 'queued' or item.campaign_id != campaign.id:
                 continue
-            item.status = 'sent'
+            # Interim status until analytics confirms the lead on the OLC order.
+            item.status = 'submitted'
             item.updated_at = datetime.utcnow()
             lead = lead_by_item.get(item.id)
             if not lead:
                 continue
 
             lead.up_next_to_mail = False
-            history = lead.mailer_history
-            if not isinstance(history, list):
-                history = [] if history is None else [history]
-            history.append({
-                'campaign_id': campaign.id,
-                'olc_order_id': campaign.olc_order_id,
-                'sent_at': now_iso,
-                'template_id': campaign.template_id,
-                'template_name': campaign.template_name,
-                'creative': campaign.creative,
-            })
-            lead.mailer_history = history
-
-            _completed, pending_sync = complete_tasks_superseded_by_mail(
-                lead.id, actor=campaign.created_by, commit=False,
-            )
-            hubspot_sync_ids.extend(pending_sync)
-
-            schedule_mail_follow_up_task(
-                lead=lead,
-                sent_at=campaign.submitted_at,
-                actor=campaign.created_by,
-                campaign_id=campaign.id,
-            )
-            sent_lead_ids.append(lead.id)
-
-            MarketingListMember.query.filter_by(lead_id=lead.id).filter(
-                MarketingListMember.outreach_status == 'not_contacted',
-            ).update({'outreach_status': 'contacted'})
+            submitted_lead_ids.append(lead.id)
 
             self._timeline.append(
                 lead_id=lead.id,
-                event_type='mail_sent',
+                event_type='note_added',
                 actor=campaign.created_by,
-                summary=f'Mailer sent (campaign {campaign.id})',
+                summary=(
+                    f'Mailer submitted to OLC (campaign {campaign.id}; '
+                    'awaiting order confirm)'
+                ),
                 metadata={
                     'campaign_id': campaign.id,
                     'olc_order_id': campaign.olc_order_id,
                     'template_name': campaign.template_name,
-                    'creative': campaign.creative,
+                    'mail_submit_pending_confirm': True,
                 },
                 source='system',
                 commit=False,
             )
 
         db.session.commit()
-        sync_pending_hubspot_completions(hubspot_sync_ids)
         refresh_leads_after_mail_task_changes(
-            sent_lead_ids + invalid_lead_ids + cadence_removed_lead_ids,
+            submitted_lead_ids + invalid_lead_ids + cadence_removed_lead_ids,
         )
         self._schedule_post_submit_analytics_sync(campaign.id)
         return campaign
@@ -1262,7 +1240,7 @@ class MailCampaignService:
         line = format_mailing_line(street, city, state, zip_code)
         changed = False
         if item is not None:
-            if item.status == 'sent':
+            if item.status in ('sent', 'submitted'):
                 item.status = 'failed'
                 item.validation_error = reason
                 item.updated_at = datetime.utcnow()
@@ -1348,6 +1326,53 @@ class MailCampaignService:
         return out
 
     @staticmethod
+    def _void_order_send_evidence(lead: Lead, order_id: str) -> None:
+        """Mark prior send evidence for an OLC order as non-cadence (omit/void)."""
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from app.models.lead_timeline_entry import LeadTimelineEntry
+
+        oid = str(order_id or '').strip()
+        if not oid:
+            return
+
+        history = lead.mailer_history
+        if isinstance(history, list):
+            changed = False
+            updated = []
+            for entry in history:
+                if not isinstance(entry, dict):
+                    updated.append(entry)
+                    continue
+                entry_oid = str(entry.get('olc_order_id') or '').strip()
+                if entry_oid == oid and (
+                    entry.get('sent_at') or entry.get('last_sent') or entry.get('date')
+                ) and not entry.get('olc_silent_omit'):
+                    stamped = dict(entry)
+                    stamped['voided'] = True
+                    updated.append(stamped)
+                    changed = True
+                else:
+                    updated.append(entry)
+            if changed:
+                lead.mailer_history = updated
+                flag_modified(lead, 'mailer_history')
+
+        entries = (
+            LeadTimelineEntry.query
+            .filter_by(
+                lead_id=lead.id,
+                event_type='mail_sent',
+                is_deleted=False,
+            )
+            .all()
+        )
+        for entry in entries:
+            meta = entry.event_metadata or {}
+            if str(meta.get('olc_order_id') or '') == oid:
+                entry.is_deleted = True
+
+    @staticmethod
     def _stamp_silent_omit(
         lead: Lead,
         *,
@@ -1355,6 +1380,8 @@ class MailCampaignService:
         campaign_id: int,
     ) -> None:
         from sqlalchemy.orm.attributes import flag_modified
+
+        MailCampaignService._void_order_send_evidence(lead, order_id)
 
         history = lead.mailer_history
         if not isinstance(history, list):
@@ -1414,6 +1441,7 @@ class MailCampaignService:
         item: MailQueueItem | None,
     ) -> MailQueueItem:
         """Return a queued, unattached queue row for the lead (create if needed)."""
+        lead.up_next_to_mail = True
         if item is not None:
             item.status = 'queued'
             item.campaign_id = None
@@ -1476,6 +1504,11 @@ class MailCampaignService:
             return 'support'
 
         # First omit — return to Ready-to-Mail for the next batch.
+        cancel_pending_mail_follow_up_tasks(
+            lead.id,
+            actor=campaign.created_by,
+            reason='olc_silent_omit',
+        )
         self._ensure_ready_to_mail_queue_item(lead, campaign, item)
         self._timeline.append(
             lead_id=lead.id,
@@ -1522,6 +1555,99 @@ class MailCampaignService:
             return False
         return True
 
+    def _confirm_submitted_sends(
+        self,
+        campaign: MailCampaign,
+        tracked_lead_ids: set[int],
+    ) -> tuple[list[int], list[str]]:
+        """Promote ``submitted`` queue rows on the order to confirmed ``sent``.
+
+        Writes mailer_history ``sent_at``, ``mail_sent`` timeline, rematch
+        follow-up, and marketing contact — only when OLC lists the lead.
+
+        Returns ``(touch_ids, hubspot_sync_ids)``. HubSpot sync must run
+        **after** the caller commits so a failed local commit cannot leave
+        HubSpot complete while mail evidence is still unconfirmed.
+        """
+        from sqlalchemy.orm.attributes import flag_modified
+
+        if not tracked_lead_ids:
+            return [], []
+
+        items = (
+            MailQueueItem.query
+            .filter(
+                MailQueueItem.campaign_id == campaign.id,
+                MailQueueItem.status == 'submitted',
+                MailQueueItem.lead_id.in_(list(tracked_lead_ids)),
+            )
+            .all()
+        )
+        if not items:
+            return [], []
+
+        sent_at = campaign.submitted_at or datetime.now(timezone.utc)
+        now_iso = sent_at.isoformat() if hasattr(sent_at, 'isoformat') else str(sent_at)
+        touch_ids: list[int] = []
+        hubspot_sync_ids: list[str] = []
+
+        for item in items:
+            lead = Lead.query.get(item.lead_id)
+            if lead is None:
+                continue
+            item.status = 'sent'
+            item.updated_at = datetime.utcnow()
+
+            history = lead.mailer_history
+            if not isinstance(history, list):
+                history = [] if history is None else [history]
+            else:
+                history = list(history)
+            history.append({
+                'campaign_id': campaign.id,
+                'olc_order_id': campaign.olc_order_id,
+                'sent_at': now_iso,
+                'template_id': campaign.template_id,
+                'template_name': campaign.template_name,
+                'creative': campaign.creative,
+            })
+            lead.mailer_history = history
+            flag_modified(lead, 'mailer_history')
+
+            _completed, pending_sync = complete_tasks_superseded_by_mail(
+                lead.id, actor=campaign.created_by, commit=False,
+            )
+            hubspot_sync_ids.extend(pending_sync)
+
+            schedule_mail_follow_up_task(
+                lead=lead,
+                sent_at=sent_at,
+                actor=campaign.created_by,
+                campaign_id=campaign.id,
+            )
+
+            MarketingListMember.query.filter_by(lead_id=lead.id).filter(
+                MarketingListMember.outreach_status == 'not_contacted',
+            ).update({'outreach_status': 'contacted'})
+
+            self._timeline.append(
+                lead_id=lead.id,
+                event_type='mail_sent',
+                actor=campaign.created_by,
+                summary=f'Mailer sent (campaign {campaign.id})',
+                metadata={
+                    'campaign_id': campaign.id,
+                    'olc_order_id': campaign.olc_order_id,
+                    'template_name': campaign.template_name,
+                    'creative': campaign.creative,
+                },
+                source='system',
+                commit=False,
+            )
+            touch_ids.append(lead.id)
+
+        return touch_ids, hubspot_sync_ids
+
     def _detect_and_heal_silent_omits(
         self,
         campaign: MailCampaign,
@@ -1540,7 +1666,7 @@ class MailCampaignService:
         # Candidates: items we believed submitted on this campaign.
         candidates = MailQueueItem.query.filter(
             MailQueueItem.campaign_id == campaign.id,
-            MailQueueItem.status.in_(('sent', 'failed')),
+            MailQueueItem.status.in_(_OMIT_CANDIDATE_STATUSES),
         ).all()
         # Also include leads already known omitted (may have been requeued).
         known_omitted = {
@@ -1563,7 +1689,9 @@ class MailCampaignService:
                 continue
             item = items_by_lead.get(lead_id)
             # Prefer sent item still on this campaign for first-omit requeue.
-            if item is None or item.status not in ('sent', 'failed', 'queued', 'invalid_address'):
+            if item is None or item.status not in (
+                'submitted', 'sent', 'failed', 'queued', 'invalid_address',
+            ):
                 item = (
                     MailQueueItem.query
                     .filter_by(lead_id=lead_id, campaign_id=campaign.id)
@@ -1610,7 +1738,7 @@ class MailCampaignService:
         if dry_run:
             candidates = MailQueueItem.query.filter(
                 MailQueueItem.campaign_id == campaign.id,
-                MailQueueItem.status.in_(('sent', 'failed')),
+                MailQueueItem.status.in_(_OMIT_CANDIDATE_STATUSES),
             ).all()
             known = {
                 int(x) for x in (campaign.olc_omitted_lead_ids or [])
@@ -1716,6 +1844,7 @@ class MailCampaignService:
                 campaign.status = 'mailed'
 
         touch_ids: list[int] = []
+        hubspot_sync_ids: list[str] = []
         address_summary = {'corrected': 0, 'failed': 0, 'verified': 0, 'unchanged': 0}
         try:
             address_summary = self._sync_order_address_statuses(
@@ -1730,6 +1859,19 @@ class MailCampaignService:
             address_summary = {'corrected': 0, 'failed': 0, 'verified': 0, 'unchanged': 0}
 
         tracked = getattr(campaign, '_olc_tracked_lead_ids_computed', None)
+        if isinstance(tracked, set) and tracked:
+            try:
+                with db.session.begin_nested():
+                    confirmed, pending_hubspot = self._confirm_submitted_sends(
+                        campaign, tracked,
+                    )
+                touch_ids.extend(confirmed)
+                hubspot_sync_ids.extend(pending_hubspot)
+            except Exception:
+                logger.exception(
+                    'OLC send confirm failed for campaign %s order %s',
+                    campaign.id, campaign.olc_order_id,
+                )
         if (
             isinstance(tracked, set)
             and self._tracked_reliable_for_silent_omit_heal(campaign, tracked)
@@ -1749,6 +1891,8 @@ class MailCampaignService:
         from sqlalchemy.orm.attributes import flag_modified
         flag_modified(campaign, 'address_feedback_summary')
         db.session.commit()
+        if hubspot_sync_ids:
+            sync_pending_hubspot_completions(hubspot_sync_ids)
         if touch_ids:
             refresh_leads_after_mail_task_changes(list(dict.fromkeys(touch_ids)))
         return campaign
@@ -2025,12 +2169,12 @@ class MailCampaignService:
             except (TypeError, ValueError):
                 tracked = set()
 
-        # Leads still attached as sent/failed on this campaign.
+        # Leads still attached as submitted/sent/failed on this campaign.
         attached = {
             item.lead_id
             for item in MailQueueItem.query.filter(
                 MailQueueItem.campaign_id == campaign.id,
-                MailQueueItem.status.in_(('sent', 'failed')),
+                MailQueueItem.status.in_(_OMIT_CANDIDATE_STATUSES),
             ).all()
         }
 
@@ -2092,6 +2236,8 @@ class MailCampaignService:
             return 'Invalid on this batch'
         if queue_status == 'failed':
             return 'Failed on this batch'
+        if queue_status == 'submitted':
+            return 'On this batch (awaiting OLC confirm)'
         if queue_status == 'sent':
             return 'Still on this batch (sent)'
         return '—'
