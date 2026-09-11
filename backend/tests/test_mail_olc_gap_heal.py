@@ -92,6 +92,19 @@ def test_dedupe_key_collapses_av_ave_and_missing_suffix(app):
         )
         assert owner_mailing_dedupe_key(a) == owner_mailing_dedupe_key(b)
         assert owner_mailing_dedupe_key(c) == owner_mailing_dedupe_key(d)
+        way = _lead(
+            mailing_address='100 Main Way',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60614',
+        )
+        bare = _lead(
+            mailing_address='100 Main',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60614',
+        )
+        assert owner_mailing_dedupe_key(way) == owner_mailing_dedupe_key(bare)
 
 
 def test_first_omit_requeues_and_stamps(app):
@@ -547,7 +560,9 @@ def test_submit_dedupes_duplicate_mailing_address(app, monkeypatch):
 
 
 def test_analytics_confirms_submitted_then_omits_other(app):
-    """Tracked submitted ? sent + mail_sent; missing submitted ? silent omit requeue."""
+    """Tracked submitted → sent + mail_sent/rematch; missing → omit + Ready to Mail."""
+    from app.services.mail_task_lifecycle_service import MAIL_REMATCH_WORKFLOW_KEY
+
     with app.app_context():
         kept = _lead(property_street='10 Kept St', mailing_address='10 Kept St')
         dropped = _lead(property_street='11 Drop St', mailing_address='11 Drop St')
@@ -593,7 +608,7 @@ def test_analytics_confirms_submitted_then_omits_other(app):
 
         with patch(
             'app.services.mail_campaign_service.refresh_leads_after_mail_task_changes',
-        ):
+        ) as mock_refresh:
             svc.sync_campaign_analytics(campaign.id)
 
         db.session.refresh(item_kept)
@@ -607,13 +622,38 @@ def test_analytics_confirms_submitted_then_omits_other(app):
             isinstance(e, dict) and e.get('sent_at')
             for e in (kept.mailer_history or [])
         )
+        timeline_kwargs = [
+            (c.kwargs if c.kwargs else {})
+            for c in svc._timeline.append.call_args_list
+        ]
+        assert any(
+            kw.get('event_type') == 'mail_sent' and kw.get('lead_id') == kept.id
+            for kw in timeline_kwargs
+        )
+        rematch = LeadTask.query.filter_by(
+            lead_id=kept.id,
+            workflow_key=MAIL_REMATCH_WORKFLOW_KEY,
+            status='open',
+        ).first()
+        assert rematch is not None
+
         assert item_drop.status == 'queued'
         assert item_drop.campaign_id is None
+        assert dropped.up_next_to_mail is True
         assert campaign.olc_omitted_lead_ids == [dropped.id]
         assert any(
             isinstance(e, dict) and e.get('olc_silent_omit')
             for e in (dropped.mailer_history or [])
         )
+        assert any(
+            kw.get('lead_id') == dropped.id
+            and (kw.get('metadata') or {}).get('olc_silent_omit')
+            for kw in timeline_kwargs
+        )
+        mock_refresh.assert_called()
+        refreshed = set(mock_refresh.call_args.args[0])
+        assert kept.id in refreshed
+        assert dropped.id in refreshed
 
 
 def test_silent_omit_voids_legacy_sent_evidence(app):

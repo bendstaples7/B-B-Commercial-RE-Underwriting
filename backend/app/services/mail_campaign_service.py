@@ -1559,16 +1559,20 @@ class MailCampaignService:
         self,
         campaign: MailCampaign,
         tracked_lead_ids: set[int],
-    ) -> list[int]:
+    ) -> tuple[list[int], list[str]]:
         """Promote ``submitted`` queue rows on the order to confirmed ``sent``.
 
         Writes mailer_history ``sent_at``, ``mail_sent`` timeline, rematch
         follow-up, and marketing contact — only when OLC lists the lead.
+
+        Returns ``(touch_ids, hubspot_sync_ids)``. HubSpot sync must run
+        **after** the caller commits so a failed local commit cannot leave
+        HubSpot complete while mail evidence is still unconfirmed.
         """
         from sqlalchemy.orm.attributes import flag_modified
 
         if not tracked_lead_ids:
-            return []
+            return [], []
 
         items = (
             MailQueueItem.query
@@ -1580,7 +1584,7 @@ class MailCampaignService:
             .all()
         )
         if not items:
-            return []
+            return [], []
 
         sent_at = campaign.submitted_at or datetime.now(timezone.utc)
         now_iso = sent_at.isoformat() if hasattr(sent_at, 'isoformat') else str(sent_at)
@@ -1642,9 +1646,7 @@ class MailCampaignService:
             )
             touch_ids.append(lead.id)
 
-        if hubspot_sync_ids:
-            sync_pending_hubspot_completions(hubspot_sync_ids)
-        return touch_ids
+        return touch_ids, hubspot_sync_ids
 
     def _detect_and_heal_silent_omits(
         self,
@@ -1842,6 +1844,7 @@ class MailCampaignService:
                 campaign.status = 'mailed'
 
         touch_ids: list[int] = []
+        hubspot_sync_ids: list[str] = []
         address_summary = {'corrected': 0, 'failed': 0, 'verified': 0, 'unchanged': 0}
         try:
             address_summary = self._sync_order_address_statuses(
@@ -1859,8 +1862,11 @@ class MailCampaignService:
         if isinstance(tracked, set) and tracked:
             try:
                 with db.session.begin_nested():
-                    confirmed = self._confirm_submitted_sends(campaign, tracked)
+                    confirmed, pending_hubspot = self._confirm_submitted_sends(
+                        campaign, tracked,
+                    )
                 touch_ids.extend(confirmed)
+                hubspot_sync_ids.extend(pending_hubspot)
             except Exception:
                 logger.exception(
                     'OLC send confirm failed for campaign %s order %s',
@@ -1885,6 +1891,8 @@ class MailCampaignService:
         from sqlalchemy.orm.attributes import flag_modified
         flag_modified(campaign, 'address_feedback_summary')
         db.session.commit()
+        if hubspot_sync_ids:
+            sync_pending_hubspot_completions(hubspot_sync_ids)
         if touch_ids:
             refresh_leads_after_mail_task_changes(list(dict.fromkeys(touch_ids)))
         return campaign

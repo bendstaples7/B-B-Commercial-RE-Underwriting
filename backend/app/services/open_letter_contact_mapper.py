@@ -88,7 +88,7 @@ _STREET_ABBREV = (
 # Trailing street-type tokens stripped for batch mailing dedupe so
 # "2717 N Kenmore" and "2717 N Kenmore Ave" collide (OLC/USPS will anyway).
 _STREET_TYPE_SUFFIXES = frozenset({
-    'ave', 'st', 'blvd', 'dr', 'rd', 'ln', 'ct', 'cir', 'pl', 'ter', 'pkwy',
+    'ave', 'st', 'blvd', 'dr', 'rd', 'ln', 'ct', 'cir', 'pl', 'ter', 'pkwy', 'way',
 })
 
 
