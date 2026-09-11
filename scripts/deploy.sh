@@ -17,6 +17,23 @@ export PATH=$PATH:/home/deploy/.local/bin
 TARGET_SHA="${1:?TARGET_SHA argument is required}"
 APP_DIR="/home/deploy/app"
 ROLLBACK_LOG="/home/deploy/rollback.log"
+# Set to 1 only while this invocation's end-of-deploy PREV promote is in flight.
+PREV_ASSETS_PROMOTE_STARTED=0
+
+# Shared PREV_ASSETS promote/restore (durable copy preferred; app tree fallback).
+PREV_ASSETS_HELPER=""
+if [ -f /home/deploy/prev_assets_promote.sh ]; then
+    PREV_ASSETS_HELPER=/home/deploy/prev_assets_promote.sh
+elif [ -f "$APP_DIR/scripts/prev_assets_promote.sh" ]; then
+    PREV_ASSETS_HELPER="$APP_DIR/scripts/prev_assets_promote.sh"
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/prev_assets_promote.sh" ]; then
+    PREV_ASSETS_HELPER="$(dirname "${BASH_SOURCE[0]}")/prev_assets_promote.sh"
+else
+    echo "FAILED: prev_assets_promote.sh not found"
+    exit 1
+fi
+# shellcheck source=prev_assets_promote.sh
+source "$PREV_ASSETS_HELPER"
 
 # Durable helper (Deploy CI copies to /home/deploy/; survives git checkout rollback).
 ensure_frontend_dist_readable() {
@@ -73,6 +90,8 @@ rollback() {
         echo "ROLLBACK WARNING: restore_frontend_dist_backup.sh not found"
         ROLLBACK_FAILED=1
     fi
+    # Discard deferred asset-grace snapshot / restore in-progress promote via shared helper.
+    restore_prev_assets_if_promote_started /home/deploy
     # Always clear soft-lock so canary can heal/alert even when restore failed.
     rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
     sudo -n systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
@@ -426,11 +445,23 @@ if [ -d "frontend/dist" ]; then
     echo "    Previous frontend dist backed up for rollback"
 fi
 
-# Install new dist
+# Install new dist — retain prior hashed /assets for one deploy generation so
+# open tabs do not 404 on lazy chunks mid-session (blank SPA class).
 touch /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
-rm -rf frontend/dist
-mv /home/deploy/frontend-dist frontend/dist
-echo "    Frontend dist installed from CI runner build"
+ASSET_GRACE_SCRIPT=/home/deploy/install_frontend_dist_with_asset_grace.sh
+if [ ! -f "$ASSET_GRACE_SCRIPT" ]; then
+    ASSET_GRACE_SCRIPT="$APP_DIR/scripts/install_frontend_dist_with_asset_grace.sh"
+fi
+if [ ! -f "$ASSET_GRACE_SCRIPT" ]; then
+    echo "FAILED: install_frontend_dist_with_asset_grace.sh not found"
+    rollback 1
+fi
+bash "$ASSET_GRACE_SCRIPT" \
+    /home/deploy/frontend-dist \
+    frontend/dist \
+    /home/deploy/frontend-assets-prev \
+    || { echo "FAILED: frontend dist install with asset grace"; rollback 1; }
+echo "    Frontend dist installed from CI runner build (with asset grace)"
 
 # Inject browser Maps key into index.html. Reads only browser-scoped key names
 # from backend/.env (or repo-root .env) so Places autocomplete works without
@@ -462,6 +493,8 @@ else
     echo "FAILED: spa-dist-fingerprint.sh not found"
     rollback 1
 fi
+# Keep PREV_ASSETS.next unpromoted until Deploy fully succeeds (see end of script).
+# On rollback, frontend-assets-prev stays on the prior good generation.
 rm -f /home/deploy/SPA_DEPLOY_IN_PROGRESS 2>/dev/null || true
 
 echo "==> (4) Run database migrations"
@@ -595,6 +628,23 @@ if ! python3.11 "${LOCK_GUARD_PY}" smoke; then
     fi
     rollback 1
 fi
+
+echo "==> (4e) Post-migrate model schema contract (code vs DB before gunicorn reload)"
+# Fail closed when Alembic applied but ORM-required columns/tables still missing
+# (the Channel ROI / SCHEMA CONTRACT ERROR class). Must run before reload so
+# workers never boot against a drifted schema.
+BB_SCHEMA_CHECK_TIMEOUT_SEC="${BB_SCHEMA_CHECK_TIMEOUT_SEC:-120}"
+if ! timeout --signal=TERM --kill-after=30 "${BB_SCHEMA_CHECK_TIMEOUT_SEC}"     env FLASK_ENV=production python3.11 scripts/check_model_schema.py; then
+    echo "FAILED: model schema contract after migrate (check_model_schema.py)"
+    if [[ -f /home/deploy/ops-alert.sh ]]; then
+        # shellcheck source=/dev/null
+        source /home/deploy/ops-alert.sh
+        send_alert "Deploy failed: schema contract" \
+            "flask db upgrade finished on $(hostname) but check_model_schema.py failed — refusing gunicorn reload." || true
+    fi
+    rollback 1
+fi
+echo "    Model schema contract passed"
 
 cd ..
 
@@ -772,6 +822,12 @@ if [ "$REQ_HASH_UPDATED" = "1" ]; then
     echo "$REQ_HASH" > /home/deploy/.requirements-hash
     echo "    requirements hash updated after successful deploy"
 fi
+
+# Promote deferred PREV_ASSETS only after the full deploy succeeded (migrations,
+# gunicorn health, post-deploy sync). Keep a .rollback snapshot of the prior
+# PREV so post-deploy-rollback.sh can restore grace hashes if CI health fails
+# after this script exits 0.
+promote_prev_assets /home/deploy
 
 echo "==> Deploy complete: $TARGET_SHA"
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Deploy successful: $PREVIOUS_SHA -> $TARGET_SHA" >> "$ROLLBACK_LOG"

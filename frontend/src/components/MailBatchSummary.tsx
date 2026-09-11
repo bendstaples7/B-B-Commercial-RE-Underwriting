@@ -14,9 +14,10 @@ import {
   Typography,
 } from '@mui/material'
 import SendIcon from '@mui/icons-material/Send'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { Link as RouterLink } from 'react-router-dom'
-import openLetterService, { type MailQueueSummary } from '@/services/openLetterApi'
+import openLetterService, { type MailCampaign, type MailQueueSummary } from '@/services/openLetterApi'
+import { invalidateAllCommandCenters } from '@/utils/afterCommandCenterMutation'
 import {
   extractOlcListRows,
   getActiveCreativePreset,
@@ -32,6 +33,33 @@ export interface MailBatchSummaryProps {
   isLoading?: boolean
   /** Indeterminate progress while leads are being added to the batch. */
   isUpdating?: boolean
+}
+
+
+const CAMPAIGN_SETTLED = new Set(['submitted', 'processing', 'mailed', 'failed', 'cancelled'])
+
+/** Celery submit creates +90d rematch after send returns; refresh workspaces once campaign settles. */
+async function refreshWorkspacesAfterCampaignSettles(
+  queryClient: QueryClient,
+  campaignId: number,
+) {
+  const delaysMs = [2_000, 3_000, 5_000, 8_000, 12_000]
+  for (const delay of delaysMs) {
+    await new Promise((resolve) => setTimeout(resolve, delay))
+    try {
+      const campaign = await openLetterService.getCampaign(campaignId)
+      if (CAMPAIGN_SETTLED.has(campaign.status)) {
+        invalidateAllCommandCenters(queryClient)
+        void queryClient.invalidateQueries({ queryKey: ['mail-campaigns'] })
+        void queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
+        return
+      }
+    } catch {
+      // Best-effort — next poll or manual navigation will refresh.
+    }
+  }
+  // Final bust even if still pending so open command centers do not stay on pre-send chips forever.
+  invalidateAllCommandCenters(queryClient)
 }
 
 export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
@@ -62,11 +90,17 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
 
   const sendMutation = useMutation({
     mutationFn: (force: boolean) => openLetterService.sendBatch(force),
-    onSuccess: () => {
+    onSuccess: (campaign: MailCampaign) => {
       setSendDialogOpen(false)
+      // Cached queue may be paged / stale after enqueue — always bust all command centers.
       queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
       queryClient.invalidateQueries({ queryKey: ['mail-campaigns'] })
       queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+      invalidateAllCommandCenters(queryClient)
+      // Rematch tasks are created when Celery finishes submit — refresh again after settle.
+      if (campaign?.id != null) {
+        void refreshWorkspacesAfterCampaignSettles(queryClient, campaign.id)
+      }
     },
     onError: (err: Error) => setSendError(err.message),
   })

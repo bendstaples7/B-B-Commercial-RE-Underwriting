@@ -31,6 +31,8 @@ from app.models.property_contact import PropertyContact
 from app.services.hubspot_matcher_service import HubSpotMatcherService
 from app.models.hubspot_contact import HubSpotContact
 
+_AUTH_HEADERS = {"X-User-Id": "test-user"}
+
 # Import the migration helper from the migration test module
 from tests.test_migration_contact import run_migration_logic
 
@@ -371,7 +373,7 @@ def test_property_contact_join_record_round_trip(app, client, role, is_primary):
         )
 
         # Retrieve the contacts for the property
-        get_resp = client.get(f"/api/properties/{property_id}/contacts")
+        get_resp = client.get(f"/api/properties/{property_id}/contacts", headers=_AUTH_HEADERS)
         assert get_resp.status_code == 200
         contacts = get_resp.get_json()
 
@@ -434,7 +436,7 @@ def test_at_most_one_primary_contact_per_property(app, client, num_contacts, is_
             assert link_resp.status_code == 201
 
             # After each link, verify at most one primary
-            get_resp = client.get(f"/api/properties/{property_id}/contacts")
+            get_resp = client.get(f"/api/properties/{property_id}/contacts", headers=_AUTH_HEADERS)
             assert get_resp.status_code == 200
             contacts_list = get_resp.get_json()
             primary_count = sum(1 for c in contacts_list if c["is_primary"])
@@ -444,7 +446,7 @@ def test_at_most_one_primary_contact_per_property(app, client, num_contacts, is_
             )
 
         # Find the current primary (if any) and remove it
-        get_resp = client.get(f"/api/properties/{property_id}/contacts")
+        get_resp = client.get(f"/api/properties/{property_id}/contacts", headers=_AUTH_HEADERS)
         contacts_list = get_resp.get_json()
         primary_contacts = [c for c in contacts_list if c["is_primary"]]
 
@@ -456,7 +458,7 @@ def test_at_most_one_primary_contact_per_property(app, client, num_contacts, is_
             assert del_resp.status_code == 204
 
             # After removing the primary, all remaining should have is_primary=False
-            get_resp2 = client.get(f"/api/properties/{property_id}/contacts")
+            get_resp2 = client.get(f"/api/properties/{property_id}/contacts", headers=_AUTH_HEADERS)
             assert get_resp2.status_code == 200
             remaining = get_resp2.get_json()
             for c in remaining:
@@ -511,7 +513,7 @@ def test_nonexistent_ids_return_404(app, client, nonexistent_id):
         )
 
         # GET /api/properties/<id>/contacts
-        resp = client.get(f"/api/properties/{nonexistent_id}/contacts")
+        resp = client.get(f"/api/properties/{nonexistent_id}/contacts", headers=_AUTH_HEADERS)
         assert resp.status_code == 404, (
             f"GET /api/properties/{nonexistent_id}/contacts expected 404, got {resp.status_code}"
         )

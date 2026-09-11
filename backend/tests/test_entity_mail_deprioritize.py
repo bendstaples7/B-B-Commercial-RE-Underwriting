@@ -219,6 +219,66 @@ class TestColdMailBlockReason:
             db.session.commit()
             assert cold_mail_block_reason(lead) is None
 
+    def test_taxpayer_of_placeholder_blocks_cold_mail(self, app):
+        with app.app_context():
+            from app.models.lead import Lead
+            from app import db
+
+            lead = Lead(
+                property_street="100 Main",
+                property_city="Chicago",
+                property_state="IL",
+                property_zip="60601",
+                owner_first_name="Taxpayer",
+                owner_last_name="of",
+                lead_status="mailing_no_contact_made",
+                mailing_address="100 Main",
+                mailing_city="Chicago",
+                mailing_state="IL",
+                mailing_zip="60601",
+            )
+            db.session.add(lead)
+            db.session.commit()
+            assert cold_mail_block_reason(lead) == "generic_owner_name"
+
+    def test_hybrid_fsbo_label_not_placeholder_block(self, app):
+        with app.app_context():
+            from app.models.lead import Lead
+            from app import db
+
+            lead = Lead(
+                property_street="100 Main",
+                property_city="Chicago",
+                property_state="IL",
+                property_zip="60601",
+                owner_first_name="Sam",
+                owner_last_name="For Sale By Owner",
+                lead_status="mailing_no_contact_made",
+            )
+            db.session.add(lead)
+            db.session.commit()
+            assert cold_mail_block_reason(lead) is None
+
+    def test_missing_owner_name_blocks_cold_mail(self, app):
+        with app.app_context():
+            from app.models.lead import Lead
+            from app import db
+
+            lead = Lead(
+                property_street="100 Main",
+                property_city="Chicago",
+                property_state="IL",
+                property_zip="60601",
+                mailing_address="100 Main",
+                mailing_city="Chicago",
+                mailing_state="IL",
+                mailing_zip="60601",
+                lead_status="mailing_no_contact_made",
+            )
+            db.session.add(lead)
+            db.session.commit()
+            assert cold_mail_block_reason(lead) == "generic_owner_name"
+
     def test_asset_management_is_unresolved_entity_residential(self, app):
         with app.app_context():
             from app.models.lead import Lead
@@ -374,8 +434,8 @@ class TestScoringMailGate:
             lambda lead: (False, False, True),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda lead: 'institutional_owner',
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda lead: ('institutional_owner', ''),
         )
         monkeypatch.setattr(
             'app.services.lead_scoring_engine.is_mailable_lead',
@@ -411,8 +471,8 @@ class TestScoringMailGate:
             lambda lead: (True, False, True),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda lead: 'institutional_owner',
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda lead: ('institutional_owner', ''),
         )
         monkeypatch.setattr(
             'app.services.lead_scoring_engine._mail_work_in_flight',
@@ -449,8 +509,8 @@ class TestScoringMailGate:
             lambda lead: (True, False, True),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda lead: 'unresolved_entity_owner',
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda lead: ('unresolved_entity_owner', ''),
         )
         monkeypatch.setattr(
             'app.services.lead_scoring_engine._mail_work_in_flight',
@@ -491,8 +551,8 @@ class TestScoringMailGate:
             lambda lead: (True, False, True),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda lead: 'unresolved_entity_owner',
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda lead: ('unresolved_entity_owner', ''),
         )
         monkeypatch.setattr(
             'app.services.lead_scoring_engine._mail_work_in_flight',
@@ -534,8 +594,8 @@ class TestScoringMailGate:
             lambda lead: (False, False, True),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda lead: 'unresolved_entity_owner',
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda lead: ('unresolved_entity_owner', ''),
         )
         monkeypatch.setattr(
             'app.services.lead_scoring_engine.is_mailable_lead',
@@ -571,8 +631,8 @@ class TestScoringMailGate:
             lambda lead: (False, False, True),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda lead: None,
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda lead: (None, ''),
         )
         monkeypatch.setattr(
             'app.services.lead_scoring_engine.is_mailable_lead',
@@ -609,8 +669,8 @@ class TestScoringMailGate:
             lambda lead: (True, False, True),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda lead: 'institutional_owner',
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda lead: ('institutional_owner', ''),
         )
         monkeypatch.setattr(
             'app.services.lead_scoring_engine._mail_work_in_flight',
@@ -683,8 +743,8 @@ class TestScoringMailGate:
             lambda *_args, **_kwargs: ('mail_ready', 'direct_mail'),
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine.cold_mail_block_reason',
-            lambda _lead: 'institutional_owner',
+            'app.services.lead_scoring_engine.cold_mail_block_context',
+            lambda _lead: ('institutional_owner', ''),
         )
 
         assert LeadScoringEngine.compute_recommended_action(lead) == 'nurture'

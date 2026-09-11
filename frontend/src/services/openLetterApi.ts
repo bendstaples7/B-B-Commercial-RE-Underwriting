@@ -271,6 +271,13 @@ export const openLetterService = {
   removeFromQueue: (itemId: number): Promise<MailQueueSummary> =>
     api.delete(`/mail-queue/${itemId}`).then((r) => r.data),
 
+  removeManyFromQueue: (itemIds: number[]): Promise<MailQueueSummary & {
+    removed: number
+    already_removed: number
+    blocked: Array<{ item_id: number; lead_id: number; status: string; error: string }>
+  }> =>
+    api.post('/mail-queue/remove', { item_ids: itemIds }).then((r) => r.data),
+
   sendBatch: (force = false): Promise<MailCampaign> =>
     api.post('/mail-queue/send', { force }).then((r) => r.data),
 

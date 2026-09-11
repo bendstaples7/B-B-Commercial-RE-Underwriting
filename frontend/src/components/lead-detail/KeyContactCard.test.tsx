@@ -16,6 +16,7 @@ vi.mock('@/services/api', () => ({
     linkContactToProperty: vi.fn(),
     searchContacts: vi.fn(),
     getContact: vi.fn(),
+    clearOwnerPerson: vi.fn(),
   },
 }))
 
@@ -451,5 +452,40 @@ describe('KeyContactCard', () => {
         screen.queryByText('Could not load contact details. Please try again.'),
       ).not.toBeInTheDocument()
     })
+  })
+
+  it('offers Clear from lead for flat owner names with no linked contact', async () => {
+    const user = userEvent.setup()
+    vi.mocked(contactService.clearOwnerPerson).mockResolvedValue({
+      cleared_slots: ['owner'],
+      unlinked_contact_id: null,
+      display_name: 'Gary Carlson',
+    })
+    renderCard(
+      basePayload({
+        owner_first_name: 'Gary',
+        owner_last_name: 'Carlson',
+        contacts: [],
+      }),
+      'Gary Carlson',
+    )
+    expect(screen.getByTestId('key-contact-clear-owner-btn')).toBeInTheDocument()
+    await user.click(screen.getByTestId('key-contact-clear-owner-btn'))
+    await user.click(screen.getByTestId('confirm-key-contact-clear-owner-btn'))
+    await waitFor(() => {
+      expect(contactService.clearOwnerPerson).toHaveBeenCalledWith(
+        634,
+        expect.objectContaining({
+          first_name: 'Gary',
+          last_name: 'Carlson',
+        }),
+      )
+    })
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+    expect(
+      await screen.findByText('Gary Carlson cleared from this lead.'),
+    ).toBeInTheDocument()
   })
 })

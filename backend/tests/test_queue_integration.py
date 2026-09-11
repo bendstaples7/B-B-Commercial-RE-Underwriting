@@ -482,6 +482,8 @@ class TestActionEngineIntegration:
                 mailing_city='Chicago',
                 mailing_state='IL',
                 mailing_zip='60601',
+                owner_first_name='Pat',
+                owner_last_name='Owner',
                 has_phone=False,
                 has_email=False,
                 has_property_match=True,

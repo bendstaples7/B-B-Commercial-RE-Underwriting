@@ -1,7 +1,9 @@
-import { useState, useEffect, Component, lazy, Suspense } from 'react'
+import { useState, useEffect, Component, Suspense } from 'react'
+import { isChunkLoadError, lazyWithRetry, reloadOnceForStaleChunk } from '@/utils/lazyWithRetry'
 import { Routes, Route, Link, Navigate, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import { BackendRuntimeGuard } from './components/BackendRuntimeGuard'
+import { SpaUpdateSnackbar } from './components/SpaUpdateSnackbar'
 import { LoginPage } from './pages/LoginPage'
 import { SetPasswordPage } from './pages/SetPasswordPage'
 import { useLoadScript } from '@react-google-maps/api'
@@ -89,115 +91,115 @@ import { GeminiNarrativePanel } from './components/GeminiNarrativePanel'
 import GlobalSearchBar from '@/components/GlobalSearchBar'
 import type { QueueCounts } from './types'
 
-const PropertyListPage = lazy(() =>
+// lazyWithRetry recovers from post-deploy hashed-chunk 404s (blank page class).
+const PropertyListPage = lazyWithRetry(() =>
   import('./components/PropertyListPage').then((m) => ({ default: m.PropertyListPage })),
 )
-const MarketingHub = lazy(() =>
+const MarketingHub = lazyWithRetry(() =>
   import('./components/MarketingHub').then((m) => ({ default: m.MarketingHub })),
 )
-const ChannelRoiPage = lazy(() =>
+const ChannelRoiPage = lazyWithRetry(() =>
   import('./pages/ChannelRoiPage').then((m) => ({ default: m.ChannelRoiPage })),
 )
-const OAuthCallback = lazy(() =>
+const OAuthCallback = lazyWithRetry(() =>
   import('./components/OAuthCallback').then((m) => ({ default: m.OAuthCallback })),
 )
-const DealListPage = lazy(() =>
+const DealListPage = lazyWithRetry(() =>
   import('./pages/multifamily/DealListPage').then((m) => ({ default: m.DealListPage })),
 )
-const DealDetailPage = lazy(() =>
+const DealDetailPage = lazyWithRetry(() =>
   import('./pages/multifamily/DealDetailPage').then((m) => ({ default: m.DealDetailPage })),
 )
-const LenderProfilesPage = lazy(() =>
+const LenderProfilesPage = lazyWithRetry(() =>
   import('./pages/multifamily/LenderProfilesPage').then((m) => ({ default: m.LenderProfilesPage })),
 )
-const AnalysisLandingPage = lazy(() =>
+const AnalysisLandingPage = lazyWithRetry(() =>
   import('./pages/AnalysisLandingPage').then((m) => ({ default: m.AnalysisLandingPage })),
 )
-const OMIntakePage = lazy(() => import('@/pages/multifamily/OMIntakePage'))
-const HubSpotImportArea = lazy(() =>
+const OMIntakePage = lazyWithRetry(() => import('@/pages/multifamily/OMIntakePage'))
+const HubSpotImportArea = lazyWithRetry(() =>
   import('./components/HubSpotImportArea').then((m) => ({ default: m.HubSpotImportArea })),
 )
-const ReviewQueue = lazy(() =>
+const ReviewQueue = lazyWithRetry(() =>
   import('./components/ReviewQueue').then((m) => ({ default: m.ReviewQueue })),
 )
-const TodaysActionQueue = lazy(() =>
+const TodaysActionQueue = lazyWithRetry(() =>
   import('./components/TodaysActionQueue').then((m) => ({ default: m.TodaysActionQueue })),
 )
-const PreviouslyWarmQueue = lazy(() =>
+const PreviouslyWarmQueue = lazyWithRetry(() =>
   import('./components/PreviouslyWarmQueue').then((m) => ({ default: m.PreviouslyWarmQueue })),
 )
-const FollowUpOverdueQueue = lazy(() =>
+const FollowUpOverdueQueue = lazyWithRetry(() =>
   import('./components/FollowUpOverdueQueue').then((m) => ({ default: m.FollowUpOverdueQueue })),
 )
-const NoNextActionQueue = lazy(() =>
+const NoNextActionQueue = lazyWithRetry(() =>
   import('./components/NoNextActionQueue').then((m) => ({ default: m.NoNextActionQueue })),
 )
-const NeedsReviewQueue = lazy(() =>
+const NeedsReviewQueue = lazyWithRetry(() =>
   import('./components/NeedsReviewQueue').then((m) => ({ default: m.NeedsReviewQueue })),
 )
-const SkipTraceQueue = lazy(() =>
+const SkipTraceQueue = lazyWithRetry(() =>
   import('./components/SkipTraceQueue').then((m) => ({ default: m.SkipTraceQueue })),
 )
-const SkipTraceExhaustedQueue = lazy(() =>
+const SkipTraceExhaustedQueue = lazyWithRetry(() =>
   import('./components/SkipTraceExhaustedQueue').then((m) => ({ default: m.SkipTraceExhaustedQueue })),
 )
-const DoNotContactQueue = lazy(() =>
+const DoNotContactQueue = lazyWithRetry(() =>
   import('./components/DoNotContactQueue').then((m) => ({ default: m.DoNotContactQueue })),
 )
-const MissingPropertyMatchQueue = lazy(() =>
+const MissingPropertyMatchQueue = lazyWithRetry(() =>
   import('./components/MissingPropertyMatchQueue').then((m) => ({
     default: m.MissingPropertyMatchQueue,
   })),
 )
-const ReadyToMailQueue = lazy(() =>
+const ReadyToMailQueue = lazyWithRetry(() =>
   import('./components/ReadyToMailQueue').then((m) => ({ default: m.ReadyToMailQueue })),
 )
-const ProspectReviewQueue = lazy(() =>
+const ProspectReviewQueue = lazyWithRetry(() =>
   import('./components/ProspectReviewQueue').then((m) => ({ default: m.ProspectReviewQueue })),
 )
-const MarketingListManager = lazy(() =>
+const MarketingListManager = lazyWithRetry(() =>
   import('./components/MarketingListManager').then((m) => ({ default: m.MarketingListManager })),
 )
-const UnifiedLeadCommandCenter = lazy(() =>
+const UnifiedLeadCommandCenter = lazyWithRetry(() =>
   import('@/components/UnifiedLeadCommandCenter').then((m) => ({
     default: m.UnifiedLeadCommandCenter,
   })),
 )
-const AdminPanel = lazy(() =>
+const AdminPanel = lazyWithRetry(() =>
   import('./components/AdminPanel').then((m) => ({ default: m.AdminPanel })),
 )
-const AdminUserDetail = lazy(() => import('./components/AdminUserDetail'))
-const ScoringWeightsEditor = lazy(() =>
+const AdminUserDetail = lazyWithRetry(() => import('./components/AdminUserDetail'))
+const ScoringWeightsEditor = lazyWithRetry(() =>
   import('./components/ScoringWeightsEditor').then((m) => ({ default: m.ScoringWeightsEditor })),
 )
-const SearchResultsPage = lazy(() => import('@/pages/SearchResultsPage'))
-const DealKanbanPage = lazy(() =>
+const SearchResultsPage = lazyWithRetry(() => import('@/pages/SearchResultsPage'))
+const DealKanbanPage = lazyWithRetry(() =>
   import('./pages/DealKanbanPage').then((m) => ({ default: m.DealKanbanPage })),
 )
-const ActivityDashboardPage = lazy(() =>
+const ActivityDashboardPage = lazyWithRetry(() =>
   import('./pages/ActivityDashboardPage').then((m) => ({ default: m.ActivityDashboardPage })),
 )
-const QuickAddPage = lazy(() =>
+const QuickAddPage = lazyWithRetry(() =>
   import('./pages/QuickAddPage').then((m) => ({ default: m.QuickAddPage })),
 )
-const BuildingOwnershipLookbookPage = lazy(
+const BuildingOwnershipLookbookPage = lazyWithRetry(
   () => import('./pages/lookbook/BuildingOwnershipLookbookPage'),
 )
-const CcPinDeprioritizeLookbookPage = lazy(
+const CcPinDeprioritizeLookbookPage = lazyWithRetry(
   () => import('./pages/lookbook/CcPinDeprioritizeLookbookPage'),
 )
-const SameAddressMergeLookbookPage = lazy(
+const SameAddressMergeLookbookPage = lazyWithRetry(
   () => import('./pages/lookbook/SameAddressMergeLookbookPage'),
 )
-const MergeCtaPlacementLookbookPage = lazy(
+const MergeCtaPlacementLookbookPage = lazyWithRetry(
   () => import('./pages/lookbook/MergeCtaPlacementLookbookPage'),
 )
-const PipelineConfigAdminPage = lazy(() =>
+const PipelineConfigAdminPage = lazyWithRetry(() =>
   import('./pages/PipelineConfigAdminPage').then((m) => ({ default: m.PipelineConfigAdminPage })),
 )
-const BackgroundJobsPage = lazy(() => import('./pages/BackgroundJobsPage'))
-const DataSourcesPanel = lazy(() => import('@/components/DataSourcesPanel'))
-
+const BackgroundJobsPage = lazyWithRetry(() => import('./pages/BackgroundJobsPage'))
+const DataSourcesPanel = lazyWithRetry(() => import('@/components/DataSourcesPanel'))
 // Dual-rail nav: narrow icon rail + light secondary panel for section children.
 const ICON_RAIL_WIDTH = 60
 const SECONDARY_NAV_WIDTH = 248
@@ -1045,10 +1047,15 @@ class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, ErrorBoundar
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error('[ErrorBoundary] Caught render error:', error, info.componentStack)
+    // Post-deploy stale chunk: auto-reload once instead of a blank / stuck alert.
+    if (isChunkLoadError(error)) {
+      reloadOnceForStaleChunk('error-boundary')
+    }
   }
 
   render() {
     if (this.state.error) {
+      const chunkMiss = isChunkLoadError(this.state.error)
       return (
         <Box sx={{ p: 3 }} data-testid={this.props.testId ?? 'route-error-boundary'}>
           <Alert
@@ -1059,15 +1066,23 @@ class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, ErrorBoundar
                 color="inherit"
                 size="small"
                 onClick={() => {
+                  if (chunkMiss) {
+                    window.location.reload()
+                    return
+                  }
                   window.location.href = this.props.recoveryHref
                 }}
               >
-                {this.props.recoveryLabel}
+                {chunkMiss ? 'Reload' : this.props.recoveryLabel}
               </Button>
             }
           >
-            <AlertTitle>Something went wrong</AlertTitle>
-            {this.state.error.message}
+            <AlertTitle>
+              {chunkMiss ? 'App updated — reload to continue' : 'Something went wrong'}
+            </AlertTitle>
+            {chunkMiss
+              ? 'A newer version was deployed. Reloading picks up the latest page assets.'
+              : this.state.error.message}
             {import.meta.env.DEV && (
               <Box
                 component="pre"
@@ -2531,6 +2546,12 @@ function App() {
         }}
       >
         <BackendRuntimeGuard />
+        <SpaUpdateSnackbar />
+        <RouteErrorBoundary
+          recoveryHref="/"
+          recoveryLabel="Go Home"
+          testId="shell-route-error-boundary"
+        >
         <Suspense fallback={<RouteLazyFallback />}>
         <Routes>
           {/* Public route — no AuthGuard */}
@@ -2641,6 +2662,7 @@ function App() {
           } />
         </Routes>
         </Suspense>
+        </RouteErrorBoundary>
       </Box>
     </Box>
     </GoogleMapsScriptProvider>

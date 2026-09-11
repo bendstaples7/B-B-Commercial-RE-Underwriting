@@ -1,8 +1,36 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   afterCommandCenterMutation,
+  afterLeadWorkspaceMutation,
   commandCenterQueryKey,
+  invalidateAllCommandCenters,
 } from '@/utils/afterCommandCenterMutation'
+
+describe('afterLeadWorkspaceMutation', () => {
+  it('invalidates each lead once and skips non-finite ids', () => {
+    const invalidateQueries = vi.fn()
+    const queryClient = { invalidateQueries } as never
+
+    afterLeadWorkspaceMutation(queryClient, [1376, 1376, Number.NaN, 42])
+
+    expect(invalidateQueries).toHaveBeenCalledTimes(2)
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: commandCenterQueryKey(1376),
+    })
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: commandCenterQueryKey(42),
+    })
+  })
+})
+
+describe('invalidateAllCommandCenters', () => {
+  it('invalidates the commandCenter prefix', () => {
+    const invalidateQueries = vi.fn()
+    const queryClient = { invalidateQueries } as never
+    invalidateAllCommandCenters(queryClient)
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['commandCenter'] })
+  })
+})
 
 describe('afterCommandCenterMutation', () => {
   it('invalidates winner and loser commandCenter keys then navigates', async () => {
