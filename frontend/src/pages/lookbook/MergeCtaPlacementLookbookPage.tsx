@@ -246,7 +246,8 @@ export default function MergeCtaPlacementLookbookPage() {
         Merge duplicate — placement options
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Three candidate spots on Command Center. Orange outline = proposed CTA.
+        Product choice: <strong>Option 2</strong> (header ⋯). Options 1 and 3 kept for
+        comparison only.
       </Typography>
 
       <Stack spacing={3} maxWidth={980}>
@@ -261,9 +262,12 @@ export default function MergeCtaPlacementLookbookPage() {
           <ActionCenterMock highlightMerge />
         </Paper>
 
-        <Paper sx={{ ...ccCardSx, p: 2 }} data-testid="merge-placement-option-2">
+        <Paper
+          sx={{ ...ccCardSx, p: 2, border: '2px solid', borderColor: 'success.main' }}
+          data-testid="merge-placement-option-2"
+        >
           <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 0.5 }}>
-            Option 2 — Header overflow (⋯) next to status
+            Option 2 — Header overflow (⋯) next to status (chosen)
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
             Quiet but always available. Click the highlighted ⋯ next to the status chip.

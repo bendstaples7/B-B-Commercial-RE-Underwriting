@@ -1,8 +1,21 @@
 /**
- * DEV lookbook — same-address merge entry points as they appear on Command Center.
+ * DEV lookbook — same-address merge entry (Option 2: header ⋯ overflow).
  */
 import { useState } from 'react'
-import { Box, Chip, Paper, Stack, Typography } from '@mui/material'
+import {
+  Box,
+  Chip,
+  IconButton,
+  ListItemIcon,
+  ListItemText,
+  Menu,
+  MenuItem,
+  Paper,
+  Stack,
+  Typography,
+} from '@mui/material'
+import MoreVertIcon from '@mui/icons-material/MoreVert'
+import MergeTypeIcon from '@mui/icons-material/MergeType'
 import { SameAddressMergeBanner } from '@/components/lead-detail/SameAddressMergeBanner'
 import { ccCardSx, ccHeroAddressSx, ccPageBgSx } from '@/components/lead-detail/commandCenterChrome'
 import type { SameAddressLeadSummary } from '@/types'
@@ -16,7 +29,16 @@ const TWIN: SameAddressLeadSummary = {
   people_names: ['JAMES E MALONE'],
 }
 
-function FakeCommandCenterHeader() {
+function FakeCommandCenterHeader({
+  mergeOpen,
+  onOpenMerge,
+}: {
+  mergeOpen: boolean
+  onOpenMerge: () => void
+}) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+  const menuOpen = Boolean(anchor)
+
   return (
     <Box
       data-testid="merge-lookbook-cc-header"
@@ -37,8 +59,43 @@ function FakeCommandCenterHeader() {
         <Typography variant="caption" color="text.secondary">
           PIN 14-33-303-031-0000
         </Typography>
-        <Box sx={{ mt: 0.75, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+        <Box sx={{ mt: 0.75, display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
           <Chip size="small" color="primary" label="Mailing, No Contact Made" />
+          <IconButton
+            size="small"
+            aria-label="Lead options"
+            data-testid="lead-header-overflow-menu"
+            onClick={(event) => setAnchor(event.currentTarget)}
+            sx={{
+              cursor: 'pointer',
+              border: '2px solid',
+              borderColor: 'warning.main',
+              bgcolor: 'rgba(237, 108, 2, 0.08)',
+            }}
+          >
+            <MoreVertIcon fontSize="small" />
+          </IconButton>
+          <Menu
+            anchorEl={anchor}
+            open={menuOpen}
+            onClose={() => setAnchor(null)}
+            data-testid="lead-header-overflow-menu-panel"
+          >
+            <MenuItem
+              data-testid="same-address-merge-menu-item"
+              selected={mergeOpen}
+              onClick={() => {
+                setAnchor(null)
+                onOpenMerge()
+              }}
+              sx={{ cursor: 'pointer' }}
+            >
+              <ListItemIcon>
+                <MergeTypeIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>Merge duplicate…</ListItemText>
+            </MenuItem>
+          </Menu>
           <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>
             Last Sale 08/21/1998 · 2 Units · Duplex · Residential
           </Typography>
@@ -71,15 +128,18 @@ function FakeCommandCenterHeader() {
 
 export default function SameAddressMergeLookbookPage() {
   const [lastMerged, setLastMerged] = useState<string | null>(null)
+  const [manualOpen, setManualOpen] = useState(false)
+  const [autoOpen, setAutoOpen] = useState(false)
 
   return (
     <Box sx={{ ...ccPageBgSx, p: 2, minHeight: '100vh' }} data-testid="merge-lookbook">
       <Typography variant="h5" sx={{ mb: 1 }}>
-        Same-address merge — Command Center placement
+        Same-address merge — header ⋯ placement
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        On <code>/leads/:id</code>, the merge control sits in the sticky header stack —
-        directly under the property address / owner row, above Action Center.
+        On <code>/leads/:id</code>, open <strong>⋯</strong> next to the status chip →{' '}
+        <strong>Merge duplicate…</strong>. When a twin is auto-detected, a blue banner also
+        offers <strong>Merge</strong>.
       </Typography>
       {lastMerged ? (
         <Typography variant="body2" sx={{ mb: 2 }} data-testid="merge-lookbook-last">
@@ -90,39 +150,23 @@ export default function SameAddressMergeLookbookPage() {
       <Stack spacing={3} maxWidth={980}>
         <Paper sx={{ ...ccCardSx, p: 2 }} data-testid="merge-lookbook-cc-placement">
           <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
-            Command Center header (lead 2496) — look here ↓
+            Manual entry (no auto twin) — ⋯ next to status
           </Typography>
-          <FakeCommandCenterHeader />
-          <Box
-            data-testid="merge-lookbook-entry-callout"
-            sx={{
-              mt: 0.5,
-              px: 1,
-              py: 0.75,
-              borderRadius: 1,
-              border: '2px solid',
-              borderColor: 'warning.main',
-              bgcolor: 'rgba(237, 108, 2, 0.08)',
+          <FakeCommandCenterHeader
+            mergeOpen={manualOpen}
+            onOpenMerge={() => setManualOpen(true)}
+          />
+          <SameAddressMergeBanner
+            leadId={2496}
+            twins={[]}
+            open={manualOpen}
+            onOpenChange={setManualOpen}
+            currentOwnerLabel="JAMES E MALONE"
+            currentPeopleNames={CURRENT_PEOPLE}
+            onMerged={({ winnerId, loserId }) => {
+              setLastMerged(`#${loserId} → #${winnerId}`)
             }}
-          >
-            <Typography
-              variant="caption"
-              fontWeight={700}
-              color="warning.dark"
-              sx={{ display: 'block', mb: 0.5 }}
-            >
-              ENTRY POINT — under the address header, above Action Center
-            </Typography>
-            <SameAddressMergeBanner
-              leadId={2496}
-              twins={[]}
-              currentOwnerLabel="JAMES E MALONE"
-              currentPeopleNames={CURRENT_PEOPLE}
-              onMerged={({ winnerId, loserId }) => {
-                setLastMerged(`#${loserId} → #${winnerId}`)
-              }}
-            />
-          </Box>
+          />
           <Box
             sx={{
               mt: 1.5,
@@ -147,13 +191,14 @@ export default function SameAddressMergeLookbookPage() {
             When a twin is auto-detected
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Same spot becomes a blue banner with <strong>Merge</strong> (search still
-            available in the dialog).
+            Blue banner with <strong>Merge</strong> (⋯ menu still available).
           </Typography>
-          <FakeCommandCenterHeader />
+          <FakeCommandCenterHeader mergeOpen={autoOpen} onOpenMerge={() => setAutoOpen(true)} />
           <SameAddressMergeBanner
             leadId={2496}
             twins={[TWIN]}
+            open={autoOpen}
+            onOpenChange={setAutoOpen}
             currentOwnerLabel="JAMES E MALONE"
             currentPeopleNames={CURRENT_PEOPLE}
             onMerged={({ winnerId, loserId }) => {

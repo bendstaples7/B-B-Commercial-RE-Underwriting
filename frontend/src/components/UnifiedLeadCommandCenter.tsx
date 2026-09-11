@@ -27,6 +27,10 @@ import {
   DialogTitle,
   Chip,
   Link as MuiLink,
+  ListItemIcon,
+  ListItemText,
+  Menu,
+  MenuItem,
   Stack,
   useMediaQuery,
   useTheme,
@@ -39,6 +43,8 @@ import CloseIcon from '@mui/icons-material/Close'
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted'
 import UndoIcon from '@mui/icons-material/Undo'
 import OpenInFullIcon from '@mui/icons-material/OpenInFull'
+import MoreVertIcon from '@mui/icons-material/MoreVert'
+import MergeTypeIcon from '@mui/icons-material/MergeType'
 import { commandCenterService, leadTaskService, leadScoreService, queueService } from '@/services/api'
 import { entityResolutionApi } from '@/services/entityResolutionApi'
 import { leadService } from '@/services/leadApi'
@@ -154,6 +160,8 @@ interface PropertyOverviewHeaderProps {
   scoreFlash?: ScoreFlash | null
   onCategoryChanged?: (next: 'residential' | 'commercial') => void | Promise<void>
   onPropertyOverviewChanged?: () => void | Promise<void>
+  /** Opens same-address merge dialog (header ⋯ → Merge duplicate…). */
+  onMergeDuplicate?: () => void
 }
 
 function formatPropertyAddress(data: CommandCenterPayload): string {
@@ -180,10 +188,13 @@ function PropertyOverviewHeader({
   scoreFlash,
   onCategoryChanged,
   onPropertyOverviewChanged,
+  onMergeDuplicate,
 }: PropertyOverviewHeaderProps & { statusSelectorRef?: React.RefObject<HTMLDivElement | null> }) {
   const [scoreDialogOpen, setScoreDialogOpen] = useState(false)
   const [pinSnack, setPinSnack] = useState<string | null>(null)
+  const [overflowAnchor, setOverflowAnchor] = useState<HTMLElement | null>(null)
   const navigate = useNavigate()
+  const overflowOpen = Boolean(overflowAnchor)
 
   const fullAddress = formatPropertyAddress(commandCenterData)
   const primaryOwner = primaryOwnerDisplayName(
@@ -433,6 +444,43 @@ function PropertyOverviewHeader({
                   onStatusChanged={onStatusChanged}
                 />
               </Box>
+              {onMergeDuplicate ? (
+                <>
+                  <IconButton
+                    size="small"
+                    aria-label="Lead options"
+                    aria-haspopup="true"
+                    aria-expanded={overflowOpen ? 'true' : undefined}
+                    data-testid="lead-header-overflow-menu"
+                    onClick={(event) => setOverflowAnchor(event.currentTarget)}
+                    sx={{ cursor: 'pointer' }}
+                  >
+                    <MoreVertIcon fontSize="small" />
+                  </IconButton>
+                  <Menu
+                    anchorEl={overflowAnchor}
+                    open={overflowOpen}
+                    onClose={() => setOverflowAnchor(null)}
+                    data-testid="lead-header-overflow-menu-panel"
+                    anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                    transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                  >
+                    <MenuItem
+                      data-testid="same-address-merge-menu-item"
+                      onClick={() => {
+                        setOverflowAnchor(null)
+                        onMergeDuplicate()
+                      }}
+                      sx={{ cursor: 'pointer' }}
+                    >
+                      <ListItemIcon>
+                        <MergeTypeIcon fontSize="small" />
+                      </ListItemIcon>
+                      <ListItemText>Merge duplicate…</ListItemText>
+                    </MenuItem>
+                  </Menu>
+                </>
+              ) : null}
             </Box>
           </Box>
 
@@ -1364,6 +1412,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       }
     }
   }, [])
+  const [sameAddressMergeOpen, setSameAddressMergeOpen] = useState(false)
   const [activitySnackbar, setActivitySnackbar] = useState<{
     open: boolean
     message: string
@@ -2270,9 +2319,12 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 })
               }
             }}
+            onMergeDuplicate={() => setSameAddressMergeOpen(true)}
           />
           <SameAddressMergeBanner
             leadId={leadId}
+            open={sameAddressMergeOpen}
+            onOpenChange={setSameAddressMergeOpen}
             twins={commandCenterData.same_address_leads ?? []}
             currentOwnerLabel={
               primaryOwnerDisplayName(

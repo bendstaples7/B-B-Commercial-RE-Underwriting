@@ -1,9 +1,10 @@
 /**
  * Same-address duplicate banner + pick-who-stays merge dialog.
  *
- * Auto-detects same-building twins when the API returns them. Always also
- * exposes **Merge duplicate…** with lead search (name / address / id) so
- * users can trigger combine without memorizing the other lead number.
+ * Auto-detects same-building twins when the API returns them (blue banner).
+ * Manual entry lives on Command Center header overflow (⋯ → Merge duplicate…);
+ * open the dialog via controlled `open` / `onOpenChange` from that menu.
+ * Dialog search supports name / address / lead #.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -44,6 +45,9 @@ export interface SameAddressMergeBannerProps {
    * no-op). Prefer afterCommandCenterMutation via UnifiedLeadCommandCenter.
    */
   onMerged: (payload: SameAddressMergedPayload) => void | Promise<void>
+  /** Controlled dialog open (header ⋯ → Merge duplicate…). */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }
 
 function peopleLine(names: string[]): string {
@@ -63,8 +67,19 @@ export function SameAddressMergeBanner({
   currentOwnerLabel,
   currentPeopleNames,
   onMerged,
+  open: openProp,
+  onOpenChange,
 }: SameAddressMergeBannerProps) {
-  const [open, setOpen] = useState(false)
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
+  const isControlled = openProp !== undefined
+  const open = isControlled ? Boolean(openProp) : uncontrolledOpen
+  const setOpen = useCallback(
+    (next: boolean) => {
+      if (!isControlled) setUncontrolledOpen(next)
+      onOpenChange?.(next)
+    },
+    [isControlled, onOpenChange],
+  )
   const [winnerId, setWinnerId] = useState<number>(leadId)
   const [removeId, setRemoveId] = useState<number | null>(null)
   const [searchInput, setSearchInput] = useState('')
@@ -354,61 +369,41 @@ export function SameAddressMergeBanner({
 
   return (
     <>
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-        {hasTwins ? (
-          <Alert
-            severity="info"
-            data-testid="same-address-merge-banner"
-            sx={{
-              cursor: 'auto',
-              py: 0.5,
-              alignItems: 'center',
-              '& .MuiAlert-message': { width: '100%', py: 0.25 },
-            }}
-          >
-            <Box
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 1,
-                flexWrap: 'wrap',
-              }}
-            >
-              <Typography variant="body2" sx={{ minWidth: 0 }}>
-                Another record for this address: {bannerDetail}
-              </Typography>
-              <Button
-                size="small"
-                variant="contained"
-                data-testid="same-address-merge-open"
-                onClick={() => setOpen(true)}
-                sx={{ cursor: 'pointer', flexShrink: 0 }}
-              >
-                Merge
-              </Button>
-            </Box>
-          </Alert>
-        ) : (
+      {hasTwins ? (
+        <Alert
+          severity="info"
+          data-testid="same-address-merge-banner"
+          sx={{
+            cursor: 'auto',
+            py: 0.5,
+            alignItems: 'center',
+            '& .MuiAlert-message': { width: '100%', py: 0.25 },
+          }}
+        >
           <Box
             sx={{
               display: 'flex',
-              justifyContent: 'flex-end',
-              py: 0.25,
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 1,
+              flexWrap: 'wrap',
             }}
           >
+            <Typography variant="body2" sx={{ minWidth: 0 }}>
+              Another record for this address: {bannerDetail}
+            </Typography>
             <Button
               size="small"
-              variant="outlined"
+              variant="contained"
               data-testid="same-address-merge-open"
               onClick={() => setOpen(true)}
               sx={{ cursor: 'pointer', flexShrink: 0 }}
             >
-              Merge duplicate…
+              Merge
             </Button>
           </Box>
-        )}
-      </Box>
+        </Alert>
+      ) : null}
 
       <Dialog
         open={open}

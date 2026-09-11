@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { render, screen, waitFor } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
@@ -41,6 +41,33 @@ function deferred<T>() {
     resolve = res
   })
   return { promise, resolve }
+}
+
+
+function ManualMergeHarness(
+  props: Omit<
+    React.ComponentProps<typeof SameAddressMergeBanner>,
+    'open' | 'onOpenChange' | 'twins'
+  > & { twins?: SameAddressLeadSummary[] },
+) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button
+        type="button"
+        data-testid="same-address-merge-open"
+        onClick={() => setOpen(true)}
+      >
+        Merge duplicate…
+      </button>
+      <SameAddressMergeBanner
+        {...props}
+        twins={props.twins ?? []}
+        open={open}
+        onOpenChange={setOpen}
+      />
+    </>
+  )
 }
 
 describe('SameAddressMergeBanner', () => {
@@ -91,7 +118,7 @@ describe('SameAddressMergeBanner', () => {
     expect(onMerged).toHaveBeenCalledWith({ winnerId: 200, loserId: 100 })
   })
 
-  it('always offers Merge duplicate when no twin is auto-detected', async () => {
+  it('opens merge dialog from controlled header entry when no twin is auto-detected', async () => {
     const user = userEvent.setup()
     const onMerged = vi.fn().mockResolvedValue(undefined)
     vi.mocked(commandCenterService.getMergePreview).mockResolvedValue({
@@ -116,11 +143,10 @@ describe('SameAddressMergeBanner', () => {
     })
     render(
       <MemoryRouter>
-        <SameAddressMergeBanner
+        <ManualMergeHarness
           leadId={100}
           currentOwnerLabel="Current"
           currentPeopleNames={['Current']}
-          twins={[]}
           onMerged={onMerged}
         />
       </MemoryRouter>,
@@ -179,11 +205,10 @@ describe('SameAddressMergeBanner', () => {
     })
     render(
       <MemoryRouter>
-        <SameAddressMergeBanner
+        <ManualMergeHarness
           leadId={100}
           currentOwnerLabel="Current"
           currentPeopleNames={['Current']}
-          twins={[]}
           onMerged={onMerged}
         />
       </MemoryRouter>,
