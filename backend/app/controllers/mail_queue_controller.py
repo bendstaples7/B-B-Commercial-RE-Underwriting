@@ -26,6 +26,8 @@ _campaign_service = MailCampaignService()
 
 
 def _serialize_queue_item(item: MailQueueItem, *, last_mailed_at: str | None = None) -> dict:
+    from app.services.open_letter_contact_mapper import owner_mailing_dedupe_key
+
     lead = item.lead
     owner = ''
     if lead:
@@ -46,6 +48,7 @@ def _serialize_queue_item(item: MailQueueItem, *, last_mailed_at: str | None = N
         'mailing_city': getattr(lead, 'mailing_city', None) if lead else None,
         'mailing_state': getattr(lead, 'mailing_state', None) if lead else None,
         'mailing_zip': getattr(lead, 'mailing_zip', None) if lead else None,
+        'mailing_dedupe_key': owner_mailing_dedupe_key(lead) if lead else None,
         'last_mailed_at': last_mailed_at,
         'last_sale_at': format_last_sale_at(lead) if lead else None,
     }
@@ -242,6 +245,41 @@ def get_campaign(campaign_id: int):
                 exc_info=True,
             )
     return jsonify(_campaign_service.serialize_campaign(campaign)), 200
+
+
+@mail_queue_bp.route('/address-problems', methods=['GET'])
+@require_auth
+@handle_errors
+def list_address_problems():
+    """Leads blocked on mailing address (invalid / USPS failed) for Ready-to-Mail."""
+    from app.services.last_mailed_service import (
+        format_last_mailed_at,
+        get_last_mailed_at_by_lead_ids,
+    )
+
+    try:
+        limit = parse_positive_int(
+            request.args.get('limit'),
+            default=100,
+            maximum=500,
+            field_name='limit',
+        )
+    except ValueError as exc:
+        return jsonify({'error': 'Invalid request', 'message': str(exc)}), 400
+    items = _queue_service.list_address_problems(g.user_id, limit=limit)
+    raw_last = get_last_mailed_at_by_lead_ids([item.lead_id for item in items])
+    last_mailed = {lid: format_last_mailed_at(ts) for lid, ts in raw_last.items()}
+    serialized = []
+    for item in items:
+        problem_kind = (
+            'address_failed' if item.status == 'failed' else 'invalid_address'
+        )
+        payload = _serialize_queue_item(
+            item, last_mailed_at=last_mailed.get(item.lead_id),
+        )
+        payload['problem_kind'] = problem_kind
+        serialized.append(payload)
+    return jsonify({'items': serialized, 'total': len(serialized)}), 200
 
 
 @mail_queue_bp.route('/campaigns/<int:campaign_id>/gap-leads', methods=['GET'])

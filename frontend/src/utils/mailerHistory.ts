@@ -17,6 +17,8 @@ export interface MailerHistoryRow {
   campaign_id: number | null
   olc_order_id: string | null
   address_feedback: string | null
+  address_failure_reason?: string | null
+  olc_silent_omit?: boolean
   cancelled: boolean
   source: MailerHistorySource
 }
@@ -111,6 +113,9 @@ function normalizeOne(entry: unknown, idx: number): MailerHistoryRow | null {
       campaign_id: typeof obj.campaign_id === 'number' ? obj.campaign_id : null,
       olc_order_id: obj.olc_order_id != null ? String(obj.olc_order_id) : null,
       address_feedback: obj.address_feedback != null ? String(obj.address_feedback) : null,
+      address_failure_reason:
+        obj.address_failure_reason != null ? String(obj.address_failure_reason) : null,
+      olc_silent_omit: Boolean(obj.olc_silent_omit),
       cancelled: Boolean(obj.cancelled),
       source,
     }
@@ -129,6 +134,8 @@ function normalizeOne(entry: unknown, idx: number): MailerHistoryRow | null {
       campaign_id: null,
       olc_order_id: null,
       address_feedback: null,
+      address_failure_reason: null,
+      olc_silent_omit: false,
       cancelled: false,
       source: 'imported',
     }
@@ -142,6 +149,8 @@ function normalizeOne(entry: unknown, idx: number): MailerHistoryRow | null {
     campaign_id: null,
     olc_order_id: null,
     address_feedback: null,
+    address_failure_reason: null,
+    olc_silent_omit: false,
     cancelled: false,
     source: 'imported',
   }
@@ -201,6 +210,8 @@ export function resolveMailerHistorySummary(
           id: row.id || `mail-${idx}`,
           creative,
           label: preferRebuilt ? labelFromParts : (row.label || labelFromParts || 'Mailer'),
+          address_failure_reason: row.address_failure_reason ?? null,
+          olc_silent_omit: Boolean(row.olc_silent_omit),
         }
       }),
     }

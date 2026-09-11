@@ -7,10 +7,16 @@ function cell(value: string | number | null | undefined): string {
   return /^[=+\-@]/.test(cleaned) ? `'${cleaned}` : cleaned
 }
 
-function dispositionLabel(row: MailCampaignGapLead): string {
-  if (row.disposition === 'requeued') return 'Requeued'
-  if (row.disposition === 'support') return 'Support'
-  if (row.disposition === 'invalid_local') return 'Invalid'
+/** Human disposition when resolution is missing (gap dialog + Excel export). */
+export function gapDispositionLabel(row: MailCampaignGapLead): string {
+  if (row.disposition === 'requeued') return 'Back on Ready to Mail'
+  if (row.disposition === 'support') return 'Contact Open Letter support'
+  if (
+    row.disposition === 'address_failed'
+    || row.disposition === 'invalid_local'
+  ) {
+    return 'Needs address fix'
+  }
   return row.disposition || ''
 }
 
@@ -37,10 +43,10 @@ export function formatGapLeadsTsv(
       cell(row.property_street),
       cell(row.mailing_address),
       cell(row.reason),
-      cell(row.resolution || dispositionLabel(row)),
+      cell(row.resolution || gapDispositionLabel(row)),
     ]
     if (includeOmit) {
-      cols.push(cell(row.omit_count != null ? String(row.omit_count) : dispositionLabel(row)))
+      cols.push(cell(row.omit_count != null ? String(row.omit_count) : gapDispositionLabel(row)))
     }
     lines.push(cols.join('\t'))
   }

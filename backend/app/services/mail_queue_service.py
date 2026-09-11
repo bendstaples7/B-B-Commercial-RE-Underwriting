@@ -131,6 +131,57 @@ class MailQueueService:
         return items, total
 
     @staticmethod
+    def _is_address_problem_failure(validation_error: str | None) -> bool:
+        """True when a failed queue row is an address/USPS problem (not omit/other)."""
+        err = str(validation_error or '').strip()
+        if not err or err.startswith('OLC omitted'):
+            return False
+        if err == 'Lead not found':
+            return False
+        return True
+
+    def list_address_problems(
+        self,
+        user_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[MailQueueItem]:
+        """Queue rows that need a mailing-address fix before they can mail again."""
+        from sqlalchemy import and_, or_
+
+        limit = max(1, min(int(limit or 100), 500))
+        # Over-fetch failed rows then filter non-address failures so limit is
+        # applied to the visible problem set (not raw status mix).
+        fetch_n = min(limit * 3, 500)
+        candidates = (
+            MailQueueItem.query
+            .filter(
+                MailQueueItem.user_id == user_id,
+                or_(
+                    MailQueueItem.status == 'invalid_address',
+                    and_(
+                        MailQueueItem.status == 'failed',
+                        MailQueueItem.validation_error.isnot(None),
+                        MailQueueItem.validation_error != '',
+                    ),
+                ),
+            )
+            .options(selectinload(MailQueueItem.lead))
+            .order_by(MailQueueItem.updated_at.desc(), MailQueueItem.id.desc())
+            .limit(fetch_n)
+            .all()
+        )
+        out: list[MailQueueItem] = []
+        for item in candidates:
+            if item.status == 'invalid_address':
+                out.append(item)
+            elif self._is_address_problem_failure(item.validation_error):
+                out.append(item)
+            if len(out) >= limit:
+                break
+        return out
+
+    @staticmethod
     def serialize_attempt(
         attempt: MailEnqueueAttempt,
         *,

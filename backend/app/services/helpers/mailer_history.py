@@ -50,7 +50,8 @@ def normalize_mailer_history(raw: Any) -> list[dict[str, Any]]:
 
     Each row:
       id, sent_at, label, creative, template_name, campaign_id,
-      olc_order_id, address_feedback, cancelled, source
+      olc_order_id, address_feedback, address_failure_reason,
+      olc_silent_omit, cancelled, source
     """
     rows: list[dict[str, Any]] = []
     for idx, entry in enumerate(_as_entries(raw)):
@@ -101,11 +102,14 @@ def _normalize_one(entry: Any, idx: int) -> dict[str, Any] | None:
             label = f"Campaign {entry.get('campaign_id')}"
         if not label and entry.get('address_feedback'):
             label = f"Address feedback: {entry.get('address_feedback')}"
+        if not label and entry.get('olc_silent_omit'):
+            label = 'OLC silent omit'
         if not label:
             label = 'Mailer'
         source = 'olc' if (
             entry.get('campaign_id') is not None or entry.get('olc_order_id')
         ) else 'imported'
+        failure_reason = entry.get('address_failure_reason')
         return {
             'id': f'mail-{idx}',
             'sent_at': sent_at if sent_at is None else str(sent_at),
@@ -115,6 +119,10 @@ def _normalize_one(entry: Any, idx: int) -> dict[str, Any] | None:
             'campaign_id': entry.get('campaign_id'),
             'olc_order_id': entry.get('olc_order_id'),
             'address_feedback': entry.get('address_feedback'),
+            'address_failure_reason': (
+                None if failure_reason is None else str(failure_reason)
+            ),
+            'olc_silent_omit': bool(entry.get('olc_silent_omit')),
             'cancelled': bool(entry.get('cancelled')),
             'source': source,
         }
@@ -133,6 +141,8 @@ def _normalize_one(entry: Any, idx: int) -> dict[str, Any] | None:
             'campaign_id': None,
             'olc_order_id': None,
             'address_feedback': None,
+            'address_failure_reason': None,
+            'olc_silent_omit': False,
             'cancelled': False,
             'source': 'imported',
         }
@@ -145,6 +155,8 @@ def _normalize_one(entry: Any, idx: int) -> dict[str, Any] | None:
         'campaign_id': None,
         'olc_order_id': None,
         'address_feedback': None,
+        'address_failure_reason': None,
+        'olc_silent_omit': False,
         'cancelled': False,
         'source': 'imported',
     }

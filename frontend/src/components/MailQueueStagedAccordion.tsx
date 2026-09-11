@@ -1,12 +1,14 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
   Accordion,
   AccordionDetails,
   AccordionSummary,
+  Alert,
   Typography,
 } from '@mui/material'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import type { MailQueueItem } from '@/services/openLetterApi'
+import { analyzeMailBatchDuplicates } from '@/utils/mailBatchDuplicates'
 import { MailQueueStagedTable } from './MailQueueStagedTable'
 
 export interface MailQueueStagedAccordionProps {
@@ -26,6 +28,7 @@ export const MailQueueStagedAccordion: React.FC<MailQueueStagedAccordionProps> =
   emptyMessage,
 }) => {
   const [expanded, setExpanded] = useState(items.length === 0)
+  const dupInfo = useMemo(() => analyzeMailBatchDuplicates(items), [items])
 
   useEffect(() => {
     if (items.length === 0) {
@@ -56,10 +59,26 @@ export const MailQueueStagedAccordion: React.FC<MailQueueStagedAccordionProps> =
           >
             {preview}
             {items.length > 1 ? ` · +${items.length - 1} more` : ''}
+            {dupInfo.duplicateExtraCount > 0
+              ? ` · ${dupInfo.duplicateExtraCount} duplicate mailing${dupInfo.duplicateExtraCount === 1 ? '' : 's'}`
+              : ''}
           </Typography>
         )}
       </AccordionSummary>
       <AccordionDetails sx={{ p: 0 }}>
+        {dupInfo.duplicateExtraCount > 0 ? (
+          <Alert
+            severity="warning"
+            sx={{ mx: 1.5, mt: 1.5, mb: 1 }}
+            data-testid="mail-queue-dup-alert"
+          >
+            {dupInfo.duplicateExtraCount} lead
+            {dupInfo.duplicateExtraCount === 1 ? '' : 's'} share a mailing address with another
+            staged lead ({dupInfo.duplicateGroupCount} address
+            {dupInfo.duplicateGroupCount === 1 ? '' : 'es'}). On send, only one piece per address
+            goes to Open Letter; the extras stay on Ready to Mail.
+          </Alert>
+        ) : null}
         <MailQueueStagedTable items={items} emptyMessage={emptyMessage} />
       </AccordionDetails>
     </Accordion>
