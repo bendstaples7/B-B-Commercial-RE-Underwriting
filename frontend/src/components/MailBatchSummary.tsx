@@ -113,19 +113,9 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
   }, [queueData, sendMutation])
 
   const queuedCount = queueData?.queued_count ?? 0
+  // ReadyToMail loads via getAllQueued — analyze the items we were given (no
+  // nested mail-queue refetch; that races the parent query and burns one-shot mocks).
   const stagedItems = queueData?.items ?? []
-  const needsFullQueueForDups = queuedCount > stagedItems.length
-  const { data: fullQueueForDups } = useQuery({
-    queryKey: ['mail-queue'],
-    queryFn: () => openLetterService.getAllQueued(),
-    enabled: needsFullQueueForDups,
-  })
-  const itemsForDupAnalysis = useMemo(() => {
-    if (needsFullQueueForDups && (fullQueueForDups?.items?.length ?? 0) >= queuedCount) {
-      return fullQueueForDups!.items
-    }
-    return stagedItems
-  }, [needsFullQueueForDups, fullQueueForDups, queuedCount, stagedItems])
   const batchMinimum = queueData?.batch_minimum ?? 50
   const progress = batchMinimum > 0 ? Math.min(100, (queuedCount / batchMinimum) * 100) : 0
   const canSend = queueData?.can_send ?? false
@@ -133,10 +123,14 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
   const activeCreative = getActiveCreativePreset(olcConfig)
   const catalog = getOlcCatalogSendLines(olcConfig, products)
   const dupInfo = useMemo(
-    () => analyzeMailBatchDuplicates(itemsForDupAnalysis),
-    [itemsForDupAnalysis],
+    () => analyzeMailBatchDuplicates(stagedItems),
+    [stagedItems],
   )
-  const willSubmitCount = Math.max(0, queuedCount - dupInfo.duplicateExtraCount)
+  // Only subtract dup extras from the full staged total when items look complete.
+  const willSubmitCount =
+    stagedItems.length >= queuedCount
+      ? Math.max(0, queuedCount - dupInfo.duplicateExtraCount)
+      : Math.max(0, queuedCount)
 
   return (
     <>
