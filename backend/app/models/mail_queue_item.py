@@ -17,7 +17,7 @@ class MailQueueItem(db.Model):
     user_id = db.Column(db.String(100), nullable=False, index=True)
     status = db.Column(
         db.Enum(
-            'queued', 'invalid_address', 'removed', 'sent', 'failed',
+            'queued', 'submitted', 'invalid_address', 'removed', 'sent', 'failed',
             name='mail_queue_status_enum',
         ),
         nullable=False,

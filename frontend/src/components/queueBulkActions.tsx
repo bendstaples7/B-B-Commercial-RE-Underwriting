@@ -34,7 +34,12 @@ export interface QueueBulkActionContext {
   onEnqueueError?: (error: unknown) => void
 }
 
-const MAIL_QUERY_KEYS = ['mail-queue', 'queue-mail-candidates', 'queue-counts'] as const
+const MAIL_QUERY_KEYS = [
+  'mail-queue',
+  'queue-mail-candidates',
+  'queue-counts',
+  'mail-address-problems',
+] as const
 
 export function invalidateMailQueries(queryClient: QueryClient) {
   for (const key of MAIL_QUERY_KEYS) {

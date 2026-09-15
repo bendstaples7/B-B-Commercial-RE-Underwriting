@@ -2495,13 +2495,15 @@ class TestSubmitCampaignFollowUp:
                 LeadTask.status == 'open',
                 LeadTask.task_type == 'add_to_mail_batch',
             ).first()
-            assert follow_up is not None
-            assert 'Add to next mailer' in follow_up.title
-            assert follow_up.due_date is not None
+            # Rematch is deferred until OLC order confirm (analytics sync).
+            assert follow_up is None
             refreshed = MailCampaign.query.get(campaign.id)
             assert refreshed.status == 'submitted'
             assert refreshed.submitted_count == 1
             assert refreshed.lead_count == 1
+            item = MailQueueItem.query.filter_by(lead_id=lead.id).first()
+            assert item.status == 'submitted'
+            assert item.campaign_id == campaign.id
 
     def test_submit_campaign_cadence_drop_dates_pending_follow_up(
         self, app, fernet_key, monkeypatch,

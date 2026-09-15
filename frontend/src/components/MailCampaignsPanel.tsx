@@ -50,10 +50,10 @@ const bodyCellSx = {
   lineHeight: 1.35,
 } as const
 
-const wrapCellSx = {
+/** Short text columns: never mid-word wrap; table scrolls horizontally instead. */
+const nowrapCellSx = {
   ...bodyCellSx,
-  overflowWrap: 'anywhere' as const,
-  wordBreak: 'break-word' as const,
+  whiteSpace: 'nowrap' as const,
 }
 
 const statusHeaderSx = {
@@ -73,7 +73,22 @@ const submittedCellSx = {
   ...bodyCellSx,
   textAlign: 'left' as const,
   verticalAlign: 'top' as const,
+  minWidth: '12rem',
+  whiteSpace: 'nowrap' as const,
 }
+
+const captionNowrapSx = {
+  textAlign: 'left' as const,
+  whiteSpace: 'nowrap' as const,
+  width: 'max-content' as const,
+  maxWidth: 'none' as const,
+} as const
+
+const campaignsTableSx = {
+  width: 'max-content',
+  minWidth: '100%',
+  tableLayout: 'auto' as const,
+} as const
 
 const gapCaptionLinkSx = {
   display: 'inline',
@@ -142,35 +157,36 @@ function CampaignRow({
   // Prefer cached omit count; fall back to scan vs submitted mismatch before first heal sync.
   const showOmitLink = hasOmitCache || (omitCount == null && hasScanPieces && scanPieces !== submittedCount)
   const omitCaption = hasOmitCache
-    ? `${omitCount} not on OLC`
+    ? `${omitCount} not on OLC — back on Ready to Mail / support`
     : `OLC tracked ${scanPieces}`
   const reconParts = mailSubmitReconciliationParts(campaign)
+  const dropEntries = Object.entries(campaign.submit_drop_summary ?? {})
 
   return (
     <TableRow data-testid={`mail-campaign-row-${campaign.id}`}>
-      <TableCell sx={bodyCellSx}>
+      <TableCell sx={nowrapCellSx}>
         <Typography variant="inherit" component="div" sx={{ fontSize: 'inherit' }}>
           #{campaign.id}
         </Typography>
         {campaign.olc_order_id ? (
-          <Typography variant="caption" color="text.secondary" component="div">
+          <Typography variant="caption" color="text.secondary" component="div" sx={{ whiteSpace: 'nowrap' }}>
             OLC {campaign.olc_order_id}
           </Typography>
         ) : (
-          <Typography variant="caption" color="text.secondary" component="div">
+          <Typography variant="caption" color="text.secondary" component="div" sx={{ whiteSpace: 'nowrap' }}>
             No OLC order yet
           </Typography>
         )}
       </TableCell>
-      <TableCell sx={bodyCellSx}>
+      <TableCell sx={nowrapCellSx}>
         {formatLastMailedDate(campaign.submitted_at || campaign.created_at)}
       </TableCell>
-      <TableCell sx={wrapCellSx}>{creativeSender(creative)}</TableCell>
-      <TableCell sx={wrapCellSx}>{creative?.envelope_color || '—'}</TableCell>
-      <TableCell sx={bodyCellSx}>{creative?.font_color || '—'}</TableCell>
-      <TableCell sx={bodyCellSx}>{yn(creative?.include_email)}</TableCell>
-      <TableCell sx={bodyCellSx}>{yn(creative?.include_website)}</TableCell>
-      <TableCell sx={wrapCellSx}>
+      <TableCell sx={nowrapCellSx}>{creativeSender(creative)}</TableCell>
+      <TableCell sx={nowrapCellSx}>{creative?.envelope_color || '—'}</TableCell>
+      <TableCell sx={nowrapCellSx}>{creative?.font_color || '—'}</TableCell>
+      <TableCell sx={nowrapCellSx}>{yn(creative?.include_email)}</TableCell>
+      <TableCell sx={nowrapCellSx}>{yn(creative?.include_website)}</TableCell>
+      <TableCell sx={nowrapCellSx}>
         {campaign.template_name || campaign.template_id || '—'}
       </TableCell>
       <TableCell sx={submittedCellSx}>
@@ -180,7 +196,7 @@ function CampaignRow({
             flexDirection: 'column',
             alignItems: 'flex-start',
             gap: 0.25,
-            width: '100%',
+            width: 'max-content',
           }}
         >
           <Typography
@@ -194,7 +210,7 @@ function CampaignRow({
               variant="caption"
               color="text.secondary"
               component="div"
-              sx={{ textAlign: 'left', width: '100%' }}
+              sx={captionNowrapSx}
             >
               {reconParts.stagedLabel}
               {reconParts.invalidLabel ? (
@@ -211,15 +227,25 @@ function CampaignRow({
                   </Box>
                 </>
               ) : null}
-              {reconParts.dropSummary ? ` · ${reconParts.dropSummary}` : ''}
             </Typography>
           ) : null}
+          {dropEntries.map(([reason, n]) => (
+            <Typography
+              key={reason}
+              variant="caption"
+              color="text.secondary"
+              component="div"
+              sx={captionNowrapSx}
+            >
+              {n}× {reason}
+            </Typography>
+          ))}
           {showOmitLink ? (
             <Typography
               variant="caption"
               color="text.secondary"
               component="div"
-              sx={{ textAlign: 'left', width: '100%' }}
+              sx={captionNowrapSx}
             >
               <Box
                 component="button"
@@ -234,20 +260,40 @@ function CampaignRow({
           ) : null}
         </Box>
       </TableCell>
-      <TableCell sx={bodyCellSx}>
+      <TableCell sx={{ ...nowrapCellSx, verticalAlign: 'top' }}>
         {campaign.address_feedback ? (
-          <Typography variant="caption" component="div" sx={{ whiteSpace: 'nowrap' }}>
-            C{campaign.address_feedback.corrected ?? 0}
-            {' / '}
-            F{campaign.address_feedback.failed ?? 0}
-            {' / '}
-            V{campaign.address_feedback.verified ?? 0}
-          </Typography>
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0.25, width: 'max-content' }}>
+            {(campaign.address_feedback.failed ?? 0) > 0 ? (
+              <Box
+                component="button"
+                type="button"
+                onClick={() => onOpenGap(campaign.id, 'address_failed')}
+                data-testid={`mail-campaign-address-failed-link-${campaign.id}`}
+                sx={{
+                  ...gapCaptionLinkSx,
+                  display: 'block',
+                  textAlign: 'left',
+                  fontWeight: 600,
+                  color: 'warning.dark',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {campaign.address_feedback.failed} USPS failed — won’t mail
+              </Box>
+            ) : null}
+            <Typography variant="caption" component="div" sx={{ whiteSpace: 'nowrap' }}>
+              Corrected {campaign.address_feedback.corrected ?? 0}
+              {' · '}
+              Failed {campaign.address_feedback.failed ?? 0}
+              {' · '}
+              Verified {campaign.address_feedback.verified ?? 0}
+            </Typography>
+          </Box>
         ) : (
           '—'
         )}
       </TableCell>
-      <TableCell sx={bodyCellSx}>
+      <TableCell sx={nowrapCellSx}>
         {campaign.cost != null
           ? `$${Number(campaign.cost).toFixed(2)}`
           : '—'}
@@ -267,9 +313,9 @@ function CampaignRow({
           />
         </Tooltip>
       </TableCell>
-      <TableCell sx={bodyCellSx}>{formatPct(deliveryRate)}</TableCell>
-      <TableCell sx={bodyCellSx}>{formatPct(campaign.response_rate)}</TableCell>
-      <TableCell sx={bodyCellSx}>
+      <TableCell sx={nowrapCellSx}>{formatPct(deliveryRate)}</TableCell>
+      <TableCell sx={nowrapCellSx}>{formatPct(campaign.response_rate)}</TableCell>
+      <TableCell sx={nowrapCellSx}>
         {canCancel ? (
           <Button
             size="small"
@@ -309,7 +355,7 @@ function CreativeCompareTable({ rows }: { rows: CreativeRollupRow[] }) {
           overflowX: 'auto',
         }}
       >
-        <Table size="small" sx={{ width: '100%', tableLayout: 'fixed' }}>
+        <Table size="small" sx={campaignsTableSx}>
           <TableHead>
             <TableRow>
               <TableCell sx={headerCellSx}>Sender</TableCell>
@@ -333,16 +379,16 @@ function CreativeCompareTable({ rows }: { rows: CreativeRollupRow[] }) {
                   String(row.include_website),
                 ].join('|')}
               >
-                <TableCell sx={wrapCellSx}>{row.sender_display_name}</TableCell>
-                <TableCell sx={wrapCellSx}>{row.envelope_color}</TableCell>
-                <TableCell sx={bodyCellSx}>
+                <TableCell sx={nowrapCellSx}>{row.sender_display_name}</TableCell>
+                <TableCell sx={nowrapCellSx}>{row.envelope_color}</TableCell>
+                <TableCell sx={nowrapCellSx}>
                   {row.font_color && row.font_color !== '—' ? row.font_color : '—'}
                 </TableCell>
-                <TableCell sx={bodyCellSx}>{yn(row.include_email)}</TableCell>
-                <TableCell sx={bodyCellSx}>{yn(row.include_website)}</TableCell>
-                <TableCell sx={bodyCellSx}>{row.campaign_count}</TableCell>
-                <TableCell sx={bodyCellSx}>{row.lead_count}</TableCell>
-                <TableCell sx={bodyCellSx}>{formatPct(row.response_rate)}</TableCell>
+                <TableCell sx={nowrapCellSx}>{yn(row.include_email)}</TableCell>
+                <TableCell sx={nowrapCellSx}>{yn(row.include_website)}</TableCell>
+                <TableCell sx={nowrapCellSx}>{row.campaign_count}</TableCell>
+                <TableCell sx={nowrapCellSx}>{row.lead_count}</TableCell>
+                <TableCell sx={nowrapCellSx}>{formatPct(row.response_rate)}</TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -448,7 +494,7 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
   }
 
   return (
-    <Box sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
+    <Box sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'auto' }}>
       {!embedded && (
         <Box
           sx={{
@@ -554,7 +600,7 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
         >
           <Table
             size="small"
-            sx={{ width: '100%', tableLayout: 'fixed' }}
+            sx={campaignsTableSx}
             data-testid="mail-campaigns-table"
           >
             <TableHead>

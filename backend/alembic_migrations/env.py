@@ -119,6 +119,8 @@ _KNOWN_REVISIONS = frozenset({
     'gen_own_20260910',
     # Cancel leftover undated rematch tasks from staged-batch enqueue
     'mail_stg_20260910',
+    # Interim mail_queue status submitted (await OLC confirm before sent)
+    'mail_sub_20260910',
     # HubSpot signal dedup uniqueness index (lead_id, signal_type, source_engagement_id)
     'd6e7f8a9b0c1',
     # Ranked fuzzy search — leads.search_document generated column + GIN trgm

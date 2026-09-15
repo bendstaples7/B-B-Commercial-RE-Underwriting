@@ -87,6 +87,9 @@ def _dates_from_mailer_entry(entry) -> list[datetime]:
     if isinstance(entry, str):
         return _dates_from_free_text(entry)
     if isinstance(entry, dict):
+        # Silent OLC omit / voided unconfirmed submits must not start cadence.
+        if entry.get('olc_silent_omit') or entry.get('voided'):
+            return []
         found: list[datetime] = []
         for key in _MAILER_DATE_KEYS:
             dt = _parse_date_string(entry.get(key))
@@ -96,17 +99,36 @@ def _dates_from_mailer_entry(entry) -> list[datetime]:
     return []
 
 
+def _omitted_order_ids(mailer_history) -> set[str]:
+    """OLC order ids that were stamped as silent omits (never a real send)."""
+    if not isinstance(mailer_history, list):
+        return set()
+    out: set[str] = set()
+    for entry in mailer_history:
+        if not isinstance(entry, dict) or not entry.get('olc_silent_omit'):
+            continue
+        oid = str(entry.get('olc_order_id') or '').strip()
+        if oid:
+            out.add(oid)
+    return out
+
+
 def last_mailed_from_mailer_history(mailer_history) -> datetime | None:
     """Best-effort parse of legacy or OLC mailer_history JSON."""
     if mailer_history is None:
         return None
 
+    omitted_orders = _omitted_order_ids(mailer_history)
     candidates: list[datetime] = []
 
     if isinstance(mailer_history, str):
         candidates.extend(_dates_from_free_text(mailer_history))
     elif isinstance(mailer_history, list):
         for entry in mailer_history:
+            if isinstance(entry, dict):
+                oid = str(entry.get('olc_order_id') or '').strip()
+                if oid and oid in omitted_orders:
+                    continue
             candidates.extend(_dates_from_mailer_entry(entry))
     elif isinstance(mailer_history, dict):
         candidates.extend(_dates_from_mailer_entry(mailer_history))
@@ -242,26 +264,39 @@ def get_last_mailed_at_by_lead_ids(lead_ids: list[int]) -> dict[int, datetime | 
 
     result: dict[int, datetime | None] = {lead_id: None for lead_id in lead_ids}
 
+    leads = Lead.query.filter(Lead.id.in_(lead_ids)).all()
+    omitted_by_lead = {
+        lead.id: _omitted_order_ids(lead.mailer_history) for lead in leads
+    }
+
     timeline_rows = (
         db.session.query(
             LeadTimelineEntry.lead_id,
-            func.max(LeadTimelineEntry.occurred_at),
+            LeadTimelineEntry.occurred_at,
+            LeadTimelineEntry.event_metadata,
         )
         .filter(
             LeadTimelineEntry.lead_id.in_(lead_ids),
             LeadTimelineEntry.event_type == 'mail_sent',
             LeadTimelineEntry.is_deleted.is_(False),
         )
-        .group_by(LeadTimelineEntry.lead_id)
         .all()
     )
-    for lead_id, occurred_at in timeline_rows:
+    for lead_id, occurred_at, meta in timeline_rows:
+        omitted = omitted_by_lead.get(lead_id) or set()
+        if omitted:
+            oid = str((meta or {}).get('olc_order_id') or '').strip()
+            if oid and oid in omitted:
+                continue
         result[lead_id] = _pick_latest(result[lead_id], occurred_at)
 
+    # Only confirmed sends (`sent`). Interim `submitted` (awaiting OLC contact
+    # confirmation) must not start quarterly cadence.
     campaign_rows = (
         db.session.query(
             MailQueueItem.lead_id,
-            func.max(MailCampaign.submitted_at),
+            MailCampaign.submitted_at,
+            MailCampaign.olc_order_id,
         )
         .join(MailCampaign, MailQueueItem.campaign_id == MailCampaign.id)
         .filter(
@@ -269,13 +304,15 @@ def get_last_mailed_at_by_lead_ids(lead_ids: list[int]) -> dict[int, datetime | 
             MailQueueItem.status == 'sent',
             MailCampaign.submitted_at.isnot(None),
         )
-        .group_by(MailQueueItem.lead_id)
         .all()
     )
-    for lead_id, submitted_at in campaign_rows:
+    for lead_id, submitted_at, order_id in campaign_rows:
+        omitted = omitted_by_lead.get(lead_id) or set()
+        oid = str(order_id or '').strip()
+        if oid and oid in omitted:
+            continue
         result[lead_id] = _pick_latest(result[lead_id], submitted_at)
 
-    leads = Lead.query.filter(Lead.id.in_(lead_ids)).all()
     for lead in leads:
         history_dt = last_mailed_from_mailer_history(lead.mailer_history)
         result[lead.id] = _pick_latest(result[lead.id], history_dt)

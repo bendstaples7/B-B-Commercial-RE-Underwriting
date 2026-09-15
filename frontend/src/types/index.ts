@@ -2370,6 +2370,8 @@ export interface CommandCenterPayload {
       campaign_id: number | null;
       olc_order_id: string | null;
       address_feedback: string | null;
+      address_failure_reason?: string | null;
+      olc_silent_omit?: boolean;
       cancelled: boolean;
       source: 'olc' | 'imported' | 'timeline';
     }>;
