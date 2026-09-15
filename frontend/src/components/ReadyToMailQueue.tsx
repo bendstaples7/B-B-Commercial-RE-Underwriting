@@ -24,6 +24,7 @@ import { Link as RouterLink } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { MailBatchSummary } from './MailBatchSummary'
 import { MailQueueStagedAccordion } from './MailQueueStagedAccordion'
+import { MailAddressProblemsSection } from './MailAddressProblemsSection'
 import { MailCampaignsPanel } from './MailCampaignsPanel'
 import { AppSnackbar } from './AppSnackbar'
 import { QueueTable } from './QueueTable'
@@ -313,7 +314,7 @@ export function ReadyToMailQueue() {
   return (
     <Box
       data-testid="ready-to-mail-queue"
-      sx={{ p: { xs: 1.5, sm: 2 }, maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}
+      sx={{ p: { xs: 1.5, sm: 2 }, maxWidth: '100%', minWidth: 0, overflowX: 'auto' }}
     >
       <Typography variant="h5" component="h1" gutterBottom sx={{ overflowWrap: 'anywhere' }}>
         Ready to Mail
@@ -605,6 +606,8 @@ export function ReadyToMailQueue() {
       ) : (
         <MailQueueStagedAccordion items={queueData?.items ?? []} />
       )}
+
+      <MailAddressProblemsSection />
 
       <Divider sx={{ my: 3 }} />
 

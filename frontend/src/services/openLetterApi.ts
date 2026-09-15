@@ -63,6 +63,10 @@ export interface MailQueueItem {
   mailing_city?: string | null
   mailing_state?: string | null
   mailing_zip?: string | null
+  /** Normalized street|city|state|zip5 for batch duplicate detection. */
+  mailing_dedupe_key?: string | null
+  /** Present on address-problems list: invalid_address | address_failed. */
+  problem_kind?: string | null
   last_mailed_at?: string | null
   last_sale_at?: string | null
 }
@@ -164,7 +168,7 @@ export interface MailCampaign {
   } | null
 }
 
-export type MailCampaignGapKind = 'invalid_local' | 'olc_omitted'
+export type MailCampaignGapKind = 'invalid_local' | 'olc_omitted' | 'address_failed'
 
 export interface MailCampaignGapLead {
   lead_id: number
@@ -302,6 +306,13 @@ export const openLetterService = {
         signal: opts?.signal,
         timeout: 30_000,
       })
+      .then((r) => r.data),
+
+  listAddressProblems: (
+    limit = 100,
+  ): Promise<{ items: MailQueueItem[]; total: number }> =>
+    api
+      .get('/mail-queue/address-problems', { params: { limit } })
       .then((r) => r.data),
 
   redispatchCampaign: (id: number): Promise<MailCampaign> =>

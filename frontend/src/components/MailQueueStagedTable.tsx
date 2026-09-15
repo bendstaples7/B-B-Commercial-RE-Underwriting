@@ -3,6 +3,7 @@ import {
   Box,
   Button,
   Checkbox,
+  Chip,
   IconButton,
   Paper,
   Stack,
@@ -24,6 +25,10 @@ import openLetterService, {
 } from '@/services/openLetterApi'
 import { afterLeadWorkspaceMutation } from '@/utils/afterCommandCenterMutation'
 import { formatLastMailedDate, formatLastSaleDate } from '@/utils/formatLastMailedDate'
+import {
+  analyzeMailBatchDuplicates,
+  sortStagedItemsByMailingDedupe,
+} from '@/utils/mailBatchDuplicates'
 
 /** Matches backend MAX_MAIL_ENQUEUE_LEADS for bulk remove. */
 export const MAIL_QUEUE_BULK_REMOVE_LIMIT = 1000
@@ -146,6 +151,8 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
     }
     return map
   }, [items])
+  const dupInfo = useMemo(() => analyzeMailBatchDuplicates(items), [items])
+  const displayItems = useMemo(() => sortStagedItemsByMailingDedupe(items), [items])
 
   useEffect(() => {
     setSelectedIds((prev) => prev.filter((id) => itemIds.includes(id)))
@@ -295,10 +302,18 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
                 </TableCell>
               </TableRow>
             ) : (
-              items.map((item) => {
+              displayItems.map((item) => {
                 const selected = selectedIds.includes(item.id)
+                const isDup = dupInfo.duplicateItemIds.has(item.id)
+                const isKeeper = dupInfo.keeperItemIds.has(item.id)
+                const groupSize = dupInfo.groupSizeByItemId.get(item.id) ?? 0
                 return (
-                  <TableRow key={item.id} selected={selected}>
+                  <TableRow
+                    key={item.id}
+                    selected={selected}
+                    data-testid={isDup ? `mail-queue-dup-row-${item.id}` : undefined}
+                    sx={isDup && !isKeeper ? { bgcolor: 'warning.50' } : undefined}
+                  >
                     <TableCell padding="checkbox">
                       <Checkbox
                         size="small"
@@ -312,7 +327,18 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
                       />
                     </TableCell>
                     <TableCell sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
-                      {item.owner_name || '—'}
+                      <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+                        <span>{item.owner_name || '—'}</span>
+                        {isDup ? (
+                          <Chip
+                            size="small"
+                            color="warning"
+                            variant={isKeeper ? 'outlined' : 'filled'}
+                            label={isKeeper ? `Sends (1 of ${groupSize})` : 'Duplicate — stays in queue'}
+                            data-testid={`mail-queue-dup-chip-${item.id}`}
+                          />
+                        ) : null}
+                      </Stack>
                     </TableCell>
                     <TableCell sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                       <RouterLink to={`/leads/${item.lead_id}`}>

@@ -25,6 +25,7 @@ import {
   isDirectMailReadyToSend,
 } from '@/utils/directMailSetup'
 import { formatLastMailedDate } from '@/utils/formatLastMailedDate'
+import { analyzeMailBatchDuplicates } from '@/utils/mailBatchDuplicates'
 import type { OlcProduct } from '@/utils/olcProductHelpers'
 
 export interface MailBatchSummaryProps {
@@ -112,12 +113,24 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
   }, [queueData, sendMutation])
 
   const queuedCount = queueData?.queued_count ?? 0
+  // ReadyToMail loads via getAllQueued — analyze the items we were given (no
+  // nested mail-queue refetch; that races the parent query and burns one-shot mocks).
+  const stagedItems = queueData?.items ?? []
   const batchMinimum = queueData?.batch_minimum ?? 50
   const progress = batchMinimum > 0 ? Math.min(100, (queuedCount / batchMinimum) * 100) : 0
   const canSend = queueData?.can_send ?? false
   const readyToSend = isDirectMailReadyToSend(olcConfig)
   const activeCreative = getActiveCreativePreset(olcConfig)
   const catalog = getOlcCatalogSendLines(olcConfig, products)
+  const dupInfo = useMemo(
+    () => analyzeMailBatchDuplicates(stagedItems),
+    [stagedItems],
+  )
+  // Only subtract dup extras from the full staged total when items look complete.
+  const willSubmitCount =
+    stagedItems.length >= queuedCount
+      ? Math.max(0, queuedCount - dupInfo.duplicateExtraCount)
+      : Math.max(0, queuedCount)
 
   return (
     <>
@@ -195,6 +208,13 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
               >
                 Adding leads to batch…
               </Typography>
+            )}
+            {dupInfo.duplicateExtraCount > 0 && (
+              <Alert severity="warning" sx={{ mb: 1.5 }} data-testid="mail-batch-dup-summary">
+                {dupInfo.duplicateExtraCount} duplicate mailing
+                {dupInfo.duplicateExtraCount === 1 ? '' : 's'} in this batch — about{' '}
+                {willSubmitCount} will submit; extras stay on Ready to Mail.
+              </Alert>
             )}
             <Box
               sx={{
@@ -308,11 +328,15 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
         )}
       </Paper>
 
-      <Dialog open={sendDialogOpen} onClose={() => setSendDialogOpen(false)}>
+      <Dialog
+        open={sendDialogOpen}
+        onClose={() => setSendDialogOpen(false)}
+        data-testid="mail-batch-send-dialog"
+      >
         <DialogTitle>Send mail batch?</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            This will submit {queuedCount} mailers to Open Letter Connect
+            This will submit {willSubmitCount} mailer{willSubmitCount === 1 ? '' : 's'} to Open Letter Connect
             {catalog.productLine
               ? ` as “${catalog.productLine}”`
               : activeCreative
@@ -320,17 +344,30 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
                 : ''}
             {catalog.templateLine ? ` (template ${catalog.templateLine})` : ''}
             .
-            {queueData?.estimated_total != null
-              && queueData.estimated_cost_per_piece != null
+            {queueData?.estimated_cost_per_piece != null
               && queueData.estimated_cost_per_piece > 0 && (
-              <> Estimated charge: ~${queueData.estimated_total.toFixed(2)} on your OLC payment method.</>
+              <> Estimated charge: ~${(
+                queueData.estimated_cost_per_piece * willSubmitCount
+              ).toFixed(2)} on your OLC payment method.</>
             )}
           </DialogContentText>
+          {dupInfo.duplicateExtraCount > 0 ? (
+            <Alert severity="warning" sx={{ mt: 2 }} data-testid="mail-batch-send-dup-review">
+              {queuedCount} staged → {willSubmitCount} submit · {dupInfo.duplicateExtraCount}{' '}
+              duplicate mailing{dupInfo.duplicateExtraCount === 1 ? '' : 's'} stay on Ready to Mail
+              (one piece per address).
+            </Alert>
+          ) : null}
           {sendError && <Alert severity="error" sx={{ mt: 2 }}>{sendError}</Alert>}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSendDialogOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleSend} disabled={sendMutation.isPending}>
+          <Button
+            variant="contained"
+            onClick={handleSend}
+            disabled={sendMutation.isPending}
+            data-testid="mail-batch-confirm-send"
+          >
             {sendMutation.isPending ? 'Submitting…' : 'Confirm send'}
           </Button>
         </DialogActions>

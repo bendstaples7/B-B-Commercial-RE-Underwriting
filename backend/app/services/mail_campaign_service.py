@@ -2029,12 +2029,12 @@ class MailCampaignService:
         *,
         kind: str,
     ) -> list[dict[str, Any]]:
-        """Return lead rows for campaign gap drill-downs (invalid / OLC omitted)."""
+        """Return lead rows for campaign gap drill-downs (invalid / OLC omitted / USPS)."""
         campaign = self.get_campaign(campaign_id, user_id)
         kind_norm = (kind or '').strip().lower()
-        if kind_norm not in ('invalid_local', 'olc_omitted'):
+        if kind_norm not in ('invalid_local', 'olc_omitted', 'address_failed'):
             raise MailQueueError(
-                "kind must be 'invalid_local' or 'olc_omitted'",
+                "kind must be 'invalid_local', 'olc_omitted', or 'address_failed'",
                 status_code=400,
             )
 
@@ -2054,6 +2054,35 @@ class MailCampaignService:
                     reason=item.validation_error or 'Invalid address',
                     disposition='invalid_local',
                     queue_status=item.status,
+                ))
+            return rows
+
+        if kind_norm == 'address_failed':
+            from app.services.mail_queue_service import MailQueueService
+
+            items = (
+                MailQueueItem.query
+                .filter(
+                    MailQueueItem.campaign_id == campaign.id,
+                    MailQueueItem.status.in_(('failed', 'invalid_address')),
+                )
+                .order_by(MailQueueItem.id.asc())
+                .all()
+            )
+            rows = []
+            for item in items:
+                if not MailQueueService._is_usps_address_failure(item.validation_error):
+                    continue
+                lead = Lead.query.get(item.lead_id)
+                rows.append(self._serialize_gap_lead_row(
+                    lead,
+                    lead_id=item.lead_id,
+                    reason=str(item.validation_error or '').strip(),
+                    disposition='address_failed',
+                    queue_status=item.status,
+                    resolution=(
+                        'Needs address fix — won’t mail until mailing address is corrected'
+                    ),
                 ))
             return rows
 
