@@ -870,11 +870,12 @@ class TestPreservation1NonNullFieldsNotOverwritten:
             max_size=12,
         ),
         email_val=st.from_regex(r'[a-z]{3,8}@[a-z]{3,6}\.(com|org|net)', fullmatch=True),
-        mailing_val=st.text(
-            alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ",
-            min_size=5,
-            max_size=40,
-        ),
+        # Single spaces only — multi-space / tab streets are treated as tabular
+        # exports and intentionally rewritten by apply_owner_mailing.
+        mailing_val=st.from_regex(
+            r'[A-Za-z0-9]+( [A-Za-z0-9]+){0,5}',
+            fullmatch=True,
+        ).filter(lambda s: 5 <= len(s) <= 40),
         pin_val=st.text(
             alphabet="0123456789",
             min_size=10,
@@ -888,6 +889,8 @@ class TestPreservation1NonNullFieldsNotOverwritten:
         never overwrites these pre-existing values.
 
         hubspot_deal_stage and lead_status ARE exempt from this rule (they sync from CRM).
+        Tabular mailing streets (tabs / multi-space columns) are also exempt — those are
+        healed on enrich.
 
         **Validates: Requirements 3.1**
         """
