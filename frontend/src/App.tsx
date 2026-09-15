@@ -189,6 +189,12 @@ const BuildingOwnershipLookbookPage = lazyWithRetry(
 const CcPinDeprioritizeLookbookPage = lazyWithRetry(
   () => import('./pages/lookbook/CcPinDeprioritizeLookbookPage'),
 )
+const SameAddressMergeLookbookPage = lazyWithRetry(
+  () => import('./pages/lookbook/SameAddressMergeLookbookPage'),
+)
+const MergeCtaPlacementLookbookPage = lazyWithRetry(
+  () => import('./pages/lookbook/MergeCtaPlacementLookbookPage'),
+)
 const PipelineConfigAdminPage = lazyWithRetry(() =>
   import('./pages/PipelineConfigAdminPage').then((m) => ({ default: m.PipelineConfigAdminPage })),
 )
@@ -2629,6 +2635,18 @@ function App() {
             <Route
               path="/lookbook/cc-pin-deprioritize"
               element={<CcPinDeprioritizeLookbookPage />}
+            />
+          )}
+          {import.meta.env.DEV && (
+            <Route
+              path="/lookbook/same-address-merge"
+              element={<SameAddressMergeLookbookPage />}
+            />
+          )}
+          {import.meta.env.DEV && (
+            <Route
+              path="/lookbook/merge-cta-placements"
+              element={<MergeCtaPlacementLookbookPage />}
             />
           )}
           {/* Old /leads/views/* — redirect to new /queues/* routes */}

@@ -13,6 +13,7 @@ from app.models.hubspot_match import HubSpotMatch
 from app.models.lead import Lead, LeadAuditTrail
 from app.services.lead_merge_utils import (
     dedup_street_key,
+    legacy_glued_house_range_key,
     merge_mailer_history,
     pick_merge_winner,
     streets_match_normalized,
@@ -626,13 +627,39 @@ def find_same_building_leads(
     key = dedup_street_key(street)
     if key:
         found: dict[int, Lead] = {}
-        indexed_matches = (
-            base_query.filter(
-                or_(
-                    Lead.normalized_street == key,
-                    Lead.normalized_street.ilike(f'{key} %'),
+        street_predicates = [
+            Lead.normalized_street == key,
+            Lead.normalized_street.ilike(f'{key} %'),
+        ]
+        # Pre-fix rows may still store glued dual house numbers ("18671869…").
+        legacy_glued = legacy_glued_house_range_key(street)
+        if legacy_glued and legacy_glued != key:
+            street_predicates.append(Lead.normalized_street == legacy_glued)
+            street_predicates.append(Lead.normalized_street.ilike(f'{legacy_glued} %'))
+        house_token = key.split(' ', 1)[0]
+        street_body = key.split(' ', 1)[1] if ' ' in key else ''
+        if house_token.isdigit() and street_body:
+            # Range twin stored as "1867-1869 …" / "1867/1869 …" with stale key.
+            street_predicates.append(
+                and_(
+                    Lead.property_street.ilike(f'{house_token}-%'),
+                    Lead.normalized_street.ilike(f'%{street_body}%'),
                 ),
             )
+            street_predicates.append(
+                and_(
+                    Lead.property_street.ilike(f'{house_token}/%'),
+                    Lead.normalized_street.ilike(f'%{street_body}%'),
+                ),
+            )
+            street_predicates.append(
+                and_(
+                    Lead.property_street.ilike(f'{house_token} &%'),
+                    Lead.normalized_street.ilike(f'%{street_body}%'),
+                ),
+            )
+        indexed_matches = (
+            base_query.filter(or_(*street_predicates))
             .order_by(Lead.id.asc())
             .limit(max(limit * 8, 64))
             .all()
