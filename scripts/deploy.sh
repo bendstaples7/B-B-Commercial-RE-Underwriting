@@ -756,6 +756,24 @@ elif [ "$HEAL_RC" -eq 124 ] || [ "$HEAL_RC" -eq 137 ]; then
 else
     echo "WARNING: heal_mail_cadence_cooldown.py exited ${HEAL_RC} — continuing Deploy"
 fi
+
+echo "==> (6d) Out-of-market property situs heal (Nominatim Town-of false positives)"
+# Clears e.g. Town of Brookhaven, NY attached to Chicago-market streets.
+set +e
+trap - ERR
+timeout --signal=TERM --kill-after=30 180 \
+    env FLASK_ENV=production PYTHONPATH="${APP_DIR}/backend${PYTHONPATH:+:$PYTHONPATH}" \
+    python3.11 scripts/heal_out_of_market_property_localities.py --apply --limit 500
+OOM_RC=$?
+trap 'rollback $?' ERR
+set -e
+if [ "$OOM_RC" -eq 0 ]; then
+    echo "    Out-of-market property situs heal complete"
+elif [ "$OOM_RC" -eq 124 ] || [ "$OOM_RC" -eq 137 ]; then
+    echo "WARNING: out-of-market situs heal timed out — continuing Deploy"
+else
+    echo "WARNING: heal_out_of_market_property_localities.py exited ${OOM_RC} — continuing Deploy"
+fi
 cd ..
 
 echo "==> (7) Ensure async stack is provisioned and healthy"

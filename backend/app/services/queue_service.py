@@ -2,7 +2,7 @@
 from datetime import date, datetime, timedelta
 from typing import ClassVar
 
-from sqlalchemy import exists, and_, or_, case, select, func
+from sqlalchemy import exists, and_, or_, func
 
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry, MailQueueItem
@@ -156,6 +156,100 @@ def _due_task_context(lead_ids: list[int], cutoff: date) -> dict[int, dict]:
             'due_task_due_date': task.due_date.isoformat(),
         }
     return context
+
+
+def _related_property_summary(lead) -> dict:
+    return {
+        'id': lead.id,
+        'property_street': lead.property_street,
+        'property_city': lead.property_city,
+        'lead_status': lead.lead_status,
+        'lead_score': float(lead.lead_score) if lead.lead_score is not None else None,
+    }
+
+
+def _consolidate_outreach_leads(
+    ordered_leads: list,
+    *,
+    due_cutoff: date | None = None,
+) -> list[tuple]:
+    """One person → one queue slot (representative + in-queue siblings).
+
+    Uses ``ContactService.portfolio_enrichment_for_leads`` person keys (shared
+    owner Contact or name key). Generic/placeholder owners stay lead-scoped.
+    Representative preference: earliest due open task (when ``due_cutoff`` is
+    set), then highest score, then lowest id. Group order follows the
+    representative's position in ``ordered_leads``.
+    """
+    from collections import defaultdict
+
+    from app.services.contact_service import ContactService
+
+    if not ordered_leads:
+        return []
+
+    lead_ids = [lead.id for lead in ordered_leads if isinstance(getattr(lead, 'id', None), int)]
+    enrichment = ContactService().portfolio_enrichment_for_leads(lead_ids)
+    due_ctx = _due_task_context(lead_ids, due_cutoff) if due_cutoff is not None else {}
+
+    buckets: dict[str, list] = defaultdict(list)
+    for lead in ordered_leads:
+        key = (enrichment.get(lead.id) or {}).get('person_key') or f'lead:{lead.id}'
+        buckets[key].append(lead)
+
+    order_index = {lead.id: idx for idx, lead in enumerate(ordered_leads)}
+    groups: list[tuple] = []
+    for key, members in buckets.items():
+        if due_cutoff is not None and len(members) > 1:
+            representative = min(
+                members,
+                key=lambda lead: (
+                    due_ctx.get(lead.id, {}).get('due_task_due_date') or '9999-12-31',
+                    -(float(lead.lead_score) if lead.lead_score is not None else 0.0),
+                    lead.id,
+                ),
+            )
+        else:
+            representative = min(members, key=lambda lead: order_index[lead.id])
+        groups.append((representative, members, key, enrichment.get(representative.id) or {}))
+
+    groups.sort(key=lambda item: order_index[item[0].id])
+    return groups
+
+
+def _attach_person_queue_fields(
+    rows: list[dict],
+    groups: list[tuple],
+) -> list[dict]:
+    """Annotate queue rows with person_key / property_count / related_in_queue."""
+    by_id = {row['id']: row for row in rows}
+    out: list[dict] = []
+    for representative, members, person_key, enrichment in groups:
+        row = by_id.get(representative.id)
+        if row is None:
+            continue
+        siblings = [
+            _related_property_summary(lead)
+            for lead in members
+            if lead.id != representative.id
+        ]
+        row['person_key'] = person_key
+        row['property_count'] = len(members)
+        row['related_in_queue'] = siblings
+        if enrichment.get('owner_display_name') and not row.get('owner_display_name'):
+            row['owner_display_name'] = enrichment['owner_display_name']
+        out.append(row)
+    return out
+
+
+def _paginate_person_groups(
+    groups: list[tuple],
+    page: int,
+    per_page: int,
+) -> tuple[list[tuple], int]:
+    total = len(groups)
+    start = max(0, (page - 1) * per_page)
+    return groups[start:start + per_page], total
 
 
 def _apply_queue_sort(query, sort_by: str, sort_order: str, default_col=None):
@@ -476,16 +570,18 @@ class QueueService:
         }
 
     def count_mail_candidates(self, mail_user_id: str) -> int:
-        """Leads recommended for mail that are not already queued by this user."""
-        return len(self._eligible_mail_candidate_ids(mail_user_id))
+        """Person-consolidated mail-ready candidates not already queued."""
+        return len(self.get_mail_candidate_ids(mail_user_id))
 
     # ------------------------------------------------------------------
     # Private count helpers
     # ------------------------------------------------------------------
 
     def _count_todays_action(self, today: date) -> int:
-        """Today's Action: due work only (open tasks due today or earlier)."""
-        return self._todays_action_query(today).count()
+        """Today's Action: person-consolidated due work count."""
+        query = _apply_queue_sort(self._todays_action_query(today), 'lead_score', 'desc')
+        leads = query.all()
+        return len(_consolidate_outreach_leads(leads, due_cutoff=today))
 
     def _todays_action_query(self, today: date | None = None, outreach: str | None = None):
         """Base Today's Action membership query, optionally filtered by outreach label.
@@ -511,47 +607,38 @@ class QueueService:
         return query
 
     def get_todays_action_outreach_counts(self) -> dict[str, int]:
-        """Counts of Today's Action leads by outreach display bucket.
-
-        Uses one membership scan with conditional aggregates instead of five
-        separate COUNT queries. Direct-mail applies owner-mailing validation in
-        Python so returned-history matching is exact.
-        """
+        """Counts of Today's Action *people* by outreach display bucket."""
         today = date.today()
-        base = self._todays_action_query(today)
-        mail_clause = _outreach_filter_clause('direct_mail')
-        call_clause = _outreach_filter_clause('call_now')
-        email_clause = _outreach_filter_clause('email_now')
-        text_clause = _outreach_filter_clause('text_now')
-        row = base.with_entities(
-            func.count(Lead.id).label('all_count'),
-            func.coalesce(func.sum(case((call_clause, 1), else_=0)), 0).label('call_now'),
-            func.coalesce(func.sum(case((email_clause, 1), else_=0)), 0).label('email_now'),
-            func.coalesce(func.sum(case((text_clause, 1), else_=0)), 0).label('text_now'),
-        ).one()
-        mail_iter = (
-            base.filter(mail_clause).yield_per(500)
-            if mail_clause is not None
-            else ()
-        )
+
+        def _person_count(outreach: str | None = None) -> int:
+            query = _apply_queue_sort(
+                self._todays_action_query(today, outreach=outreach),
+                'lead_score',
+                'desc',
+            )
+            leads = list(query.yield_per(500))
+            if normalize_todays_outreach_filter(outreach) == 'direct_mail':
+                leads = [lead for lead in leads if is_owner_mailable_lead(lead)]
+            return len(_consolidate_outreach_leads(leads, due_cutoff=today))
+
         return {
-            'all': int(row.all_count or 0),
-            'direct_mail': sum(1 for lead in mail_iter if is_owner_mailable_lead(lead)),
-            'call_now': int(row.call_now or 0),
-            'email_now': int(row.email_now or 0),
-            'text_now': int(row.text_now or 0),
+            'all': _person_count(),
+            'direct_mail': _person_count('direct_mail'),
+            'call_now': _person_count('call_now'),
+            'email_now': _person_count('email_now'),
+            'text_now': _person_count('text_now'),
         }
 
     def get_todays_action_lead_ids(self, outreach: str | None = None) -> list[int]:
-        """All Today's Action lead IDs matching an optional outreach filter."""
+        """Representative Today's Action lead IDs (one per person)."""
+        today = date.today()
         query = self._todays_action_query(outreach=outreach)
         query = _apply_queue_sort(query, 'lead_score', 'desc')
+        leads = list(query.yield_per(500))
         if normalize_todays_outreach_filter(outreach) == 'direct_mail':
-            return [
-                lead.id for lead in query.yield_per(500)
-                if is_owner_mailable_lead(lead)
-            ]
-        return [row[0] for row in query.with_entities(Lead.id).all()]
+            leads = [lead for lead in leads if is_owner_mailable_lead(lead)]
+        groups = _consolidate_outreach_leads(leads, due_cutoff=today)
+        return [rep.id for rep, _members, _key, _enrichment in groups]
 
     def get_todays_action(
         self,
@@ -561,54 +648,32 @@ class QueueService:
         sort_order: str = 'desc',
         outreach: str | None = None,
     ) -> tuple[list[dict], int]:
-        """Today's Action — due open tasks; optional outreach display filter."""
+        """Today's Action — due open tasks; one row per person when portfolios share owners."""
+        today = date.today()
         query = self._todays_action_query(outreach=outreach)
+        query = _apply_queue_sort(query, sort_by, sort_order)
+        leads = list(query.yield_per(500))
         if normalize_todays_outreach_filter(outreach) == 'direct_mail':
-            query = _apply_queue_sort(query, sort_by, sort_order)
-            eligible = [
-                lead for lead in query.yield_per(500)
-                if is_owner_mailable_lead(lead)
-            ]
-            total = len(eligible)
-            start = (page - 1) * per_page
-            leads = eligible[start:start + per_page]
-        else:
-            total = query.count()
-            query = _apply_queue_sort(query, sort_by, sort_order)
-            leads = query.offset((page - 1) * per_page).limit(per_page).all()
-        rows = _leads_to_queue_rows(leads)
-        task_context = _due_task_context([lead.id for lead in leads], date.today())
+            leads = [lead for lead in leads if is_owner_mailable_lead(lead)]
+        groups = _consolidate_outreach_leads(leads, due_cutoff=today)
+        page_groups, total = _paginate_person_groups(groups, page, per_page)
+        page_leads = [rep for rep, _members, _key, _enrichment in page_groups]
+        rows = _leads_to_queue_rows(page_leads)
+        task_context = _due_task_context([lead.id for lead in page_leads], today)
         for row in rows:
             row.update(task_context.get(row['id'], {}))
-        return [rows, total]
+        return [_attach_person_queue_fields(rows, page_groups), total]
 
     def _count_previously_warm(self) -> int:
         """Previously Warm: leads where is_warm = True."""
         return self._base_query().filter(Lead.is_warm.is_(True)).count()
 
     def _count_follow_up_overdue(self, today: date, seven_days_ago: date) -> int:
-        """Follow-Up Overdue: overdue open LeadTask or stale follow_up_now RA.
-
-        Matches leads where ANY of the following is true:
-          - Has an open lead_task with due_date in the past
-          - recommended_action = 'follow_up_now' AND last_contact_date > 7 days ago
-        """
-        open_lead_task_overdue = _open_lead_task_overdue_excluding_mail_awaiting(today)
-
-        return (
-            self._base_query()
-            .filter(
-                or_(
-                    open_lead_task_overdue,
-                    and_(
-                        Lead.recommended_action == 'follow_up_now',
-                        Lead.last_contact_date < seven_days_ago,
-                        ~_lead_awaiting_mail_subquery(),
-                    ),
-                )
-            )
-            .count()
-        )
+        """Follow-Up Overdue: person-consolidated overdue / stale follow-ups."""
+        query = self._follow_up_overdue_query()
+        query = query.order_by(Lead.last_contact_date.asc())
+        leads = query.all()
+        return len(_consolidate_outreach_leads(leads, due_cutoff=today))
 
     def _count_no_next_action(self) -> int:
         """No Next Action: active pipeline, decide-next RA, no open LeadTasks."""
@@ -698,27 +763,17 @@ class QueueService:
         sort_by: str = 'last_contact_date',
         sort_order: str = 'asc',
     ) -> tuple[list[dict], int]:
-        """Follow-Up Overdue — see _count_follow_up_overdue for criteria."""
+        """Follow-Up Overdue — one row per person when portfolios share owners."""
         today = date.today()
-        seven_days_ago = today - timedelta(days=7)
-
-        open_lead_task_overdue = _open_lead_task_overdue_excluding_mail_awaiting(today)
-
-        query = self._base_query().filter(
-            or_(
-                open_lead_task_overdue,
-                and_(
-                    Lead.recommended_action == 'follow_up_now',
-                    Lead.last_contact_date < seven_days_ago,
-                    ~_lead_awaiting_mail_subquery(),
-                ),
-            )
-        )
-        total = query.count()
+        query = self._follow_up_overdue_query()
         sort_col = getattr(Lead, sort_by, Lead.last_contact_date)
         query = query.order_by(sort_col.asc() if sort_order == 'asc' else sort_col.desc())
-        leads = query.offset((page - 1) * per_page).limit(per_page).all()
-        return [_leads_to_queue_rows(leads), total]
+        leads = list(query.yield_per(500))
+        groups = _consolidate_outreach_leads(leads, due_cutoff=today)
+        page_groups, total = _paginate_person_groups(groups, page, per_page)
+        page_leads = [rep for rep, _members, _key, _enrichment in page_groups]
+        rows = _leads_to_queue_rows(page_leads)
+        return [_attach_person_queue_fields(rows, page_groups), total]
 
     def get_no_next_action(
         self,
@@ -1024,7 +1079,7 @@ class QueueService:
         sort_by: str = 'lead_score',
         sort_order: str = 'desc',
     ) -> tuple[list[dict], int]:
-        """Paginated mail-ready leads not yet staged for the next batch."""
+        """Paginated mail-ready leads — one row per person (avoid N mailers)."""
         from app.services.last_mailed_service import format_last_mailed_at, get_last_mailed_at_by_lead_ids
 
         eligible_ids = self._eligible_mail_candidate_ids(
@@ -1032,24 +1087,24 @@ class QueueService:
             sort_by,
             sort_order,
         )
-        total = len(eligible_ids)
-        start = (page - 1) * per_page
-        page_ids = eligible_ids[start:start + per_page]
         leads_by_id = {
             lead.id: lead
-            for lead in Lead.query.filter(Lead.id.in_(page_ids)).all()
-        } if page_ids else {}
-        leads = [
+            for lead in Lead.query.filter(Lead.id.in_(eligible_ids)).all()
+        } if eligible_ids else {}
+        ordered_leads = [
             leads_by_id[lead_id]
-            for lead_id in page_ids
+            for lead_id in eligible_ids
             if lead_id in leads_by_id
         ]
+        groups = _consolidate_outreach_leads(ordered_leads)
+        page_groups, total = _paginate_person_groups(groups, page, per_page)
+        leads = [rep for rep, _members, _key, _enrichment in page_groups]
         from app.services.contact_service import batch_owner_display_for_leads
 
         contacts = resolve_outreach_contacts_for_leads(leads)
         owner_displays = batch_owner_display_for_leads([lead.id for lead in leads])
         last_mailed = get_last_mailed_at_by_lead_ids([lead.id for lead in leads])
-        return [
+        rows = [
             _lead_to_queue_row(
                 lead,
                 contacts,
@@ -1057,7 +1112,8 @@ class QueueService:
                 owner_displays=owner_displays,
             )
             for lead in leads
-        ], total
+        ]
+        return [_attach_person_queue_fields(rows, page_groups), total]
 
     def get_mail_candidate_ids(
         self,
@@ -1065,12 +1121,23 @@ class QueueService:
         sort_by: str = 'lead_score',
         sort_order: str = 'desc',
     ) -> list[int]:
-        """All mail-ready lead IDs not yet staged, excluding recently sold."""
-        return self._eligible_mail_candidate_ids(
+        """Representative mail-ready lead IDs (one per person)."""
+        eligible_ids = self._eligible_mail_candidate_ids(
             mail_user_id,
             sort_by,
             sort_order,
         )
+        leads_by_id = {
+            lead.id: lead
+            for lead in Lead.query.filter(Lead.id.in_(eligible_ids)).all()
+        } if eligible_ids else {}
+        ordered_leads = [
+            leads_by_id[lead_id]
+            for lead_id in eligible_ids
+            if lead_id in leads_by_id
+        ]
+        groups = _consolidate_outreach_leads(ordered_leads)
+        return [rep.id for rep, _members, _key, _enrichment in groups]
 
     # Cap for prev/next neighbor lookup (same order as list endpoints).
     QUEUE_NAV_CAP = 500
@@ -1114,17 +1181,12 @@ class QueueService:
         if queue_key == 'todays-action':
             query = self._todays_action_query(outreach=outreach)
             query = _apply_queue_sort(query, sort_by, sort_order)
+            leads = list(query.yield_per(500))
             if normalize_todays_outreach_filter(outreach) == 'direct_mail':
-                ids: list[int] = []
-                total = 0
-                for lead in query.yield_per(500):
-                    if not is_owner_mailable_lead(lead):
-                        continue
-                    total += 1
-                    if len(ids) < cap:
-                        ids.append(lead.id)
-                return ids, total
-            return self._ordered_ids_from_query(query, cap)
+                leads = [lead for lead in leads if is_owner_mailable_lead(lead)]
+            groups = _consolidate_outreach_leads(leads, due_cutoff=date.today())
+            ids = [rep.id for rep, _m, _k, _e in groups]
+            return ids[:cap], len(ids)
 
         if queue_key == 'previously-warm':
             query = _apply_queue_sort(
@@ -1135,22 +1197,13 @@ class QueueService:
             return self._ordered_ids_from_query(query, cap)
 
         if queue_key == 'follow-up-overdue':
-            today = date.today()
-            seven_days_ago = today - timedelta(days=7)
-            open_lead_task_overdue = _open_lead_task_overdue_excluding_mail_awaiting(today)
-            query = self._base_query().filter(
-                or_(
-                    open_lead_task_overdue,
-                    and_(
-                        Lead.recommended_action == 'follow_up_now',
-                        Lead.last_contact_date < seven_days_ago,
-                        ~_lead_awaiting_mail_subquery(),
-                    ),
-                )
-            )
+            query = self._follow_up_overdue_query()
             sort_col = getattr(Lead, sort_by, Lead.last_contact_date)
             query = query.order_by(sort_col.asc() if sort_order == 'asc' else sort_col.desc())
-            return self._ordered_ids_from_query(query, cap)
+            leads = list(query.yield_per(500))
+            groups = _consolidate_outreach_leads(leads, due_cutoff=date.today())
+            ids = [rep.id for rep, _m, _k, _e in groups]
+            return ids[:cap], len(ids)
 
         if queue_key == 'no-next-action':
             has_open_lead_task = exists().where(
