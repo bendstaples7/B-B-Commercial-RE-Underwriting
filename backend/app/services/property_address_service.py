@@ -721,6 +721,8 @@ def complete_property_address_fields(
     try_geocode: bool | None = None,
     apply_market_defaults: bool = True,
     county_assessor_pin: str | None = None,
+    mailing_state: str | None = None,
+    trusted_market_states: set[str] | frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Return completed property address components (pure helper for payloads).
 
@@ -731,6 +733,10 @@ def complete_property_address_fields(
     Pass ``apply_market_defaults=False`` on pre-GIS create/merge paths so a
     blank city is not invented as Chicago (which would route live Cook GIS
     enrichment for every imported row).
+
+    ``trusted_market_states`` / ``mailing_state`` gate geocode writes: an
+    out-of-state geocode cannot overwrite when portfolio, mailing, or market
+    defaults already imply Illinois (or another trusted state).
     """
     street_out = _clean(street)
     city_out = _clean(city)
@@ -738,6 +744,14 @@ def complete_property_address_fields(
     zip_out = _clean(zip_code)
     pin_out = _clean(county_assessor_pin)
     sources: list[str] = []
+    trusted_states = {
+        code
+        for raw in (trusted_market_states or set())
+        if (code := (_state_code(raw) or _clean(raw).upper())) and len(code) == 2
+    }
+    mail_code = _state_code(mailing_state) or _clean(mailing_state).upper()
+    if len(mail_code) == 2:
+        trusted_states.add(mail_code)
     # External geocode is opt-in only — callers must pass try_geocode=True
     # explicitly (e.g. batch heal). Never geocode on the interactive/import
     # hot path by default, since Nominatim throttles to ~1 req/sec and a
@@ -823,6 +837,10 @@ def complete_property_address_fields(
             state_out = DEFAULT_MARKET_STATE
             sources.append('default_market_locality')
 
+    if 'default_market_locality' in sources:
+        trusted_states.add(DEFAULT_MARKET_STATE)
+
+    geocode_market_rejected = False
     if (
         do_geocode
         and street_out
@@ -833,8 +851,11 @@ def complete_property_address_fields(
         # match. Let the geocoder infer city/state from the street alone.
         geo_city = None if _is_market_default_city(city_out, sources) else city_out
         geo_state = None if _is_market_default_state(state_out, sources) else state_out
-        geo_fill = _geocode_fill_from_street(
-            street_out, city=geo_city, state=geo_state,
+        geo_fill, geo_reject = _geocode_fill_from_street(
+            street_out,
+            city=geo_city,
+            state=geo_state,
+            trusted_market_states=trusted_states,
         )
         if geo_fill:
             street_out, city_out, state_out, zip_out = _merge_gis_fill(
@@ -842,6 +863,9 @@ def complete_property_address_fields(
                 source_tag='geocode',
                 replace_market_defaults=True,
             )
+        elif geo_reject == 'market_mismatch':
+            geocode_market_rejected = True
+            sources.append('geocode_rejected_market_mismatch')
 
     # Collapse one-liners / ZIP-in-street leftovers to street-only, then title-case.
     if street_out:
@@ -866,6 +890,8 @@ def complete_property_address_fields(
         'property_zip': zip_out or None,
         'complete': complete,
         'sources': sorted(set(sources)),
+        'geocode_market_rejected': geocode_market_rejected,
+        'trusted_market_states': sorted(trusted_states),
     }
 
 
@@ -928,6 +954,8 @@ def complete_property_address(
         try_geocode=try_geocode,
         apply_market_defaults=apply_market_defaults,
         county_assessor_pin=pin_in,
+        mailing_state=getattr(lead, 'mailing_state', None),
+        trusted_market_states=trusted_market_states_for_lead(lead),
     )
     if sibling_sources:
         sources = list(result.get('sources') or [])
@@ -1743,39 +1771,127 @@ def _is_administrative_town_label(city: str | None) -> bool:
     return _clean(city).lower().startswith('town of ')
 
 
-def _accept_geocode_situs_fill(fill: Mapping[str, Any] | None) -> dict[str, str] | None:
-    """Keep only in-market, house-level geocode hits for situs completion.
+def _normalize_state_code(state: str | None) -> str | None:
+    code = (_state_code(state) or _clean(state)).upper()
+    return code if len(code) == 2 else None
 
-    Bare-street Nominatim hits (e.g. ``7710 E Lake Terrace`` → Town of
-    Brookhaven, NY) must never overwrite Chicago/IL market defaults.
+
+def trusted_market_states_for_lead(lead: Lead | None) -> set[str]:
+    """States already trusted for this lead (mailing, portfolio, non-suspect situs).
+
+    Used to reject geocode fills that would pull a Chicago-market portfolio
+    property into another state (e.g. Nominatim Brookhaven NY while a sibling
+    sits in Illinois).
+    """
+    trusted: set[str] = set()
+    if lead is None:
+        return trusted
+
+    mail_code = _normalize_state_code(getattr(lead, 'mailing_state', None))
+    if mail_code:
+        trusted.add(mail_code)
+
+    # Do not trust the lead's own suspect out-of-market geocode residue.
+    if not is_suspect_out_of_market_locality(
+        getattr(lead, 'property_city', None),
+        getattr(lead, 'property_state', None),
+    ):
+        cur = _normalize_state_code(getattr(lead, 'property_state', None))
+        if cur:
+            trusted.add(cur)
+
+    sibling = find_sibling_complete_locality(lead)
+    if sibling:
+        sib_state = _normalize_state_code(sibling.get('property_state'))
+        if sib_state:
+            trusted.add(sib_state)
+
+    lead_id = getattr(lead, 'id', None)
+    if isinstance(lead_id, int):
+        try:
+            from app.services.contact_service import ContactService
+
+            related = ContactService().get_related_properties(lead_id, limit=50)
+            related_ids = [
+                row['id'] for row in related
+                if isinstance(row.get('id'), int)
+            ]
+            if related_ids:
+                for (state,) in (
+                    db.session.query(Lead.property_state)
+                    .filter(
+                        Lead.id.in_(related_ids),
+                        Lead.property_state.isnot(None),
+                        Lead.property_state != '',
+                    )
+                    .all()
+                ):
+                    code = _normalize_state_code(state)
+                    if code:
+                        trusted.add(code)
+        except Exception as exc:
+            logger.warning(
+                'trusted market states portfolio lookup failed lead=%s: %s',
+                lead_id,
+                exc,
+            )
+    return trusted
+
+
+def _accept_geocode_situs_fill(
+    fill: Mapping[str, Any] | None,
+    *,
+    trusted_market_states: set[str] | frozenset[str] | None = None,
+) -> tuple[dict[str, str] | None, str | None]:
+    """Keep only trustworthy house-level geocode hits for situs completion.
+
+    Returns ``(fill, reject_reason)``. Bare-street Nominatim hits (e.g.
+    ``7710 E Lake Terrace`` → Town of Brookhaven, NY) must never overwrite
+    Chicago/IL market defaults or portfolio/mailing Illinois signals.
     """
     if not fill:
-        return None
+        return None, None
     street = _clean(fill.get('property_street'))
     city = _clean(fill.get('property_city'))
     state = _clean(fill.get('property_state'))
     zip_code = _zip5(fill.get('property_zip')) or ''
     if not street or not city or not state or not zip_code:
-        return None
+        return None, 'incomplete'
     if _is_administrative_town_label(city):
         logger.info(
             'Rejecting geocode situs fill with administrative town label: %s, %s',
             city, state,
         )
-        return None
-    if not _is_market_state(state):
+        return None, 'administrative_town'
+    geo_state = _normalize_state_code(state)
+    if not geo_state:
+        return None, 'incomplete'
+
+    trusted = {
+        code
+        for raw in (trusted_market_states or set())
+        if (code := _normalize_state_code(raw))
+    }
+    if trusted and geo_state not in trusted:
+        logger.info(
+            'Rejecting geocode situs fill %s, %s %s — conflicts with trusted '
+            'market states %s (portfolio / mailing / defaults)',
+            city, geo_state, zip_code, sorted(trusted),
+        )
+        return None, 'market_mismatch'
+    if not trusted and not _is_market_state(geo_state):
         logger.info(
             'Rejecting out-of-market geocode situs fill: %s, %s %s',
-            city, state, zip_code,
+            city, geo_state, zip_code,
         )
-        return None
-    state = DEFAULT_MARKET_STATE
+        return None, 'out_of_market'
+
     return {
         'property_street': street,
         'property_city': city,
-        'property_state': state,
+        'property_state': geo_state if trusted else DEFAULT_MARKET_STATE,
         'property_zip': zip_code,
-    }
+    }, None
 
 
 def _geocode_fill_from_street(
@@ -1783,12 +1899,15 @@ def _geocode_fill_from_street(
     *,
     city: str | None = None,
     state: str | None = None,
-) -> dict[str, str] | None:
+    trusted_market_states: set[str] | frozenset[str] | None = None,
+) -> tuple[dict[str, str] | None, str | None]:
     """External geocode last resort for incomplete situs (never uses mailing).
 
     Tries Google (server key) then OpenStreetMap Nominatim when Google is
     unavailable — unless the paid/quota circuit is open (then stop entirely
     and surface the halt via logs + health).
+
+    Returns ``(fill, reject_reason)``.
     """
     global _geocode_calls_this_run
     if not _geocode_budget_allows():
@@ -1799,7 +1918,7 @@ def _geocode_fill_from_street(
             )
         else:
             logger.info('Geocode situs skipped — PROPERTY_ADDRESS_GEOCODE_MAX_PER_RUN reached')
-        return None
+        return None, 'budget'
 
     # Soft-cap: stop Google before free tier rolls into paid usage.
     # Nominatim remains allowed (skip_google only — not halt_all).
@@ -1829,9 +1948,10 @@ def _geocode_fill_from_street(
         query_parts.append(DEFAULT_MARKET_STATE)
     query = ', '.join(query_parts)
     if not query:
-        return None
+        return None, 'empty_query'
 
     _geocode_calls_this_run += 1
+    last_reject: str | None = None
 
     if not _geocode_skip_google:
         try:
@@ -1863,7 +1983,7 @@ def _geocode_fill_from_street(
                     ),
                     status=outcome.status,
                 )
-                return None
+                return None, 'circuit'
 
             if outcome.status == 'REQUEST_DENIED':
                 # Misconfigured / referer-restricted key — skip Google, allow Nominatim.
@@ -1875,28 +1995,38 @@ def _geocode_fill_from_street(
                     status=outcome.status,
                 )
             elif outcome.address:
-                accepted = _accept_geocode_situs_fill({
-                    'property_street': _clean(outcome.address.get('property_street')),
-                    'property_city': _clean(outcome.address.get('property_city')),
-                    'property_state': _clean(outcome.address.get('property_state')) or 'IL',
-                    'property_zip': _zip5(outcome.address.get('property_zip')) or '',
-                })
+                accepted, reason = _accept_geocode_situs_fill(
+                    {
+                        'property_street': _clean(outcome.address.get('property_street')),
+                        'property_city': _clean(outcome.address.get('property_city')),
+                        'property_state': _clean(outcome.address.get('property_state')) or 'IL',
+                        'property_zip': _zip5(outcome.address.get('property_zip')) or '',
+                    },
+                    trusted_market_states=trusted_market_states,
+                )
                 if accepted:
-                    return accepted
+                    return accepted, None
+                if reason == 'market_mismatch' or last_reject != 'market_mismatch':
+                    last_reject = reason
         except Exception as exc:
             logger.warning('Google geocode situs fill failed for %r: %s', query, exc)
 
     if _geocode_halt_all:
-        return None
+        return None, 'circuit'
 
     try:
         nominatim = _nominatim_structured_address(query)
-        accepted = _accept_geocode_situs_fill(nominatim)
+        accepted, reason = _accept_geocode_situs_fill(
+            nominatim,
+            trusted_market_states=trusted_market_states,
+        )
         if accepted:
-            return accepted
+            return accepted, None
+        if reason and (reason == 'market_mismatch' or last_reject != 'market_mismatch'):
+            last_reject = reason
     except Exception as exc:
         logger.warning('Nominatim geocode situs fill failed for %r: %s', query, exc)
-    return None
+    return None, last_reject
 
 
 _last_nominatim_monotonic: float = 0.0

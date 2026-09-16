@@ -1232,3 +1232,131 @@ def test_heal_out_of_market_clears_town_of_brookhaven(app):
         refreshed = db.session.get(Lead, lead_id)
         assert refreshed.property_state == 'IL'
         assert refreshed.property_city == 'Chicago'
+
+
+def test_geocode_rejects_ny_when_trusted_mailing_is_il():
+    """Portfolio/mailing IL trust signals block an out-of-state geocode hit."""
+    from app.services.property_address_service import (
+        _accept_geocode_situs_fill,
+        complete_property_address_fields,
+    )
+    from app.services.property_data_service import StructuredGeocodeOutcome
+
+    accepted, reason = _accept_geocode_situs_fill(
+        {
+            'property_street': '7710 East Lake Terrace',
+            'property_city': 'Lake Ronkonkoma',
+            'property_state': 'NY',
+            'property_zip': '11779',
+        },
+        trusted_market_states={'IL'},
+    )
+    assert accepted is None
+    assert reason == 'market_mismatch'
+
+    with patch(
+        'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+        return_value=[],
+    ), patch(
+        'app.services.gis.cook_county_gis_connector.CookCountyGISConnector'
+        '.lookup_by_address',
+        return_value=None,
+    ), patch(
+        'app.services.property_data_service.PropertyDataService'
+        '.geocode_structured_address',
+        return_value=StructuredGeocodeOutcome(
+            address={
+                'property_street': '7710 East Lake Terrace',
+                'property_city': 'Brookhaven',
+                'property_state': 'NY',
+                'property_zip': '11779',
+            },
+            status='OK',
+            billable=False,
+        ),
+    ), patch(
+        'app.services.property_address_service._nominatim_structured_address',
+        return_value={
+            'property_street': '7710 East Lake Terrace',
+            'property_city': 'Town of Brookhaven',
+            'property_state': 'NY',
+            'property_zip': '11779',
+        },
+    ):
+        result = complete_property_address_fields(
+            '7710 E Lake Terrace',
+            None,
+            None,
+            None,
+            try_gis=True,
+            try_geocode=True,
+            mailing_state='IL',
+            apply_market_defaults=False,
+        )
+    assert result['property_state'] in (None, '')
+    assert result['geocode_market_rejected'] is True
+    assert 'geocode_rejected_market_mismatch' in result['sources']
+    assert 'IL' in result['trusted_market_states']
+
+
+def test_trusted_market_states_include_portfolio_sibling(app):
+    from app import db
+    from app.models import Contact, Lead
+    from app.models.property_contact import PropertyContact
+    from app.services.property_address_service import trusted_market_states_for_lead
+
+    with app.app_context():
+        a = Lead(
+            property_street='2551 W Eastwood Ave 1',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60625',
+            owner_first_name='Bob',
+            owner_last_name='Weinstein',
+            owner_user_id='ben',
+            lead_status='mailing_no_contact_made',
+            has_phone=False,
+            has_email=False,
+            has_property_match=False,
+            analysis_complete=False,
+            follow_up_overdue=False,
+            is_warm=False,
+            lead_score=0,
+            data_completeness_score=0,
+            unanswered_call_count=0,
+        )
+        b = Lead(
+            property_street='7710 E Lake Terrace',
+            property_city=None,
+            property_state=None,
+            property_zip=None,
+            mailing_state='IL',
+            owner_first_name='Bob',
+            owner_last_name='Weinstein',
+            owner_user_id='ben',
+            lead_status='mailing_no_contact_made',
+            has_phone=False,
+            has_email=False,
+            has_property_match=False,
+            analysis_complete=False,
+            follow_up_overdue=False,
+            is_warm=False,
+            lead_score=0,
+            data_completeness_score=0,
+            unanswered_call_count=0,
+        )
+        db.session.add_all([a, b])
+        db.session.flush()
+        contact = Contact(first_name='Bob', last_name='Weinstein', role='owner')
+        db.session.add(contact)
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=a.id, contact_id=contact.id, role='owner', is_primary=True,
+        ))
+        db.session.add(PropertyContact(
+            property_id=b.id, contact_id=contact.id, role='owner', is_primary=True,
+        ))
+        db.session.commit()
+
+        trusted = trusted_market_states_for_lead(b)
+        assert 'IL' in trusted
