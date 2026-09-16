@@ -1052,6 +1052,26 @@ export function PropertySidebar({
             Not in an active work queue.
           </Typography>
         )}
+        {(commandCenterData.review_required || commandCenterData.review_reason) && (
+          <Box sx={{ mt: 1 }} data-testid="sidebar-needs-review-reason">
+            <Typography variant="caption" color="text.secondary" display="block">
+              Needs Review reason
+            </Typography>
+            <Typography variant="caption" fontWeight={600} display="block">
+              {commandCenterData.review_reason === 'duplicate_lead_cluster'
+                ? `Duplicate cluster${
+                    commandCenterData.duplicate_cluster?.suggested_winner_id
+                      ? ` → #${commandCenterData.duplicate_cluster.suggested_winner_id}`
+                      : ''
+                  }${
+                    commandCenterData.duplicate_cluster?.confidence
+                      ? ` (${commandCenterData.duplicate_cluster.confidence})`
+                      : ''
+                  }`
+                : (commandCenterData.review_reason || 'Needs review')}
+            </Typography>
+          </Box>
+        )}
       </SidebarSection>
 
       <SidebarSection title="Import & Sync">

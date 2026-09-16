@@ -93,6 +93,7 @@ import { KeyContactCard } from '@/components/lead-detail/KeyContactCard'
 import { PropertyKpiCard } from '@/components/lead-detail/PropertyKpiCard'
 import { PropertyOverviewQuickStats, shouldShowCondoCheckCell } from '@/components/lead-detail/PropertyOverviewQuickStats'
 import { SameAddressMergeBanner } from '@/components/lead-detail/SameAddressMergeBanner'
+import { NeedsReviewClarityPanel } from '@/components/lead-detail/NeedsReviewClarityPanel'
 import { afterCommandCenterMutation } from '@/utils/afterCommandCenterMutation'
 import { HeaderCondoCheckPanel } from '@/components/lead-detail/HeaderCondoCheckPanel'
 import { HeaderLeadScorePanel, type ScoreFlash } from '@/components/lead-detail/HeaderLeadScorePanel'
@@ -672,42 +673,73 @@ function QueueWorkHeader({
 
 interface WorkQueueMembershipStripProps {
   commandCenterData: CommandCenterPayload
+  fromQueue?: FromQueueState | null
 }
 
 /** Always-visible work-queue membership (sidebar is lg+ only). */
-function WorkQueueMembershipStrip({ commandCenterData }: WorkQueueMembershipStripProps) {
+function WorkQueueMembershipStrip({
+  commandCenterData,
+  fromQueue = null,
+}: WorkQueueMembershipStripProps) {
   const memberships = commandCenterData.work_queues ?? []
+  const fromMeta = fromQueue
+    ? { key: fromQueue.key, label: fromQueue.label, path: queuePath(fromQueue.key) }
+    : null
 
   return (
     <Box
       sx={{
         display: 'flex',
-        flexWrap: 'wrap',
-        alignItems: 'center',
-        gap: 1,
+        flexDirection: 'column',
+        gap: 0.5,
       }}
       data-testid="work-queue-membership-strip"
     >
-      <Typography variant="body2" fontWeight={600} sx={{ mr: 0.5 }}>
-        Work queues
-      </Typography>
-      {memberships.length > 0 ? (
-        memberships.map((q) => (
+      {fromMeta && (
+        <Box
+          sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}
+          data-testid="work-queue-came-from"
+        >
+          <Typography variant="body2" fontWeight={600} sx={{ mr: 0.5 }}>
+            Came from
+          </Typography>
           <Chip
-            key={q.key}
             component={RouterLink}
-            to={q.path}
+            to={fromMeta.path}
             clickable
             size="small"
-            label={q.label}
-            data-testid={`work-queue-strip-${q.key}`}
+            color="primary"
+            variant="outlined"
+            label={fromMeta.label}
+            data-testid={`work-queue-came-from-${fromMeta.key}`}
           />
-        ))
-      ) : (
-        <Typography variant="body2" color="text.secondary" data-testid="work-queue-strip-empty">
-          Not in an active work queue
-        </Typography>
+        </Box>
       )}
+      <Box
+        sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}
+        data-testid="work-queue-currently-in"
+      >
+        <Typography variant="body2" fontWeight={600} sx={{ mr: 0.5 }}>
+          {fromMeta ? 'Currently in' : 'Work queues'}
+        </Typography>
+        {memberships.length > 0 ? (
+          memberships.map((q) => (
+            <Chip
+              key={q.key}
+              component={RouterLink}
+              to={q.path}
+              clickable
+              size="small"
+              label={q.label}
+              data-testid={`work-queue-strip-${q.key}`}
+            />
+          ))
+        ) : (
+          <Typography variant="body2" color="text.secondary" data-testid="work-queue-strip-empty">
+            Not in an active work queue
+          </Typography>
+        )}
+      </Box>
     </Box>
   )
 }
@@ -2289,7 +2321,36 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }}
           data-testid="cc-header-stack"
         >
-          <WorkQueueMembershipStrip commandCenterData={commandCenterData} />
+          <WorkQueueMembershipStrip
+            commandCenterData={commandCenterData}
+            fromQueue={fromQueue}
+          />
+
+          <NeedsReviewClarityPanel
+            leadId={leadId}
+            commandCenterData={commandCenterData}
+            onResolved={async (result) => {
+              if (result.kind === 'merged' && result.winnerId != null && result.loserId != null) {
+                const mergeFlash = { message: 'Duplicate merged.' }
+                setActivitySnackbar({ open: true, ...mergeFlash })
+                await afterCommandCenterMutation(queryClient, {
+                  winnerId: result.winnerId,
+                  loserId: result.loserId,
+                  navigate,
+                  fromQueue,
+                  flashSnackbar: result.winnerId === leadId ? undefined : mergeFlash,
+                })
+                return
+              }
+              setActivitySnackbar({
+                open: true,
+                message: result.kind === 'dismissed' ? 'Duplicate review dismissed.' : 'Marked reviewed.',
+              })
+              await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+              void queryClient.invalidateQueries({ queryKey: ['queue-needs-review'] })
+              void queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+            }}
+          />
 
           <PropertyOverviewHeader
             leadId={leadId}

@@ -463,13 +463,46 @@ class TestGetCommandCenter:
                 t.get('hubspot_task_id') == 'hs-cc-crm-only' for t in data['open_tasks']
             )
 
-    def test_clears_review_required_flag(self, client, app):
-        """Opening command center clears review_required flag."""
+    def test_preserves_review_required_flag_on_open(self, client, app):
+        """Opening command center keeps review_required so Needs Review stays visible."""
         with app.app_context():
-            lead = _make_lead(app, '4 CC St', review_required=True)
-            client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            lead = _make_lead(
+                app,
+                '4 CC St',
+                review_required=True,
+                review_reason='New HubSpot activity',
+            )
+            response = client.get(
+                f'/api/leads/{lead.id}/command-center',
+                headers=_AUTH_HEADERS,
+            )
+            data = json.loads(response.data)
+            db.session.refresh(lead)
+            assert lead.review_required is True
+            assert data['review_required'] is True
+            assert data['review_reason'] == 'New HubSpot activity'
+            assert any(q['key'] == 'needs-review' for q in data['work_queues'])
+
+    def test_clear_review_endpoint(self, client, app):
+        """POST clear-review removes Needs Review flags for any reason."""
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '4c Clear Review St',
+                review_required=True,
+                review_reason='Missing phone, email, and county PIN',
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/clear-review',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = json.loads(response.data)
+            assert body['cleared'] is True
+            assert body['previous_reason'] == 'Missing phone, email, and county PIN'
             db.session.refresh(lead)
             assert lead.review_required is False
+            assert lead.review_reason is None
 
     def test_persists_live_data_completeness_score(self, client, app):
         """Opening command center stores the live completeness score on the lead."""

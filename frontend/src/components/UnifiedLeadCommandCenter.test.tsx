@@ -17,7 +17,7 @@ import userEvent from '@testing-library/user-event'
 import { UnifiedLeadCommandCenter } from './UnifiedLeadCommandCenter'
 import { QUEUE_ADVANCE_HOLD_MS } from '@/components/lead-detail/QueueAdvanceHoldBanner'
 import type { CommandCenterPayload, PropertyDetail } from '@/types'
-import { callLogService } from '@/services/api'
+import { callLogService, queueService } from '@/services/api'
 
 // ---------------------------------------------------------------------------
 // Mock all services used by UnifiedLeadCommandCenter and its children
@@ -30,6 +30,8 @@ vi.mock('@/services/api', () => ({
     updateCategory: vi.fn(),
     mergeInto: vi.fn(),
     getMergePreview: vi.fn(),
+    dismissDuplicateReview: vi.fn(),
+    clearReview: vi.fn(),
     moveToSkipTrace: vi.fn(),
     getTimeline: vi.fn(),
   },
@@ -335,6 +337,7 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
           { key: 'follow-up-overdue', label: 'Follow-Up Overdue', path: '/queues/follow-up-overdue' },
           { key: 'previously-warm', label: 'Previously Warm', path: '/queues/previously-warm' },
         ],
+        review_required: true,
         review_reason: 'Manual review needed',
       }),
     )
@@ -347,8 +350,82 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     expect(screen.getByTestId('work-queue-strip-needs-review')).toBeInTheDocument()
     expect(screen.getByTestId('work-queue-strip-follow-up-overdue')).toBeInTheDocument()
     expect(screen.getByTestId('work-queue-strip-previously-warm')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-review-clarity-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-review-clarity-reason')).toHaveTextContent('Manual review needed')
     expect(screen.queryByTestId('work-queue-banner-needs-review')).not.toBeInTheDocument()
     expect(screen.queryByTestId('work-queue-banner-follow-up-overdue')).not.toBeInTheDocument()
+  })
+
+  it('splits came-from routing context from live work-queue membership', async () => {
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        work_queues: [
+          { key: 'needs-review', label: 'Needs Review', path: '/queues/needs-review' },
+        ],
+        review_required: true,
+        review_reason: 'duplicate_lead_cluster',
+        duplicate_cluster: {
+          cluster_ids: [1, 99],
+          suggested_winner_id: 99,
+          confidence: 'ambiguous',
+          streets: { 1: '100 Main St', 99: '100 Main St Unit 2' },
+          members: [
+            {
+              id: 1,
+              property_street: '100 Main St',
+              owner_display_name: 'Ada Owner',
+              county_assessor_pin: '11-22-33',
+              hubspot_confirmed: false,
+              has_phone: true,
+              has_email: false,
+              is_suggested_winner: false,
+            },
+            {
+              id: 99,
+              property_street: '100 Main St Unit 2',
+              owner_display_name: 'Ada Owner',
+              county_assessor_pin: '11-22-34',
+              hubspot_confirmed: true,
+              has_phone: true,
+              has_email: true,
+              is_suggested_winner: true,
+            },
+          ],
+        },
+      }),
+    )
+
+    const fromQueue = { key: 'needs-review', label: 'Needs Review' }
+    vi.mocked(queueService.getNavigation).mockResolvedValue({
+      queue_key: 'needs-review',
+      lead_id: 1,
+      position: 1,
+      total: 3,
+      prev_id: null,
+      next_id: 2,
+    })
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: '/leads/1',
+            state: { fromQueue },
+          },
+        ]}
+      >
+        <UnifiedLeadCommandCenter leadId={1} />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('work-queue-came-from-needs-review')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('work-queue-currently-in')).toBeInTheDocument()
+    expect(screen.getByTestId('work-queue-strip-needs-review')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-review-cluster-table')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-review-clarity-reason')).toHaveTextContent(
+      'Duplicate cluster → #99 (+1) (ambiguous match)',
+    )
   })
 
   it('shows a tight Property Overview header with address, owner link, status, quick stats, and score panel', async () => {

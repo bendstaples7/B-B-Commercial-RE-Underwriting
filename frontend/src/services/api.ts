@@ -1366,6 +1366,10 @@ export const commandCenterService = {
     leadId: number,
   ): Promise<{ lead_id: number; dismissed: boolean }> =>
     api.post(`/leads/${leadId}/dismiss-duplicate-review`).then(r => r.data),
+  clearReview: (
+    leadId: number,
+  ): Promise<{ lead_id: number; cleared: boolean; previous_reason: string | null }> =>
+    api.post(`/leads/${leadId}/clear-review`).then(r => r.data),
   reactivate: (leadId: number): Promise<unknown> =>
     api.post(`/leads/${leadId}/reactivate`).then(r => r.data),
   suppress: (leadId: number): Promise<unknown> =>

@@ -513,7 +513,10 @@ def get_command_center(lead_id: int):
 
     Returns the full command center payload for a lead, including recommended
     action, open tasks, and the first page of the timeline.
-    Clears the review_required flag when the command center is opened.
+
+    Needs Review flags (``review_required`` / ``review_reason``) are **not**
+    cleared on open — clear via Merge / Dismiss duplicate / Mark reviewed so
+    Command Center can show queue membership and the review reason honestly.
     """
     lead = Lead.query.get(lead_id)
     if lead is None:
@@ -564,13 +567,6 @@ def get_command_center(lead_id: int):
             _db_demote.session.rollback()
         except Exception:  # noqa: BLE001
             pass
-
-    # Clear review_required flag when command center is opened
-    if lead.review_required:
-        lead.review_required = False
-        from app import db
-        db.session.add(lead)
-        db.session.commit()
 
     # Do not auto-sync HubSpot on Command Center GET. Sync-on-read can complete
     # open LeadTasks as a side effect of opening a lead or cache invalidation,
@@ -658,6 +654,16 @@ def get_command_center(lead_id: int):
     if not mail_user_id or mail_user_id == 'anonymous':
         mail_user_id = None
     work_queues = queue_svc.membership_for_lead(lead_id, mail_user_id=mail_user_id)
+
+    _duplicate_cluster_preview = None
+    if lead.review_reason == 'duplicate_lead_cluster':
+        try:
+            from app.services.lead_dedup_service import cluster_preview_for_lead
+            _duplicate_cluster_preview = cluster_preview_for_lead(lead)
+        except Exception:  # noqa: BLE001 — never block command center
+            logger.exception(
+                'cluster_preview_for_lead failed for lead %s', lead_id,
+            )
 
     # ------------------------------------------------------------------
     # Collect phones: relational contact_phones + flat columns (structured)
@@ -1279,6 +1285,22 @@ def get_command_center(lead_id: int):
         'hubspot_deal_last_updated_at': hubspot_sync['hubspot_deal_last_updated_at'],
         'review_required': lead.review_required,
         'review_reason': lead.review_reason,
+        'review_triggered_at': (
+            lead.review_triggered_at.isoformat()
+            if getattr(lead, 'review_triggered_at', None)
+            else None
+        ),
+        'duplicate_cluster': (
+            {
+                'cluster_ids': _duplicate_cluster_preview['cluster_ids'],
+                'suggested_winner_id': _duplicate_cluster_preview['suggested_winner_id'],
+                'confidence': _duplicate_cluster_preview['confidence'],
+                'streets': _duplicate_cluster_preview['streets'],
+                'members': _duplicate_cluster_preview.get('members') or [],
+            }
+            if _duplicate_cluster_preview
+            else None
+        ),
         'quick_briefing': lead.quick_briefing if isinstance(lead.quick_briefing, dict) else None,
         'recommended_action': {
             'value': ra,
@@ -2215,19 +2237,12 @@ def get_timeline(lead_id: int):
     GET /api/leads/<lead_id>/timeline
 
     Returns a paginated page of timeline entries in reverse-chronological order.
-    Clears the review_required flag when the timeline is viewed.
-    """
-    from app import db
 
+    Does not clear Needs Review flags — those stay until Merge / Dismiss /
+    Mark reviewed so queue membership stays truthful while working the lead.
+    """
     page = int(request.args.get('page', 1))
     per_page = int(request.args.get('per_page', 25))
-
-    # Clear review_required flag when timeline is viewed
-    lead = Lead.query.get(lead_id)
-    if lead and lead.review_required:
-        lead.review_required = False
-        db.session.add(lead)
-        db.session.commit()
 
     entries, total = _lead_timeline_service.get_page(lead_id, page=page, per_page=per_page)
     actor_cache = _resolve_actors_batch([e.actor for e in entries if e.actor])
@@ -2526,6 +2541,34 @@ def dismiss_duplicate_review(lead_id: int):
     db.session.add(lead)
     db.session.commit()
     return jsonify({'lead_id': lead_id, 'dismissed': True}), 200
+
+
+@command_center_bp.route('/<int:lead_id>/clear-review', methods=['POST'])
+@require_auth
+@handle_errors
+def clear_review(lead_id: int):
+    """Mark Needs Review resolved without merging (any review_reason)."""
+    from app import db
+
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return denied
+    if not lead.review_required and not lead.review_reason:
+        return jsonify({'error': 'Lead is not flagged for review'}), 400
+    previous_reason = lead.review_reason
+    lead.review_required = False
+    lead.review_reason = None
+    lead.review_triggered_at = None
+    db.session.add(lead)
+    db.session.commit()
+    return jsonify({
+        'lead_id': lead_id,
+        'cleared': True,
+        'previous_reason': previous_reason,
+    }), 200
 
 
 @command_center_bp.route('/<int:lead_id>/reactivate', methods=['POST'])
