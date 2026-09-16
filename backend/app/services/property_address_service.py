@@ -1548,6 +1548,129 @@ def heal_incomplete_property_addresses(
     return _decorate_heal_summary_with_geocode_circuit(summary)
 
 
+def is_suspect_out_of_market_locality(
+    city: str | None,
+    state: str | None,
+) -> bool:
+    """True when situs locality looks like a bare-street Nominatim false positive."""
+    if not state or _is_market_state(state):
+        return False
+    return _is_administrative_town_label(city)
+
+
+def heal_out_of_market_property_localities(
+    *,
+    limit: int = 200,
+    try_gis: bool = True,
+    try_geocode: bool | None = None,
+    actor: str = 'property_address_out_of_market_heal',
+    commit: bool = True,
+    lead_id: int | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Clear OSM ``Town of …`` / non-IL geocode false positives and re-complete.
+
+    Targets the class of bug where bare-street Nominatim attached e.g.
+    ``Town of Brookhaven, NY 11779`` to a Chicago-market street. Re-runs the
+    canonical completer (GIS → Chicago/IL defaults → hardened geocode).
+    """
+    effective_try_geocode = try_gis if try_geocode is None else try_geocode
+    summary: dict[str, Any] = {
+        'status': 'completed',
+        'processed': 0,
+        'healed': 0,
+        'still_out_of_market': 0,
+        'errors': 0,
+        'dry_run': bool(dry_run),
+        'lead_ids': [],
+        'previews': [],
+    }
+    query = Lead.query.filter(
+        Lead.property_street.isnot(None),
+        Lead.property_street != '',
+        Lead.property_state.isnot(None),
+        Lead.property_state != '',
+        Lead.property_city.isnot(None),
+        Lead.property_city != '',
+        ~func.upper(func.trim(Lead.property_state)).in_(('IL', 'ILLINOIS')),
+        func.lower(Lead.property_city).like('town of %'),
+    )
+    if lead_id is not None:
+        query = query.filter(Lead.id == lead_id)
+    else:
+        query = query.order_by(Lead.id.asc()).limit(max(int(limit), 0))
+    leads = query.all()
+
+    for lead in leads:
+        summary['processed'] += 1
+        summary['lead_ids'].append(lead.id)
+        before = {
+            'property_street': lead.property_street,
+            'property_city': lead.property_city,
+            'property_state': lead.property_state,
+            'property_zip': lead.property_zip,
+        }
+        if dry_run:
+            preview = complete_property_address_fields(
+                lead.property_street,
+                None,
+                None,
+                None,
+                pin=getattr(lead, 'county_assessor_pin', None),
+                try_gis=try_gis,
+                try_geocode=effective_try_geocode,
+                apply_market_defaults=True,
+            )
+            summary['previews'].append({'lead_id': lead.id, 'before': before, 'after': preview})
+            if is_suspect_out_of_market_locality(
+                preview.get('property_city'), preview.get('property_state'),
+            ):
+                summary['still_out_of_market'] += 1
+            else:
+                summary['healed'] += 1
+            continue
+        try:
+            lead.property_city = None
+            lead.property_state = None
+            lead.property_zip = None
+            complete_property_address(
+                lead,
+                try_gis=try_gis,
+                try_geocode=effective_try_geocode,
+                apply_market_defaults=True,
+                actor=actor,
+                commit=False,
+                write_timeline=True,
+            )
+            if is_suspect_out_of_market_locality(
+                lead.property_city, lead.property_state,
+            ):
+                summary['still_out_of_market'] += 1
+            else:
+                summary['healed'] += 1
+                logger.info(
+                    'Cleared out-of-market situs lead=%s before=%s after=%s/%s/%s',
+                    lead.id,
+                    before,
+                    lead.property_city,
+                    lead.property_state,
+                    lead.property_zip,
+                )
+        except Exception as exc:
+            summary['errors'] += 1
+            logger.warning(
+                'out-of-market situs heal failed for lead %s: %s',
+                lead.id,
+                exc,
+            )
+            db.session.rollback()
+            continue
+
+    if commit and not dry_run and leads:
+        db.session.commit()
+    return _decorate_heal_summary_with_geocode_circuit(summary)
+
+
 def _zip5(value: Any) -> str | None:
     text = _clean(value)
     if not text:
@@ -1610,6 +1733,51 @@ def _gis_fill_from_street(street: str) -> dict[str, str] | None:
         return None
 
 
+def _is_market_state(state: str | None) -> bool:
+    code = (_state_code(state) or _clean(state)).upper()
+    return code == DEFAULT_MARKET_STATE.upper()
+
+
+def _is_administrative_town_label(city: str | None) -> bool:
+    """OSM often labels counties/townships as ``Town of X`` — not a USPS city."""
+    return _clean(city).lower().startswith('town of ')
+
+
+def _accept_geocode_situs_fill(fill: Mapping[str, Any] | None) -> dict[str, str] | None:
+    """Keep only in-market, house-level geocode hits for situs completion.
+
+    Bare-street Nominatim hits (e.g. ``7710 E Lake Terrace`` → Town of
+    Brookhaven, NY) must never overwrite Chicago/IL market defaults.
+    """
+    if not fill:
+        return None
+    street = _clean(fill.get('property_street'))
+    city = _clean(fill.get('property_city'))
+    state = _clean(fill.get('property_state'))
+    zip_code = _zip5(fill.get('property_zip')) or ''
+    if not street or not city or not state or not zip_code:
+        return None
+    if _is_administrative_town_label(city):
+        logger.info(
+            'Rejecting geocode situs fill with administrative town label: %s, %s',
+            city, state,
+        )
+        return None
+    if not _is_market_state(state):
+        logger.info(
+            'Rejecting out-of-market geocode situs fill: %s, %s %s',
+            city, state, zip_code,
+        )
+        return None
+    state = DEFAULT_MARKET_STATE
+    return {
+        'property_street': street,
+        'property_city': city,
+        'property_state': state,
+        'property_zip': zip_code,
+    }
+
+
 def _geocode_fill_from_street(
     street: str,
     *,
@@ -1655,6 +1823,10 @@ def _geocode_fill_from_street(
         query_parts.append(_clean(city))
     if _clean(state):
         query_parts.append(_clean(state))
+    # When market defaults were stripped from the query, still bias to IL so a
+    # bare street cannot latch onto an out-of-state road of the same name.
+    if not _clean(state):
+        query_parts.append(DEFAULT_MARKET_STATE)
     query = ', '.join(query_parts)
     if not query:
         return None
@@ -1703,12 +1875,14 @@ def _geocode_fill_from_street(
                     status=outcome.status,
                 )
             elif outcome.address:
-                return {
+                accepted = _accept_geocode_situs_fill({
                     'property_street': _clean(outcome.address.get('property_street')),
                     'property_city': _clean(outcome.address.get('property_city')),
                     'property_state': _clean(outcome.address.get('property_state')) or 'IL',
                     'property_zip': _zip5(outcome.address.get('property_zip')) or '',
-                }
+                })
+                if accepted:
+                    return accepted
         except Exception as exc:
             logger.warning('Google geocode situs fill failed for %r: %s', query, exc)
 
@@ -1717,8 +1891,9 @@ def _geocode_fill_from_street(
 
     try:
         nominatim = _nominatim_structured_address(query)
-        if nominatim:
-            return nominatim
+        accepted = _accept_geocode_situs_fill(nominatim)
+        if accepted:
+            return accepted
     except Exception as exc:
         logger.warning('Nominatim geocode situs fill failed for %r: %s', query, exc)
     return None
@@ -1728,8 +1903,30 @@ _last_nominatim_monotonic: float = 0.0
 _NOMINATIM_MIN_INTERVAL_SEC = 1.05
 
 
+def _nominatim_city_from_address(addr: Mapping[str, Any]) -> str:
+    """Prefer municipal city/village over OSM ``Town of …`` admin labels."""
+    city = _clean(addr.get('city'))
+    if city and not _is_administrative_town_label(city):
+        return city
+    village = _clean(addr.get('village'))
+    if village:
+        return village
+    town = _clean(addr.get('town'))
+    if town and not _is_administrative_town_label(town):
+        return town
+    hamlet = _clean(addr.get('hamlet'))
+    if hamlet:
+        return hamlet
+    # Fall through only when nothing better exists (caller may still reject).
+    return city or town or village or hamlet
+
+
 def _nominatim_structured_address(query: str) -> dict[str, str] | None:
-    """Free OSM Nominatim fallback when Google Geocoding is unavailable."""
+    """Free OSM Nominatim fallback when Google Geocoding is unavailable.
+
+    Requires a house-number hit (parity with Google structured situs) and an
+    in-market (IL) state so bare streets cannot attach out-of-state localities.
+    """
     global _last_nominatim_monotonic
     import json
     import time
@@ -1769,15 +1966,13 @@ def _nominatim_structured_address(query: str) -> dict[str, str] | None:
     if not addr.get('road') and not addr.get('pedestrian'):
         return None
     number = (addr.get('house_number') or '').strip()
+    # Road-only hits (no house number) are how ``7710 E Lake Terrace`` became
+    # Town of Brookhaven, NY — reject them.
+    if not number:
+        return None
     road = (addr.get('road') or addr.get('pedestrian') or '').strip()
     street = ' '.join(p for p in (number, road) if p).strip()
-    city = (
-        addr.get('city')
-        or addr.get('town')
-        or addr.get('village')
-        or addr.get('hamlet')
-        or ''
-    ).strip()
+    city = _nominatim_city_from_address(addr)
     state = (addr.get('state') or '').strip()
     # Prefer ISO3166-2-lvl4 US-IL style short code when present.
     state_code = (addr.get('ISO3166-2-lvl4') or '').split('-')[-1] or ''
@@ -1790,10 +1985,14 @@ def _nominatim_structured_address(query: str) -> dict[str, str] | None:
     zip_code = _zip5(addr.get('postcode')) or ''
     if not street or not city or not state or not zip_code:
         return None
+    if not _is_market_state(state):
+        return None
+    if _is_administrative_town_label(city):
+        return None
     return {
         'property_street': street,
         'property_city': city,
-        'property_state': state,
+        'property_state': DEFAULT_MARKET_STATE,
         'property_zip': zip_code,
     }
 

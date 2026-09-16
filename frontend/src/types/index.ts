@@ -2115,6 +2115,12 @@ export interface QueueRow {
   skip_tracer?: string | null;
   skip_trace_next_source_id?: string | null;
   skip_trace_exhausted_at?: string | null;
+  /** Same-person grouping key for outreach-queue consolidation. */
+  person_key?: string | null;
+  /** In-queue properties for this person (1 = only this lead). */
+  property_count?: number | null;
+  /** Sibling properties also in this queue (excludes the representative). */
+  related_in_queue?: RelatedPropertySummary[] | null;
 }
 
 export interface QueuePage {

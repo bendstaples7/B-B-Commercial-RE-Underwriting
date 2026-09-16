@@ -869,6 +869,7 @@ def property_address_heal_incomplete_task(self):
             )
             from app.services.property_address_service import (
                 heal_incomplete_property_addresses,
+                heal_out_of_market_property_localities,
             )
 
             client = _redis_client()
@@ -882,11 +883,24 @@ def property_address_heal_incomplete_task(self):
                     )
                     return {'skipped': True, 'reason': 'lock_held'}
 
+            # Clear Nominatim ``Town of …`` / non-IL false positives before the
+            # incomplete cursor walk — those rows look "complete" otherwise.
+            out_of_market = heal_out_of_market_property_localities(
+                actor='property_address.heal_incomplete',
+                commit=True,
+            )
+            if out_of_market.get('processed'):
+                _logger.info(
+                    "property_address.heal_out_of_market: %s",
+                    out_of_market,
+                )
+
             summary = heal_incomplete_property_addresses(
                 actor='property_address.heal_incomplete',
                 persist_cursor=True,
                 commit=True,
             )
+            summary['out_of_market'] = out_of_market
             if summary.get('geocode_halted'):
                 _logger.error(
                     "property_address.heal_incomplete: GEOCODE CIRCUIT OPEN — %s",

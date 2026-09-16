@@ -1105,3 +1105,130 @@ class TestHealIncompletePropertyAddresses:
                 )
             assert result['priority_processed'] == 1
             assert result['lead_ids'] == [active.id]
+
+
+def test_nominatim_rejects_road_only_brookhaven_hit():
+    """Bare-street OSM hits without house_number must not become situs."""
+    from app.services.property_address_service import _nominatim_structured_address
+
+    fake_rows = [{
+        'address': {
+            'road': 'East Lake Terrace',
+            'village': 'Lake Ronkonkoma',
+            'town': 'Town of Brookhaven',
+            'state': 'New York',
+            'ISO3166-2-lvl4': 'US-NY',
+            'postcode': '11779',
+            'country_code': 'us',
+        },
+    }]
+
+    class _Resp:
+        def read(self):
+            import json
+            return json.dumps(fake_rows).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    with patch('urllib.request.urlopen', return_value=_Resp()):
+        assert _nominatim_structured_address('7710 E Lake Terrace') is None
+
+
+def test_geocode_does_not_overwrite_chicago_defaults_with_ny(app):
+    from app.services.property_address_service import complete_property_address_fields
+    from app.services.property_data_service import StructuredGeocodeOutcome
+
+    with patch(
+        'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+        return_value=[],
+    ), patch(
+        'app.services.gis.cook_county_gis_connector.CookCountyGISConnector'
+        '.lookup_by_address',
+        return_value=None,
+    ), patch(
+        'app.services.property_data_service.PropertyDataService'
+        '.geocode_structured_address',
+        return_value=StructuredGeocodeOutcome(
+            address=None,
+            status='SKIPPED_NO_KEY',
+            billable=False,
+        ),
+    ), patch(
+        'app.services.property_address_service._nominatim_structured_address',
+        return_value={
+            'property_street': 'East Lake Terrace',
+            'property_city': 'Town of Brookhaven',
+            'property_state': 'NY',
+            'property_zip': '11779',
+        },
+    ):
+        result = complete_property_address_fields(
+            '7710 E Lake Terrace',
+            'Chicago',
+            'IL',
+            None,
+            try_gis=True,
+            try_geocode=True,
+        )
+    assert result['property_city'] == 'Chicago'
+    assert result['property_state'] == 'IL'
+    assert result['property_zip'] in (None, '')
+    assert 'geocode' not in (result.get('sources') or [])
+
+
+def test_heal_out_of_market_clears_town_of_brookhaven(app):
+    from app import db
+    from app.models import Lead
+    from app.services.property_address_service import (
+        heal_out_of_market_property_localities,
+    )
+
+    with app.app_context():
+        lead = Lead(
+            property_street='7710 E Lake Terrace',
+            property_city='Town of Brookhaven',
+            property_state='NY',
+            property_zip='11779',
+            lead_status='mailing_no_contact_made',
+            has_phone=False,
+            has_email=False,
+            has_property_match=False,
+            analysis_complete=False,
+            follow_up_overdue=False,
+            is_warm=False,
+            lead_score=0,
+            data_completeness_score=0,
+            unanswered_call_count=0,
+        )
+        db.session.add(lead)
+        db.session.commit()
+        lead_id = lead.id
+
+        with patch(
+            'app.services.property_address_service.complete_property_address',
+        ) as mock_complete:
+            def _fake(lead_obj, **kwargs):
+                lead_obj.property_city = 'Chicago'
+                lead_obj.property_state = 'IL'
+                lead_obj.property_zip = None
+                return {
+                    'complete': False,
+                    'changed_fields': ['property_city', 'property_state', 'property_zip'],
+                    'sources': ['default_market_locality'],
+                }
+
+            mock_complete.side_effect = _fake
+            summary = heal_out_of_market_property_localities(
+                lead_id=lead_id,
+                commit=True,
+                dry_run=False,
+            )
+        assert summary['processed'] == 1
+        assert summary['healed'] == 1
+        refreshed = db.session.get(Lead, lead_id)
+        assert refreshed.property_state == 'IL'
+        assert refreshed.property_city == 'Chicago'
