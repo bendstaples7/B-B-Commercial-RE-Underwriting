@@ -6,7 +6,7 @@ import {
 } from './needsReviewReason'
 
 describe('needsReviewReason', () => {
-  it('formats duplicate cluster with winner and siblings', () => {
+  it('formats possible duplicate records with winner and siblings', () => {
     expect(
       formatNeedsReviewReason({
         id: 10,
@@ -15,7 +15,7 @@ describe('needsReviewReason', () => {
         duplicate_cluster_ids: [10, 20, 30],
         duplicate_confidence: 'ambiguous',
       }),
-    ).toBe('Duplicate cluster → #20 (+2) (ambiguous match)')
+    ).toBe('Possible duplicate records → keep #20 (+2) (ambiguous match)')
   })
 
   it('passes through non-duplicate reasons', () => {

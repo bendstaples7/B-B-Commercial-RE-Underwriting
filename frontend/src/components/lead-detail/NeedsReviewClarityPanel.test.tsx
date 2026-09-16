@@ -1,11 +1,14 @@
 /**
- * Unit tests for NeedsReviewClarityPanel.
+ * Unit tests for Needs Review clarity popover content.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { NeedsReviewClarityPanel } from './NeedsReviewClarityPanel'
+import {
+  NeedsReviewClarityContent,
+  NeedsReviewChipPopover,
+} from './NeedsReviewClarityPanel'
 import { commandCenterService } from '@/services/api'
 import type { CommandCenterPayload } from '@/types'
 
@@ -43,24 +46,11 @@ function basePayload(overrides: Partial<CommandCenterPayload> = {}): CommandCent
   }
 }
 
-describe('NeedsReviewClarityPanel', () => {
+describe('NeedsReviewClarityContent', () => {
   beforeEach(() => {
     vi.mocked(commandCenterService.mergeInto).mockReset()
     vi.mocked(commandCenterService.dismissDuplicateReview).mockReset()
     vi.mocked(commandCenterService.clearReview).mockReset()
-  })
-
-  it('renders nothing when not flagged for review', () => {
-    const { container } = render(
-      <MemoryRouter>
-        <NeedsReviewClarityPanel
-          leadId={10}
-          commandCenterData={basePayload({ review_required: false, review_reason: null })}
-          onResolved={vi.fn()}
-        />
-      </MemoryRouter>,
-    )
-    expect(container).toBeEmptyDOMElement()
   })
 
   it('marks non-duplicate review as reviewed', async () => {
@@ -72,7 +62,7 @@ describe('NeedsReviewClarityPanel', () => {
     })
     render(
       <MemoryRouter>
-        <NeedsReviewClarityPanel
+        <NeedsReviewClarityContent
           leadId={10}
           commandCenterData={basePayload()}
           onResolved={onResolved}
@@ -89,7 +79,7 @@ describe('NeedsReviewClarityPanel', () => {
     })
   })
 
-  it('shows cluster table and dismiss for duplicate_lead_cluster', async () => {
+  it('shows Possible duplicate records and Not a duplicate action', async () => {
     const onResolved = vi.fn()
     vi.mocked(commandCenterService.dismissDuplicateReview).mockResolvedValue({
       lead_id: 10,
@@ -97,7 +87,7 @@ describe('NeedsReviewClarityPanel', () => {
     })
     render(
       <MemoryRouter>
-        <NeedsReviewClarityPanel
+        <NeedsReviewClarityContent
           leadId={10}
           commandCenterData={basePayload({
             review_reason: 'duplicate_lead_cluster',
@@ -127,6 +117,9 @@ describe('NeedsReviewClarityPanel', () => {
         />
       </MemoryRouter>,
     )
+    expect(screen.getByTestId('needs-review-clarity-reason')).toHaveTextContent(
+      'Possible duplicate records',
+    )
     expect(screen.getByTestId('needs-review-cluster-row-20')).toBeInTheDocument()
     expect(screen.queryByTestId('needs-review-merge-into-winner')).not.toBeInTheDocument()
     await userEvent.click(screen.getByTestId('needs-review-dismiss-duplicate'))
@@ -134,5 +127,27 @@ describe('NeedsReviewClarityPanel', () => {
       expect(commandCenterService.dismissDuplicateReview).toHaveBeenCalledWith(10)
       expect(onResolved).toHaveBeenCalledWith({ kind: 'dismissed' })
     })
+  })
+})
+
+describe('NeedsReviewChipPopover', () => {
+  it('opens popover from Needs Review chip', async () => {
+    render(
+      <MemoryRouter>
+        <NeedsReviewChipPopover
+          leadId={10}
+          commandCenterData={basePayload({
+            review_reason: 'duplicate_lead_cluster',
+          })}
+          onResolved={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    expect(screen.queryByTestId('needs-review-clarity-panel')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByTestId('work-queue-strip-needs-review'))
+    expect(await screen.findByTestId('needs-review-clarity-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-review-clarity-reason')).toHaveTextContent(
+      'Possible duplicate records',
+    )
   })
 })

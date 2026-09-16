@@ -306,7 +306,7 @@ describe('PropertySidebar phone confidence', () => {
       }),
     )
     expect(screen.getByTestId('sidebar-needs-review-reason')).toHaveTextContent(
-      'Duplicate cluster → #2 (ambiguous)',
+      'Possible duplicate records → keep #2 (+1) (ambiguous match)',
     )
   })
 

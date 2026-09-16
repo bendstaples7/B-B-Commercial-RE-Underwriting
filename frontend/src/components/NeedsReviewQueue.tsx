@@ -75,7 +75,7 @@ export function NeedsReviewQueue() {
 
   const rowActions: RowAction[] = [
     {
-      label: 'Merge into winner',
+      label: 'Keep suggested',
       icon: <MergeTypeIcon fontSize="small" />,
       testId: 'action-merge-duplicate',
       isVisible: (row: QueueRow) => (
@@ -97,7 +97,7 @@ export function NeedsReviewQueue() {
       },
     },
     {
-      label: 'Dismiss duplicate',
+      label: 'Not a duplicate',
       icon: <CloseIcon fontSize="small" />,
       testId: 'action-dismiss-duplicate',
       isVisible: (row: QueueRow) => row.review_reason === 'duplicate_lead_cluster',

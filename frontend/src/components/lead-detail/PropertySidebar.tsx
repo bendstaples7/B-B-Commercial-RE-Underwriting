@@ -48,6 +48,7 @@ import {
 } from '@/utils/propertyContacts'
 import { formatImportNote } from './leadDetailFormatters'
 import { resolveMailerHistorySummary } from '@/utils/mailerHistory'
+import { formatNeedsReviewReason } from '@/utils/needsReviewReason'
 import { hasNonBlankPhones, PhoneList } from '@/components/PhoneRow'
 import { ccCardSx } from '@/components/lead-detail/commandCenterChrome'
 import { PriorOwnerStaleOverlay } from '@/components/lead-detail/PriorOwnerStaleCallout'
@@ -1058,17 +1059,13 @@ export function PropertySidebar({
               Needs Review reason
             </Typography>
             <Typography variant="caption" fontWeight={600} display="block">
-              {commandCenterData.review_reason === 'duplicate_lead_cluster'
-                ? `Duplicate cluster${
-                    commandCenterData.duplicate_cluster?.suggested_winner_id
-                      ? ` → #${commandCenterData.duplicate_cluster.suggested_winner_id}`
-                      : ''
-                  }${
-                    commandCenterData.duplicate_cluster?.confidence
-                      ? ` (${commandCenterData.duplicate_cluster.confidence})`
-                      : ''
-                  }`
-                : (commandCenterData.review_reason || 'Needs review')}
+              {formatNeedsReviewReason({
+                id: commandCenterData.id,
+                review_reason: commandCenterData.review_reason,
+                suggested_winner_id: commandCenterData.duplicate_cluster?.suggested_winner_id,
+                duplicate_cluster_ids: commandCenterData.duplicate_cluster?.cluster_ids,
+                duplicate_confidence: commandCenterData.duplicate_cluster?.confidence,
+              })}
             </Typography>
           </Box>
         )}

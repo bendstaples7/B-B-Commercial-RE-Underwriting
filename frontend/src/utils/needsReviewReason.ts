@@ -1,6 +1,8 @@
 /**
- * Shared Needs Review reason labels (queue table + Command Center panel).
+ * Shared Needs Review reason labels (queue table + Command Center popover).
  */
+
+export const POSSIBLE_DUPLICATE_RECORDS_LABEL = 'Possible duplicate records'
 
 export type DuplicateClusterReasonInput = {
   id?: number | null
@@ -22,9 +24,10 @@ export function formatNeedsReviewReason(row: DuplicateClusterReasonInput): strin
     const twin = row.suggested_winner_id
     const ids = (row.duplicate_cluster_ids ?? []).filter((id) => id !== row.id)
     const confidence = duplicateConfidenceLabel(row.duplicate_confidence)
+    const base = POSSIBLE_DUPLICATE_RECORDS_LABEL
     return twin
-      ? `Duplicate cluster → #${twin}${ids.length ? ` (+${ids.length})` : ''}${confidence}`
-      : `Duplicate cluster${confidence}`
+      ? `${base} → keep #${twin}${ids.length ? ` (+${ids.length})` : ''}${confidence}`
+      : `${base}${confidence}`
   }
   return row.review_reason?.trim() || 'Needs review'
 }

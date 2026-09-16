@@ -350,10 +350,14 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     expect(screen.getByTestId('work-queue-strip-needs-review')).toBeInTheDocument()
     expect(screen.getByTestId('work-queue-strip-follow-up-overdue')).toBeInTheDocument()
     expect(screen.getByTestId('work-queue-strip-previously-warm')).toBeInTheDocument()
-    expect(screen.getByTestId('needs-review-clarity-panel')).toBeInTheDocument()
-    expect(screen.getByTestId('needs-review-clarity-reason')).toHaveTextContent('Manual review needed')
+    // Clarity lives in chip popover — not a sticky header banner
+    expect(screen.queryByTestId('needs-review-clarity-panel')).not.toBeInTheDocument()
     expect(screen.queryByTestId('work-queue-banner-needs-review')).not.toBeInTheDocument()
     expect(screen.queryByTestId('work-queue-banner-follow-up-overdue')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByTestId('work-queue-strip-needs-review'))
+    expect(await screen.findByTestId('needs-review-clarity-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-review-clarity-reason')).toHaveTextContent('Manual review needed')
   })
 
   it('splits came-from routing context from live work-queue membership', async () => {
@@ -422,9 +426,12 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     })
     expect(screen.getByTestId('work-queue-currently-in')).toBeInTheDocument()
     expect(screen.getByTestId('work-queue-strip-needs-review')).toBeInTheDocument()
-    expect(screen.getByTestId('needs-review-cluster-table')).toBeInTheDocument()
+    expect(screen.queryByTestId('needs-review-cluster-table')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByTestId('work-queue-strip-needs-review'))
+    expect(await screen.findByTestId('needs-review-cluster-table')).toBeInTheDocument()
     expect(screen.getByTestId('needs-review-clarity-reason')).toHaveTextContent(
-      'Duplicate cluster → #99 (+1) (ambiguous match)',
+      'Possible duplicate records',
     )
   })
 
