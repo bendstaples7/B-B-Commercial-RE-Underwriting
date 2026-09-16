@@ -2074,6 +2074,27 @@ export interface WorkQueueMembership {
   path: string;
 }
 
+/** Same-building duplicate cluster member for Needs Review clarity on CC. */
+export interface DuplicateClusterMember {
+  id: number;
+  property_street: string | null;
+  owner_display_name: string;
+  county_assessor_pin?: string | null;
+  lead_status?: string | null;
+  has_phone?: boolean;
+  has_email?: boolean;
+  hubspot_confirmed?: boolean;
+  is_suggested_winner?: boolean;
+}
+
+export interface DuplicateClusterPreview {
+  cluster_ids: number[];
+  suggested_winner_id: number;
+  confidence: string;
+  streets: Record<number, string | null>;
+  members: DuplicateClusterMember[];
+}
+
 export interface QueueRow {
   id: number;
   owner_first_name: string | null;
@@ -2337,7 +2358,11 @@ export interface CommandCenterPayload {
   lead_category_locked?: boolean;
   /** Same-building other leads (not other buildings in a portfolio). */
   same_address_leads?: SameAddressLeadSummary[];
+  review_required?: boolean;
   review_reason?: string | null;
+  review_triggered_at?: string | null;
+  /** Present when review_reason is duplicate_lead_cluster. */
+  duplicate_cluster?: DuplicateClusterPreview | null;
   has_property_match: boolean;
   analysis_session_id: number | null;
   hubspot_deal_stage?: string | null;

@@ -829,6 +829,19 @@ def cluster_preview_for_lead(lead: Lead) -> dict[str, Any] | None:
     confirmed_ids = confirmed_hubspot_lead_ids()
     records = [_lead_to_merge_record(item) for item in cluster]
     winner = pick_merge_winner(records, confirmed_ids)
+    members = []
+    for item in cluster:
+        members.append({
+            'id': item.id,
+            'property_street': item.property_street,
+            'owner_display_name': _lead_owner_display_name(item),
+            'county_assessor_pin': getattr(item, 'county_assessor_pin', None),
+            'lead_status': item.lead_status,
+            'has_phone': bool(item.has_phone),
+            'has_email': bool(item.has_email),
+            'hubspot_confirmed': item.id in confirmed_ids,
+            'is_suggested_winner': item.id == winner['id'],
+        })
     return {
         'cluster_ids': [item.id for item in cluster],
         'suggested_winner_id': winner['id'],
@@ -836,6 +849,7 @@ def cluster_preview_for_lead(lead: Lead) -> dict[str, Any] | None:
         'streets': {
             item.id: item.property_street for item in cluster
         },
+        'members': members,
     }
 
 

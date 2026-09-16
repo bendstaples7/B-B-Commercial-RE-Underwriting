@@ -288,6 +288,28 @@ describe('PropertySidebar phone confidence', () => {
     )
   })
 
+  it('shows Needs Review reason under Work Queues', () => {
+    renderSidebar(
+      makePayload({
+        work_queues: [
+          { key: 'needs-review', label: 'Needs Review', path: '/queues/needs-review' },
+        ],
+        review_required: true,
+        review_reason: 'duplicate_lead_cluster',
+        duplicate_cluster: {
+          cluster_ids: [1, 2],
+          suggested_winner_id: 2,
+          confidence: 'ambiguous',
+          streets: {},
+          members: [],
+        },
+      }),
+    )
+    expect(screen.getByTestId('sidebar-needs-review-reason')).toHaveTextContent(
+      'Possible duplicate records → keep #2 (+1) (ambiguous match)',
+    )
+  })
+
   it('always shows Mailing under Contact Info with Not on file when empty', () => {
     renderSidebar(
       makePayload({

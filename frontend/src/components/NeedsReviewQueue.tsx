@@ -1,11 +1,3 @@
-/**
- * NeedsReviewQueue — Needs Review queue view.
- *
- * Shows leads flagged for review. Extra columns: review reason and trigger date.
- * Soft-merge for ``duplicate_lead_cluster``: Merge into suggested winner / Dismiss.
- *
- * Requirements: 6.7, 18.1
- */
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Box, Typography } from '@mui/material'
@@ -23,12 +15,7 @@ import { resolveBulkActions } from './queueBulkActions'
 import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
-
-function duplicateConfidenceLabel(confidence: QueueRow['duplicate_confidence']): string {
-  const normalized = String(confidence || '').trim().toLowerCase()
-  if (!normalized) return ''
-  return normalized === 'ambiguous' ? ' (ambiguous match)' : ` (${normalized} match)`
-}
+import { formatNeedsReviewReason } from '@/utils/needsReviewReason'
 
 export function NeedsReviewQueue() {
   const [page, setPage] = useState(1)
@@ -57,15 +44,8 @@ export function NeedsReviewQueue() {
       key: 'review_reason',
       label: 'Review Reason',
       render: (row: QueueRow) => {
-        if (row.review_reason === 'duplicate_lead_cluster') {
-          const twin = row.suggested_winner_id
-          const ids = (row.duplicate_cluster_ids ?? []).filter((id) => id !== row.id)
-          const confidence = duplicateConfidenceLabel(row.duplicate_confidence)
-          return twin
-            ? `Duplicate cluster → #${twin}${ids.length ? ` (+${ids.length})` : ''}${confidence}`
-            : `Duplicate cluster${confidence}`
-        }
-        return row.review_reason ?? '—'
+        if (!row.review_reason) return '—'
+        return formatNeedsReviewReason(row)
       },
     },
     {
@@ -95,7 +75,7 @@ export function NeedsReviewQueue() {
 
   const rowActions: RowAction[] = [
     {
-      label: 'Merge into winner',
+      label: 'Keep suggested',
       icon: <MergeTypeIcon fontSize="small" />,
       testId: 'action-merge-duplicate',
       isVisible: (row: QueueRow) => (
@@ -117,7 +97,7 @@ export function NeedsReviewQueue() {
       },
     },
     {
-      label: 'Dismiss duplicate',
+      label: 'Not a duplicate',
       icon: <CloseIcon fontSize="small" />,
       testId: 'action-dismiss-duplicate',
       isVisible: (row: QueueRow) => row.review_reason === 'duplicate_lead_cluster',

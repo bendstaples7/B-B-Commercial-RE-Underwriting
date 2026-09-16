@@ -195,6 +195,9 @@ const SameAddressMergeLookbookPage = lazyWithRetry(
 const MergeCtaPlacementLookbookPage = lazyWithRetry(
   () => import('./pages/lookbook/MergeCtaPlacementLookbookPage'),
 )
+const NeedsReviewPlacementLookbookPage = lazyWithRetry(
+  () => import('./pages/lookbook/NeedsReviewPlacementLookbookPage'),
+)
 const PipelineConfigAdminPage = lazyWithRetry(() =>
   import('./pages/PipelineConfigAdminPage').then((m) => ({ default: m.PipelineConfigAdminPage })),
 )
@@ -2644,10 +2647,16 @@ function App() {
             />
           )}
           {import.meta.env.DEV && (
-            <Route
-              path="/lookbook/merge-cta-placements"
-              element={<MergeCtaPlacementLookbookPage />}
-            />
+            <>
+              <Route
+                path="/lookbook/merge-cta-placements"
+                element={<MergeCtaPlacementLookbookPage />}
+              />
+              <Route
+                path="/lookbook/needs-review-placements"
+                element={<NeedsReviewPlacementLookbookPage />}
+              />
+            </>
           )}
           {/* Old /leads/views/* — redirect to new /queues/* routes */}
           <Route path="/leads/views/previously-warm" element={<Navigate to="/queues/previously-warm" replace />} />
