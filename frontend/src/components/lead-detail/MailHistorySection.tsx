@@ -19,7 +19,7 @@ import {
 import type { CommandCenterPayload, PropertyDetail } from '@/types'
 import { ccSubsectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
 import { formatDateTime } from '@/utils/formatters'
-import { resolveMailerHistorySummary } from '@/utils/mailerHistory'
+import { parseMailerSentAt, resolveMailerHistorySummary } from '@/utils/mailerHistory'
 
 export interface MailHistorySectionProps {
   commandCenterData: CommandCenterPayload
@@ -45,6 +45,30 @@ export function MailHistorySection({
     (commandCenterData as { returned_addresses?: string | null }).returned_addresses
   const attributed = commandCenterData.mail_attributed_responses ?? []
 
+  const historyBySentDesc = [...mailSummary.rows].sort((a, b) => {
+    const am = parseMailerSentAt(a.sent_at)?.getTime() ?? -1
+    const bm = parseMailerSentAt(b.sent_at)?.getTime() ?? -1
+    if (am !== bm) return bm - am
+    return String(b.id).localeCompare(String(a.id))
+  })
+  const latestUspsFail = historyBySentDesc.find(
+    (row) => (row.address_feedback || '').toLowerCase() === 'failed',
+  )
+  // Suppress the banner when a newer Corrected/Verified (or non-failed) row
+  // supersedes the last USPS failure for this mailing history.
+  const uspsFailStillCurrent =
+    latestUspsFail != null
+    && !historyBySentDesc.some((row) => {
+      if (row.id === latestUspsFail.id) return false
+      const rowMs = parseMailerSentAt(row.sent_at)?.getTime() ?? -1
+      const failMs = parseMailerSentAt(latestUspsFail.sent_at)?.getTime() ?? -1
+      if (rowMs < failMs) return false
+      const fb = (row.address_feedback || '').toLowerCase()
+      return fb === 'corrected' || fb === 'verified' || (!fb && !row.olc_silent_omit)
+    })
+  const silentOmitCount = mailSummary.rows.filter((row) => row.olc_silent_omit).length
+  const latestSilentOmit = historyBySentDesc.find((row) => row.olc_silent_omit)
+
   return (
     <Box
       id="mail-history-section"
@@ -59,6 +83,28 @@ export function MailHistorySection({
       <Typography variant="subtitle2" sx={{ ...ccSubsectionTitleSx, mb: 1 }}>
         Mail history
       </Typography>
+      {uspsFailStillCurrent && latestUspsFail ? (
+        <Alert severity="warning" sx={{ mb: 1.5 }} data-testid="mail-history-usps-fail-banner">
+          Last batch: USPS rejected this mailing address
+          {latestUspsFail.campaign_id != null ? ` (batch #${latestUspsFail.campaign_id})` : ''}.
+          {latestUspsFail.address_failure_reason
+            ? ` ${latestUspsFail.address_failure_reason}`
+            : ' Fix the address before mailing again.'}
+        </Alert>
+      ) : null}
+      {latestSilentOmit ? (
+        <Alert
+          severity={silentOmitCount >= 2 ? 'error' : 'info'}
+          sx={{ mb: 1.5 }}
+          data-testid="mail-history-olc-omit-banner"
+        >
+          {silentOmitCount >= 2
+            ? 'Open Letter omitted this mailing address twice — contact Open Letter support before re-mailing.'
+            : `Open Letter omitted this lead from order${
+                latestSilentOmit.olc_order_id ? ` ${latestSilentOmit.olc_order_id}` : ''
+              }; it was returned to Ready to Mail for another try.`}
+        </Alert>
+      ) : null}
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1.5 }}>
         <Chip
           size="small"
@@ -108,6 +154,7 @@ export function MailHistorySection({
                   <TableCell>
                     {[
                       row.address_feedback ? `Feedback: ${row.address_feedback}` : null,
+                      row.olc_silent_omit ? 'OLC silent omit' : null,
                       row.cancelled ? 'Cancelled' : null,
                     ]
                       .filter(Boolean)

@@ -963,14 +963,22 @@ def building_size_fit_score(lead: Lead) -> float:
 
 def _property_identity_score(lead: Lead) -> float:
     """Assessor / identity fields — max PROPERTY_IDENTITY_MAX (50)."""
+    from app.services.plugins.owner_name_utils import (
+        contact_display_name,
+        is_placeholder_owner_name,
+    )
+
     score = 0.0
     if lead.county_assessor_pin and str(lead.county_assessor_pin).strip():
         score += DATA_QUALITY_FIELDS["has_pin"]
     if lead.property_street and lead.property_street.strip():
         score += DATA_QUALITY_FIELDS["has_property_address"]
         score += DATA_QUALITY_FIELDS["has_normalized_address"]
-    if (lead.owner_first_name and lead.owner_first_name.strip()) or \
-       (lead.owner_last_name and lead.owner_last_name.strip()):
+    owner_display = contact_display_name(
+        getattr(lead, "owner_first_name", None),
+        getattr(lead, "owner_last_name", None),
+    )
+    if owner_display and not is_placeholder_owner_name(owner_display):
         score += DATA_QUALITY_FIELDS["has_owner_name"]
     if lead.mailing_address and lead.mailing_address.strip():
         score += DATA_QUALITY_FIELDS["has_owner_mailing_address"]
@@ -1361,6 +1369,10 @@ def identify_missing_data(
     has_email: bool | None = None,
 ) -> list[str]:
     from app.services.phone_confidence_service import MIN_VIABLE_CONFIDENCE
+    from app.services.plugins.owner_name_utils import (
+        contact_display_name,
+        is_placeholder_owner_name,
+    )
 
     if best_confidence is None:
         best_confidence = _best_phone_confidence(lead)
@@ -1375,8 +1387,13 @@ def identify_missing_data(
         "property_address": lambda: lead.property_street and lead.property_street.strip(),
         "normalized_address": lambda: lead.property_street and lead.property_street.strip(),
         "owner_name": lambda: (
-            (lead.owner_first_name and lead.owner_first_name.strip()) or
-            (lead.owner_last_name and lead.owner_last_name.strip())
+            (
+                (lead.owner_first_name and lead.owner_first_name.strip())
+                or (lead.owner_last_name and lead.owner_last_name.strip())
+            )
+            and not is_placeholder_owner_name(
+                contact_display_name(lead.owner_first_name, lead.owner_last_name),
+            )
         ),
         "owner_mailing_address": lambda: lead.mailing_address and lead.mailing_address.strip(),
         "property_type": lambda: lead.property_type and lead.property_type.strip(),

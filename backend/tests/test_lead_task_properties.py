@@ -220,16 +220,38 @@ def test_property_5_completing_completed_task_is_noop(n):
 
 @settings(max_examples=100)
 @given(n=st.integers(min_value=0, max_value=100))
-def test_property_5_cancelled_task_cannot_be_completed(n):
+def test_property_5_cancelled_task_complete_is_noop(n):
     """
-    Property 5: Task State Machine Validity — a cancelled task cannot be completed.
-    Attempting to complete a 'cancelled' task raises InvalidTaskStatusTransitionError.
+    Property 5: Task State Machine Validity — completing a cancelled task is a
+    no-op (same as completed). System cancels (mail dequeue, DNC) must not 422
+    when a stale UI retries complete.
 
     Validates: Requirements 3.4, 21.5, 21.6
     """
     # Feature: actionable-lead-command-center, Property 5: Task State Machine Validity
     service = LeadTaskService()
     mock_task = make_mock_task(status='cancelled')
+
+    with patch('app.services.lead_task_service.LeadTask') as MockLeadTask, \
+         patch('app.services.lead_task_service.db') as mock_db:
+
+        MockLeadTask.query.filter_by.return_value.first.return_value = mock_task
+        mock_db.session = MagicMock()
+
+        result = service.complete(task_id=1, lead_id=1, actor='test')
+
+        assert result is mock_task
+        assert mock_task.status == 'cancelled'
+        mock_db.session.add.assert_not_called()
+        mock_db.session.commit.assert_not_called()
+
+
+@settings(max_examples=50)
+@given(status=st.sampled_from(['overdue', 'pending', 'unknown', '']))
+def test_property_5_non_terminal_unknown_status_cannot_be_completed(status):
+    """Unknown non-open statuses still raise InvalidTaskStatusTransitionError."""
+    service = LeadTaskService()
+    mock_task = make_mock_task(status=status)
 
     with patch('app.services.lead_task_service.LeadTask') as MockLeadTask, \
          patch('app.services.lead_task_service.db') as mock_db:

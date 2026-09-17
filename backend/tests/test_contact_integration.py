@@ -209,7 +209,7 @@ class TestPrimaryDemotion:
         assert resp.status_code == 201
 
         # Verify via HTTP that contact B is now primary
-        resp_list = client.get(f"/api/properties/{prop_id}/contacts")
+        resp_list = client.get(f"/api/properties/{prop_id}/contacts", headers=_AUTH_HEADERS)
         assert resp_list.status_code == 200
         contacts_data = resp_list.get_json()
 
@@ -220,6 +220,39 @@ class TestPrimaryDemotion:
 
         assert contact_a_id in by_id
         assert by_id[contact_a_id]["is_primary"] is False
+
+    def test_list_excludes_former_owners_unless_requested(self, client, app):
+        """Default GET omits former_owner; include_former_owners=1 returns them."""
+        with app.app_context():
+            prop = _make_property("4490 Former Owner List Ave")
+            active = _make_contact("Sam", "FISBO")
+            former = _make_contact("Sam", "Old Town Square Cbre")
+            _link(prop.id, active.id, is_primary=True, role="owner")
+            _link(prop.id, former.id, is_primary=False, role="former_owner")
+            prop_id = prop.id
+            active_id = active.id
+            former_id = former.id
+
+        anon = client.get(f"/api/properties/{prop_id}/contacts")
+        assert anon.status_code == 401
+
+        default_resp = client.get(f"/api/properties/{prop_id}/contacts", headers=_AUTH_HEADERS)
+        assert default_resp.status_code == 200
+        default_ids = {c["id"] for c in default_resp.get_json()}
+        assert active_id in default_ids
+        assert former_id not in default_ids
+
+        included = client.get(
+            f"/api/properties/{prop_id}/contacts",
+            query_string={"include_former_owners": "1"},
+            headers=_AUTH_HEADERS,
+        )
+        assert included.status_code == 200
+        included_ids = {c["id"] for c in included.get_json()}
+        assert active_id in included_ids
+        assert former_id in included_ids
+        former_row = next(c for c in included.get_json() if c["id"] == former_id)
+        assert former_row["property_contact_role"] == "former_owner"
 
     def test_previous_primary_demoted_verified_in_db(self, client, app):
         """Database record confirms previous primary is_primary=False after demotion."""
@@ -309,7 +342,7 @@ class TestDeletePrimaryNoAutoPromotion:
         assert resp.status_code == 204
 
         # Verify via HTTP that secondary is still not primary
-        resp_list = client.get(f"/api/properties/{prop_id}/contacts")
+        resp_list = client.get(f"/api/properties/{prop_id}/contacts", headers=_AUTH_HEADERS)
         assert resp_list.status_code == 200
         contacts_data = resp_list.get_json()
 

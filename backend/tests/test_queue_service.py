@@ -43,7 +43,7 @@ def _make_lead(app, street, **kwargs):
 
 
 def _make_mail_ready_lead(app, street, **kwargs):
-    """Create a mail-ready lead with a valid mailable address."""
+    """Create a mail-ready lead with a valid mailable address and real owner name."""
     defaults = dict(
         lead_status='mailing_no_contact_made',
         recommended_action='mail_ready',
@@ -52,6 +52,8 @@ def _make_mail_ready_lead(app, street, **kwargs):
         mailing_city='Chicago',
         mailing_state='IL',
         mailing_zip='60601',
+        owner_first_name='Pat',
+        owner_last_name='Owner',
         owner_user_id='test-owner',
     )
     defaults.update(kwargs)
@@ -1113,3 +1115,95 @@ def test_skip_trace_queue_by_status_exhausted_separate(app):
         hold_membership = {m['key'] for m in svc.membership_for_lead(mid_hold.id)}
         assert 'skip-trace' not in hold_membership
 
+
+
+# ---------------------------------------------------------------------------
+# Person consolidation (outreach queues)
+# ---------------------------------------------------------------------------
+
+def test_todays_action_consolidates_same_person_two_properties(app):
+    """Same owner Contact with two due properties → one Today's Action row."""
+    from app import db
+    from app.models import Contact
+    from app.models.property_contact import PropertyContact
+
+    with app.app_context():
+        a = _make_lead(
+            app,
+            '2551 W Eastwood Ave 1',
+            owner_first_name='Bob',
+            owner_last_name='Weinstein',
+            owner_user_id='ben',
+            lead_status='in_person_appointment',
+            lead_score=100.0,
+        )
+        b = _make_lead(
+            app,
+            '7710 E Lake Terrace',
+            owner_first_name='Bob',
+            owner_last_name='Weinstein',
+            owner_user_id='ben',
+            lead_status='mailing_no_contact_made',
+            lead_score=31.0,
+            property_city='Chicago',
+            property_state='IL',
+        )
+        contact = Contact(first_name='Bob', last_name='Weinstein', role='owner')
+        db.session.add(contact)
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=a.id, contact_id=contact.id, role='owner', is_primary=True,
+        ))
+        db.session.add(PropertyContact(
+            property_id=b.id, contact_id=contact.id, role='owner', is_primary=True,
+        ))
+        db.session.commit()
+        _make_task(app, a.id, due_date=date.today(), title='Follow up with Bob')
+        _make_task(app, b.id, due_date=date.today(), title='Follow up with Bob')
+
+        rows, total = QueueService().get_todays_action(per_page=100)
+        ids = [r['id'] for r in rows]
+        assert total == 1
+        assert ids == [a.id]  # higher score / earliest-due tie → score wins when dues equal
+        row = rows[0]
+        assert row['property_count'] == 2
+        assert row['person_key'] and 'contact:' in row['person_key']
+        assert any(s['id'] == b.id for s in (row.get('related_in_queue') or []))
+        assert QueueService().get_counts()['todays_action'] == 1
+
+
+def test_mail_candidates_consolidates_same_person(app):
+    from app import db
+    from app.models import Contact
+    from app.models.property_contact import PropertyContact
+
+    with app.app_context():
+        a = _make_mail_ready_lead(
+            app,
+            '100 Same Person Ave',
+            owner_first_name='Jane',
+            owner_last_name='Portfolio',
+            lead_score=80.0,
+        )
+        b = _make_mail_ready_lead(
+            app,
+            '200 Same Person Blvd',
+            owner_first_name='Jane',
+            owner_last_name='Portfolio',
+            lead_score=40.0,
+        )
+        contact = Contact(first_name='Jane', last_name='Portfolio', role='owner')
+        db.session.add(contact)
+        db.session.flush()
+        for lead in (a, b):
+            db.session.add(PropertyContact(
+                property_id=lead.id, contact_id=contact.id, role='owner', is_primary=True,
+            ))
+        db.session.commit()
+
+        svc = QueueService()
+        rows, total = svc.get_mail_candidates('test-owner', per_page=100)
+        assert total == 1
+        assert [r['id'] for r in rows] == [a.id]
+        assert rows[0]['property_count'] == 2
+        assert svc.count_mail_candidates('test-owner') == 1

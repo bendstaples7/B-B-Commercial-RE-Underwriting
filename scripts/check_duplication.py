@@ -238,6 +238,113 @@ def check_queue_advance_bleed_regression_test() -> list[str]:
     return errors
 
 
+def check_dial_target_contract() -> list[str]:
+    """Canonical dial_target must wire Call Now / Log Call and keep the 4490 gate."""
+    errors: list[str] = []
+
+    outreach = ROOT / "backend" / "app" / "services" / "outreach_method_service.py"
+    if not outreach.exists():
+        return ["backend/app/services/outreach_method_service.py missing"]
+    outreach_text = outreach.read_text(encoding="utf-8")
+    if "def resolve_dial_target" not in outreach_text:
+        errors.append(
+            "outreach_method_service.py must define resolve_dial_target "
+            "(canonical dial target for Call Now / call tasks / Log Call)"
+        )
+
+    cc = ROOT / "backend" / "app" / "controllers" / "command_center_controller.py"
+    if not cc.exists():
+        errors.append("command_center_controller.py missing")
+    else:
+        cc_text = cc.read_text(encoding="utf-8")
+        cc_fn = re.search(
+            r"def get_command_center\b.*?(?=\n@|\ndef |\Z)",
+            cc_text,
+            re.DOTALL,
+        )
+        if not cc_fn or "'dial_target': resolve_dial_target(lead)" not in cc_fn.group(0):
+            errors.append(
+                "get_command_center must attach dial_target via "
+                "resolve_dial_target(lead)"
+            )
+
+    ulcc = ROOT / "frontend" / "src" / "components" / "UnifiedLeadCommandCenter.tsx"
+    if not ulcc.exists():
+        errors.append("UnifiedLeadCommandCenter.tsx missing")
+    else:
+        ulcc_text = ulcc.read_text(encoding="utf-8")
+        if "dial_target" not in ulcc_text or "preferredPhoneDigits" not in ulcc_text:
+            errors.append(
+                "UnifiedLeadCommandCenter must pass dial_target into Log Call "
+                "as preferredPhoneDigits"
+            )
+
+    fields = ROOT / "frontend" / "src" / "components" / "ContactMethodFields.tsx"
+    if not fields.exists():
+        errors.append("ContactMethodFields.tsx missing")
+    else:
+        fields_text = fields.read_text(encoding="utf-8")
+        if "preferredPhoneDigits" not in fields_text:
+            errors.append("ContactMethodFields must accept preferredPhoneDigits")
+        # Behavioral never-hide path (not comment text).
+        if "phoneDigitsEqual(phone.value, preferredPhoneDigits)" not in fields_text:
+            errors.append(
+                "ContactMethodFields must inject preferredPhoneDigits via "
+                "phoneDigitsEqual when the selected contact would hide it"
+            )
+        if "phoneDigitsEqual(a.value, preferredPhoneDigits)" not in fields_text:
+            errors.append(
+                "ContactMethodFields must rank preferredPhoneDigits first in "
+                "buildMethodOptions sort"
+            )
+
+    fields_test = ROOT / "frontend" / "src" / "components" / "ContactMethodFields.test.tsx"
+    if not fields_test.exists():
+        errors.append("ContactMethodFields.test.tsx missing")
+    else:
+        test_text = fields_test.read_text(encoding="utf-8")
+        if "4490" not in test_text:
+            errors.append(
+                "ContactMethodFields.test.tsx must keep a 4490 dial-target gate"
+            )
+        if "never hides preferred dial-target" not in test_text.lower():
+            errors.append(
+                "ContactMethodFields.test.tsx must keep a never-hide dial-target test"
+            )
+        if "7732715525" not in test_text or "toBe(true)" not in test_text:
+            errors.append(
+                "ContactMethodFields.test.tsx must assert the 4490 dial digits stay visible"
+            )
+
+    outreach_test = ROOT / "backend" / "tests" / "test_outreach_method_service.py"
+    if not outreach_test.exists():
+        errors.append("test_outreach_method_service.py missing")
+    else:
+        ot = outreach_test.read_text(encoding="utf-8")
+        if "resolve_dial_target" not in ot or "4490" not in ot:
+            errors.append(
+                "test_outreach_method_service.py must assert resolve_dial_target "
+                "on a 4490-shaped former-owner HubSpot phone"
+            )
+        if "7732715525" not in ot:
+            errors.append(
+                "test_outreach_method_service.py must assert the 4490 dial digits"
+            )
+
+    arch = ROOT / "docs" / "ARCHITECTURE.md"
+    if arch.exists():
+        arch_text = arch.read_text(encoding="utf-8")
+        if "resolve_dial_target" not in arch_text or "dial_target" not in arch_text:
+            errors.append(
+                "docs/ARCHITECTURE.md must document canonical dial_target / "
+                "resolve_dial_target"
+            )
+    else:
+        errors.append("docs/ARCHITECTURE.md missing")
+
+    return errors
+
+
 def check_cook_county_sale_date_resolver_structure() -> list[str]:
     """Single choke point for Cook sale-date resolve order (systemic-structure)."""
     errors: list[str] = []
@@ -311,6 +418,7 @@ def main() -> None:
     errors.extend(check_dead_api_exports())
     errors.extend(check_lead_command_center_remount_key())
     errors.extend(check_queue_advance_bleed_regression_test())
+    errors.extend(check_dial_target_contract())
     errors.extend(check_cook_county_sale_date_resolver_structure())
 
     if errors:

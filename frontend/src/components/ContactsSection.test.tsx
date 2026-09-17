@@ -14,6 +14,7 @@ vi.mock('@/services/api', () => ({
     getPropertyContacts: vi.fn(),
     linkContactToProperty: vi.fn(),
     unlinkContactFromProperty: vi.fn(),
+    clearOwnerPerson: vi.fn(),
     createContact: vi.fn(),
     updateContact: vi.fn(),
     deleteContact: vi.fn(),
@@ -538,6 +539,45 @@ describe('ContactsSection', () => {
       firstName: 'Gregory',
       lastName: 'Shek',
       phones: [{ value: '(312) 555-0199', label: 'work' }],
+    })
+  })
+
+  it('clears an unlinked flat owner from the lead', async () => {
+    vi.mocked(contactService.getPropertyContacts).mockResolvedValue([])
+    vi.mocked(contactService.clearOwnerPerson).mockResolvedValue({
+      cleared_slots: ['owner'],
+      unlinked_contact_id: null,
+      display_name: 'Gregory Shek',
+    })
+
+    render(
+      <ContactsSection
+        propertyId={PROPERTY_ID}
+        commandCenterData={
+          {
+            id: PROPERTY_ID,
+            owner_first_name: 'Gregory',
+            owner_last_name: 'Shek',
+            phones: [] as CommandCenterPayload['phones'],
+            organizations: [] as CommandCenterPayload['organizations'],
+          } as CommandCenterPayload
+        }
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('clear-unlinked-person-btn')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId('clear-unlinked-person-btn'))
+    fireEvent.click(screen.getByTestId('confirm-clear-unlinked-person-btn'))
+    await waitFor(() => {
+      expect(contactService.clearOwnerPerson).toHaveBeenCalledWith(
+        PROPERTY_ID,
+        expect.objectContaining({
+          first_name: 'Gregory',
+          last_name: 'Shek',
+        }),
+      )
     })
   })
 })

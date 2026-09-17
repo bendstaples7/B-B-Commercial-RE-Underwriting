@@ -38,6 +38,8 @@ SHELL_SCRIPTS = [
     REPO_ROOT / "scripts" / "celery-liveness-check.sh",
     REPO_ROOT / "scripts" / "ops-alert.sh",
     REPO_ROOT / "scripts" / "ensure_frontend_dist_readable.sh",
+    REPO_ROOT / "scripts" / "install_frontend_dist_with_asset_grace.sh",
+    REPO_ROOT / "scripts" / "prev_assets_promote.sh",
     REPO_ROOT / "scripts" / "spa-dist-fingerprint.sh",
     REPO_ROOT / "scripts" / "spa-uptime-canary.sh",
     REPO_ROOT / "scripts" / "post-deploy-rollback.sh",
@@ -141,6 +143,17 @@ def _bash_syntax_check_available() -> bool:
     )
     return probe.returncode == 0
 
+
+
+def _executable_shell_lines(text: str) -> list[str]:
+    """Return non-empty shell lines with full-line comments removed."""
+    out: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        out.append(stripped)
+    return out
 
 def main() -> int:
     errors: list[str] = []
@@ -347,7 +360,8 @@ def main() -> int:
             )
 
     # 6. deploy.sh uses sudo -n (no bare sudo for systemctl) and always restores celery
-    deploy_text = _read(REPO_ROOT / "scripts" / "deploy.sh")
+    deploy_text_raw = _read(REPO_ROOT / "scripts" / "deploy.sh")
+    deploy_text = _strip_hash_comments(deploy_text_raw)
     if re.search(r'(?<!-n )\bsudo systemctl\b', deploy_text):
         errors.append("deploy.sh contains 'sudo systemctl' without -n — use sudo -n")
     if "trap cleanup_deploy_exit EXIT" not in deploy_text:
@@ -371,6 +385,211 @@ def main() -> int:
         errors.append(
             "deploy.sh must HTTP-smoke SPA assets via ensure_frontend_dist_readable --http-base"
         )
+    if "install_frontend_dist_with_asset_grace" not in deploy_text:
+        errors.append(
+            "deploy.sh must install frontend/dist via install_frontend_dist_with_asset_grace "
+            "(retain prior hashed assets for one generation)"
+        )
+    # PREV_ASSETS promote must run via the shared helper after post-deploy HubSpot.
+    if "promote_prev_assets" not in deploy_text:
+        errors.append(
+            "deploy.sh must call promote_prev_assets after a successful deploy"
+        )
+    else:
+        post_hubspot = deploy_text.find("Post-deploy HubSpot")
+        promote_call = deploy_text.find("promote_prev_assets")
+        if post_hubspot < 0 or promote_call < post_hubspot:
+            errors.append(
+                "deploy.sh must call promote_prev_assets only after "
+                "post-deploy HubSpot sync succeeds (not before migrations/health)"
+            )
+    install_grace = REPO_ROOT / "scripts" / "install_frontend_dist_with_asset_grace.sh"
+    if install_grace.exists():
+        grace_text = _read(install_grace)
+        if "-releases" not in grace_text:
+            errors.append(
+                "install_frontend_dist_with_asset_grace.sh must stage under a "
+                "*-releases directory for atomic publish"
+            )
+        # Require temp-link + rename publish (not a direct ln -sfn onto LIVE_DIST),
+        # so nginx never observes a missing document root.
+        if "ln -sfn" not in grace_text or not re.search(
+            r'\bmv\s+-Tf\s+"\$TMP_LINK"\s+"\$LIVE_DIST"',
+            grace_text,
+        ):
+            errors.append(
+                "install_frontend_dist_with_asset_grace.sh must atomically publish "
+                'via ln -sfn to "$TMP_LINK" then mv -Tf "$TMP_LINK" "$LIVE_DIST"'
+            )
+        if "RENAME_EXCHANGE" not in grace_text and "renameat2" not in grace_text:
+            errors.append(
+                "install_frontend_dist_with_asset_grace.sh must atomically migrate a "
+                "plain LIVE_DIST directory via renameat2(RENAME_EXCHANGE) (or equivalent)"
+            )
+        # Reject non-atomic plain-dir migration fallbacks (mv LIVE aside then
+        # publish) — that window 404s nginx. Fail closed when renameat2 is missing.
+        if re.search(
+            r'\bmv\s+"\$LIVE_DIST"\s+"\$legacy".*\bmv\s+-Tf\s+"\$TMP_LINK"\s+"\$LIVE_DIST"',
+            grace_text,
+            flags=re.DOTALL,
+        ) or (
+            'Migrated plain' in grace_text
+            and 'brief rename window' in grace_text
+        ):
+            errors.append(
+                "install_frontend_dist_with_asset_grace.sh must not fall back to a "
+                "non-atomic mv/mv plain-dir migration; fail closed if renameat2 is unavailable"
+            )
+        if "cannot atomically migrate" not in grace_text:
+            errors.append(
+                "install_frontend_dist_with_asset_grace.sh must fail closed when "
+                "renameat2(RENAME_EXCHANGE) cannot migrate a plain LIVE_DIST"
+            )
+        if re.search(r"\brsync\b", grace_text):
+            errors.append(
+                "install_frontend_dist_with_asset_grace.sh must not rsync in-place "
+                "into the live dist tree"
+            )
+        if "realpath" not in grace_text and "os.path.realpath" not in grace_text:
+            errors.append(
+                "install_frontend_dist_with_asset_grace.sh must protect the live "
+                "symlink target (and rollback backup target) when pruning releases"
+            )
+    # Post-deploy rollback must restore pre-promotion PREV after deploy.sh promote.
+    post_rollback = REPO_ROOT / "scripts" / "post-deploy-rollback.sh"
+    if post_rollback.exists():
+        post_text = _read(post_rollback)
+        if "frontend-assets-prev.rollback" not in post_text:
+            errors.append(
+                "post-deploy-rollback.sh must restore frontend-assets-prev.rollback "
+                "after a post-deploy health failure (deploy.sh may have already promoted)"
+            )
+    if "frontend-assets-prev.rollback" not in deploy_text and "promote_prev_assets" not in deploy_text:
+        errors.append(
+            "deploy.sh must promote via promote_prev_assets (which saves "
+            "frontend-assets-prev.rollback before swapping .next)"
+        )
+    # Production promote/restore must live in the shared helper (not a comment-only
+    # or duplicated mirror). Strip comments above so these cannot be satisfied by # text.
+    helper_path = REPO_ROOT / "scripts" / "prev_assets_promote.sh"
+    if not helper_path.exists():
+        errors.append("Missing expected script: scripts/prev_assets_promote.sh")
+    else:
+        helper_text = _strip_hash_comments(_read(helper_path))
+        mv_to_rollback = re.search(
+            r'mv\s+"\$prev"\s+"\$rollback"',
+            helper_text,
+        )
+        flag_assign = re.search(
+            r"^\s*PREV_ASSETS_PROMOTE_STARTED=1\s*$",
+            helper_text,
+            flags=re.MULTILINE,
+        )
+        # Require flag assign inside the same `if [[ -d "$prev" ]]` block as the mv.
+        live_block = re.search(
+            r'if\s+\[\[\s+-d\s+"\$prev"\s*\]\];\s*then([\s\S]*?)fi',
+            helper_text,
+        )
+        if not live_block or not mv_to_rollback or not flag_assign:
+            errors.append(
+                "prev_assets_promote.sh must mv \"$prev\" → \"$rollback\" and set "
+                "PREV_ASSETS_PROMOTE_STARTED=1 inside the live-prev existence guard"
+            )
+        else:
+            block = live_block.group(1)
+            if 'mv "$prev" "$rollback"' not in block or "PREV_ASSETS_PROMOTE_STARTED=1" not in block:
+                errors.append(
+                    "prev_assets_promote.sh must keep mv-to-rollback and "
+                    "PREV_ASSETS_PROMOTE_STARTED=1 in the same `if [[ -d \"$prev\" ]]` block"
+                )
+            elif block.find("PREV_ASSETS_PROMOTE_STARTED=1") < block.find('mv "$prev" "$rollback"'):
+                errors.append(
+                    "prev_assets_promote.sh must set PREV_ASSETS_PROMOTE_STARTED=1 only AFTER "
+                    'mv "$prev" "$rollback" succeeds'
+                )
+        guarded_restore = re.search(
+            r'PREV_ASSETS_PROMOTE_STARTED:-0[^]]*=\s*"1"[\s\S]*?'
+            r'mv\s+"\$rollback"\s+"\$prev"',
+            helper_text,
+        )
+        if not guarded_restore:
+            errors.append(
+                "prev_assets_promote.sh must restore \"$rollback\" → \"$prev\" only when "
+                'PREV_ASSETS_PROMOTE_STARTED is "1"'
+            )
+        # Resumable promote: require the resume conditional block itself, and that
+        # its mv runs before rm -rf "$rollback" inside promote_prev_assets (do not
+        # accept restore_* moves elsewhere in the file).
+        promote_fn = re.search(
+            r"promote_prev_assets\(\)\s*\{([\s\S]*?)\n\}",
+            helper_text,
+        )
+        if not promote_fn:
+            errors.append(
+                "prev_assets_promote.sh must define promote_prev_assets() with a body"
+            )
+        else:
+            promote_body = promote_fn.group(1)
+            resume_block = re.search(
+                r'if\s+\[\[\s+!\s*-d\s+"\$prev"\s*&&\s*-d\s+"\$rollback"\s*\]\];\s*then'
+                r'([\s\S]*?)fi',
+                promote_body,
+            )
+            rm_rollback = re.search(r'rm\s+-rf\s+"\$rollback"', promote_body)
+            if (
+                not resume_block
+                or 'mv "$rollback" "$prev"' not in resume_block.group(1)
+            ):
+                errors.append(
+                    "prev_assets_promote.sh must resume interrupted promote with "
+                    '`if [[ ! -d "$prev" && -d "$rollback" ]]; then mv "$rollback" "$prev"; fi`'
+                )
+            elif not rm_rollback:
+                errors.append(
+                    'prev_assets_promote.sh must rm -rf "$rollback" after the resume block'
+                )
+            elif resume_block.end() > rm_rollback.start():
+                errors.append(
+                    "prev_assets_promote.sh must restore \"$rollback\" → \"$prev\" "
+                    'BEFORE rm -rf "$rollback" (resumable promote)'
+                )
+    if "source" not in deploy_text or "prev_assets_promote.sh" not in deploy_text:
+        errors.append("deploy.sh must source prev_assets_promote.sh")
+    if "promote_prev_assets" not in deploy_text:
+        errors.append("deploy.sh must call promote_prev_assets")
+    if "restore_prev_assets_if_promote_started" not in deploy_text:
+        errors.append("deploy.sh must call restore_prev_assets_if_promote_started on ERR rollback")
+    # Executable-flow test against the production helper (not a parallel mirror).
+    promote_test = REPO_ROOT / "scripts" / "test_prev_assets_promote_rollback.sh"
+    if not promote_test.exists():
+        errors.append("Missing expected script: scripts/test_prev_assets_promote_rollback.sh")
+    else:
+        test_src = _read(promote_test)
+        if "source" not in test_src or "prev_assets_promote.sh" not in test_src:
+            errors.append(
+                "test_prev_assets_promote_rollback.sh must source prev_assets_promote.sh "
+                "(must not re-implement promote/restore)"
+            )
+        if "promote_with_flag()" in test_src or "restore_on_err()" in test_src:
+            errors.append(
+                "test_prev_assets_promote_rollback.sh must not define a parallel "
+                "promote/restore mirror — call the production helper functions"
+            )
+        if _bash_syntax_check_available():
+            result = subprocess.run(
+                ["bash", str(promote_test)],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            if result.returncode != 0:
+                errors.append(
+                    "test_prev_assets_promote_rollback.sh failed:\n"
+                    + (result.stdout or "")
+                    + (result.stderr or "")
+                )
     if "SPA_DEPLOY_IN_PROGRESS" not in deploy_text:
         errors.append(
             "deploy.sh must set SPA_DEPLOY_IN_PROGRESS around frontend dist swap "
@@ -598,6 +817,32 @@ def main() -> int:
             "deploy.yml must scp scripts/ensure_frontend_dist_readable.sh "
             "to /home/deploy/ensure_frontend_dist_readable.sh"
         )
+    if not re.search(
+        r"scp\s+[^\n]*scripts/install_frontend_dist_with_asset_grace\.sh\s+[^\n]+:/home/deploy/install_frontend_dist_with_asset_grace\.sh",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/install_frontend_dist_with_asset_grace.sh "
+            "to /home/deploy/install_frontend_dist_with_asset_grace.sh"
+        )
+    if not re.search(
+        r"scp\s+[^\n]*scripts/prev_assets_promote\.sh\s+[^\n]+:/home/deploy/prev_assets_promote\.sh",
+        deploy_yml_text,
+    ):
+        errors.append(
+            "deploy.yml must scp scripts/prev_assets_promote.sh "
+            "to /home/deploy/prev_assets_promote.sh"
+        )
+    if not re.search(
+        r"chmod 750[^\n]*install_frontend_dist_with_asset_grace\.sh", deploy_yml_text
+    ):
+        errors.append(
+            "deploy.yml chmod 750 line must include install_frontend_dist_with_asset_grace.sh"
+        )
+    if not re.search(r"chmod 750[^\n]*prev_assets_promote\.sh", deploy_yml_text):
+        errors.append(
+            "deploy.yml chmod 750 line must include prev_assets_promote.sh"
+        )
     # umask 077 for secret JSON must not apply to frontend/dist scp (mode 0700 blank SPA).
     scp_dist_idx = deploy_yml_text.find("scp -i ~/.ssh/id_deploy -r frontend/dist")
     umask_secrets_idx = deploy_yml_text.find("umask 077")
@@ -717,9 +962,144 @@ def main() -> int:
             "deploy.sh must run heal_mail_cadence_cooldown.py after migrations "
             "(mail_cad Alembic heal skips rescore)"
         )
+    if "check_model_schema.py" not in deploy_text:
+        errors.append(
+            "deploy.sh must run check_model_schema.py after migrate before "
+            "gunicorn reload (schema contract gate)"
+        )
+    # Require the live timeout invocation (not merely the string in a message).
+    exec_deploy_lines = _executable_shell_lines(deploy_text)
+    if not any(
+        re.search(
+            r'(?:^|\s)timeout\b.*\$\{?BB_SCHEMA_CHECK_TIMEOUT_SEC\}?.*check_model_schema\.py',
+            line,
+        )
+        for line in exec_deploy_lines
+    ):
+        errors.append(
+            "deploy.sh must wrap check_model_schema.py in an executable timeout "
+            "line (BB_SCHEMA_CHECK_TIMEOUT_SEC) — comments/echo alone are not enough"
+        )
+    # Ordering: schema contract must come after DB smoke and before reload.
+    schema_idx = next(
+        (
+            deploy_text.find(line)
+            for line in exec_deploy_lines
+            if re.search(r'(?:^|\s)timeout\b.*check_model_schema\.py', line)
+        ),
+        deploy_text.find("check_model_schema.py"),
+    )
+    smoke_idx = deploy_text.find("Post-migrate DB-only smoke")
+    reload_idx = deploy_text.find("Reload Gunicorn")
+    if schema_idx < 0 or smoke_idx < 0 or reload_idx < 0:
+        errors.append(
+            "deploy.sh must include post-migrate DB smoke, check_model_schema.py, "
+            "and Reload Gunicorn steps"
+        )
+    elif not (smoke_idx < schema_idx < reload_idx):
+        errors.append(
+            "deploy.sh must run check_model_schema.py after post-migrate DB smoke "
+            "and before Reload Gunicorn"
+        )
     if "reclaim-vps-disk.sh" not in deploy_text:
         errors.append(
             "deploy.sh must run reclaim-vps-disk.sh before the 1GB free-space gate"
+        )
+    probe_path = REPO_ROOT / "scripts" / "probe_authenticated_api.py"
+    if not probe_path.exists():
+        errors.append("Missing expected script: scripts/probe_authenticated_api.py")
+    else:
+        probe_text = _read(probe_path)
+        if "DEFAULT_PATHS = (" not in probe_text or "/api/marketing/channel-roi" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must assign DEFAULT_PATHS including "
+                "/api/marketing/channel-roi"
+            )
+        if "args.paths) if args.paths else DEFAULT_PATHS" not in probe_text and \
+                "tuple(args.paths) if args.paths else DEFAULT_PATHS" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must fall back to DEFAULT_PATHS when "
+                "--path is omitted"
+            )
+        if "SMOKE_TEST_EMAIL" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must use SMOKE_TEST_EMAIL credentials"
+            )
+        if "SMOKE_TEST_PASSWORD" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must use SMOKE_TEST_PASSWORD credentials"
+            )
+        if "session_token" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must read session_token from login response"
+            )
+        if "EXIT_SKIPPED_NO_CREDS" not in probe_text and "return 78" not in probe_text:
+            errors.append(
+                "probe_authenticated_api.py must exit 78 when skipping for missing creds"
+            )
+    ops_health_yml = _read(REPO_ROOT / ".github" / "workflows" / "ops-health.yml")
+    if "probe_authenticated_api.py" not in ops_health_yml:
+        errors.append(
+            "ops-health.yml must run probe_authenticated_api.py (auth canary)"
+        )
+    if "auth_api_canary.outcome == 'failure'" not in ops_health_yml:
+        errors.append(
+            "ops-health.yml final canary failure gate must include auth_api_canary"
+        )
+    if "skipped (no credentials)" not in ops_health_yml:
+        errors.append(
+            "ops-health.yml canary summary must render skipped auth probes distinctly"
+        )
+    # Recovery must branch on AUTH_SKIPPED with both TITLE_RE variants present.
+    recovery_ok = bool(
+        re.search(
+            r'AUTH_SKIPPED:\s*\$\{\{\s*steps\.auth_api_canary\.outputs\.skipped\s*\}\}'
+            r'[\s\S]*?'
+            r'if \[ "\$\{AUTH_SKIPPED:-\}" = "true" \]; then\s*'
+            r'TITLE_RE="[^"]*main↔prod SHA drift"\s*'
+            r'else\s*'
+            r'TITLE_RE="[^"]*authenticated API canary[^"]*main↔prod SHA drift"',
+            ops_health_yml,
+        )
+    )
+    if not recovery_ok:
+        errors.append(
+            "ops-health.yml recovery must branch on AUTH_SKIPPED with distinct "
+            "TITLE_RE values (non-auth titles when skipped; include authenticated "
+            "API canary when not skipped)"
+        )
+    deploy_yml_preview = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
+    if "probe_authenticated_api.py" not in deploy_yml_preview:
+        errors.append(
+            "deploy.yml must run probe_authenticated_api.py after deploy "
+            "(authenticated channel-roi canary)"
+        )
+    else:
+        probe_idx = deploy_yml_preview.find("probe_authenticated_api.py")
+        post_health_idx = deploy_yml_preview.find("Post-deploy health check")
+        if post_health_idx < 0 or probe_idx < post_health_idx:
+            errors.append(
+                "deploy.yml must run probe_authenticated_api.py after "
+                "Post-deploy health check"
+            )
+        if "Rollback after authenticated API canary failure" not in deploy_yml_preview:
+            errors.append(
+                "deploy.yml must roll back via post-deploy-rollback.sh when the "
+                "authenticated API canary fails"
+            )
+        if "ATTEMPTS=3" not in deploy_yml_preview and "Canary attempt" not in deploy_yml_preview:
+            errors.append(
+                "deploy.yml authenticated API canary must retry transient failures "
+                "before rollback"
+            )
+        if "session_token" not in deploy_yml_preview:
+            errors.append(
+                "deploy.yml ownership/search smoke must read session_token from login"
+            )
+    if "BB_SCHEMA_CHECK_TIMEOUT_SEC" not in deploy_text:
+        errors.append(
+            "deploy.sh must wrap check_model_schema.py in a timeout "
+            "(BB_SCHEMA_CHECK_TIMEOUT_SEC)"
         )
     reclaim_path = REPO_ROOT / "scripts" / "reclaim-vps-disk.sh"
     if not reclaim_path.exists():
@@ -728,6 +1108,22 @@ def main() -> int:
     if "reclaim-vps-disk.sh" not in deploy_yml:
         errors.append(
             "deploy.yml must scp/run reclaim-vps-disk.sh before uploading frontend-dist"
+        )
+
+    celery_worker = _read(REPO_ROOT / "backend" / "celery_worker.py")
+    if "class MemoryShedTask" not in celery_worker or "celery.Task = MemoryShedTask" not in celery_worker:
+        errors.append(
+            "celery_worker.py must use MemoryShedTask (Task.__call__) for memory shed "
+            "— task_prerun Ignore/Reject does not short-circuit execution"
+        )
+    if "@task_prerun.connect" in celery_worker and "_shed_heavy_tasks_under_memory_pressure" in celery_worker:
+        errors.append(
+            "celery_worker.py must not shed via task_prerun "
+            "(_shed_heavy_tasks_under_memory_pressure)"
+        )
+    if "bb_beat" not in celery_worker:
+        errors.append(
+            "celery_worker.py must stamp bb_beat headers on beat_schedule shed tasks"
         )
 
     if errors:

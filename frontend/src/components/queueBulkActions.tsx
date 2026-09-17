@@ -13,6 +13,7 @@ import {
   formatEnqueueSummary,
   type EnqueueCounts,
 } from '@/utils/formatEnqueueSummary'
+import { afterLeadWorkspaceMutation } from '@/utils/afterCommandCenterMutation'
 import type { BulkActionResult } from '@/types'
 import type { BulkAction, RowAction } from './QueueTable'
 
@@ -33,7 +34,12 @@ export interface QueueBulkActionContext {
   onEnqueueError?: (error: unknown) => void
 }
 
-const MAIL_QUERY_KEYS = ['mail-queue', 'queue-mail-candidates', 'queue-counts'] as const
+const MAIL_QUERY_KEYS = [
+  'mail-queue',
+  'queue-mail-candidates',
+  'queue-counts',
+  'mail-address-problems',
+] as const
 
 export function invalidateMailQueries(queryClient: QueryClient) {
   for (const key of MAIL_QUERY_KEYS) {
@@ -92,6 +98,16 @@ export function addedLeadIds(result: EnqueueResult, requestedIds: number[]): num
   return result.added === requestedIds.length ? requestedIds : []
 }
 
+/** Leads whose command-center cache must refresh after enqueue (includes recently_sold heals). */
+export function workspaceLeadIdsFromEnqueue(
+  result: EnqueueResult,
+  requestedIds: number[],
+): number[] {
+  const fromResults = [...new Set((result.results ?? []).map((row) => row.lead_id))]
+  if (fromResults.length > 0) return fromResults
+  return [...new Set(requestedIds)]
+}
+
 function invalidateQueueQueries(
   queryClient: QueryClient,
   queryKey: string,
@@ -116,9 +132,12 @@ export async function enqueueLeadsAsBulkResult(
 ): Promise<BulkActionResult> {
   try {
     const result = await openLetterService.enqueue(leadIds, ctx.queryKey)
-    stripMailCandidatesFromCache(ctx.queryClient, addedLeadIds(result, leadIds))
+    const queuedIds = addedLeadIds(result, leadIds)
+    const workspaceLeadIds = workspaceLeadIdsFromEnqueue(result, leadIds)
+    stripMailCandidatesFromCache(ctx.queryClient, queuedIds)
     bumpMailQueueAfterEnqueue(ctx.queryClient, result)
     invalidateMailQueries(ctx.queryClient)
+    afterLeadWorkspaceMutation(ctx.queryClient, workspaceLeadIds)
     invalidateQueueQueries(ctx.queryClient, ctx.queryKey, ctx.extraQueryKeys)
     ctx.onEnqueueResult?.(result)
     ctx.onAfterAction?.()

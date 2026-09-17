@@ -10,6 +10,7 @@ import {
   Box,
   Checkbox,
   Chip,
+  CircularProgress,
   IconButton,
   Link,
   Pagination,
@@ -34,6 +35,7 @@ import type { FromQueueState } from '@/utils/fromQueue'
 import { buildLeadUrl } from '@/utils/queueLogNavigation'
 import { LeadStatusChip } from './LeadStatusChip'
 import { OutreachContactCallout } from './OutreachContactCallout'
+import { RelatedPropertyRow } from './RelatedPropertyRow'
 import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
 import { MailEnqueueResultDialog } from './MailEnqueueResultDialog'
 import { formatEnqueueSummary } from '@/utils/formatEnqueueSummary'
@@ -105,6 +107,44 @@ function getAddress(row: QueueRow): string {
     .join(', ')
   if (street && cityStateZip) return `${street}, ${cityStateZip}`
   return street || cityStateZip || '—'
+}
+
+function PersonPropertyCountChip({ row }: { row: QueueRow }) {
+  const count = row.property_count ?? 1
+  if (count <= 1) return null
+  return (
+    <Chip
+      label={`${count} properties`}
+      size="small"
+      color="primary"
+      variant="outlined"
+      sx={{ height: 20 }}
+      data-testid={`row-property-count-${row.id}`}
+    />
+  )
+}
+
+function RelatedInQueueList({ row }: { row: QueueRow }) {
+  const related = row.related_in_queue ?? []
+  if (related.length === 0) return null
+  return (
+    <Box
+      sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mt: 0.75 }}
+      data-testid={`row-related-in-queue-${row.id}`}
+    >
+      <Typography variant="caption" color="text.secondary">
+        Also due in queue
+      </Typography>
+      {related.map((prop) => (
+        <RelatedPropertyRow
+          key={prop.id}
+          prop={prop}
+          testIdPrefix={`queue-related-${row.id}`}
+          fontSize="0.8rem"
+        />
+      ))}
+    </Box>
+  )
 }
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
@@ -362,14 +402,29 @@ export function QueueTable({
         result={bulkMailResult}
       />
 
-      {/* Empty state */}
-      {rows.length === 0 ? (
+      {/* Empty vs mid-refresh: stripped page rows can be [] while total remains. */}
+      {rows.length === 0 && total <= 0 ? (
         <Box
           sx={{ py: 6, textAlign: 'center' }}
           data-testid="queue-table-empty"
         >
           <Typography variant="body1" color="text.secondary">
             No leads in this queue
+          </Typography>
+        </Box>
+      ) : rows.length === 0 && total > 0 ? (
+        <Box
+          sx={{ py: 6, textAlign: 'center' }}
+          data-testid="queue-table-refreshing"
+          role="status"
+          aria-live="polite"
+        >
+          <CircularProgress size={28} sx={{ mb: 1.5 }} aria-label="Loading queue leads" />
+          <Typography variant="body1" color="text.secondary">
+            Loading more leads…
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            {total.toLocaleString()} still in this queue
           </Typography>
         </Box>
       ) : isMobile ? (
@@ -454,26 +509,30 @@ export function QueueTable({
                       />
                     )}
                     <Box sx={{ flex: 1, minWidth: 0 }}>
-                      {disabled ? (
-                        <Typography fontWeight={600} data-testid={`row-name-${row.id}`}>
-                          {getOwnerName(row)}
-                        </Typography>
-                      ) : (
-                        <Link
-                          component={RouterLink}
-                          to={leadTo(row.id)}
-                          state={leadNavState}
-                          underline="hover"
-                          color="primary"
-                          fontWeight={600}
-                          data-testid={`row-name-${row.id}`}
-                        >
-                          {getOwnerName(row)}
-                        </Link>
-                      )}
+                      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                        {disabled ? (
+                          <Typography fontWeight={600} data-testid={`row-name-${row.id}`}>
+                            {getOwnerName(row)}
+                          </Typography>
+                        ) : (
+                          <Link
+                            component={RouterLink}
+                            to={leadTo(row.id)}
+                            state={leadNavState}
+                            underline="hover"
+                            color="primary"
+                            fontWeight={600}
+                            data-testid={`row-name-${row.id}`}
+                          >
+                            {getOwnerName(row)}
+                          </Link>
+                        )}
+                        <PersonPropertyCountChip row={row} />
+                      </Stack>
                       <Typography variant="body2" color="text.secondary" data-testid={`row-address-${row.id}`}>
                         {getAddress(row)}
                       </Typography>
+                      <RelatedInQueueList row={row} />
                     </Box>
                     <Typography variant="subtitle2" data-testid={`row-score-${row.id}`}>
                       {row.lead_score}
@@ -652,22 +711,25 @@ export function QueueTable({
 
                     {/* Lead name — links to Command Center */}
                     <TableCell data-testid={`row-name-${row.id}`}>
-                      {disabled ? (
-                        <Typography component="span" color="text.secondary" fontWeight={500}>
-                          {getOwnerName(row)}
-                        </Typography>
-                      ) : (
-                        <Link
-                          component={RouterLink}
-                          to={leadTo(row.id)}
-                          state={leadNavState}
-                          underline="hover"
-                          color="primary"
-                          fontWeight={500}
-                        >
-                          {getOwnerName(row)}
-                        </Link>
-                      )}
+                      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                        {disabled ? (
+                          <Typography component="span" color="text.secondary" fontWeight={500}>
+                            {getOwnerName(row)}
+                          </Typography>
+                        ) : (
+                          <Link
+                            component={RouterLink}
+                            to={leadTo(row.id)}
+                            state={leadNavState}
+                            underline="hover"
+                            color="primary"
+                            fontWeight={500}
+                          >
+                            {getOwnerName(row)}
+                          </Link>
+                        )}
+                        <PersonPropertyCountChip row={row} />
+                      </Stack>
                     </TableCell>
 
                     {/* Lead score */}
@@ -685,7 +747,10 @@ export function QueueTable({
 
                     {/* Property address */}
                     <TableCell data-testid={`row-address-${row.id}`}>
-                      {getAddress(row)}
+                      <Box>
+                        {getAddress(row)}
+                        <RelatedInQueueList row={row} />
+                      </Box>
                     </TableCell>
 
                     {/* Recommended action */}

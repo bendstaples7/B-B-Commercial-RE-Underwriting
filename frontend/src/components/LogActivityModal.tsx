@@ -36,6 +36,8 @@ export interface LogActivityModalProps {
   activityType: ActivityLogType | null
   leadId: number
   openTasks?: LeadTask[]
+  /** Digits from recommended outreach dial target (fallback when task title has none). */
+  preferredPhoneDigits?: string | null
   onClose: () => void
   onSaved: (
     entry: LeadTimelineEntry,
@@ -79,6 +81,7 @@ export function LogActivityModal({
   activityType,
   leadId,
   openTasks = [],
+  preferredPhoneDigits = null,
   onClose,
   onSaved,
 }: LogActivityModalProps) {
@@ -89,9 +92,14 @@ export function LogActivityModal({
   const previouslyFocused = useRef<HTMLElement | null>(null)
   const [offset, setOffset] = useState<PanelOffset>({ x: 0, y: 0 })
 
+  // Log Call only: include former owners so dialed / HubSpot-primary phones
+  // that GIS archived under a rename still appear (matches outreach SQL).
+  // Log Email keeps active contacts only.
+  const includeFormerOwners = activityType === 'call'
   const { data: contacts = [], isLoading: contactsLoading } = useQuery({
-    queryKey: ['propertyContacts', leadId],
-    queryFn: () => contactService.getPropertyContacts(leadId),
+    queryKey: ['propertyContacts', leadId, { includeFormerOwners }],
+    queryFn: () =>
+      contactService.getPropertyContacts(leadId, { includeFormerOwners }),
     enabled: open && activityType != null && activityType !== 'note',
   })
 
@@ -306,6 +314,7 @@ export function LogActivityModal({
           contacts={contacts}
           contactsLoading={contactsLoading}
           openTasks={openTasks}
+          preferredPhoneDigits={preferredPhoneDigits}
           onSaved={handleSaved}
           onCancel={onClose}
         />

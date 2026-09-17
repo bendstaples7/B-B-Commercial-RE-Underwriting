@@ -22,7 +22,7 @@ def handle_errors(f):
         except HTTPException as e:
             response = e.get_response()
             response.data = jsonify({
-                'error': getattr(e, 'name', 'HTTP error'),
+                'error': 'HTTP error',
                 'message': e.description,
             }).data
             response.content_type = 'application/json'
@@ -32,12 +32,12 @@ def handle_errors(f):
                 response = e.get_response() if hasattr(e, 'get_response') else None
                 if response is not None:
                     response.data = jsonify({
-                        'error': getattr(e, 'name', 'HTTP error'),
+                        'error': 'HTTP error',
                         'message': e.description,
                     }).data
                     response.content_type = 'application/json'
                     return response
-                return jsonify({'error': getattr(e, 'name', 'HTTP error'), 'message': e.description}), e.code
+                return jsonify({'error': 'HTTP error', 'message': e.description}), e.code
             logger.error("Unexpected error: %s", str(e), exc_info=True)
             return jsonify({'error': 'Internal server error', 'message': 'An unexpected error occurred'}), 500
     return decorated_function

@@ -34,7 +34,11 @@ describe('first-paint settle — same-address merge banner', () => {
     expect(banner).toContain('Combine these records')
     expect(banner).toMatch(/twins\.length|hasTwins/)
     expect(ulcc).toContain('afterCommandCenterMutation')
+    expect(ulcc).toContain('onMergeDuplicate')
+    expect(ulcc).toContain('lead-header-overflow-menu')
+    expect(ulcc).toContain('same-address-merge-menu-item')
     expect(banner).toContain('onMerged')
+    expect(banner).toContain('onOpenChange')
   })
 
   it('banner + dialog landmarks settle when twin payload is present', async () => {
@@ -62,5 +66,27 @@ describe('first-paint settle — same-address merge banner', () => {
     expect(screen.getByTestId('same-address-merge-dialog')).toHaveTextContent(
       'Combine these records',
     )
+  })
+
+  it('manual Merge duplicate settles via controlled open when no twin payload is present', async () => {
+    render(
+      <MemoryRouter>
+        <SameAddressMergeBanner
+          leadId={1}
+          currentOwnerLabel="Current"
+          currentPeopleNames={['Current']}
+          twins={[]}
+          open
+          onOpenChange={vi.fn()}
+          onMerged={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    expect(screen.queryByTestId('same-address-merge-banner')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('same-address-merge-open')).not.toBeInTheDocument()
+    expect(screen.getByTestId('same-address-merge-dialog')).toHaveTextContent(
+      'Combine these records',
+    )
+    expect(screen.getByTestId('same-address-merge-paste-id')).toBeInTheDocument()
   })
 })

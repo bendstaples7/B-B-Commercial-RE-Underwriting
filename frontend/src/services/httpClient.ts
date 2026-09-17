@@ -1,4 +1,6 @@
 import axios, { AxiosError, AxiosInstance } from 'axios'
+import { isApiErrorEnvelope } from '@/services/apiErrorEnvelopes'
+
 type ApiErrorPayload = {
   error?: string | { message?: unknown }
   message?: unknown
@@ -10,14 +12,10 @@ function asApiErrorPayload(value: unknown): ApiErrorPayload {
     : {}
 }
 
-const genericErrorLabels = new Set([
-  'Invalid request',
-  'Validation error',
-  'An error occurred',
-  'Internal server error',
-  'HTTP error',
-  'Provider not configured',
-])
+/** True for backend `error: "SomeExceptionClassName"` wrappers. */
+function looksLikeExceptionClassName(value: string): boolean {
+  return /^[A-Z][A-Za-z0-9]+(?:Error|Exception|Violation)$/.test(value)
+}
 
 /** Map a backend JSON error body to the sentence shown in the UI. */
 export function userFacingApiErrorMessage(errorData: unknown): string {
@@ -27,21 +25,24 @@ export function userFacingApiErrorMessage(errorData: unknown): string {
     typeof payload.message === 'string'
       ? payload.message
       : null
-  return (
-    (errorField != null
+  const nestedMessage =
+    errorField != null
       && typeof errorField === 'object'
       && typeof errorField.message === 'string'
       ? errorField.message
-      : null)
-    || (typeof errorField === 'string'
-      && genericErrorLabels.has(errorField)
-      && detailedMessage
-      ? detailedMessage
-      : null)
-    || (typeof errorField === 'string' ? errorField : null)
-    || detailedMessage
-    || 'An error occurred'
-  )
+      : null
+  // Prefer the human message over generic/envelope labels and Exception class names
+  // (command-center handle_errors returns error: e.__class__.__name__).
+  if (nestedMessage) return nestedMessage
+  if (
+    typeof errorField === 'string'
+    && detailedMessage
+    && (isApiErrorEnvelope(errorField) || looksLikeExceptionClassName(errorField))
+  ) {
+    return detailedMessage
+  }
+  if (typeof errorField === 'string') return errorField
+  return detailedMessage || 'An error occurred'
 }
 
 

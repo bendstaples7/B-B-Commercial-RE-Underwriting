@@ -1236,6 +1236,20 @@ export interface OutreachContact {
   lines?: string[]
 }
 
+/**
+ * Canonical phone dial target for Call Now, open call-task titles, and Log Call.
+ * Produced by backend `resolve_dial_target` — do not re-rank phones in the FE.
+ */
+export interface DialTarget {
+  channel: 'phone'
+  label: string
+  value: string
+  display: string
+  href?: string | null
+  contact_id?: number | null
+  phone_id?: number | null
+}
+
 /** Unified recommended action vocabulary (scoring + workflow). */
 export type UnifiedRecommendedAction =
   | 'enrich_data'
@@ -2060,6 +2074,27 @@ export interface WorkQueueMembership {
   path: string;
 }
 
+/** Same-building duplicate cluster member for Needs Review clarity on CC. */
+export interface DuplicateClusterMember {
+  id: number;
+  property_street: string | null;
+  owner_display_name: string;
+  county_assessor_pin?: string | null;
+  lead_status?: string | null;
+  has_phone?: boolean;
+  has_email?: boolean;
+  hubspot_confirmed?: boolean;
+  is_suggested_winner?: boolean;
+}
+
+export interface DuplicateClusterPreview {
+  cluster_ids: number[];
+  suggested_winner_id: number;
+  confidence: string;
+  streets: Record<number, string | null>;
+  members: DuplicateClusterMember[];
+}
+
 export interface QueueRow {
   id: number;
   owner_first_name: string | null;
@@ -2101,6 +2136,12 @@ export interface QueueRow {
   skip_tracer?: string | null;
   skip_trace_next_source_id?: string | null;
   skip_trace_exhausted_at?: string | null;
+  /** Same-person grouping key for outreach-queue consolidation. */
+  person_key?: string | null;
+  /** In-queue properties for this person (1 = only this lead). */
+  property_count?: number | null;
+  /** Sibling properties also in this queue (excludes the representative). */
+  related_in_queue?: RelatedPropertySummary[] | null;
 }
 
 export interface QueuePage {
@@ -2304,6 +2345,11 @@ export interface CommandCenterPayload {
   email_4?: string | null;
   email_5?: string | null;
   phones?: LeadPhone[];
+  /**
+   * Canonical dial target from `resolve_dial_target` — Call Now, call-task
+   * titles, and Log Call must consume this instead of re-ranking phones.
+   */
+  dial_target?: DialTarget | null;
   emails?: string[];
   notes?: string | null;
   lead_score: number;
@@ -2312,7 +2358,11 @@ export interface CommandCenterPayload {
   lead_category_locked?: boolean;
   /** Same-building other leads (not other buildings in a portfolio). */
   same_address_leads?: SameAddressLeadSummary[];
+  review_required?: boolean;
   review_reason?: string | null;
+  review_triggered_at?: string | null;
+  /** Present when review_reason is duplicate_lead_cluster. */
+  duplicate_cluster?: DuplicateClusterPreview | null;
   has_property_match: boolean;
   analysis_session_id: number | null;
   hubspot_deal_stage?: string | null;
@@ -2351,6 +2401,8 @@ export interface CommandCenterPayload {
       campaign_id: number | null;
       olc_order_id: string | null;
       address_feedback: string | null;
+      address_failure_reason?: string | null;
+      olc_silent_omit?: boolean;
       cancelled: boolean;
       source: 'olc' | 'imported' | 'timeline';
     }>;

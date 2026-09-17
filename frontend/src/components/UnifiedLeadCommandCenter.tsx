@@ -27,6 +27,10 @@ import {
   DialogTitle,
   Chip,
   Link as MuiLink,
+  ListItemIcon,
+  ListItemText,
+  Menu,
+  MenuItem,
   Stack,
   useMediaQuery,
   useTheme,
@@ -39,6 +43,8 @@ import CloseIcon from '@mui/icons-material/Close'
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted'
 import UndoIcon from '@mui/icons-material/Undo'
 import OpenInFullIcon from '@mui/icons-material/OpenInFull'
+import MoreVertIcon from '@mui/icons-material/MoreVert'
+import MergeTypeIcon from '@mui/icons-material/MergeType'
 import { commandCenterService, leadTaskService, leadScoreService, queueService } from '@/services/api'
 import { entityResolutionApi } from '@/services/entityResolutionApi'
 import { leadService } from '@/services/leadApi'
@@ -87,6 +93,7 @@ import { KeyContactCard } from '@/components/lead-detail/KeyContactCard'
 import { PropertyKpiCard } from '@/components/lead-detail/PropertyKpiCard'
 import { PropertyOverviewQuickStats, shouldShowCondoCheckCell } from '@/components/lead-detail/PropertyOverviewQuickStats'
 import { SameAddressMergeBanner } from '@/components/lead-detail/SameAddressMergeBanner'
+import { NeedsReviewChipPopover } from '@/components/lead-detail/NeedsReviewClarityPanel'
 import { afterCommandCenterMutation } from '@/utils/afterCommandCenterMutation'
 import { HeaderCondoCheckPanel } from '@/components/lead-detail/HeaderCondoCheckPanel'
 import { HeaderLeadScorePanel, type ScoreFlash } from '@/components/lead-detail/HeaderLeadScorePanel'
@@ -154,6 +161,8 @@ interface PropertyOverviewHeaderProps {
   scoreFlash?: ScoreFlash | null
   onCategoryChanged?: (next: 'residential' | 'commercial') => void | Promise<void>
   onPropertyOverviewChanged?: () => void | Promise<void>
+  /** Opens same-address merge dialog (header ⋯ → Merge duplicate…). */
+  onMergeDuplicate?: () => void
 }
 
 function formatPropertyAddress(data: CommandCenterPayload): string {
@@ -180,10 +189,13 @@ function PropertyOverviewHeader({
   scoreFlash,
   onCategoryChanged,
   onPropertyOverviewChanged,
+  onMergeDuplicate,
 }: PropertyOverviewHeaderProps & { statusSelectorRef?: React.RefObject<HTMLDivElement | null> }) {
   const [scoreDialogOpen, setScoreDialogOpen] = useState(false)
   const [pinSnack, setPinSnack] = useState<string | null>(null)
+  const [overflowAnchor, setOverflowAnchor] = useState<HTMLElement | null>(null)
   const navigate = useNavigate()
+  const overflowOpen = Boolean(overflowAnchor)
 
   const fullAddress = formatPropertyAddress(commandCenterData)
   const primaryOwner = primaryOwnerDisplayName(
@@ -433,6 +445,43 @@ function PropertyOverviewHeader({
                   onStatusChanged={onStatusChanged}
                 />
               </Box>
+              {onMergeDuplicate ? (
+                <>
+                  <IconButton
+                    size="small"
+                    aria-label="Lead options"
+                    aria-haspopup="true"
+                    aria-expanded={overflowOpen ? 'true' : undefined}
+                    data-testid="lead-header-overflow-menu"
+                    onClick={(event) => setOverflowAnchor(event.currentTarget)}
+                    sx={{ cursor: 'pointer' }}
+                  >
+                    <MoreVertIcon fontSize="small" />
+                  </IconButton>
+                  <Menu
+                    anchorEl={overflowAnchor}
+                    open={overflowOpen}
+                    onClose={() => setOverflowAnchor(null)}
+                    data-testid="lead-header-overflow-menu-panel"
+                    anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                    transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                  >
+                    <MenuItem
+                      data-testid="same-address-merge-menu-item"
+                      onClick={() => {
+                        setOverflowAnchor(null)
+                        onMergeDuplicate()
+                      }}
+                      sx={{ cursor: 'pointer' }}
+                    >
+                      <ListItemIcon>
+                        <MergeTypeIcon fontSize="small" />
+                      </ListItemIcon>
+                      <ListItemText>Merge duplicate…</ListItemText>
+                    </MenuItem>
+                  </Menu>
+                </>
+              ) : null}
             </Box>
           </Box>
 
@@ -623,43 +672,108 @@ function QueueWorkHeader({
 // ── Work queue membership strip ──────────────────────────────────────────────
 
 interface WorkQueueMembershipStripProps {
+  leadId: number
   commandCenterData: CommandCenterPayload
+  fromQueue?: FromQueueState | null
+  onNeedsReviewResolved: (result: {
+    kind: 'merged' | 'dismissed' | 'cleared'
+    winnerId?: number
+    loserId?: number
+  }) => void | Promise<void>
 }
 
 /** Always-visible work-queue membership (sidebar is lg+ only). */
-function WorkQueueMembershipStrip({ commandCenterData }: WorkQueueMembershipStripProps) {
+function WorkQueueMembershipStrip({
+  leadId,
+  commandCenterData,
+  fromQueue = null,
+  onNeedsReviewResolved,
+}: WorkQueueMembershipStripProps) {
   const memberships = commandCenterData.work_queues ?? []
+  const fromMeta = fromQueue
+    ? { key: fromQueue.key, label: fromQueue.label, path: queuePath(fromQueue.key) }
+    : null
+  const reviewActive = Boolean(
+    commandCenterData.review_required || commandCenterData.review_reason,
+  )
+  const hasNeedsReviewMembership = memberships.some((q) => q.key === 'needs-review')
 
   return (
     <Box
       sx={{
         display: 'flex',
-        flexWrap: 'wrap',
-        alignItems: 'center',
-        gap: 1,
+        flexDirection: 'column',
+        gap: 0.5,
       }}
       data-testid="work-queue-membership-strip"
     >
-      <Typography variant="body2" fontWeight={600} sx={{ mr: 0.5 }}>
-        Work queues
-      </Typography>
-      {memberships.length > 0 ? (
-        memberships.map((q) => (
+      {fromMeta && (
+        <Box
+          sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}
+          data-testid="work-queue-came-from"
+        >
+          <Typography variant="body2" fontWeight={600} sx={{ mr: 0.5 }}>
+            Came from
+          </Typography>
           <Chip
-            key={q.key}
             component={RouterLink}
-            to={q.path}
+            to={fromMeta.path}
             clickable
             size="small"
-            label={q.label}
-            data-testid={`work-queue-strip-${q.key}`}
+            color="primary"
+            variant="outlined"
+            label={fromMeta.label}
+            data-testid={`work-queue-came-from-${fromMeta.key}`}
           />
-        ))
-      ) : (
-        <Typography variant="body2" color="text.secondary" data-testid="work-queue-strip-empty">
-          Not in an active work queue
-        </Typography>
+        </Box>
       )}
+      <Box
+        sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}
+        data-testid="work-queue-currently-in"
+      >
+        <Typography variant="body2" fontWeight={600} sx={{ mr: 0.5 }}>
+          {fromMeta ? 'Currently in' : 'Work queues'}
+        </Typography>
+        {memberships.length > 0 || reviewActive ? (
+          <>
+            {memberships.map((q) => {
+              if (q.key === 'needs-review' && reviewActive) {
+                return (
+                  <NeedsReviewChipPopover
+                    key={q.key}
+                    leadId={leadId}
+                    commandCenterData={commandCenterData}
+                    label={q.label}
+                    onResolved={onNeedsReviewResolved}
+                  />
+                )
+              }
+              return (
+                <Chip
+                  key={q.key}
+                  component={RouterLink}
+                  to={q.path}
+                  clickable
+                  size="small"
+                  label={q.label}
+                  data-testid={`work-queue-strip-${q.key}`}
+                />
+              )
+            })}
+            {reviewActive && !hasNeedsReviewMembership && (
+              <NeedsReviewChipPopover
+                leadId={leadId}
+                commandCenterData={commandCenterData}
+                onResolved={onNeedsReviewResolved}
+              />
+            )}
+          </>
+        ) : (
+          <Typography variant="body2" color="text.secondary" data-testid="work-queue-strip-empty">
+            Not in an active work queue
+          </Typography>
+        )}
+      </Box>
     </Box>
   )
 }
@@ -1364,6 +1478,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       }
     }
   }, [])
+  const [sameAddressMergeOpen, setSameAddressMergeOpen] = useState(false)
   const [activitySnackbar, setActivitySnackbar] = useState<{
     open: boolean
     message: string
@@ -2240,7 +2355,32 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }}
           data-testid="cc-header-stack"
         >
-          <WorkQueueMembershipStrip commandCenterData={commandCenterData} />
+          <WorkQueueMembershipStrip
+            leadId={leadId}
+            commandCenterData={commandCenterData}
+            fromQueue={fromQueue}
+            onNeedsReviewResolved={async (result) => {
+              if (result.kind === 'merged' && result.winnerId != null && result.loserId != null) {
+                const mergeFlash = { message: 'Records combined.' }
+                setActivitySnackbar({ open: true, ...mergeFlash })
+                await afterCommandCenterMutation(queryClient, {
+                  winnerId: result.winnerId,
+                  loserId: result.loserId,
+                  navigate,
+                  fromQueue,
+                  flashSnackbar: result.winnerId === leadId ? undefined : mergeFlash,
+                })
+                return
+              }
+              setActivitySnackbar({
+                open: true,
+                message: result.kind === 'dismissed' ? 'Marked not a duplicate.' : 'Marked reviewed.',
+              })
+              await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+              void queryClient.invalidateQueries({ queryKey: ['queue-needs-review'] })
+              void queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+            }}
+          />
 
           <PropertyOverviewHeader
             leadId={leadId}
@@ -2270,9 +2410,12 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 })
               }
             }}
+            onMergeDuplicate={() => setSameAddressMergeOpen(true)}
           />
           <SameAddressMergeBanner
             leadId={leadId}
+            open={sameAddressMergeOpen}
+            onOpenChange={setSameAddressMergeOpen}
             twins={commandCenterData.same_address_leads ?? []}
             currentOwnerLabel={
               primaryOwnerDisplayName(
@@ -2502,6 +2645,14 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         activityType={activityModal}
         leadId={leadId}
         openTasks={openTasks}
+        preferredPhoneDigits={
+          commandCenterData.dial_target?.value
+          ?? (
+            outreachContact?.channel === 'phone' || outreachContact?.channel === 'text'
+              ? outreachContact.value
+              : null
+          )
+        }
         onClose={() => setActivityModal(null)}
         onSaved={handleActivitySaved}
       />

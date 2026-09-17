@@ -13,6 +13,7 @@ from app.models.hubspot_match import HubSpotMatch
 from app.models.lead import Lead, LeadAuditTrail
 from app.services.lead_merge_utils import (
     dedup_street_key,
+    legacy_glued_house_range_key,
     merge_mailer_history,
     pick_merge_winner,
     streets_match_normalized,
@@ -626,13 +627,39 @@ def find_same_building_leads(
     key = dedup_street_key(street)
     if key:
         found: dict[int, Lead] = {}
-        indexed_matches = (
-            base_query.filter(
-                or_(
-                    Lead.normalized_street == key,
-                    Lead.normalized_street.ilike(f'{key} %'),
+        street_predicates = [
+            Lead.normalized_street == key,
+            Lead.normalized_street.ilike(f'{key} %'),
+        ]
+        # Pre-fix rows may still store glued dual house numbers ("18671869…").
+        legacy_glued = legacy_glued_house_range_key(street)
+        if legacy_glued and legacy_glued != key:
+            street_predicates.append(Lead.normalized_street == legacy_glued)
+            street_predicates.append(Lead.normalized_street.ilike(f'{legacy_glued} %'))
+        house_token = key.split(' ', 1)[0]
+        street_body = key.split(' ', 1)[1] if ' ' in key else ''
+        if house_token.isdigit() and street_body:
+            # Range twin stored as "1867-1869 …" / "1867/1869 …" with stale key.
+            street_predicates.append(
+                and_(
+                    Lead.property_street.ilike(f'{house_token}-%'),
+                    Lead.normalized_street.ilike(f'%{street_body}%'),
                 ),
             )
+            street_predicates.append(
+                and_(
+                    Lead.property_street.ilike(f'{house_token}/%'),
+                    Lead.normalized_street.ilike(f'%{street_body}%'),
+                ),
+            )
+            street_predicates.append(
+                and_(
+                    Lead.property_street.ilike(f'{house_token} &%'),
+                    Lead.normalized_street.ilike(f'%{street_body}%'),
+                ),
+            )
+        indexed_matches = (
+            base_query.filter(or_(*street_predicates))
             .order_by(Lead.id.asc())
             .limit(max(limit * 8, 64))
             .all()
@@ -802,6 +829,19 @@ def cluster_preview_for_lead(lead: Lead) -> dict[str, Any] | None:
     confirmed_ids = confirmed_hubspot_lead_ids()
     records = [_lead_to_merge_record(item) for item in cluster]
     winner = pick_merge_winner(records, confirmed_ids)
+    members = []
+    for item in cluster:
+        members.append({
+            'id': item.id,
+            'property_street': item.property_street,
+            'owner_display_name': _lead_owner_display_name(item),
+            'county_assessor_pin': getattr(item, 'county_assessor_pin', None),
+            'lead_status': item.lead_status,
+            'has_phone': bool(item.has_phone),
+            'has_email': bool(item.has_email),
+            'hubspot_confirmed': item.id in confirmed_ids,
+            'is_suggested_winner': item.id == winner['id'],
+        })
     return {
         'cluster_ids': [item.id for item in cluster],
         'suggested_winner_id': winner['id'],
@@ -809,6 +849,7 @@ def cluster_preview_for_lead(lead: Lead) -> dict[str, Any] | None:
         'streets': {
             item.id: item.property_street for item in cluster
         },
+        'members': members,
     }
 
 

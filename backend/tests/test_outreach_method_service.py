@@ -7,6 +7,7 @@ from app.services.outreach_method_service import (
     evaluate_contact_method,
     refine_outreach_action,
     outreach_action_label,
+    resolve_dial_target,
     resolve_outreach_contact,
     resolve_outreach_contacts_for_leads,
     outreach_contact_task_title,
@@ -360,6 +361,53 @@ def test_resolve_outreach_phone_matches_key_contact_former_owner_hubspot(app):
         assert PhoneConfidenceService.normalize_phone(key_contact[0]['value']).endswith(
             '7732715525',
         )
+
+        dial = resolve_dial_target(lead)
+        assert dial is not None
+        assert PhoneConfidenceService.normalize_phone(dial['value']).endswith('7732715525')
+        assert dial['contact_id'] == former.id
+        assert dial['phone_id'] is not None
+        assert outreach_contact_task_title(dial).endswith('271-5525')
+
+
+def test_resolve_dial_target_independent_of_recommended_channel(app):
+    """dial_target still resolves when RA channel is not phone."""
+    from app import db
+    from app.models.contact import Contact
+    from app.models.contact_phone import ContactPhone
+    from app.models.lead import Lead
+    from app.models.property_contact import PropertyContact
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
+    with app.app_context():
+        lead = Lead(
+            property_street='Dial Target Mail Channel St',
+            lead_score=40.0,
+            recommended_contact_method='direct_mail',
+        )
+        db.session.add(lead)
+        db.session.flush()
+        contact = Contact(first_name='Pat', last_name='Owner', role='owner')
+        db.session.add(contact)
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=lead.id, contact_id=contact.id, role='owner', is_primary=True,
+        ))
+        phone = ContactPhone(
+            contact_id=contact.id,
+            value='(312) 555-0199',
+            label='mobile',
+            confidence_score=90,
+            notes='HubSpot primary',
+        )
+        db.session.add(phone)
+        db.session.commit()
+
+        dial = resolve_dial_target(lead)
+        assert dial is not None
+        assert PhoneConfidenceService.normalize_phone(dial['value']).endswith('3125550199')
+        assert dial['contact_id'] == contact.id
+        assert dial['phone_id'] == phone.id
 
 
 def _lead_with_primary_phone(

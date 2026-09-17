@@ -20,6 +20,7 @@ from app.services.plugins.owner_name_utils import (
     is_entity_name,
     is_institutional_contact,
     is_institutional_name,
+    is_placeholder_owner_name,
 )
 
 
@@ -69,6 +70,18 @@ def _owner_display_name(lead: Lead, primary: Optional[Contact]) -> str:
     )
 
 
+def owner_display_name_for_policy(lead: Lead) -> str:
+    """Public owner display used by cold-mail policy (primary Contact preferred)."""
+    lead_id = getattr(lead, "id", None)
+    primary: Optional[Contact] = None
+    if isinstance(lead_id, int):
+        try:
+            primary = _primary_contact(lead_id)
+        except Exception:  # noqa: BLE001
+            primary = None
+    return _owner_display_name(lead, primary)
+
+
 def _org_name_is_entity(org: Organization) -> bool:
     if (org.org_type or "") in {
         "llc", "corporation", "trust", "property_management", "brokerage",
@@ -97,6 +110,7 @@ def _cold_mail_block_reason_with_context(
       - institutional_owner: clear institution / nonprofit name markers
       - nonprofit_organization: linked org_type == nonprofit
       - tax_exempt_owner: parcel ownership_type tax_exempt
+      - generic_owner_name: assessor/listing placeholder (e.g. Taxpayer of)
       - unresolved_entity_owner: entity primary with no natural-person primary
     """
     ownership = (getattr(lead, "ownership_type", None) or "").strip().lower()
@@ -112,6 +126,18 @@ def _cold_mail_block_reason_with_context(
         return "nonprofit_organization"
 
     display = _owner_display_name(lead, primary)
+    # Assessor stubs ("Taxpayer of") and blank names are not mailable identities.
+    # Commercial entity orgs may still cold-mail the LLC address without a person.
+    # ``display`` already prefers the primary owner Contact when one exists.
+    if is_placeholder_owner_name(display):
+        has_entity_org = any(_org_name_is_entity(org) for org in owner_orgs)
+        category = (getattr(lead, "lead_category", None) or "residential")
+        commercial = (
+            isinstance(category, str) and category.strip().lower() == "commercial"
+        )
+        if not (has_entity_org and commercial):
+            return "generic_owner_name"
+
     if display and is_institutional_name(display):
         return "institutional_owner"
     if primary is not None and is_institutional_contact(
@@ -169,8 +195,8 @@ def is_unresolved_entity_owner(lead: Lead) -> bool:
     return bool(entity_shaped and not _has_natural_person_primary(primary))
 
 
-def cold_mail_block_reason(lead: Lead) -> Optional[str]:
-    """Return a reason code when this lead should not be cold-mailed, else None."""
+def cold_mail_block_context(lead: Lead) -> tuple[Optional[str], str]:
+    """Return ``(block_reason, owner_display)`` with one primary-contact fetch."""
     lead_id = getattr(lead, "id", None)
     primary: Optional[Contact] = None
     orgs: list[Organization] = []
@@ -181,7 +207,15 @@ def cold_mail_block_reason(lead: Lead) -> Optional[str]:
         except Exception:  # noqa: BLE001 — scoring unit tests may use MagicMock
             primary = None
             orgs = []
-    return _cold_mail_block_reason_with_context(lead, primary, orgs)
+    display = _owner_display_name(lead, primary)
+    reason = _cold_mail_block_reason_with_context(lead, primary, orgs)
+    return reason, display
+
+
+def cold_mail_block_reason(lead: Lead) -> Optional[str]:
+    """Return a reason code when this lead should not be cold-mailed, else None."""
+    reason, _display = cold_mail_block_context(lead)
+    return reason
 
 
 def cold_mail_block_reasons_for_leads(leads: Iterable[Lead]) -> dict[int, str]:

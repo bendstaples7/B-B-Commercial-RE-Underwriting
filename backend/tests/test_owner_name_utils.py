@@ -162,13 +162,47 @@ class TestOwnerNamesEquivalent:
         assert is_generic_owner_name('NA')
         assert is_generic_owner_name('current resident')
         assert is_generic_owner_name('')
+        assert is_generic_owner_name('Taxpayer of')
+        assert is_generic_owner_name('TAXPAYER OF 123 MAIN ST')
+        assert is_generic_owner_name('taxpayer')
+        assert is_generic_owner_name('Owner of Record')
         assert not is_generic_owner_name('Joseph Kiferbaum')
         assert not is_generic_owner_name('Jane Na')
         assert not is_generic_owner_name('Na Zhang')
         assert not is_generic_owner_name('Bank of America, N.A.')
         assert not is_matchable_person_name('For Sale By', 'Owner')
         assert not is_matchable_person_name('123', 'Main St')
+        assert not is_matchable_person_name('Taxpayer', 'of')
         assert not owner_names_equivalent('FSBO', None, 'FSBO', None)
+
+    def test_placeholder_only_excludes_hybrid_listing_labels(self):
+        from app.services.plugins.owner_name_utils import is_placeholder_owner_name
+
+        assert is_placeholder_owner_name('Taxpayer of')
+        assert is_placeholder_owner_name('TAXPAYER OF 3508 N SACRAMENTO')
+        assert is_placeholder_owner_name('CURRENT RESIDENT 123 MAIN ST')
+        assert not is_placeholder_owner_name('CURRENT RESIDENT John Smith 123 MAIN ST')
+        assert not is_placeholder_owner_name('John Smith For Sale By Owner 123 Main St')
+        assert is_placeholder_owner_name('CURRENT RESIDENT HIGHWAY 12')
+        assert is_placeholder_owner_name('CURRENT RESIDENT AVE 12')
+        assert is_placeholder_owner_name('CURRENT RESIDENT BLVD 5')
+        assert not is_placeholder_owner_name('CURRENT RESIDENT LANE 5 MAIN ST')
+        assert is_placeholder_owner_name('N/A')
+        assert is_placeholder_owner_name('For Sale By Owner +')
+        assert is_placeholder_owner_name('current resident')
+        assert not is_placeholder_owner_name('Sam For Sale By Owner')
+        assert not is_placeholder_owner_name('Joseph Kiferbaum')
+        assert not is_placeholder_owner_name('Bank of America, N.A.')
+
+    def test_apply_owner_name_skips_placeholders(self):
+        fields = {}
+        apply_owner_name_fields(fields, 'Taxpayer of')
+        assert fields == {}
+        apply_owner_name_fields(fields, 'TAXPAYER OF 123 MAIN')
+        assert fields == {}
+        apply_owner_name_fields(fields, 'John Smith')
+        assert fields['owner_first_name'] == 'John'
+        assert fields['owner_last_name'] == 'Smith'
 
     def test_middle_initial_matches(self):
         from app.services.plugins.owner_name_utils import owner_names_equivalent

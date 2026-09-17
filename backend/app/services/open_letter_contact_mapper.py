@@ -79,7 +79,17 @@ _STREET_ABBREV = (
     (r'\bapartment\b', 'apt'),
     (r'\bsuite\b', 'ste'),
     (r'\bunit\b', 'unit'),
+    # Short forms that already look like abbreviations (after full-word pass).
+    (r'\bav\b', 'ave'),
+    (r'\bblvd\b', 'blvd'),
+    (r'\bstr\b', 'st'),
 )
+
+# Trailing street-type tokens stripped for batch mailing dedupe so
+# "2717 N Kenmore" and "2717 N Kenmore Ave" collide (OLC/USPS will anyway).
+_STREET_TYPE_SUFFIXES = frozenset({
+    'ave', 'st', 'blvd', 'dr', 'rd', 'ln', 'ct', 'cir', 'pl', 'ter', 'pkwy', 'way',
+})
 
 
 def _normalize_address_part(value: str) -> str:
@@ -91,6 +101,14 @@ def _normalize_address_part(value: str) -> str:
     for pattern, repl in _STREET_ABBREV:
         text = re.sub(pattern, repl, text)
     return re.sub(r'\s+', ' ', text).strip()
+
+
+def _street_core_for_dedupe(street_norm: str) -> str:
+    """Drop a single trailing street-type token for mailbox-level dedupe."""
+    parts = street_norm.split()
+    if len(parts) >= 2 and parts[-1] in _STREET_TYPE_SUFFIXES:
+        return ' '.join(parts[:-1])
+    return street_norm
 
 
 def _normalize_zip(value: str) -> str:
@@ -170,12 +188,17 @@ def owner_mailing_address(lead: Lead) -> tuple[str, str, str, str]:
 
 
 def owner_mailing_dedupe_key(lead: Lead) -> str | None:
-    """Normalized street|city|state|zip5 key for batch address dedupe, or None."""
+    """Normalized street|city|state|zip5 key for batch address dedupe, or None.
+
+    Street core strips a trailing type suffix (ave/st/…) and short aliases
+    (``av`` → ``ave``) so near-duplicate mailbox strings in one batch collapse
+    before OLC place_order.
+    """
     street, city, state, zip_code = owner_mailing_address(lead)
     if not street or not city or not state or not zip_code:
         return None
     return '|'.join((
-        _normalize_address_part(street),
+        _street_core_for_dedupe(_normalize_address_part(street)),
         _normalize_address_part(city),
         _normalize_address_part(state),
         _normalize_zip(zip_code),

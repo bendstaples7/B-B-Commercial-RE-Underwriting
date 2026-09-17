@@ -162,9 +162,61 @@ class TestGetCommandCenter:
             assert 'open_tasks' in data
             assert 'timeline' in data
             assert 'contacts' in data
+            assert 'dial_target' in data
             assert isinstance(data['contacts'], list)
             assert data['id'] == lead.id
             assert 'assessed_value' in data
+
+    def test_dial_target_prefers_former_owner_hubspot_phone(self, client, app):
+        """4490-shaped: CC dial_target is HubSpot primary on former_owner, not GIS primary."""
+        with app.app_context():
+            from datetime import datetime, timezone
+
+            from app import db
+            from app.models.contact import Contact
+            from app.models.contact_phone import ContactPhone
+            from app.models.property_contact import PropertyContact
+            from app.services.phone_confidence_service import PhoneConfidenceService
+
+            lead = _make_lead(app, '4490 Dial Target St', phone_1='(773) 454-0106')
+            former = Contact(first_name='Sam', last_name='FISBO', role='owner')
+            current = Contact(first_name='Sam', last_name='Old Town Square Cbre', role='owner')
+            db.session.add_all([former, current])
+            db.session.flush()
+            db.session.add(PropertyContact(
+                property_id=lead.id, contact_id=former.id,
+                role='former_owner', is_primary=False,
+            ))
+            db.session.add(PropertyContact(
+                property_id=lead.id, contact_id=current.id,
+                role='owner', is_primary=True,
+            ))
+            # Same confidence so hubspot_rank (HubSpot primary notes) must decide.
+            db.session.add(ContactPhone(
+                contact_id=former.id,
+                value='(773) 271-5525',
+                label='mobile',
+                confidence_score=50,
+                last_called_at=datetime.now(timezone.utc),
+                last_outcome='no_answer',
+                notes='HubSpot primary',
+            ))
+            db.session.add(ContactPhone(
+                contact_id=current.id,
+                value='(773) 454-0106',
+                label='other',
+                confidence_score=50,
+            ))
+            db.session.commit()
+
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            assert response.status_code == 200
+            dial = data['dial_target']
+            assert dial is not None
+            assert PhoneConfidenceService.normalize_phone(dial['value']).endswith('7732715525')
+            assert dial['contact_id'] == former.id
+            assert dial['phone_id'] is not None
 
     def test_assessed_value_serialized_when_present(self, client, app):
         """assessed_value is included on the command center payload when set on the lead."""
@@ -411,13 +463,46 @@ class TestGetCommandCenter:
                 t.get('hubspot_task_id') == 'hs-cc-crm-only' for t in data['open_tasks']
             )
 
-    def test_clears_review_required_flag(self, client, app):
-        """Opening command center clears review_required flag."""
+    def test_preserves_review_required_flag_on_open(self, client, app):
+        """Opening command center keeps review_required so Needs Review stays visible."""
         with app.app_context():
-            lead = _make_lead(app, '4 CC St', review_required=True)
-            client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            lead = _make_lead(
+                app,
+                '4 CC St',
+                review_required=True,
+                review_reason='New HubSpot activity',
+            )
+            response = client.get(
+                f'/api/leads/{lead.id}/command-center',
+                headers=_AUTH_HEADERS,
+            )
+            data = json.loads(response.data)
+            db.session.refresh(lead)
+            assert lead.review_required is True
+            assert data['review_required'] is True
+            assert data['review_reason'] == 'New HubSpot activity'
+            assert any(q['key'] == 'needs-review' for q in data['work_queues'])
+
+    def test_clear_review_endpoint(self, client, app):
+        """POST clear-review removes Needs Review flags for any reason."""
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '4c Clear Review St',
+                review_required=True,
+                review_reason='Missing phone, email, and county PIN',
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/clear-review',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = json.loads(response.data)
+            assert body['cleared'] is True
+            assert body['previous_reason'] == 'Missing phone, email, and county PIN'
             db.session.refresh(lead)
             assert lead.review_required is False
+            assert lead.review_reason is None
 
     def test_persists_live_data_completeness_score(self, client, app):
         """Opening command center stores the live completeness score on the lead."""

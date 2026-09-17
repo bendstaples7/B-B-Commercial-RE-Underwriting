@@ -177,6 +177,10 @@ WINNING_RULE_LABELS = {
     'institutional_owner': 'Institutional owner — cold mail blocked',
     'nonprofit_organization': 'Nonprofit owner — cold mail blocked',
     'tax_exempt_owner': 'Tax-exempt owner — cold mail blocked',
+    'generic_owner_name': (
+        'Owner name is missing or a placeholder (e.g. Taxpayer of) — research a '
+        'real owner before cold mail'
+    ),
 }
 
 

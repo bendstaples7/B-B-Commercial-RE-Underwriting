@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { render, screen, waitFor } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { SameAddressMergeBanner } from '@/components/lead-detail/SameAddressMergeBanner'
-import { commandCenterService } from '@/services/api'
+import { commandCenterService, searchService } from '@/services/api'
 import type { SameAddressLeadSummary } from '@/types'
 import { AppSnackbar } from '@/components/AppSnackbar'
 import {
@@ -16,6 +16,9 @@ vi.mock('@/services/api', () => ({
   commandCenterService: {
     mergeInto: vi.fn(),
     getMergePreview: vi.fn(),
+  },
+  searchService: {
+    search: vi.fn(),
   },
 }))
 
@@ -40,14 +43,51 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
+
+function ManualMergeHarness(
+  props: Omit<
+    React.ComponentProps<typeof SameAddressMergeBanner>,
+    'open' | 'onOpenChange' | 'twins'
+  > & { twins?: SameAddressLeadSummary[] },
+) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button
+        type="button"
+        data-testid="same-address-merge-open"
+        onClick={() => setOpen(true)}
+      >
+        Merge duplicate…
+      </button>
+      <SameAddressMergeBanner
+        {...props}
+        twins={props.twins ?? []}
+        open={open}
+        onOpenChange={setOpen}
+      />
+    </>
+  )
+}
+
 describe('SameAddressMergeBanner', () => {
   beforeEach(() => {
     vi.mocked(commandCenterService.getMergePreview).mockReset()
     vi.mocked(commandCenterService.mergeInto).mockReset()
+    vi.mocked(searchService.search).mockReset()
     vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
       winner_id: 200,
       loser_id: 100,
       merged: true,
+    })
+    vi.mocked(searchService.search).mockResolvedValue({
+      q: '',
+      page: 1,
+      per_page: 10,
+      leads: [],
+      leads_total: 0,
+      sessions: [],
+      sessions_total: 0,
     })
   })
 
@@ -76,6 +116,117 @@ describe('SameAddressMergeBanner', () => {
       expect(commandCenterService.mergeInto).toHaveBeenCalledWith(100, 200)
     })
     expect(onMerged).toHaveBeenCalledWith({ winnerId: 200, loserId: 100 })
+  })
+
+  it('opens merge dialog from controlled header entry when no twin is auto-detected', async () => {
+    const user = userEvent.setup()
+    const onMerged = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(commandCenterService.getMergePreview).mockResolvedValue({
+      same_building: true,
+      current: {
+        id: 100,
+        property_street: '1867 N Howe St',
+        owner_display_name: 'Current',
+        people_names: ['Current'],
+      },
+      other: {
+        id: 2497,
+        property_street: '1867-1869 N Howe St',
+        owner_display_name: 'Twin range',
+        people_names: ['Twin'],
+      },
+    } satisfies MergePreviewResponse)
+    vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
+      winner_id: 100,
+      loser_id: 2497,
+      merged: true,
+    })
+    render(
+      <MemoryRouter>
+        <ManualMergeHarness
+          leadId={100}
+          currentOwnerLabel="Current"
+          currentPeopleNames={['Current']}
+          onMerged={onMerged}
+        />
+      </MemoryRouter>,
+    )
+    expect(screen.queryByTestId('same-address-merge-banner')).not.toBeInTheDocument()
+    expect(screen.getByTestId('same-address-merge-open')).toHaveTextContent('Merge duplicate')
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    await user.type(screen.getByTestId('same-address-merge-paste-id'), '2497')
+    await user.click(screen.getByTestId('same-address-merge-confirm'))
+    await waitFor(() => {
+      expect(commandCenterService.mergeInto).toHaveBeenCalledWith(2497, 100)
+    })
+    expect(onMerged).toHaveBeenCalledWith({ winnerId: 100, loserId: 2497 })
+  })
+
+  it('lets you pick the other lead from search results by name/address', async () => {
+    const user = userEvent.setup()
+    const onMerged = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(searchService.search).mockResolvedValue({
+      q: 'Howe',
+      page: 1,
+      per_page: 10,
+      leads: [
+        {
+          id: 2497,
+          type: 'lead',
+          label: 'JAMES E MALONE',
+          nav_path: '/leads/2497',
+          owner_display_name: 'JAMES E MALONE',
+          property_street: '1867-1869 N Howe St',
+        },
+      ],
+      leads_total: 1,
+      sessions: [],
+      sessions_total: 0,
+    })
+    vi.mocked(commandCenterService.getMergePreview).mockResolvedValue({
+      same_building: true,
+      current: {
+        id: 100,
+        property_street: '1867 N Howe St',
+        owner_display_name: 'Current',
+        people_names: ['Current'],
+      },
+      other: {
+        id: 2497,
+        property_street: '1867-1869 N Howe St',
+        owner_display_name: 'JAMES E MALONE',
+        people_names: ['JAMES E MALONE'],
+      },
+    } satisfies MergePreviewResponse)
+    vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
+      winner_id: 100,
+      loser_id: 2497,
+      merged: true,
+    })
+    render(
+      <MemoryRouter>
+        <ManualMergeHarness
+          leadId={100}
+          currentOwnerLabel="Current"
+          currentPeopleNames={['Current']}
+          onMerged={onMerged}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    await user.type(screen.getByTestId('same-address-merge-paste-id'), 'Howe')
+    await waitFor(() => {
+      expect(searchService.search).toHaveBeenCalled()
+    })
+    await user.click(await screen.findByTestId('same-address-merge-search-hit-2497'))
+    await waitFor(() => {
+      expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 2497)
+    })
+    await user.click(screen.getByTestId('same-address-merge-confirm'))
+    await waitFor(() => {
+      expect(commandCenterService.mergeInto).toHaveBeenCalledWith(2497, 100)
+    })
+    expect(onMerged).toHaveBeenCalledWith({ winnerId: 100, loserId: 2497 })
   })
 
   it('when winner differs from current lead, onMerged still runs (navigate owned by helper)', async () => {

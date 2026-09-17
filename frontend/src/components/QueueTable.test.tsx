@@ -89,6 +89,15 @@ describe('QueueTable', () => {
 
       expect(screen.queryByTestId('queue-table-empty')).not.toBeInTheDocument()
     })
+
+    it('shows refreshing state when rows are empty but total remains', () => {
+      render(<QueueTable rows={[]} total={1520} />)
+
+      expect(screen.queryByTestId('queue-table-empty')).not.toBeInTheDocument()
+      expect(screen.getByTestId('queue-table-refreshing')).toBeInTheDocument()
+      expect(screen.getByText('Loading more leads…')).toBeInTheDocument()
+      expect(screen.getByText(/1,520 still in this queue/)).toBeInTheDocument()
+    })
   })
 
   // -------------------------------------------------------------------------

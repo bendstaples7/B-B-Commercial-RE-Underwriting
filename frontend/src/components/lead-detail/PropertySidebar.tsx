@@ -48,6 +48,7 @@ import {
 } from '@/utils/propertyContacts'
 import { formatImportNote } from './leadDetailFormatters'
 import { resolveMailerHistorySummary } from '@/utils/mailerHistory'
+import { formatNeedsReviewReason } from '@/utils/needsReviewReason'
 import { hasNonBlankPhones, PhoneList } from '@/components/PhoneRow'
 import { ccCardSx } from '@/components/lead-detail/commandCenterChrome'
 import { PriorOwnerStaleOverlay } from '@/components/lead-detail/PriorOwnerStaleCallout'
@@ -1051,6 +1052,22 @@ export function PropertySidebar({
           <Typography variant="caption" color="text.secondary" data-testid="work-queues-empty">
             Not in an active work queue.
           </Typography>
+        )}
+        {(commandCenterData.review_required || commandCenterData.review_reason) && (
+          <Box sx={{ mt: 1 }} data-testid="sidebar-needs-review-reason">
+            <Typography variant="caption" color="text.secondary" display="block">
+              Needs Review reason
+            </Typography>
+            <Typography variant="caption" fontWeight={600} display="block">
+              {formatNeedsReviewReason({
+                id: commandCenterData.id,
+                review_reason: commandCenterData.review_reason,
+                suggested_winner_id: commandCenterData.duplicate_cluster?.suggested_winner_id,
+                duplicate_cluster_ids: commandCenterData.duplicate_cluster?.cluster_ids,
+                duplicate_confidence: commandCenterData.duplicate_cluster?.confidence,
+              })}
+            </Typography>
+          </Box>
         )}
       </SidebarSection>
 

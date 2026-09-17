@@ -1,7 +1,44 @@
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import fs from 'fs'
 import { liveUiCapturePlugin } from '../scripts/live-ui/vite-plugin.mjs'
+
+/** Emit spa-version.json + <meta name="spa-build-id"> for post-deploy stale-tab recovery. */
+function spaVersionPlugin(): Plugin {
+  const buildId =
+    process.env.VITE_SPA_BUILD_ID
+    || process.env.GITHUB_SHA
+    || process.env.CF_PAGES_COMMIT_SHA
+    || `dev-${Date.now()}`
+  const builtAt = new Date().toISOString()
+  const payload = { buildId, builtAt }
+
+  return {
+    name: 'spa-version',
+    transformIndexHtml(html) {
+      const meta = `<meta name="spa-build-id" content="${buildId}" />`
+      const cacheMeta =
+        '<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />'
+      if (html.includes('name="spa-build-id"')) {
+        return html.replace(
+          /<meta\s+name="spa-build-id"[^>]*>/,
+          `${meta}\n    ${cacheMeta}`,
+        )
+      }
+      return html.replace('<head>', `<head>\n    ${meta}\n    ${cacheMeta}`)
+    },
+    writeBundle(outputOptions) {
+      const dir = outputOptions.dir
+      if (!dir) return
+      fs.writeFileSync(
+        path.join(dir, 'spa-version.json'),
+        `${JSON.stringify(payload)}\n`,
+        'utf8',
+      )
+    },
+  }
+}
 
 export default defineConfig(({ command, mode }) => {
   const rootDir = path.resolve(__dirname, '..')
@@ -23,6 +60,7 @@ export default defineConfig(({ command, mode }) => {
     envDir: rootDir,
     plugins: [
       react(),
+      spaVersionPlugin(),
       // Packing-geometry harness starts its own Vite server; skip live-ui middleware
       // so HMR/capture hooks cannot keep networkidle from settling in CI.
       ...(command === 'serve' && !isPackingHarness

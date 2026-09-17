@@ -223,11 +223,15 @@ jobs:
 
       - name: Build frontend on runner (manual deploy fallback)
         if: github.event_name == 'workflow_dispatch'
+        env:
+          TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
         run: |
           cd frontend
           npm ci
           npm install --no-save @rollup/rollup-linux-x64-gnu
-          npm run build
+          # Use the resolved target SHA (not workflow_dispatch ref) so spa-version
+          # matches the code that will actually be deployed.
+          VITE_SPA_BUILD_ID="${TARGET_SHA}" GITHUB_SHA="${TARGET_SHA}" npm run build
           echo "Frontend built successfully ($(du -sh dist | cut -f1) total)"
 
       - name: Assert frontend dist asset coupling
@@ -251,12 +255,14 @@ jobs:
         run: |
           # Copy deploy script and shared checks
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
+          scp -i ~/.ssh/id_deploy scripts/prev_assets_promote.sh $VPS_USER@$VPS_HOST:/home/deploy/prev_assets_promote.sh
           scp -i ~/.ssh/id_deploy scripts/reclaim-vps-disk.sh $VPS_USER@$VPS_HOST:/home/deploy/reclaim-vps-disk.sh
           # Free space before uploading frontend-dist (1GB gate was blocking #171+).
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
             "chmod +x /home/deploy/reclaim-vps-disk.sh && bash /home/deploy/reclaim-vps-disk.sh --min-free-kb 1048576"
           scp -i ~/.ssh/id_deploy scripts/post-deploy-rollback.sh $VPS_USER@$VPS_HOST:/home/deploy/post-deploy-rollback.sh
           scp -i ~/.ssh/id_deploy scripts/ensure_frontend_dist_readable.sh $VPS_USER@$VPS_HOST:/home/deploy/ensure_frontend_dist_readable.sh
+          scp -i ~/.ssh/id_deploy scripts/install_frontend_dist_with_asset_grace.sh $VPS_USER@$VPS_HOST:/home/deploy/install_frontend_dist_with_asset_grace.sh
           scp -i ~/.ssh/id_deploy scripts/spa-dist-fingerprint.sh $VPS_USER@$VPS_HOST:/home/deploy/spa-dist-fingerprint.sh
           scp -i ~/.ssh/id_deploy scripts/spa-uptime-canary.sh $VPS_USER@$VPS_HOST:/home/deploy/spa-uptime-canary.sh
           scp -i ~/.ssh/id_deploy scripts/pg-idle-xact-watchdog.sh $VPS_USER@$VPS_HOST:/home/deploy/pg-idle-xact-watchdog.sh
@@ -291,7 +297,7 @@ jobs:
           scp -i ~/.ssh/id_deploy backup_lib.py $VPS_USER@$VPS_HOST:/home/deploy/backup_lib.py
           # Set correct permissions on backup scripts
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
-            "chmod 750 /home/deploy/backup.sh /home/deploy/backup_remote_transfer.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh /home/deploy/install-backup-cron.sh /home/deploy/celery-liveness-check.sh /home/deploy/check-lead-cc-mount-health.sh /home/deploy/ops-alert.sh /home/deploy/verify-backup-health.sh /home/deploy/restore-drill.sh /home/deploy/post-deploy-rollback.sh /home/deploy/ensure_frontend_dist_readable.sh /home/deploy/spa-dist-fingerprint.sh /home/deploy/spa-uptime-canary.sh /home/deploy/pg-idle-xact-watchdog.sh /home/deploy/restore_frontend_dist_backup.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py /home/deploy/backup_health_check.py /home/deploy/lead_cc_mount_health.py /home/deploy/pg_lock_guard.py /home/deploy/setup-b2-rclone.py /home/deploy/setup-cloudflare-rclone.py /home/deploy/configure_backup_remotes.py /home/deploy/inject-remote-backup.py /home/deploy/spa_asset_refs.py /home/deploy/inject_google_maps_browser_key.py /home/deploy/google_maps_browser_key_policy.json"
+            "chmod 750 /home/deploy/backup.sh /home/deploy/backup_remote_transfer.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh /home/deploy/install-backup-cron.sh /home/deploy/celery-liveness-check.sh /home/deploy/check-lead-cc-mount-health.sh /home/deploy/ops-alert.sh /home/deploy/verify-backup-health.sh /home/deploy/restore-drill.sh /home/deploy/post-deploy-rollback.sh /home/deploy/ensure_frontend_dist_readable.sh /home/deploy/install_frontend_dist_with_asset_grace.sh /home/deploy/spa-dist-fingerprint.sh /home/deploy/spa-uptime-canary.sh /home/deploy/pg-idle-xact-watchdog.sh /home/deploy/restore_frontend_dist_backup.sh /home/deploy/prev_assets_promote.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py /home/deploy/backup_health_check.py /home/deploy/lead_cc_mount_health.py /home/deploy/pg_lock_guard.py /home/deploy/setup-b2-rclone.py /home/deploy/setup-cloudflare-rclone.py /home/deploy/configure_backup_remotes.py /home/deploy/inject-remote-backup.py /home/deploy/spa_asset_refs.py /home/deploy/inject_google_maps_browser_key.py /home/deploy/google_maps_browser_key_policy.json"
           # Create a stub backup.conf if none exists so backup.sh can run without blocking the deploy.
           # The stub has empty remote/alert credentials — backup will skip remote transfer and alerting
           # but will still run pg_dump and write a local manifest entry.
@@ -381,13 +387,14 @@ jobs:
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "rm -rf /home/deploy/frontend-dist"
           scp -i ~/.ssh/id_deploy -r frontend/dist $VPS_USER@$VPS_HOST:/home/deploy/frontend-dist
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
+          scp -i ~/.ssh/id_deploy scripts/prev_assets_promote.sh $VPS_USER@$VPS_HOST:/home/deploy/prev_assets_promote.sh
           scp -i ~/.ssh/id_deploy scripts/reclaim-vps-disk.sh $VPS_USER@$VPS_HOST:/home/deploy/reclaim-vps-disk.sh
           ssh -i ~/.ssh/id_deploy \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=20 \
             -o TCPKeepAlive=yes \
             $VPS_USER@$VPS_HOST \
-            "chmod +x /home/deploy/deploy.sh /home/deploy/reclaim-vps-disk.sh && bash /home/deploy/deploy.sh '$TARGET_SHA'"
+            "chmod +x /home/deploy/deploy.sh /home/deploy/prev_assets_promote.sh /home/deploy/reclaim-vps-disk.sh && bash /home/deploy/deploy.sh '$TARGET_SHA'"
 
       - name: Fail job if both deploy attempts failed
         if: steps.deploy_run.outcome == 'failure' && steps.retry_deploy.outcome != 'success'
@@ -656,7 +663,7 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$LOGIN_PAYLOAD")
 
-          TOKEN=$(echo "$LOGIN_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+          TOKEN=$(echo "$LOGIN_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('session_token') or d.get('token') or '')" 2>/dev/null || echo "")
           if [ -z "$TOKEN" ]; then
             echo "ERROR: Could not obtain auth token. Login response: $LOGIN_RESPONSE"
             exit 1
@@ -730,7 +737,7 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$LOGIN_PAYLOAD")
 
-          TOKEN=$(echo "$LOGIN_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+          TOKEN=$(echo "$LOGIN_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('session_token') or d.get('token') or '')" 2>/dev/null || echo "")
           if [ -z "$TOKEN" ]; then
             echo "ERROR: Could not obtain auth token for search smoke test. Response: $LOGIN_RESPONSE"
             exit 1
@@ -749,6 +756,60 @@ jobs:
             exit 1
           fi
           echo "Search smoke test passed."
+
+      # ── Step 9: Post-deploy authenticated critical-route canary ───────────
+      # Catches Channel ROI / schema-contract / worker crash classes that leave
+      # /api/health green while authenticated marketing routes 500.
+      - name: Post-deploy authenticated API canary (channel-roi)
+        id: auth_api_canary
+        if: success() && steps.post_health.outcome == 'success' && steps.spa_boot.outcome == 'success'
+        env:
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+          SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
+          SMOKE_TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Retry transient timeouts/blips before treating as hard canary failure
+          # (avoids rolling back a healthy deploy on a single flaky probe).
+          ATTEMPTS=3
+          RC=1
+          for ATTEMPT in $(seq 1 "$ATTEMPTS"); do
+            set +e
+            python3 scripts/probe_authenticated_api.py \
+              --base-url "https://${VPS_SUBDOMAIN}.duckdns.org" \
+              --skip-if-no-creds \
+              --timeout 45
+            RC=$?
+            set -e
+            if [ "$RC" -eq 0 ]; then
+              echo "Authenticated API canary passed on attempt ${ATTEMPT}."
+              exit 0
+            fi
+            if [ "$RC" -eq 78 ]; then
+              echo "SMOKE_TEST credentials unset — skipping authenticated API canary."
+              exit 0
+            fi
+            if [ "$ATTEMPT" -lt "$ATTEMPTS" ]; then
+              echo "Canary attempt ${ATTEMPT}/${ATTEMPTS} failed (rc=${RC}); retrying in 15s..."
+              sleep 15
+            fi
+          done
+          echo "Authenticated API canary failed after ${ATTEMPTS} attempts (rc=${RC})."
+          exit "$RC"
+
+      - name: Rollback after authenticated API canary failure
+        if: failure() && steps.auth_api_canary.outcome == 'failure'
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "Authenticated API canary failed — rolling back to previous SHA on VPS..."
+          scp -i ~/.ssh/id_deploy scripts/post-deploy-rollback.sh \
+            "$VPS_USER@$VPS_HOST:/home/deploy/post-deploy-rollback.sh"
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            "chmod +x /home/deploy/post-deploy-rollback.sh && bash /home/deploy/post-deploy-rollback.sh"
+          echo "::error::Deploy rolled back after authenticated API canary failure (channel-roi)."
+          exit 1
 
       # ── One auto re-dispatch after App-CI-triggered SSH preflight exhaustion ─
       # Only workflow_run triggers this; the follow-up is workflow_dispatch so it

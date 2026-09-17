@@ -66,6 +66,8 @@ if [[ -d "$LOG_DIR" ]]; then
 fi
 
 # 2) Drop incomplete SPA swap staging only.
+# NEVER delete /home/deploy/frontend-assets-prev — one-generation hashed
+# asset grace so open tabs survive a deploy without blanking.
 # NEVER delete /home/deploy/frontend-dist — Deploy CI uploads the new build
 # there before deploy.sh runs; removing it fails install with
 # "frontend-dist not found".
