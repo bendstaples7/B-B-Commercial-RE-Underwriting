@@ -1,11 +1,9 @@
-# Temporary one-shot: SSH to prod and capture why Channel ROI fails to load.
-# Safe/read-only against the live DB (get_dashboard + log greps only).
+# Temporary / manual: SSH to prod and capture why Channel ROI fails to load.
+# Read-only against the live DB (HTTP probe + log greps only). No create_app.
+# Prefer closing this PR unmerged once RCA is done; keep as workflow_dispatch only.
 name: Diagnose Channel ROI
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/diagnose-channel-roi.yml'
   workflow_dispatch:
 
 jobs:
@@ -14,8 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-
       - name: Set up SSH
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
@@ -33,7 +29,7 @@ jobs:
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/id_deploy -o ConnectTimeout=20 "$VPS_USER@$VPS_HOST" bash -s <<'REMOTE'
-          set -uo pipefail
+          set -euo pipefail
           echo "=== host memory / gunicorn ==="
           awk '/MemAvailable|MemTotal|SwapTotal|SwapFree/ {print}' /proc/meminfo
           systemctl is-active gunicorn || true
@@ -44,113 +40,121 @@ jobs:
           psql -U app_user -h localhost -d real_estate_analysis -c "SELECT version_num FROM alembic_version;"
           psql -U app_user -h localhost -d real_estate_analysis -c "SELECT count(*) AS config_rows FROM channel_roi_config; SELECT count(*) AS fb_rows FROM facebook_ad_campaigns; SELECT count(*) AS mail_active FROM mail_campaigns WHERE status <> 'cancelled';"
           echo
-          echo "=== which python has flask ==="
-          export PATH="$HOME/.local/bin:$PATH"
-          which python3 python3.11 flask gunicorn 2>/dev/null || true
-          python3 -c "import flask; print('python3 flask', flask.__version__)" 2>&1 || true
-          python3.11 -c "import flask; print('python3.11 flask', flask.__version__)" 2>&1 || true
-          ls -la /home/deploy/app/backend/.venv/bin/python 2>&1 || true
-          echo
           echo "=== authenticated GET /api/marketing/channel-roi via gunicorn ==="
           cd /home/deploy/app/backend
           set -a
           # shellcheck disable=SC1091
           source .env
           set +a
-          # Prefer the same interpreter family gunicorn uses (user site-packages).
-          PY=python3.11
-          command -v "$PY" >/dev/null 2>&1 || PY=python3
+          # Prefer gunicorn's venv; fall back to system python3.11 / python3.
+          if [ -x /home/deploy/app/backend/.venv/bin/python ]; then
+            PY=/home/deploy/app/backend/.venv/bin/python
+          elif command -v python3.11 >/dev/null 2>&1; then
+            PY=python3.11
+          else
+            PY=python3
+          fi
+          echo "using interpreter: $PY"
           "$PY" - <<'PY'
-          import os, sys, traceback, json, time
-          # Lightweight: mint JWT the same way AuthService does, then curl via urllib
-          # to the already-running gunicorn (avoid create_app OOM on ~80MiB free).
+          import json
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
           try:
               import jwt
-              import urllib.request
           except Exception as exc:
-              print('IMPORT_FAIL', exc)
-              sys.exit(0)
+              print("IMPORT_FAIL", type(exc).__name__)
+              sys.exit(1)
 
-          secret = os.environ.get('SECRET_KEY') or os.environ.get('JWT_SECRET_KEY')
+          secret = os.environ.get("SECRET_KEY") or os.environ.get("JWT_SECRET_KEY")
           if not secret:
-              print('NO_SECRET_KEY')
-              sys.exit(0)
+              print("NO_SECRET_KEY")
+              sys.exit(1)
 
-          # JWT sub is users.user_id (UUID string), not integer PK.
           user_uuid = None
-          email = 'diag@local'
+          email = "diag@local"
+          is_admin = False
           try:
               import psycopg2
-              url = os.environ['DATABASE_URL']
-              dsn = url.replace('postgresql+psycopg2://', 'postgresql://')
+
+              url = os.environ["DATABASE_URL"]
+              dsn = url.replace("postgresql+psycopg2://", "postgresql://")
               conn = psycopg2.connect(dsn)
               cur = conn.cursor()
               cur.execute(
-                  "SELECT user_id, email FROM users "
+                  "SELECT user_id, email, COALESCE(is_admin, FALSE) FROM users "
                   "WHERE is_active IS TRUE ORDER BY is_admin DESC, id ASC LIMIT 1"
               )
               row = cur.fetchone()
               if row:
-                  user_uuid, email = row[0], row[1]
-              cur.close(); conn.close()
-              print('user_id', user_uuid, 'email', email)
+                  user_uuid, email, is_admin = row[0], row[1], bool(row[2])
+              cur.close()
+              conn.close()
+              # Redact email in CI logs — keep id + admin flag only.
+              print("user_id", user_uuid, "is_admin", is_admin)
           except Exception as exc:
-              print('user_lookup_failed', type(exc).__name__, exc)
+              print("user_lookup_failed", type(exc).__name__)
+              sys.exit(1)
 
           if not user_uuid:
-              print('NO_ACTIVE_USER')
-              sys.exit(0)
+              print("NO_ACTIVE_USER")
+              sys.exit(1)
 
           now = int(time.time())
           token = jwt.encode(
               {
-                  'sub': user_uuid,
-                  'email': email,
-                  'is_admin': True,
-                  'exp': now + 600,
-                  'iat': now,
+                  "sub": user_uuid,
+                  "email": email,
+                  "is_admin": is_admin,
+                  "exp": now + 600,
+                  "iat": now,
               },
               secret,
-              algorithm='HS256',
+              algorithm="HS256",
           )
           if isinstance(token, bytes):
               token = token.decode()
 
           req = urllib.request.Request(
-              'http://127.0.0.1:5000/api/marketing/channel-roi',
-              headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'},
+              "http://127.0.0.1:5000/api/marketing/channel-roi",
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/json",
+              },
           )
           try:
               with urllib.request.urlopen(req, timeout=60) as resp:
-                  body = resp.read().decode('utf-8', errors='replace')
-                  print('HTTP', resp.status)
-                  print(body[:2000])
-          except Exception as exc:
-              print('REQUEST_FAIL', type(exc).__name__, exc)
-              if hasattr(exc, 'read'):
+                  body = resp.read().decode("utf-8", errors="replace")
+                  status = int(resp.status)
+                  print("HTTP", status)
                   try:
-                      print(exc.read().decode('utf-8', errors='replace')[:2000])
-                  except Exception:
-                      pass
-              traceback.print_exc()
-          PY
-          echo
-          echo "=== in-process get_dashboard (may OOM under memory pressure) ==="
-          "$PY" - <<'PY' || echo "create_app_or_dashboard_failed exit=$?"
-          import os, traceback, json
-          os.chdir('/home/deploy/app/backend')
-          # Load .env already sourced into environ by parent shell
-          try:
-              from app import create_app
-              app = create_app()
-              with app.app_context():
-                  from app.services.channel_roi_service import ChannelRoiService
-                  payload = ChannelRoiService().get_dashboard()
-                  print('DASHBOARD_OK keys=', sorted(payload.keys()))
-                  print('channels=', json.dumps(payload.get('channels'), default=str)[:500])
-          except Exception:
-              print('DASHBOARD_FAIL')
-              traceback.print_exc()
+                      payload = json.loads(body)
+                      if isinstance(payload, dict):
+                          print("keys=", sorted(payload.keys()))
+                          channels = payload.get("channels")
+                          if isinstance(channels, list):
+                              print("channel_count=", len(channels))
+                          elif isinstance(channels, dict):
+                              print("channel_keys=", sorted(channels.keys())[:20])
+                      else:
+                          print("body_type=", type(payload).__name__)
+                  except json.JSONDecodeError:
+                      print("non_json_body_len=", len(body))
+                  if status != 200:
+                      sys.exit(1)
+          except urllib.error.HTTPError as exc:
+              print("HTTP", int(exc.code))
+              err_body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+              print("error_body_len=", len(err_body))
+              # Keep a short non-secret snippet for triage (no full ROI/PII dump).
+              print("error_body_head=", err_body[:200].replace("\n", " "))
+              sys.exit(1)
+          except Exception as exc:
+              print("REQUEST_FAIL", type(exc).__name__, str(exc)[:200])
+              sys.exit(1)
           PY
           echo
           echo "=== nginx access/error for channel-roi + 502/504 (recent) ==="
@@ -162,9 +166,8 @@ jobs:
               echo "-- $f not readable --"
             fi
           done
-          # deploy may have passwordless sudo for journal/nginx
           sudo -n journalctl -u nginx --since "24 hours ago" --no-pager 2>/dev/null \
-            | grep -iE '502|504|upstream timed out|connect\\(\\) failed' | tail -40 || true
+            | grep -iE '502|504|upstream timed out|connect\(\) failed' | tail -40 || true
           echo
           echo "=== gunicorn restart reason (last 50) ==="
           journalctl -u gunicorn --since "24 hours ago" --no-pager 2>/dev/null \
