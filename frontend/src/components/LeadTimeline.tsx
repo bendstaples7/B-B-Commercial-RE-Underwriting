@@ -591,10 +591,10 @@ export interface LeadTimelineProps {
   initialTotal: number
   onLoadMore?: (page: number) => Promise<{ entries: LeadTimelineEntry[]; total: number }>
   highlightEntryId?: number | null
-  /** Compact scrollable feed (right rail) vs accordion timeline. */
+  /** Compact feed (center Activity card) vs accordion timeline. */
   variant?: 'accordion' | 'feed'
   /**
-   * When false, skip the 5-entry preview collapse (full-screen activity view).
+   * When false, skip the 5-entry preview collapse (center Activity / full-screen).
    * Defaults to true.
    */
   previewMode?: boolean

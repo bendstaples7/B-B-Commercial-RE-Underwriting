@@ -1443,16 +1443,11 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
 
           await waitForCommandCenterLoaded(container)
 
-          // Preview may hide rows until "Show older" is clicked.
-          const expectedVisible = Math.min(page1.length, TIMELINE_PREVIEW_COUNT)
+          // Center Activity shows the full loaded page (no 5-entry preview collapse).
           const initialRendered = container.querySelectorAll('[data-testid^="timeline-entry-"]')
-          expect(initialRendered.length).toBe(expectedVisible)
+          expect(initialRendered.length).toBe(page1.length)
 
           const { fireEvent } = await import('@testing-library/react')
-          const showOlder = container.querySelector('[data-testid="timeline-show-older-btn"]')
-          if (showOlder) {
-            fireEvent.click(showOlder)
-          }
 
           // Find and click the "Load more" button
           const loadMoreBtn = container.querySelector('[data-testid="load-more-btn"]')
