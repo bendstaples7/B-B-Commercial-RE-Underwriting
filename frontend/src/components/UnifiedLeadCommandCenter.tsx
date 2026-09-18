@@ -110,6 +110,8 @@ import { MissingPinActions } from '@/components/lead-detail/PinLookupControl'
 import {
   QueueAdvanceHoldBanner,
   QUEUE_ADVANCE_HOLD_MS,
+  QUEUE_ADVANCE_NEXT_LABEL,
+  QUEUE_ADVANCE_QUEUE_LABEL,
 } from '@/components/lead-detail/QueueAdvanceHoldBanner'
 import { scrollCommandCenterSectionIntoView } from '@/utils/scrollCommandCenterSection'
 import { parseHubSpotTaskId } from '@/utils/callCompletableTask'
@@ -1685,6 +1687,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
 
   const [queueAdvanceHold, setQueueAdvanceHold] = useState<QueueAdvanceHoldState | null>(null)
   const holdTimeoutRef = useRef<number | null>(null)
+  const holdGenerationRef = useRef(0)
 
   const clearQueueAdvanceHoldTimers = useCallback(() => {
     if (holdTimeoutRef.current != null) {
@@ -1694,6 +1697,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   }, [])
 
   const cancelQueueAdvanceHold = useCallback((opts?: { snackStay?: boolean }) => {
+    holdGenerationRef.current += 1
     clearQueueAdvanceHoldTimers()
     setQueueAdvanceHold(null)
     if (opts?.snackStay) {
@@ -1719,6 +1723,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     }
 
     clearQueueAdvanceHoldTimers()
+    const generation = ++holdGenerationRef.current
     const startedAt = Date.now()
     const durationMs = QUEUE_ADVANCE_HOLD_MS
     const nextId = opts.nextId
@@ -1731,22 +1736,27 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       message: opts.message,
     })
 
-    // Warm caches during the drain so we can navigate the instant it finishes.
+    // Warm the next workspace + queue lists during the drain so navigation
+    // isn't blocked after the bar empties.
     refreshQueueCachesForAdvance()
+    if (nextId != null) prefetchQueueLead(nextId)
 
     holdTimeoutRef.current = window.setTimeout(() => {
+      if (holdGenerationRef.current !== generation) return
       clearQueueAdvanceHoldTimers()
       // Leave the banner mounted until the next lead remounts so the drain
       // and the route change happen in the same beat — no empty-bar linger.
       advanceAfterTaskComplete(nextId, flash)
     }, durationMs)
-  }, [fromQueue, advanceAfterTaskComplete, clearQueueAdvanceHoldTimers, refreshQueueCachesForAdvance])
+  }, [fromQueue, advanceAfterTaskComplete, clearQueueAdvanceHoldTimers, refreshQueueCachesForAdvance, prefetchQueueLead])
 
   // Drop a pending hold when the lead identity changes; always clear timers on unmount.
   useEffect(() => {
+    holdGenerationRef.current += 1
     clearQueueAdvanceHoldTimers()
     setQueueAdvanceHold(null)
     return () => {
+      holdGenerationRef.current += 1
       clearQueueAdvanceHoldTimers()
     }
   }, [leadId, clearQueueAdvanceHoldTimers])
@@ -2327,7 +2337,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             isLoading={queueNavLoading}
             sessionBackLeadId={visitedHistory.at(-1) ?? null}
             onAdvance={handleManualQueueAdvance}
-            onBackToQueue={returnToQueue}
+            onBackToQueue={() => {
+              cancelQueueAdvanceHold()
+              returnToQueue()
+            }}
             onPrefetchLead={prefetchQueueLead}
           />
         )}
@@ -2336,6 +2349,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             key={queueAdvanceHold.startedAt}
             message={queueAdvanceHold.message}
             durationMs={queueAdvanceHold.durationMs}
+            destinationLabel={
+              queueAdvanceHold.nextId == null
+                ? QUEUE_ADVANCE_QUEUE_LABEL
+                : QUEUE_ADVANCE_NEXT_LABEL
+            }
             onPause={() => cancelQueueAdvanceHold({ snackStay: true })}
           />
         )}

@@ -18,26 +18,41 @@ export const QUEUE_ADVANCE_HOLD_MS = 5000
 /** Above cc-sticky-chrome's own z-index so the overlay always wins the stack. */
 export const QUEUE_ADVANCE_HOLD_Z_INDEX = 150
 
+export const QUEUE_ADVANCE_NEXT_LABEL = 'Next lead…'
+export const QUEUE_ADVANCE_QUEUE_LABEL = 'Returning to queue…'
+
 export function queueAdvanceDrainTransition(durationMs: number): string {
   return `transform ${durationMs}ms linear`
+}
+
+export function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false
+  }
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
 export interface QueueAdvanceHoldBannerProps {
   message: string
   /** Drain duration; must match the parent navigation timer. */
   durationMs?: number
+  /** Shown after the message — next lead vs end of queue. */
+  destinationLabel?: string
   onPause: () => void
 }
 
 export function QueueAdvanceHoldBanner({
   message,
   durationMs = QUEUE_ADVANCE_HOLD_MS,
+  destinationLabel = QUEUE_ADVANCE_NEXT_LABEL,
   onPause,
 }: QueueAdvanceHoldBannerProps) {
+  const reduceMotion = prefersReducedMotion()
   // Paint 100% first, then flip to 0 so the CSS transition actually runs.
   const [progress, setProgress] = useState(100)
 
   useEffect(() => {
+    if (reduceMotion) return undefined
     let inner = 0
     const outer = window.requestAnimationFrame(() => {
       inner = window.requestAnimationFrame(() => setProgress(0))
@@ -46,7 +61,17 @@ export function QueueAdvanceHoldBanner({
       window.cancelAnimationFrame(outer)
       window.cancelAnimationFrame(inner)
     }
-  }, [])
+  }, [reduceMotion])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      onPause()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onPause])
 
   return (
     <Box
@@ -89,7 +114,7 @@ export function QueueAdvanceHoldBanner({
             color="text.secondary"
             sx={{ ml: 1 }}
           >
-            Next lead…
+            {destinationLabel}
           </Typography>
         </Typography>
         <Button
@@ -98,6 +123,7 @@ export function QueueAdvanceHoldBanner({
           onClick={onPause}
           data-testid="queue-advance-pause"
           aria-label="Pause and stay on this lead"
+          aria-keyshortcuts="Escape"
           sx={{ cursor: 'pointer', flexShrink: 0 }}
         >
           Pause
@@ -106,15 +132,17 @@ export function QueueAdvanceHoldBanner({
       <LinearProgress
         variant="determinate"
         value={progress}
-        aria-label="Advancing to next lead"
+        aria-label={destinationLabel}
         data-testid="queue-advance-hold-bar"
-        data-drain-ms={durationMs}
+        data-drain-ms={reduceMotion ? 0 : durationMs}
         sx={{
           height: 4,
           borderRadius: 1,
           cursor: 'auto',
           '& .MuiLinearProgress-bar, & .MuiLinearProgress-bar1Determinate': {
-            transition: queueAdvanceDrainTransition(durationMs),
+            transition: reduceMotion
+              ? 'none'
+              : queueAdvanceDrainTransition(durationMs),
           },
         }}
       />
