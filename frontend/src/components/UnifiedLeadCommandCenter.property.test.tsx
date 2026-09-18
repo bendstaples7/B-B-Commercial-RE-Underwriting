@@ -272,7 +272,8 @@ const timelineEntryArb = fc.record({
     'task_completed',
     'status_changed',
     'hubspot_note',
-    'hubspot_call'
+    'hubspot_call',
+    'hubspot_meeting'
   ),
   occurred_at: fc.constant(new Date().toISOString()),
   source: fc.constantFrom('manual', 'system', 'hubspot', 'hubspot_import'),
@@ -290,6 +291,7 @@ const EXPECTED_TIMELINE_EVENT_PRIORITY: Record<string, number> = {
   email_logged: 3,
   hubspot_call: 3,
   hubspot_note: 3,
+  hubspot_meeting: 3,
   task_completed: 2,
   task_created: 1,
 }

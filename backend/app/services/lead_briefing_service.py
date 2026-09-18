@@ -41,7 +41,8 @@ _MAX_BULLET_CHARS = 180
 
 # Timeline event types that count as real contact (not admin/status chatter)
 _CONTACT_EVENT_TYPES = frozenset({
-    'note_added', 'hubspot_call', 'hubspot_note', 'call_logged', 'note_logged',
+    'note_added', 'hubspot_call', 'hubspot_note', 'hubspot_meeting',
+    'call_logged', 'note_logged',
     'email_logged', 'meeting_logged', 'sms_logged', 'voicemail_logged',
 })
 

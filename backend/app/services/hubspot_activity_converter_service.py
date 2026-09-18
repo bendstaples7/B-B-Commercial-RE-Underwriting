@@ -45,6 +45,8 @@ class HubSpotActivityConverterService:
             return self.convert_task(engagement)
         elif etype == 'EMAIL':
             return self.convert_email(engagement)
+        elif etype == 'MEETING':
+            return self.convert_meeting(engagement)
         else:
             logger.warning(
                 "Unrecognized HubSpot engagement type '%s' for hubspot_id=%s — skipping.",
@@ -210,6 +212,55 @@ class HubSpotActivityConverterService:
         db.session.commit()
         logger.info(
             "Created Interaction(id=%s, type=email) from HubSpot engagement %s (orphaned=%s).",
+            interaction.id,
+            engagement.hubspot_id,
+            is_orphaned,
+        )
+        self._extract_signals_for_interaction(interaction, associations)
+        return interaction
+
+    def convert_meeting(self, engagement):
+        """Convert a HubSpot MEETING engagement to Interaction(type='meeting').
+
+        Idempotent: returns None if hubspot_engagement_id already exists.
+        Body is sourced like notes (metadata.body, then bodyPreview, then title).
+        occurred_at prefers the meeting start time over the HubSpot log time.
+        """
+        if self._interaction_exists(engagement.hubspot_id):
+            logger.debug(
+                "Interaction for hubspot_engagement_id=%s already exists — skipping.",
+                engagement.hubspot_id,
+            )
+            return None
+
+        body = self._extract_meeting_body(engagement.raw_payload)
+        occurred_at = self._parse_meeting_occurred_at(engagement.raw_payload)
+
+        associations = self._resolve_associations(engagement)
+        is_orphaned = len(associations) == 0
+
+        interaction = Interaction(
+            interaction_type='meeting',
+            body=body,
+            occurred_at=occurred_at,
+            source='hubspot_import',
+            hubspot_engagement_id=engagement.hubspot_id,
+            raw_payload=engagement.raw_payload,
+            is_orphaned=is_orphaned,
+        )
+        db.session.add(interaction)
+        db.session.flush()
+
+        for assoc in associations:
+            db.session.add(InteractionAssociation(
+                interaction_id=interaction.id,
+                target_type=assoc['target_type'],
+                target_id=assoc['target_id'],
+            ))
+
+        db.session.commit()
+        logger.info(
+            "Created Interaction(id=%s, type=meeting) from HubSpot engagement %s (orphaned=%s).",
             interaction.id,
             engagement.hubspot_id,
             is_orphaned,
@@ -778,6 +829,38 @@ class HubSpotActivityConverterService:
         return ''
 
     @staticmethod
+    def _extract_meeting_body(raw_payload):
+        """Extract body text from a MEETING engagement payload.
+
+        Meetings use the same metadata.body / bodyPreview shape as notes.
+        Calendar title is a last-resort fallback when the logged meeting has
+        no notes.
+        """
+        body = HubSpotActivityConverterService._extract_note_body(raw_payload)
+        if body:
+            return body
+        metadata = (raw_payload or {}).get('metadata') or {}
+        title = metadata.get('title') or metadata.get('subject')
+        if title and not isinstance(title, (dict, list)):
+            return str(title).strip()
+        return ''
+
+    @staticmethod
+    def _parse_meeting_occurred_at(raw_payload):
+        """Prefer meeting start time over the HubSpot UI log timestamp."""
+        payload = raw_payload or {}
+        metadata = payload.get('metadata') or {}
+        engagement_obj = payload.get('engagement') or {}
+        for value in (
+            metadata.get('startTime'),
+            engagement_obj.get('timestamp'),
+            engagement_obj.get('createdAt'),
+        ):
+            if value is not None:
+                return HubSpotActivityConverterService._parse_ms_timestamp(value)
+        return datetime.utcnow()
+
+    @staticmethod
     def _extract_email_body(metadata):
         """Extract body text from an EMAIL engagement's metadata.
 
@@ -903,7 +986,7 @@ class HubSpotActivityConverterService:
 
     def _apply_note_property_facts_for_interaction(self, interaction, associations):
         """Fill blank units / commercial + note_property_facts from note/call body."""
-        if (interaction.interaction_type or '') not in ('note', 'call'):
+        if (interaction.interaction_type or '') not in ('note', 'call', 'meeting'):
             return
         lead_ids = [
             a['target_id'] for a in associations
@@ -918,11 +1001,10 @@ class HubSpotActivityConverterService:
             )
             from app.services.lead_refresh import refresh_lead_scoring
 
-            source = (
-                'hubspot_call'
-                if interaction.interaction_type == 'call'
-                else 'hubspot_note'
-            )
+            source = {
+                'call': 'hubspot_call',
+                'meeting': 'hubspot_meeting',
+            }.get(interaction.interaction_type, 'hubspot_note')
             score_lead_ids: list[int] = []
             any_updates = False
             for lead_id in lead_ids:

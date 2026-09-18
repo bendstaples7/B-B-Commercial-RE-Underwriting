@@ -2008,6 +2008,7 @@ export type TimelineEventType =
   | 'status_changed'
   | 'hubspot_note'
   | 'hubspot_call'
+  | 'hubspot_meeting'
   | 'hubspot_task'
   | 'hubspot_deal_stage'
   | 'property_analysis_completed'

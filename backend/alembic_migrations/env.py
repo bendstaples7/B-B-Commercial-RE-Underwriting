@@ -175,6 +175,9 @@ _KNOWN_REVISIONS = frozenset({
     'p7q8r9s0t1u2',
     # Multifamily deal priority score
     'q8r9s0t1u2v3',
+    # HubSpot MEETING engagements → Command Center timeline
+    'hs_mtg_20260918',
+    'hs_mtg_bf_20260918',
 })
 
 

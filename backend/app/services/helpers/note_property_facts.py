@@ -332,7 +332,9 @@ def apply_note_facts_from_timeline(lead: Any) -> list[str]:
         .filter(
             LeadTimelineEntry.lead_id == lead_id,
             LeadTimelineEntry.is_deleted.is_(False),
-            LeadTimelineEntry.event_type.in_(('hubspot_note', 'hubspot_call')),
+            LeadTimelineEntry.event_type.in_(
+                ('hubspot_note', 'hubspot_call', 'hubspot_meeting'),
+            ),
         )
         .order_by(LeadTimelineEntry.occurred_at.desc())
         .all()
@@ -341,11 +343,10 @@ def apply_note_facts_from_timeline(lead: Any) -> list[str]:
     for entry in entries:
         meta = entry.event_metadata if isinstance(entry.event_metadata, dict) else {}
         body = meta.get('body') or entry.summary or ''
-        source = (
-            'hubspot_call'
-            if str(entry.event_type) == 'hubspot_call'
-            else 'hubspot_note'
-        )
+        source = {
+            'hubspot_call': 'hubspot_call',
+            'hubspot_meeting': 'hubspot_meeting',
+        }.get(str(entry.event_type), 'hubspot_note')
         facts = parse_note_property_facts(
             body,
             source=source,

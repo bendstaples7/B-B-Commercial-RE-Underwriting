@@ -1642,7 +1642,7 @@ class LeadTaskSnoozeSchema(RequestSchema):
 VALID_TIMELINE_EVENT_TYPES = [
     'note_added', 'email_logged', 'call_logged', 'task_created', 'task_completed',
     'task_snoozed', 'recommended_action_changed', 'status_changed',
-    'hubspot_note', 'hubspot_call', 'hubspot_task', 'hubspot_deal_stage',
+    'hubspot_note', 'hubspot_call', 'hubspot_meeting', 'hubspot_task', 'hubspot_deal_stage',
     'property_analysis_completed', 'lead_imported',
     'category_changed', 'leads_merged', 'property_overview_changed',
 ]

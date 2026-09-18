@@ -28,7 +28,7 @@ _HUBSPOT_TYPE_TO_EVENT_TYPE = {
     'DEAL_STAGE_CHANGE': 'hubspot_deal_stage',
     # Fallback for unknown types
     'EMAIL': 'hubspot_note',
-    'MEETING': 'hubspot_note',
+    'MEETING': 'hubspot_meeting',
 }
 
 # Interaction.interaction_type → HubSpot-style activity type for import_activities_for_lead
@@ -295,7 +295,7 @@ class HubSpotTimelineImportService:
                     ),
                     activity_id,
                 ))
-            if activity_type in ('NOTE', 'CALL') and plain_body:
+            if activity_type in ('NOTE', 'CALL', 'MEETING') and plain_body:
                 pending_note_property_facts.append((plain_body, event_type, activity_id, occurred_at))
 
         if pending_call_confidence:

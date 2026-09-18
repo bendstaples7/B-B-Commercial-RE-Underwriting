@@ -14,7 +14,7 @@ class LeadTimelineEntry(db.Model):
     event_type = db.Column(db.Enum(
         'note_added', 'email_logged', 'call_logged', 'task_created', 'task_completed',
         'task_snoozed', 'recommended_action_changed', 'status_changed',
-        'hubspot_note', 'hubspot_call', 'hubspot_task', 'hubspot_deal_stage',
+        'hubspot_note', 'hubspot_call', 'hubspot_meeting', 'hubspot_task', 'hubspot_deal_stage',
         'property_analysis_completed', 'lead_imported',
         'mail_queued', 'mail_sent', 'mail_delivered',
         'property_match_approved', 'property_match_rejected',

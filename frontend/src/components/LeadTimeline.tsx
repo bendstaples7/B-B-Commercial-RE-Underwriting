@@ -304,6 +304,7 @@ function getPreviewText(entry: LeadTimelineEntry): string {
 export function getTimelineEventLabel(entry: LeadTimelineEntry): string {
   if (entry.event_type === 'email_logged' || isEmailEntry(entry)) return 'Email Logged'
   if (entry.event_type === 'call_logged') return 'Call Logged'
+  if (entry.event_type === 'hubspot_meeting') return 'Meeting Logged'
   if (entry.event_type === 'note_added') return 'Note Added'
   if (entry.event_type === 'mail_sent') return 'Mailer Sent'
   if (entry.event_type === 'mailer_history') return 'Mailer History'

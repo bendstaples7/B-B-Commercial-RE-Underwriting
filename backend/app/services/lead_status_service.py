@@ -76,7 +76,7 @@ def mailing_status_for_unpark(lead_id: int) -> str:
         LeadTimelineEntry.query.filter(
             LeadTimelineEntry.lead_id == lead_id,
             LeadTimelineEntry.event_type.in_(
-                ('call_logged', 'hubspot_call', 'email_logged'),
+                ('call_logged', 'hubspot_call', 'email_logged', 'hubspot_meeting'),
             ),
             LeadTimelineEntry.is_deleted.is_(False),
         )

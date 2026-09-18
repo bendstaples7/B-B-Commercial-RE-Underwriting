@@ -216,6 +216,27 @@ def test_import_maps_note_type_to_hubspot_note_event(app):
         assert entry.event_type == 'hubspot_note'
 
 
+def test_import_maps_meeting_type_to_hubspot_meeting_event(app):
+    """MEETING activity type maps to event_type='hubspot_meeting'."""
+    from app.models import LeadTimelineEntry
+
+    with app.app_context():
+        lead = _make_lead(app, '3b HubSpot Meeting St')
+        svc = HubSpotTimelineImportService()
+
+        svc.import_activities_for_lead(
+            lead.id,
+            [_make_activity('hs-mtg-004', 'MEETING', 'had coffee with bob')],
+        )
+
+        entry = LeadTimelineEntry.query.filter_by(
+            lead_id=lead.id, hubspot_activity_id='hs-mtg-004'
+        ).first()
+        assert entry is not None
+        assert entry.event_type == 'hubspot_meeting'
+        assert 'coffee' in (entry.summary or '').lower()
+
+
 # ---------------------------------------------------------------------------
 # Re-importing same activities creates zero new entries
 # ---------------------------------------------------------------------------
@@ -421,6 +442,29 @@ def test_sync_lead_from_interactions_creates_timeline_entries(app):
         types = {e.event_type for e in entries}
         assert types == {'hubspot_note', 'hubspot_call'}
         assert {e.hubspot_activity_id for e in entries} == {'eng-sync-1', 'eng-sync-2'}
+
+
+def test_sync_lead_from_interactions_bridges_meetings(app):
+    """HubSpot meeting Interactions become hubspot_meeting timeline rows."""
+    from app.models import LeadTimelineEntry
+
+    with app.app_context():
+        lead = _make_lead(app, '12b Meeting Bridge St')
+        _make_hubspot_interaction(
+            lead.id, 'eng-sync-mtg', 'meeting', 'had coffee with bob',
+        )
+        svc = HubSpotTimelineImportService()
+
+        count = svc.sync_lead_from_interactions(lead.id, mark_review=False)
+
+        assert count == 1
+        entry = LeadTimelineEntry.query.filter_by(
+            lead_id=lead.id, hubspot_activity_id='eng-sync-mtg'
+        ).first()
+        assert entry is not None
+        assert entry.event_type == 'hubspot_meeting'
+        assert entry.source == 'hubspot'
+        assert 'coffee' in (entry.summary or '').lower()
 
 
 def test_sync_lead_from_interactions_idempotent(app):

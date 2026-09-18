@@ -1050,6 +1050,12 @@ describe('LeadTimeline', () => {
       ).toBe('Email Logged')
     })
 
+    it('returns Meeting Logged for hubspot_meeting events', () => {
+      expect(
+        getTimelineEventLabel(makeEntry(1, { event_type: 'hubspot_meeting' })),
+      ).toBe('Meeting Logged')
+    })
+
     it('returns Mailer Sent for mail_sent events', () => {
       expect(
         getTimelineEventLabel(makeEntry(1, { event_type: 'mail_sent', summary: 'Campaign 2' })),
