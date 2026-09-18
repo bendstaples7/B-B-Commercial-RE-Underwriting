@@ -111,6 +111,8 @@ export default defineConfig(({ command, mode }) => {
                 norm.includes('/context/')
                 || norm.includes('/components/AppSnackbar')
                 || norm.includes('/utils/searchResultDisplay')
+                || norm.includes('/utils/formatters')
+                || norm.includes('/utils/helpers')
               ) {
                 return 'ui-shared'
               }
