@@ -46,12 +46,12 @@ function formatCalendarDay(year: number, month: number, day: number): string {
 }
 
 /**
- * Expand 2-digit years with a Windows-style pivot: 00–68 → 2000s, 69–99 → 1900s.
- * Mail history is historical, so `6/21/99` is 1999 (not 2099).
+ * Expand 2-digit slash years with V8 Date.parse-style legacy behavior:
+ * 00-49 -> 2000s, 50-99 -> 1900s.
  */
 function expandTwoDigitYear(year: number): number {
   if (year >= 100) return year
-  return year <= 68 ? 2000 + year : 1900 + year
+  return year < 50 ? 2000 + year : 1900 + year
 }
 
 function parseSlashDate(text: string): { year: number; month: number; day: number } | null {

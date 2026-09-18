@@ -25,11 +25,12 @@ describe('formatDate', () => {
     expect(formatDate('2/30/2024')).toBe('—')
   })
 
-  it('expands two-digit slash years with a Windows-style pivot', () => {
+  it('expands two-digit slash years with the legacy JavaScript slash-date pivot', () => {
     expect(formatDate('6/21/24')).toBe('Jun 21, 2024')
+    expect(formatDate('6/21/49')).toBe('Jun 21, 2049')
+    expect(formatDate('6/21/50')).toBe('Jun 21, 1950')
+    expect(formatDate('6/21/68')).toBe('Jun 21, 1968')
     expect(formatDate('6/21/99')).toBe('Jun 21, 1999')
-    expect(formatDate('6/21/68')).toBe('Jun 21, 2068')
-    expect(formatDate('6/21/69')).toBe('Jun 21, 1969')
   })
 })
 

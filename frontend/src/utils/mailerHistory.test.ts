@@ -126,6 +126,7 @@ describe('mailerHistory', () => {
     expect(parseMailerSentAt('2024-06-01T00:00:00Z')).not.toBeNull()
     expect(parseMailerSentAt('6/21/2024')?.getTime()).toBe(parseMailerSentAt('2024-06-21')?.getTime())
     expect(parseMailerSentAt('6/21/99')?.getUTCFullYear()).toBe(1999)
+    expect(parseMailerSentAt('6/21/68')?.getUTCFullYear()).toBe(1968)
     expect(parseMailerSentAt('6/21/24')?.getUTCFullYear()).toBe(2024)
     expect(parseMailerSentAt('nope')).toBeNull()
   })
