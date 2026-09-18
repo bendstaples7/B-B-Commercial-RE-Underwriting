@@ -83,6 +83,7 @@ class TestDedupStreetKey:
         assert streets_match_duplicate_merge('2834 N Drake Ave', '2834 N Drake Ave 1r')
         assert streets_match_duplicate_merge('100 Main St', '100 Main St Unit 2')
         assert streets_match_duplicate_merge('100 Main St', '100 Main St 2')
+        assert streets_match_duplicate_merge('100 Main St 02', '100 Main St Unit 2')
         assert not streets_match_duplicate_merge(
             '1 Oak Brook Club Dr Unit A-30',
             '1 Oak Brook Club Dr Unit A-206',
@@ -122,6 +123,7 @@ class TestSitusUnitToken:
         assert situs_unit_token('123 Main St 1R') == '1r'
         assert situs_unit_token('123 Main St 2R') == '2r'
         assert situs_unit_token('123 Main St 2') == '2'
+        assert situs_unit_token('123 Main St 02') == '2'
         assert not streets_match_same_situs('123 Main St 1R', '123 Main St 2R')
 
     def test_zip_only_suffix_is_not_treated_as_unit(self):

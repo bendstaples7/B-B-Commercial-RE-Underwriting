@@ -121,7 +121,7 @@ describe('NeedsReviewClarityContent', () => {
     expect(screen.getByTestId('needs-review-clarity-reason')).toHaveTextContent(
       'Possible duplicate records',
     )
-    expect(screen.getByTestId('needs-review-cluster-row-20')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-review-cluster-compare-20')).toBeInTheDocument()
     expect(screen.getByTestId('needs-review-cluster-comparison')).toBeInTheDocument()
     expect(screen.getByTestId('needs-review-merge-into-winner')).toBeInTheDocument()
     expect(screen.getByTestId('needs-review-merge-into-winner')).toHaveTextContent(
@@ -292,8 +292,9 @@ describe('DuplicateReviewCallout', () => {
     )
 
     expect(screen.getByTestId('needs-review-cluster-comparison')).toBeInTheDocument()
-    expect(screen.getAllByTestId('needs-review-cluster-row-20')).toHaveLength(2)
+    expect(screen.getByTestId('needs-review-cluster-compare-20')).toBeInTheDocument()
     expect(screen.getByTestId('needs-review-cluster-table')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-review-cluster-row-20')).toBeInTheDocument()
     expect(screen.getByTestId('needs-review-cluster-row-30')).toBeInTheDocument()
   })
 })

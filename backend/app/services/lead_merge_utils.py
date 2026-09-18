@@ -181,7 +181,10 @@ def situs_unit_token(street: Optional[str]) -> str:
     if not match:
         return ''
     raw = match.group(1) or match.group(2) or match.group(3) or ''
-    return re.sub(r'[^a-z0-9]', '', raw.lower())
+    token = re.sub(r'[^a-z0-9]', '', raw.lower())
+    if token.isdigit():
+        return str(int(token))
+    return token
 
 
 def streets_match_same_situs(a: Optional[str], b: Optional[str]) -> bool:

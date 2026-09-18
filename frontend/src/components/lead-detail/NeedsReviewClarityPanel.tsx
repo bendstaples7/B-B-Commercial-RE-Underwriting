@@ -114,7 +114,11 @@ function DuplicatePairComparison({
           This lead #{leadId}
           {current.is_suggested_winner ? ' · suggested keep' : ''}
         </Typography>
-        <Typography variant="caption" fontWeight={700} data-testid={`needs-review-cluster-row-${other.id}`}>
+        <Typography
+          variant="caption"
+          fontWeight={700}
+          data-testid={`needs-review-cluster-compare-${other.id}`}
+        >
           <Link
             component={RouterLink}
             to={`/leads/${other.id}?queue=needs-review`}
