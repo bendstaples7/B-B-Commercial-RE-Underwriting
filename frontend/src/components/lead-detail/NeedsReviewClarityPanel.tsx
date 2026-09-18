@@ -4,7 +4,7 @@
  * Explains why the lead is in Needs Review and offers Keep suggested /
  * Not a duplicate / Mark reviewed. Not a sticky header banner.
  */
-import { useState } from 'react'
+import { useState, type MouseEvent } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import {
   Box,
@@ -244,17 +244,23 @@ export function NeedsReviewClarityContent({
 export interface NeedsReviewChipPopoverProps {
   leadId: number
   commandCenterData: CommandCenterPayload
-  /** Chip label (usually "Needs Review"). */
+  /** Chip / inline label (usually "Needs Review"). */
   label?: string
   onResolved: NeedsReviewClarityContentProps['onResolved']
+  /** `inline` matches the Current queues text list in the score box. */
+  variant?: 'chip' | 'inline'
+  /** Bold when this is the queue the user opened the lead from. */
+  viewingFrom?: boolean
 }
 
-/** Warning chip that opens the Needs Review clarity popover. */
+/** Warning chip (or inline name) that opens the Needs Review clarity popover. */
 export function NeedsReviewChipPopover({
   leadId,
   commandCenterData,
   label = 'Needs Review',
   onResolved,
+  variant = 'chip',
+  viewingFrom = false,
 }: NeedsReviewChipPopoverProps) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const open = Boolean(anchor)
@@ -263,22 +269,52 @@ export function NeedsReviewChipPopover({
   )
   if (!reviewActive) return null
 
-  return (
-    <>
+  const openPopover = (e: MouseEvent<HTMLElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setAnchor(e.currentTarget)
+  }
+
+  const trigger =
+    variant === 'inline' ? (
+      <Link
+        component="button"
+        type="button"
+        underline="hover"
+        onClick={openPopover}
+        data-testid="work-queue-strip-needs-review"
+        data-viewing-from={viewingFrom ? 'true' : undefined}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        sx={{
+          fontFamily: 'inherit',
+          fontSize: 'inherit',
+          lineHeight: 'inherit',
+          fontWeight: viewingFrom ? 700 : 400,
+          color: viewingFrom ? 'text.primary' : 'text.secondary',
+          cursor: 'pointer',
+          verticalAlign: 'baseline',
+        }}
+      >
+        {viewingFrom ? <strong>{label}</strong> : label}
+      </Link>
+    ) : (
       <Chip
         size="small"
         color="warning"
         label={label}
         clickable
-        onClick={(e) => {
-          e.preventDefault()
-          setAnchor(e.currentTarget)
-        }}
+        onClick={openPopover}
         data-testid="work-queue-strip-needs-review"
         aria-haspopup="dialog"
         aria-expanded={open}
-        sx={{ fontWeight: 700 }}
+        sx={{ fontWeight: 700, cursor: 'pointer' }}
       />
+    )
+
+  return (
+    <>
+      {trigger}
       <Popover
         open={open}
         anchorEl={anchor}

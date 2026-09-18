@@ -6,8 +6,10 @@ import {
   Box,
   Chip,
   CircularProgress,
+  Link as MuiLink,
   Typography,
 } from '@mui/material'
+import { Link as RouterLink } from 'react-router-dom'
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney'
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
@@ -16,10 +18,11 @@ import ApartmentIcon from '@mui/icons-material/Apartment'
 import HomeWorkIcon from '@mui/icons-material/HomeWork'
 import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment'
 import InsightsIcon from '@mui/icons-material/Insights'
-import type { PropertyScoreRecord, ScoreSignal } from '@/types'
+import type { PropertyScoreRecord, ScoreSignal, WorkQueueMembership } from '@/types'
 import type { ScoreTier } from '@/components/LeadScoreBadge'
 import { getDimensionMeta } from '@/utils/scoreDimensionMeta'
 import { formatDateOnly } from '@/utils/helpers'
+import { queuePath } from '@/utils/fromQueue'
 
 const ATTRIBUTION_ONLY = new Set(['notes_keywords'])
 const GAUGE_SIZE = 56
@@ -127,6 +130,28 @@ const SCORE_FLASH_TONE_COLORS: Record<ScoreFlash['tone'], { bg: string; fg: stri
   neutral: { bg: '#F1F5F9', fg: '#475569' },
 }
 
+export type HeaderCurrentQueue = Pick<WorkQueueMembership, 'key' | 'label' | 'path'>
+
+/** Memberships plus viewing-from / Needs Review so the score box can list them once. */
+export function resolveHeaderCurrentQueues(
+  memberships: HeaderCurrentQueue[] | undefined,
+  viewingFrom?: { key: string; label: string } | null,
+  options?: { reviewActive?: boolean },
+): HeaderCurrentQueue[] {
+  const list: HeaderCurrentQueue[] = [...(memberships ?? [])]
+  if (options?.reviewActive && !list.some((q) => q.key === 'needs-review')) {
+    list.push({ key: 'needs-review', label: 'Needs Review', path: queuePath('needs-review') })
+  }
+  if (viewingFrom && !list.some((q) => q.key === viewingFrom.key)) {
+    list.unshift({
+      key: viewingFrom.key,
+      label: viewingFrom.label,
+      path: queuePath(viewingFrom.key),
+    })
+  }
+  return list
+}
+
 export interface HeaderLeadScorePanelProps {
   score: number | null | undefined
   tier: ScoreTier | null | undefined
@@ -134,6 +159,44 @@ export interface HeaderLeadScorePanelProps {
   onOpenBreakdown?: () => void
   /** Brief "+N" / "-N" / "Score unchanged" pill after an activity save. */
   flash?: ScoreFlash | null
+  /** Work-queue membership. `undefined` hides the line (harness / lookbook). */
+  currentQueues?: HeaderCurrentQueue[]
+  /** Queue the user opened this lead from — rendered bold in the list. */
+  viewingFromQueueKey?: string | null
+  /** Override a queue name (Needs Review popover). Return undefined for the default link. */
+  renderQueueItem?: (
+    queue: HeaderCurrentQueue,
+    viewingFrom: boolean,
+  ) => React.ReactNode | undefined
+}
+
+function DefaultQueueName({
+  queue,
+  viewingFrom,
+}: {
+  queue: HeaderCurrentQueue
+  viewingFrom: boolean
+}) {
+  return (
+    <MuiLink
+      component={RouterLink}
+      to={queue.path}
+      underline="hover"
+      onClick={(event) => event.stopPropagation()}
+      data-testid={`work-queue-strip-${queue.key}`}
+      data-viewing-from={viewingFrom ? 'true' : undefined}
+      sx={{
+        fontFamily: 'inherit',
+        fontSize: 'inherit',
+        lineHeight: 'inherit',
+        fontWeight: viewingFrom ? 700 : 400,
+        color: viewingFrom ? 'text.primary' : 'text.secondary',
+        cursor: 'pointer',
+      }}
+    >
+      {viewingFrom ? <strong>{queue.label}</strong> : queue.label}
+    </MuiLink>
+  )
 }
 
 export function HeaderLeadScorePanel({
@@ -142,6 +205,9 @@ export function HeaderLeadScorePanel({
   scoreRecord,
   onOpenBreakdown,
   flash,
+  currentQueues,
+  viewingFromQueueKey = null,
+  renderQueueItem,
 }: HeaderLeadScorePanelProps) {
   const hasScore = score != null && Number.isFinite(Number(score))
   const rounded = hasScore ? Math.round(Number(score)) : null
@@ -165,26 +231,13 @@ export function HeaderLeadScorePanel({
 
   return (
     <Box
-      role={clickable ? 'button' : undefined}
-      tabIndex={clickable ? 0 : undefined}
-      onClick={clickable ? onOpenBreakdown : undefined}
-      onKeyDown={clickable ? handleKeyDown : undefined}
       data-testid="header-lead-score"
-      aria-label={
-        clickable
-          ? hasScore
-            ? `Lead score ${rounded}, ${priority}. View lead score breakdown`
-            : 'Lead score not available. View lead score breakdown'
-          : hasScore
-            ? `Lead score ${rounded}`
-            : 'Lead score not available'
-      }
       sx={{
         boxSizing: 'border-box',
         display: 'flex',
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 1.25,
+        flexDirection: 'column',
+        alignItems: 'stretch',
+        gap: 0.5,
         flex: { xs: '1 0 100%', md: '1 1 clamp(10rem, 13vw, 260px)' },
         width: { xs: '100%', md: 'auto' },
         minWidth: { xs: 0, md: 0 },
@@ -197,20 +250,43 @@ export function HeaderLeadScorePanel({
         borderColor: 'divider',
         bgcolor: 'background.paper',
         overflow: 'visible',
-        cursor: clickable ? 'pointer' : 'default',
+        cursor: 'default',
         textAlign: 'left',
         contain: 'layout style',
         isolation: 'isolate',
         '&:hover': clickable
           ? { borderColor: 'text.disabled', bgcolor: 'action.hover' }
           : undefined,
-        '&:focus-visible': {
-          outline: '2px solid',
-          outlineColor: 'primary.main',
-          outlineOffset: 2,
-        },
       }}
     >
+      <Box
+        role={clickable ? 'button' : undefined}
+        tabIndex={clickable ? 0 : undefined}
+        onClick={clickable ? onOpenBreakdown : undefined}
+        onKeyDown={clickable ? handleKeyDown : undefined}
+        aria-label={
+          clickable
+            ? hasScore
+              ? `Lead score ${rounded}, ${priority}. View lead score breakdown`
+              : 'Lead score not available. View lead score breakdown'
+            : hasScore
+              ? `Lead score ${rounded}`
+              : 'Lead score not available'
+        }
+        sx={{
+          display: 'flex',
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 1.25,
+          minWidth: 0,
+          cursor: clickable ? 'pointer' : 'default',
+          '&:focus-visible': {
+            outline: '2px solid',
+            outlineColor: 'primary.main',
+            outlineOffset: 2,
+          },
+        }}
+      >
       <Box
         sx={{
           position: 'relative',
@@ -381,6 +457,39 @@ export function HeaderLeadScorePanel({
           </Box>
         )}
       </Box>
+      </Box>
+      {currentQueues && (
+        <Typography
+          variant="caption"
+          data-testid="header-current-queues"
+          sx={{
+            fontSize: '0.65rem',
+            lineHeight: 1.35,
+            color: 'text.secondary',
+            cursor: 'default',
+          }}
+        >
+          <Box component="span" sx={{ fontWeight: 700, color: 'text.secondary' }}>
+            Current queues:{' '}
+          </Box>
+          {currentQueues.length === 0 ? (
+            <Box component="span" data-testid="work-queue-strip-empty">
+              None
+            </Box>
+          ) : (
+            currentQueues.map((queue, index) => {
+              const viewingFrom = queue.key === viewingFromQueueKey
+              const custom = renderQueueItem?.(queue, viewingFrom)
+              return (
+                <Box component="span" key={queue.key}>
+                  {index > 0 ? ', ' : null}
+                  {custom ?? <DefaultQueueName queue={queue} viewingFrom={viewingFrom} />}
+                </Box>
+              )
+            })
+          )}
+        </Typography>
+      )}
     </Box>
   )
 }

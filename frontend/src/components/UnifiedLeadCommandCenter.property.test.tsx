@@ -364,7 +364,7 @@ const commandCenterPayloadArb = fc.record({
       per_page: fc.constant(20),
     })
   ),
-  // Fields used by work-queue membership strip (server work_queues)
+  // Fields used by Current queues in the score box (server work_queues)
   work_queues: fc.array(
     fc.record({
       key: fc.constantFrom(
@@ -885,7 +885,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByTestId('work-queue-membership-strip')).toBeInTheDocument()
+      expect(screen.getByTestId('header-current-queues')).toBeInTheDocument()
     })
     expect(screen.getByTestId('work-queue-strip-follow-up-overdue')).toBeInTheDocument()
     expect(screen.getByTestId('work-queue-strip-needs-review')).toBeInTheDocument()

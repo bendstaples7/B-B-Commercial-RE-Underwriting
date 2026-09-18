@@ -96,7 +96,7 @@ import { SameAddressMergeBanner } from '@/components/lead-detail/SameAddressMerg
 import { NeedsReviewChipPopover } from '@/components/lead-detail/NeedsReviewClarityPanel'
 import { afterCommandCenterMutation } from '@/utils/afterCommandCenterMutation'
 import { HeaderCondoCheckPanel } from '@/components/lead-detail/HeaderCondoCheckPanel'
-import { HeaderLeadScorePanel, type ScoreFlash } from '@/components/lead-detail/HeaderLeadScorePanel'
+import { HeaderLeadScorePanel, resolveHeaderCurrentQueues, type ScoreFlash } from '@/components/lead-detail/HeaderLeadScorePanel'
 import { DeepDiveDetailsCard } from '@/components/lead-detail/DeepDiveDetailsCard'
 import { SuppressLeadDialog } from '@/components/SuppressLeadDialog'
 import { AppSnackbar } from '@/components/AppSnackbar'
@@ -165,6 +165,11 @@ interface PropertyOverviewHeaderProps {
   onPropertyOverviewChanged?: () => void | Promise<void>
   /** Opens same-address merge dialog (header ⋯ → Merge duplicate…). */
   onMergeDuplicate?: () => void
+  onNeedsReviewResolved?: (result: {
+    kind: 'merged' | 'dismissed' | 'cleared'
+    winnerId?: number
+    loserId?: number
+  }) => void | Promise<void>
 }
 
 function formatPropertyAddress(data: CommandCenterPayload): string {
@@ -192,6 +197,7 @@ function PropertyOverviewHeader({
   onCategoryChanged,
   onPropertyOverviewChanged,
   onMergeDuplicate,
+  onNeedsReviewResolved,
 }: PropertyOverviewHeaderProps & { statusSelectorRef?: React.RefObject<HTMLDivElement | null> }) {
   const [scoreDialogOpen, setScoreDialogOpen] = useState(false)
   const [pinSnack, setPinSnack] = useState<string | null>(null)
@@ -514,6 +520,34 @@ function PropertyOverviewHeader({
               scoreRecord={scoreRecord}
               onOpenBreakdown={() => setScoreDialogOpen(true)}
               flash={scoreFlash}
+              currentQueues={resolveHeaderCurrentQueues(
+                commandCenterData.work_queues,
+                fromQueue,
+                {
+                  reviewActive: Boolean(
+                    commandCenterData.review_required || commandCenterData.review_reason,
+                  ),
+                },
+              )}
+              viewingFromQueueKey={fromQueue?.key ?? null}
+              renderQueueItem={(queue, viewingFrom) => {
+                if (queue.key !== 'needs-review' || !onNeedsReviewResolved) return undefined
+                if (
+                  !commandCenterData.review_required && !commandCenterData.review_reason
+                ) {
+                  return undefined
+                }
+                return (
+                  <NeedsReviewChipPopover
+                    leadId={leadId}
+                    commandCenterData={commandCenterData}
+                    label={queue.label}
+                    variant="inline"
+                    viewingFrom={viewingFrom}
+                    onResolved={onNeedsReviewResolved}
+                  />
+                )
+              }}
             />
           </Box>
           </Box>
@@ -666,115 +700,6 @@ function QueueWorkHeader({
         >
           <ChevronRightIcon />
         </IconButton>
-      </Box>
-    </Box>
-  )
-}
-
-// ── Work queue membership strip ──────────────────────────────────────────────
-
-interface WorkQueueMembershipStripProps {
-  leadId: number
-  commandCenterData: CommandCenterPayload
-  fromQueue?: FromQueueState | null
-  onNeedsReviewResolved: (result: {
-    kind: 'merged' | 'dismissed' | 'cleared'
-    winnerId?: number
-    loserId?: number
-  }) => void | Promise<void>
-}
-
-/** Always-visible work-queue membership (sidebar is lg+ only). */
-function WorkQueueMembershipStrip({
-  leadId,
-  commandCenterData,
-  fromQueue = null,
-  onNeedsReviewResolved,
-}: WorkQueueMembershipStripProps) {
-  const memberships = commandCenterData.work_queues ?? []
-  const fromMeta = fromQueue
-    ? { key: fromQueue.key, label: fromQueue.label, path: queuePath(fromQueue.key) }
-    : null
-  const reviewActive = Boolean(
-    commandCenterData.review_required || commandCenterData.review_reason,
-  )
-  const hasNeedsReviewMembership = memberships.some((q) => q.key === 'needs-review')
-
-  return (
-    <Box
-      sx={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 0.5,
-      }}
-      data-testid="work-queue-membership-strip"
-    >
-      {fromMeta && (
-        <Box
-          sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}
-          data-testid="work-queue-came-from"
-        >
-          <Typography variant="body2" fontWeight={600} sx={{ mr: 0.5 }}>
-            Came from
-          </Typography>
-          <Chip
-            component={RouterLink}
-            to={fromMeta.path}
-            clickable
-            size="small"
-            color="primary"
-            variant="outlined"
-            label={fromMeta.label}
-            data-testid={`work-queue-came-from-${fromMeta.key}`}
-          />
-        </Box>
-      )}
-      <Box
-        sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}
-        data-testid="work-queue-currently-in"
-      >
-        <Typography variant="body2" fontWeight={600} sx={{ mr: 0.5 }}>
-          {fromMeta ? 'Currently in' : 'Work queues'}
-        </Typography>
-        {memberships.length > 0 || reviewActive ? (
-          <>
-            {memberships.map((q) => {
-              if (q.key === 'needs-review' && reviewActive) {
-                return (
-                  <NeedsReviewChipPopover
-                    key={q.key}
-                    leadId={leadId}
-                    commandCenterData={commandCenterData}
-                    label={q.label}
-                    onResolved={onNeedsReviewResolved}
-                  />
-                )
-              }
-              return (
-                <Chip
-                  key={q.key}
-                  component={RouterLink}
-                  to={q.path}
-                  clickable
-                  size="small"
-                  label={q.label}
-                  data-testid={`work-queue-strip-${q.key}`}
-                />
-              )
-            })}
-            {reviewActive && !hasNeedsReviewMembership && (
-              <NeedsReviewChipPopover
-                leadId={leadId}
-                commandCenterData={commandCenterData}
-                onResolved={onNeedsReviewResolved}
-              />
-            )}
-          </>
-        ) : (
-          <Typography variant="body2" color="text.secondary" data-testid="work-queue-strip-empty">
-            Not in an active work queue
-          </Typography>
-        )}
       </Box>
     </Box>
   )
@@ -2362,10 +2287,15 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }}
           data-testid="cc-header-stack"
         >
-          <WorkQueueMembershipStrip
+          <PropertyOverviewHeader
             leadId={leadId}
             commandCenterData={commandCenterData}
+            scoreRecord={scoreData?.latest}
+            onStatusChanged={handleStatusChanged}
+            onViewFullBreakdown={handleViewScoreBreakdown}
             fromQueue={fromQueue}
+            statusSelectorRef={statusSelectorRef}
+            scoreFlash={scoreFlash}
             onNeedsReviewResolved={async (result) => {
               if (result.kind === 'merged' && result.winnerId != null && result.loserId != null) {
                 const mergeFlash = { message: 'Records combined.' }
@@ -2387,17 +2317,6 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               void queryClient.invalidateQueries({ queryKey: ['queue-needs-review'] })
               void queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
             }}
-          />
-
-          <PropertyOverviewHeader
-            leadId={leadId}
-            commandCenterData={commandCenterData}
-            scoreRecord={scoreData?.latest}
-            onStatusChanged={handleStatusChanged}
-            onViewFullBreakdown={handleViewScoreBreakdown}
-            fromQueue={fromQueue}
-            statusSelectorRef={statusSelectorRef}
-            scoreFlash={scoreFlash}
             onCategoryChanged={async () => {
               await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
             }}
