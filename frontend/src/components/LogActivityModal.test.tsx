@@ -12,6 +12,9 @@ vi.mock('@/services/api', () => ({
     logNote: vi.fn(),
     logCall: vi.fn(),
   },
+  leadTaskService: {
+    updateTask: vi.fn(),
+  },
   contactService: {
     getPropertyContacts: vi.fn().mockResolvedValue([]),
   },
@@ -155,5 +158,37 @@ describe('LogActivityModal', () => {
     )
     await user.click(screen.getByTestId('log-activity-close'))
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('titles the overlay Edit Task when opened from an existing task', () => {
+    render(
+      <LogActivityModal
+        open
+        activityType="note"
+        leadId={1}
+        editTask={{
+          task: {
+            id: 5,
+            lead_id: 1,
+            task_type: 'custom',
+            title: 'Follow up with Bob',
+            status: 'open',
+            due_date: '2026-09-20',
+            created_at: '2026-01-01T00:00:00Z',
+            completed_at: null,
+            created_by: 'user',
+          },
+          note: 'Left voicemail yesterday',
+          phoneDigits: '5551234567',
+        }}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByTestId('log-activity-modal-edit-task')).toBeInTheDocument()
+    expect(screen.getByText('Edit Task')).toBeInTheDocument()
+    expect(screen.getByTestId('edit-task-form')).toBeInTheDocument()
+    expect(screen.getByTestId('note-body-input')).toHaveValue('Left voicemail yesterday')
   })
 })

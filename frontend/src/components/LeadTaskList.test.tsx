@@ -1161,6 +1161,48 @@ describe('LeadTaskList', () => {
       expect(screen.getByTestId('task-edit-title-input')).toHaveValue('Follow up with Bob')
     })
 
+    it('opens the activity overlay instead of inline edit when onEditTask is provided', async () => {
+      const onEditTask = vi.fn()
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[makeTask(5, { title: 'Follow up with Bob', due_date: '2026-09-15' })]}
+          onTaskCreated={vi.fn()}
+          onTaskUpdated={vi.fn()}
+          onTaskCompleted={vi.fn()}
+          onEditTask={onEditTask}
+        />,
+      )
+
+      await user.click(screen.getByTestId('edit-task-btn-5'))
+
+      expect(onEditTask).toHaveBeenCalledWith(expect.objectContaining({
+        id: 5,
+        title: 'Follow up with Bob',
+        due_date: '2026-09-15',
+      }))
+      expect(screen.queryByTestId('task-edit-title-input')).not.toBeInTheDocument()
+    })
+
+    it('opens the overlay from the due date when onEditTask is provided', async () => {
+      const onEditTask = vi.fn()
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[makeTask(5, { title: 'Follow up with Bob', due_date: '2026-09-15' })]}
+          onTaskCreated={vi.fn()}
+          onTaskUpdated={vi.fn()}
+          onTaskCompleted={vi.fn()}
+          onEditTask={onEditTask}
+        />,
+      )
+
+      await user.click(screen.getByTestId('task-due-date-5'))
+
+      expect(onEditTask).toHaveBeenCalledWith(expect.objectContaining({ id: 5 }))
+      expect(screen.queryByTestId('task-edit-due-date-input')).not.toBeInTheDocument()
+    })
+
     it('saves title on Enter via updateTask', async () => {
       const onTaskUpdated = vi.fn()
       mockUpdateTask.mockResolvedValue({

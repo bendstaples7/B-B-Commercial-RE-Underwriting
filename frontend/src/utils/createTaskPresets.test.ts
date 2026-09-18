@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest'
 import {
   CREATE_TASK_PRESETS,
   getCreateTaskPreset,
+  nextStepTypeFromTask,
   resolveCreateTaskPayload,
   type CreateTaskPresetId,
 } from './createTaskPresets'
@@ -45,6 +46,20 @@ describe('createTaskPresets', () => {
       title: 'Custom task',
       task_type: 'custom',
     })
+  })
+
+  it('maps existing tasks back onto next-step presets', () => {
+    expect(nextStepTypeFromTask({ task_type: 'call_owner_today', title: 'Anything' })).toBe(
+      'call_owner_today',
+    )
+    expect(nextStepTypeFromTask({ task_type: 'add_to_mail_batch', title: 'Add to mail queue' })).toBe(
+      'add_to_mail_batch',
+    )
+    expect(nextStepTypeFromTask({ task_type: 'custom', title: 'Email owner' })).toBe('schedule_email')
+    expect(nextStepTypeFromTask({ task_type: 'custom', title: 'Follow up call' })).toBe(
+      'call_owner_today',
+    )
+    expect(nextStepTypeFromTask({ task_type: 'custom', title: 'Follow up with Bob' })).toBe('custom')
   })
 
   it('getCreateTaskPreset falls back to custom for unknown ids', () => {

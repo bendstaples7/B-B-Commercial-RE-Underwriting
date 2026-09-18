@@ -74,6 +74,7 @@ import { RecommendedActionPanel } from '@/components/RecommendedActionPanel'
 import { resolveOutreachContactFromCommandCenter } from '@/utils/outreachContact'
 import { outreachContactPlacement } from '@/utils/outreachContactPlacement'
 import { sortTimelineEntriesDesc } from '@/utils/timelineSort'
+import { findActivityContextForTask } from '@/utils/timelineTaskContext'
 import { LeadDetailTabPanel } from '@/components/lead-detail/LeadDetailTabPanel'
 import { PropertySidebar } from '@/components/lead-detail/PropertySidebar'
 import { BuildingOwnershipSection } from '@/components/BuildingOwnershipSection'
@@ -724,6 +725,8 @@ interface TasksPanelProps {
   onTasksChanged: () => void
   /** Called after a task is successfully completed (for queue auto-advance). */
   onAfterTaskCompleted?: () => void | Promise<void>
+  /** Open the activity overlay to edit an existing task. */
+  onEditTask?: (task: LeadTask) => void
 }
 
 export interface TasksPanelHandle {
@@ -744,6 +747,7 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
     embedded = false,
     onTasksChanged,
     onAfterTaskCompleted,
+    onEditTask,
   },
   ref,
 ) {
@@ -881,6 +885,7 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
           upNextToMail={upNextToMail}
           onTaskCreated={handleTaskCreated}
           onTaskUpdated={handleTaskUpdated}
+          onEditTask={onEditTask}
           onTaskCompleted={handleTaskCompleted}
           onHubSpotTaskDone={handleHubSpotTaskDone}
           onOptimisticTaskCreate={handleOptimisticTaskCreate}
@@ -900,6 +905,7 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
             upNextToMail={upNextToMail}
             onTaskCreated={handleTaskCreated}
             onTaskUpdated={handleTaskUpdated}
+            onEditTask={onEditTask}
             onTaskCompleted={handleTaskCompleted}
             onHubSpotTaskDone={handleHubSpotTaskDone}
             onOptimisticTaskCreate={handleOptimisticTaskCreate}
@@ -1396,6 +1402,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const isLgUp = useMediaQuery(theme.breakpoints.up('lg'), { noSsr: true })
   const showLead = !!commandCenterData && !commandCenterError
   const [activityModal, setActivityModal] = useState<ActivityLogType | null>(null)
+  const [editingTask, setEditingTask] = useState<LeadTask | null>(null)
   const [highlightEntryId, setHighlightEntryId] = useState<number | null>(null)
   const [scoreFlash, setScoreFlash] = useState<ScoreFlash | null>(null)
   const scoreFlashTimeoutRef = useRef<number | null>(null)
@@ -1825,6 +1832,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       severity: meta?.warning ? 'warning' : 'success',
     })
     setActivityModal(null)
+    setEditingTask(null)
 
     // Optimistically drop the task the response says was completed — do not
     // wait for the full refetch below (visible immediately even during a
@@ -1888,15 +1896,53 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     prependTimelineEntry,
   ])
 
+  const editingTaskDraft = useMemo(() => {
+    if (!editingTask || typeof editingTask.id !== 'number' || editingTask.id <= 0) return null
+    const ctx = findActivityContextForTask(editingTask.id, taskActivityEntries)
+    return {
+      task: editingTask,
+      note: ctx?.body ?? '',
+      phoneDigits: ctx?.phoneNumber ?? null,
+    }
+  }, [editingTask, taskActivityEntries])
+
+  const handleEditOpenTask = useCallback((task: LeadTask) => {
+    setEditingTask(task)
+    setActivityModal('note')
+  }, [])
+
+  const handleTaskUpdatedFromOverlay = useCallback((task: LeadTask) => {
+    setEditingTask(null)
+    setActivityModal(null)
+    setActivitySnackbar({ open: true, message: 'Task updated' })
+    queryClient.setQueryData<CommandCenterPayload>(
+      ['commandCenter', leadId],
+      (current) => {
+        if (!current) return current
+        return {
+          ...current,
+          open_tasks: current.open_tasks.map((row) => (
+            row.id === task.id ? { ...row, ...task } : row
+          )),
+        }
+      },
+    )
+    void queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+    void queryClient.invalidateQueries({ queryKey: ['leadScore', leadId] })
+  }, [leadId, queryClient])
+
   const handleRaAction = useCallback(async (action: string) => {
     switch (action) {
       case 'log_call':
+        setEditingTask(null)
         setActivityModal('call')
         return
       case 'log_note':
+        setEditingTask(null)
         setActivityModal('note')
         return
       case 'log_email':
+        setEditingTask(null)
         setActivityModal('email')
         return
       case 'create_task':
@@ -2161,6 +2207,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   useEffect(() => {
     setHighlightEntryId(null)
     setActivityModal(null)
+    setEditingTask(null)
     setSuppressDialogOpen(false)
     setDncDialogOpen(false)
     setDncPending(false)
@@ -2477,6 +2524,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 upNextToMail={Boolean(commandCenterData.up_next_to_mail)}
                 embedded
                 onTasksChanged={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
+                onEditTask={handleEditOpenTask}
                 onAfterTaskCompleted={fromQueue ? () => {
                   scheduleQueueAdvanceHold({
                     nextId: snapshotNextQueueLeadId(),
@@ -2602,8 +2650,13 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               : null
           )
         }
-        onClose={() => setActivityModal(null)}
+        editTask={editingTaskDraft}
+        onClose={() => {
+          setActivityModal(null)
+          setEditingTask(null)
+        }}
         onSaved={handleActivitySaved}
+        onTaskUpdated={handleTaskUpdatedFromOverlay}
       />
 
       <SuppressLeadDialog

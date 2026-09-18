@@ -22,6 +22,9 @@ vi.mock('@/services/api', () => ({
     logCall: vi.fn(),
     markHubSpotTaskDone: vi.fn(),
   },
+  leadTaskService: {
+    updateTask: vi.fn(),
+  },
 }))
 
 vi.mock('@/services/openLetterApi', () => ({
@@ -48,11 +51,12 @@ vi.mock('@/services/channelRoiApi', () => ({
   },
 }))
 
-import { callLogService } from '@/services/api'
+import { callLogService, leadTaskService } from '@/services/api'
 
 const mockLogCall = callLogService.logCall as ReturnType<typeof vi.fn>
 const mockLogNote = callLogService.logNote as ReturnType<typeof vi.fn>
 const mockMarkHubSpotTaskDone = callLogService.markHubSpotTaskDone as ReturnType<typeof vi.fn>
+const mockUpdateTask = leadTaskService.updateTask as ReturnType<typeof vi.fn>
 
 const user = userEvent.setup({ pointerEventsCheck: 0 })
 
@@ -465,5 +469,74 @@ describe('LogActivityForm — cross-mode next-step parity', () => {
       />,
     )
     expect(screen.queryByRole('checkbox', { name: /Complete task:/i })).not.toBeInTheDocument()
+  })
+})
+
+describe('LogActivityForm — edit-task overlay', () => {
+  it('prefills the original note, phone, and due date', () => {
+    render(
+      <LogActivityForm
+        mode="note"
+        leadId={1}
+        editTask={{
+          task: makeOpenTask({
+            title: 'Follow up with Bob',
+            due_date: '2026-09-20',
+          }),
+          note: 'Left voicemail yesterday',
+          phoneDigits: '5551234567',
+        }}
+        onSaved={vi.fn()}
+        onTaskUpdated={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByTestId('edit-task-form')).toBeInTheDocument()
+    expect(screen.getByTestId('edit-task-context-hint')).toBeInTheDocument()
+    expect(screen.getByTestId('note-body-input')).toHaveValue('Left voicemail yesterday')
+    expect(screen.getByTestId('contact-method-other-input')).toHaveValue('5551234567')
+    expect(screen.getByTestId('follow-up-custom-date')).toHaveValue('2026-09-20')
+    expect(screen.getByTestId('next-step-custom-title')).toHaveValue('Follow up with Bob')
+    expect(screen.queryByRole('checkbox', { name: /Complete task:/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /Create a follow-up task/i })).not.toBeInTheDocument()
+  })
+
+  it('saves a new due date via updateTask without logging a new note', async () => {
+    mockUpdateTask.mockResolvedValue({
+      id: 7,
+      title: 'Follow up with Bob',
+      status: 'open',
+      due_date: '2026-09-22',
+    })
+    const onTaskUpdated = vi.fn()
+
+    render(
+      <LogActivityForm
+        mode="note"
+        leadId={1}
+        editTask={{
+          task: makeOpenTask({
+            title: 'Follow up with Bob',
+            due_date: '2026-09-20',
+          }),
+          note: 'Left voicemail yesterday',
+          phoneDigits: '5551234567',
+        }}
+        onSaved={vi.fn()}
+        onTaskUpdated={onTaskUpdated}
+      />,
+    )
+
+    const dateInput = screen.getByTestId('follow-up-custom-date')
+    fireEvent.change(dateInput, { target: { value: '2026-09-22' } })
+    await user.click(screen.getByTestId('edit-task-save-btn'))
+
+    await waitFor(() => {
+      expect(mockUpdateTask).toHaveBeenCalledWith(1, 7, { due_date: '2026-09-22' })
+    })
+    expect(mockLogNote).not.toHaveBeenCalled()
+    expect(onTaskUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 7, due_date: '2026-09-22' }),
+    )
   })
 })

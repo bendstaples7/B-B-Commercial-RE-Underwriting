@@ -53,6 +53,21 @@ export function getCreateTaskPreset(id: CreateTaskPresetId): CreateTaskPreset {
   )
 }
 
+/** Map an existing open task back onto the next-step preset used to create it. */
+export function nextStepTypeFromTask(task: {
+  task_type: LeadTaskType | string
+  title: string
+}): CreateTaskPresetId {
+  if (task.task_type === 'call_owner_today') return 'call_owner_today'
+  if (task.task_type === 'add_to_mail_batch') return 'add_to_mail_batch'
+  const trimmed = task.title.trim()
+  const emailTitle = getCreateTaskPreset('schedule_email').defaultTitle
+  if (emailTitle && trimmed === emailTitle) return 'schedule_email'
+  const callTitle = getCreateTaskPreset('call_owner_today').defaultTitle
+  if (callTitle && trimmed === callTitle) return 'call_owner_today'
+  return 'custom'
+}
+
 /** Resolve API title + task_type for a selected preset. */
 export function resolveCreateTaskPayload(
   presetId: CreateTaskPresetId,

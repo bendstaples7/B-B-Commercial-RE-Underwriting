@@ -111,6 +111,8 @@ export interface LeadTaskListProps {
   onTaskCreated: (task: LeadTask) => void
   /** Called after a successful title/due-date update on a native task. */
   onTaskUpdated?: (task: LeadTask) => void
+  /** When set, title/due-date edit opens the activity overlay instead of inline fields. */
+  onEditTask?: (task: LeadTask) => void
   onTaskCompleted?: (taskId: number | string) => void | Promise<void>
   onHubSpotTaskDone?: (taskId: number) => void | Promise<void>
   /** Called immediately when the user submits the form, before the API call
@@ -150,6 +152,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     recommendedAction,
     onTaskCreated,
     onTaskUpdated,
+    onEditTask,
     onTaskCompleted,
     onHubSpotTaskDone,
     onOptimisticTaskCreate,
@@ -423,6 +426,10 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     // Optimistic placeholders (non-numeric ids) are not.
     if (editSubmittingRef.current) return
     if (typeof task.id !== 'number' || task.id <= 0) return
+    if (onEditTask) {
+      onEditTask(task)
+      return
+    }
     skipBlurSaveRef.current = false
     setFormOpen(false)
     setEditingTaskId(task.id)
@@ -781,9 +788,9 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                                 {task.title}
                               </Box>
                               {canEdit && (
-                                <Tooltip title="Edit title">
+                                <Tooltip title={onEditTask ? 'Edit task' : 'Edit title'}>
                                   <IconButton
-                                    aria-label={`Edit title: ${task.title}`}
+                                    aria-label={onEditTask ? `Edit task: ${task.title}` : `Edit title: ${task.title}`}
                                     onClick={() => handleStartEdit(task, 'title')}
                                     data-testid={`edit-task-btn-${task.id}`}
                                     size="small"

@@ -55,6 +55,7 @@ vi.mock('@/services/api', () => ({
   },
   contactService: {
     listContacts: vi.fn().mockResolvedValue([]),
+    getPropertyContacts: vi.fn().mockResolvedValue([]),
     createContact: vi.fn(),
     updateContact: vi.fn(),
     deleteContact: vi.fn(),
@@ -946,6 +947,61 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
     } finally {
       Element.prototype.scrollIntoView = original
     }
+  })
+
+  it('opens the log overlay prefilled when editing the current task', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        open_tasks: [{
+          id: 5,
+          lead_id: 1,
+          task_type: 'custom',
+          title: 'Follow up with Bob',
+          status: 'open',
+          due_date: '2026-09-20',
+          created_at: '2026-01-01T00:00:00Z',
+          completed_at: null,
+          created_by: 'user',
+          source: 'native',
+        }],
+        timeline: {
+          entries: [{
+            id: 9,
+            lead_id: 1,
+            event_type: 'call_logged',
+            occurred_at: '2026-09-10T00:00:00Z',
+            source: 'manual',
+            actor: 'user',
+            summary: 'Left voicemail',
+            metadata: {
+              notes: 'Left voicemail yesterday',
+              phone_number: '5551234567',
+              follow_up_task_id: 5,
+            },
+            hubspot_activity_id: null,
+            is_deleted: false,
+            created_at: '2026-09-10T00:00:00Z',
+          }],
+          total: 1,
+          page: 1,
+          per_page: 20,
+        },
+      }),
+    )
+
+    renderComponent()
+    await waitFor(() => {
+      expect(screen.getByTestId('edit-task-btn-5')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByTestId('edit-task-btn-5'))
+
+    expect(screen.getByTestId('log-activity-modal-edit-task')).toBeInTheDocument()
+    expect(screen.getByText('Edit Task')).toBeInTheDocument()
+    expect(screen.getByTestId('note-body-input')).toHaveValue('Left voicemail yesterday')
+    expect(screen.getByTestId('contact-method-other-input')).toHaveValue('5551234567')
+    expect(screen.getByTestId('follow-up-custom-date')).toHaveValue('2026-09-20')
   })
 
   it('moves the lead and current task to skip trace from quick actions', async () => {

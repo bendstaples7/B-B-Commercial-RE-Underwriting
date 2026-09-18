@@ -28,13 +28,14 @@ import {
   Typography,
 } from '@mui/material'
 import type { LeadTask, LeadTimelineEntry, LogCallPayload, LogNotePayload, PropertyContact } from '@/types'
-import { callLogService } from '@/services/api'
+import { callLogService, leadTaskService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
 import channelRoiService from '@/services/channelRoiApi'
 import { useQuery } from '@tanstack/react-query'
 import {
   ContactMethodFields,
   EMPTY_CONTACT_METHOD,
+  METHOD_OTHER,
   type ContactMethodValue,
   contactMethodToCallPayload,
   contactMethodToEmailPayload,
@@ -46,7 +47,11 @@ import {
   followUpDueForPreset,
   resolveFollowUpDueDate,
 } from '@/utils/followUpPresets'
-import { resolveCreateTaskPayload, type CreateTaskPresetId } from '@/utils/createTaskPresets'
+import {
+  nextStepTypeFromTask,
+  resolveCreateTaskPayload,
+  type CreateTaskPresetId,
+} from '@/utils/createTaskPresets'
 import { addSentFromAddress, getSentFromAddresses } from '@/utils/emailSentFromAddresses'
 import { extractPhoneDigitsFromText, normalizePhoneDigits } from '@/utils/phone'
 import { formatDate } from '@/utils/formatters'
@@ -145,6 +150,12 @@ const OUTCOME_OPTIONS: { value: LogCallPayload['outcome']; label: string }[] = [
   { value: 'not_interested', label: 'Not Interested' },
 ]
 
+export type LogActivityTaskEdit = {
+  task: LeadTask
+  note?: string
+  phoneDigits?: string | null
+}
+
 export interface LogActivityFormProps {
   mode: LogActivityMode
   leadId: number
@@ -153,8 +164,21 @@ export interface LogActivityFormProps {
   openTasks?: LeadTask[]
   /** Digits from recommended outreach / open call task — prefer in phone picker. */
   preferredPhoneDigits?: string | null
+  /** When set, Save updates this task instead of logging a new activity. */
+  editTask?: LogActivityTaskEdit | null
   onSaved: (entry: LeadTimelineEntry, meta?: LogCallSavedMeta) => void
+  onTaskUpdated?: (task: LeadTask) => void
   onCancel?: () => void
+}
+
+function contactMethodFromPhoneDigits(phoneDigits: string | null | undefined): ContactMethodValue {
+  const raw = (phoneDigits ?? '').trim()
+  if (!raw || normalizePhoneDigits(raw).length < 7) return EMPTY_CONTACT_METHOD
+  return {
+    ...EMPTY_CONTACT_METHOD,
+    methodKey: METHOD_OTHER,
+    methodValue: raw,
+  }
 }
 
 export interface LogActivityFormHandle {
@@ -170,26 +194,32 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       contactsLoading = false,
       openTasks = [],
       preferredPhoneDigits = null,
+      editTask = null,
       onSaved,
+      onTaskUpdated,
       onCancel,
     },
     ref,
   ) {
     const formRef = useRef<HTMLDivElement>(null)
     const outcomeGroupRef = useRef<HTMLDivElement>(null)
+    const isEditingTask = Boolean(editTask?.task)
 
     const completableTask = useMemo(
       () => findCompletableTaskForMode(mode, openTasks),
       [mode, openTasks],
     )
     const resolvedPreferredPhoneDigits = useMemo(() => {
-      if (mode !== 'call') return null
+      const fromEdit = normalizePhoneDigits(editTask?.phoneDigits)
+      if (fromEdit.length >= 7) return fromEdit
+      if (mode !== 'call' && !editTask) return null
       // Prefer canonical dial_target digits (passed as preferredPhoneDigits)
       // over task-title parsing so Log Call cannot invent a parallel ranking.
       const fromProp = normalizePhoneDigits(preferredPhoneDigits)
       if (fromProp.length >= 7) return fromProp
+      if (mode !== 'call') return fromProp || null
       return extractPhoneDigitsFromText(completableTask?.title)
-    }, [mode, completableTask?.title, preferredPhoneDigits])
+    }, [mode, completableTask?.title, preferredPhoneDigits, editTask])
     const hasOpenNonCompletableTasks =
       !completableTask && openTasks.some((t) => t.status === 'open' || t.status === 'overdue')
 
@@ -229,10 +259,10 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
     const [callNotes, setCallNotes] = useState('')
     const [mailCampaignId, setMailCampaignId] = useState<number | ''>('')
     const [facebookCampaignId, setFacebookCampaignId] = useState<number | ''>('')
-    const [completeTask, setCompleteTask] = useState(true)
+    const [completeTask, setCompleteTask] = useState(!editTask)
 
     // Note/email shared body field
-    const [body, setBody] = useState('')
+    const [body, setBody] = useState(() => editTask?.note ?? '')
     const [bodyError, setBodyError] = useState<string | null>(null)
 
     // Email-mode fields
@@ -245,15 +275,19 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
     const [newSentFromInput, setNewSentFromInput] = useState('')
 
     // Shared contact method (phone for call, email for email)
-    const [contactMethod, setContactMethod] = useState<ContactMethodValue>(EMPTY_CONTACT_METHOD)
+    const [contactMethod, setContactMethod] = useState<ContactMethodValue>(() =>
+      contactMethodFromPhoneDigits(editTask?.phoneDigits ?? preferredPhoneDigits),
+    )
 
     // Shared next-step / follow-up cadence — default on when a completable task exists
-    const [createFollowUp, setCreateFollowUp] = useState(Boolean(completableTask))
-    const [followUpPreset, setFollowUpPreset] = useState<FollowUpPreset>('3')
-    const [customDueDate, setCustomDueDate] = useState('')
-    const [nextStepExpanded, setNextStepExpanded] = useState(false)
-    const [nextStepType, setNextStepType] = useState<CreateTaskPresetId>('call_owner_today')
-    const [customTaskTitle, setCustomTaskTitle] = useState('')
+    const [createFollowUp, setCreateFollowUp] = useState(Boolean(editTask) || Boolean(completableTask))
+    const [followUpPreset, setFollowUpPreset] = useState<FollowUpPreset>(editTask ? 'custom' : '3')
+    const [customDueDate, setCustomDueDate] = useState(() => editTask?.task.due_date ?? '')
+    const [nextStepExpanded, setNextStepExpanded] = useState(Boolean(editTask))
+    const [nextStepType, setNextStepType] = useState<CreateTaskPresetId>(() =>
+      editTask ? nextStepTypeFromTask(editTask.task) : 'call_owner_today',
+    )
+    const [customTaskTitle, setCustomTaskTitle] = useState(() => editTask?.task.title ?? '')
 
     const [outcomeError, setOutcomeError] = useState<string | null>(null)
     const [durationError, setDurationError] = useState<string | null>(null)
@@ -589,9 +623,52 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
     const handleSubmit = async (e: React.FormEvent) => {
       e.preventDefault()
       if (submitting) return
+      if (isEditingTask) {
+        await handleTaskEditSubmit()
+        return
+      }
       if (mode === 'call') await handleCallSubmit()
       else if (mode === 'note') await handleNoteSubmit()
       else await handleEmailSubmit()
+    }
+
+    const handleTaskEditSubmit = async () => {
+      const task = editTask?.task
+      if (!task || typeof task.id !== 'number' || task.id <= 0) return
+      const due = resolveFollowUpDueDate(followUpPreset, customDueDate)
+      if (!due) {
+        setFollowUpError('Choose a follow-up date.')
+        return
+      }
+      setFollowUpError(null)
+      setSubmitError(null)
+      setSubmitting(true)
+      try {
+        const { title } = resolveCreateTaskPayload(
+          nextStepType,
+          nextStepType === 'custom' ? customTaskTitle : '',
+        )
+        const payload: { title?: string; due_date: string } = { due_date: due }
+        if (title !== task.title) payload.title = title
+        const updated = await leadTaskService.updateTask(leadId, task.id, payload)
+        onTaskUpdated?.({
+          ...task,
+          ...updated,
+          lead_id: updated.lead_id ?? task.lead_id ?? leadId,
+          task_type: updated.task_type ?? task.task_type,
+          created_at: updated.created_at ?? task.created_at,
+          completed_at: updated.completed_at ?? task.completed_at,
+          created_by: updated.created_by ?? task.created_by,
+          title: updated.title ?? title,
+          due_date: updated.due_date !== undefined ? updated.due_date : due,
+        })
+      } catch (err) {
+        setSubmitError(
+          err instanceof Error ? err.message : 'Failed to update task. Please try again.',
+        )
+      } finally {
+        setSubmitting(false)
+      }
     }
 
     const isCallNotesOverLimit = callNotes.length > MAX_CALL_NOTES_LENGTH
@@ -624,11 +701,18 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
         onNextStepTypeChange={setNextStepType}
         customTaskTitle={customTaskTitle}
         onCustomTaskTitleChange={setCustomTaskTitle}
+        hideCompleteTask={isEditingTask}
+        lockFollowUp={isEditingTask}
       />
     )
 
     return (
-      <Box ref={formRef} component="form" onSubmit={handleSubmit} data-testid={ROOT_TESTID[mode]}>
+      <Box
+        ref={formRef}
+        component="form"
+        onSubmit={handleSubmit}
+        data-testid={isEditingTask ? 'edit-task-form' : ROOT_TESTID[mode]}
+      >
         {submitError && (
           <Alert
             severity="error"
@@ -837,32 +921,55 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
             )}
 
             {mode === 'note' && (
-              <TextField
-                label="Note"
-                multiline
-                minRows={4}
-                value={body}
-                onChange={(e) => {
-                  setBody(e.target.value)
-                  if (bodyError) setBodyError(null)
-                }}
-                error={!!bodyError || isBodyOverLimit}
-                helperText={
-                  bodyError ?? (
+              <>
+                {isEditingTask && (
+                  <>
                     <Typography
-                      component="span"
                       variant="caption"
-                      color={isBodyOverLimit ? 'error' : 'text.secondary'}
-                      data-testid="note-char-count"
+                      color="text.secondary"
+                      sx={{ display: 'block', mb: 1 }}
+                      data-testid="edit-task-context-hint"
                     >
-                      {body.length}/{MAX_BODY_LENGTH.toLocaleString()}
+                      Original note and phone are shown for context. Saving updates this task.
                     </Typography>
-                  )
-                }
-                fullWidth
-                sx={{ mb: 2 }}
-                inputProps={{ 'data-testid': 'note-body-input' }}
-              />
+                    <ContactMethodFields
+                      dense
+                      mode="phone"
+                      contacts={contacts}
+                      contactsLoading={contactsLoading}
+                      value={contactMethod}
+                      onChange={setContactMethod}
+                      preferredPhoneDigits={resolvedPreferredPhoneDigits}
+                    />
+                  </>
+                )}
+                <TextField
+                  label="Note"
+                  multiline
+                  minRows={4}
+                  value={body}
+                  onChange={(e) => {
+                    setBody(e.target.value)
+                    if (bodyError) setBodyError(null)
+                  }}
+                  error={!!bodyError || isBodyOverLimit}
+                  helperText={
+                    bodyError ?? (
+                      <Typography
+                        component="span"
+                        variant="caption"
+                        color={isBodyOverLimit ? 'error' : 'text.secondary'}
+                        data-testid="note-char-count"
+                      >
+                        {body.length}/{MAX_BODY_LENGTH.toLocaleString()}
+                      </Typography>
+                    )
+                  }
+                  fullWidth
+                  sx={{ mb: 2 }}
+                  inputProps={{ 'data-testid': 'note-body-input' }}
+                />
+              </>
             )}
 
             {mode === 'email' && (
@@ -1002,15 +1109,25 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
             size="small"
             disabled={submitting}
             startIcon={submitting ? <CircularProgress size={14} color="inherit" /> : undefined}
-            data-testid={mode === 'call' ? 'call-save-btn' : mode === 'note' ? 'note-save-btn' : 'email-save-btn'}
+            data-testid={
+              isEditingTask
+                ? 'edit-task-save-btn'
+                : mode === 'call'
+                  ? 'call-save-btn'
+                  : mode === 'note'
+                    ? 'note-save-btn'
+                    : 'email-save-btn'
+            }
           >
             {submitting
               ? 'Saving…'
-              : mode === 'call'
-                ? (completeTask && completableTask ? 'Log call and complete task' : 'Log call')
-                : mode === 'note'
-                  ? (completeTask && completableTask ? 'Save note and complete task' : 'Save Note')
-                  : (completeTask && completableTask ? 'Log email and complete task' : 'Log email')}
+              : isEditingTask
+                ? 'Update task'
+                : mode === 'call'
+                  ? (completeTask && completableTask ? 'Log call and complete task' : 'Log call')
+                  : mode === 'note'
+                    ? (completeTask && completableTask ? 'Save note and complete task' : 'Save Note')
+                    : (completeTask && completableTask ? 'Log email and complete task' : 'Log email')}
           </Button>
         </Stack>
       </Box>

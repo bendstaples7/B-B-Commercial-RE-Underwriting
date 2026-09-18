@@ -49,6 +49,9 @@ export interface ActivityNextStepPanelProps {
   onNextStepTypeChange: (value: NextStepTaskType) => void
   customTaskTitle: string
   onCustomTaskTitleChange: (value: string) => void
+  /** Hide complete-task; keep due-date controls always visible (edit-task overlay). */
+  hideCompleteTask?: boolean
+  lockFollowUp?: boolean
 }
 
 export function ActivityNextStepPanel({
@@ -71,6 +74,8 @@ export function ActivityNextStepPanel({
   onNextStepTypeChange,
   customTaskTitle,
   onCustomTaskTitleChange,
+  hideCompleteTask = false,
+  lockFollowUp = false,
 }: ActivityNextStepPanelProps) {
   return (
     <Box
@@ -89,7 +94,7 @@ export function ActivityNextStepPanel({
         Next step
       </Typography>
 
-      {completableTask ? (
+      {completableTask && !hideCompleteTask ? (
         <FormControlLabel
           sx={{ alignItems: 'flex-start', m: 0, mb: 1, display: 'flex' }}
           control={
@@ -123,35 +128,56 @@ export function ActivityNextStepPanel({
         </Alert>
       ) : null}
 
-      <FormControlLabel
-        sx={{ alignItems: 'flex-start', m: 0, mb: createFollowUp ? 0.75 : 0, display: 'flex' }}
-        control={
-          <Checkbox
-            checked={createFollowUp}
-            onChange={(e) => onCreateFollowUpChange(e.target.checked)}
-            data-testid="create-follow-up-checkbox"
-            sx={{ pt: 0.25 }}
-          />
-        }
-        label={
-          <Typography variant="body2" data-testid="activity-follow-up-section">
-            Create a follow-up task
-            {followUpDuePreview && (
-              <>
-                {' — '}
-                <Typography component="span" variant="body2" color="primary.main">
-                  {formatFollowUpPresetLabel(
-                    followUpPreset as Exclude<FollowUpPreset, 'custom'>,
-                    followUpDuePreview,
-                  )}
-                </Typography>
-              </>
-            )}
-          </Typography>
-        }
-      />
+      {lockFollowUp ? (
+        <Typography
+          variant="body2"
+          data-testid="activity-follow-up-section"
+          sx={{ mb: 0.75, fontWeight: 500 }}
+        >
+          Due date
+          {followUpDuePreview && (
+            <>
+              {' — '}
+              <Typography component="span" variant="body2" color="primary.main">
+                {formatFollowUpPresetLabel(
+                  followUpPreset as Exclude<FollowUpPreset, 'custom'>,
+                  followUpDuePreview,
+                )}
+              </Typography>
+            </>
+          )}
+        </Typography>
+      ) : (
+        <FormControlLabel
+          sx={{ alignItems: 'flex-start', m: 0, mb: createFollowUp ? 0.75 : 0, display: 'flex' }}
+          control={
+            <Checkbox
+              checked={createFollowUp}
+              onChange={(e) => onCreateFollowUpChange(e.target.checked)}
+              data-testid="create-follow-up-checkbox"
+              sx={{ pt: 0.25 }}
+            />
+          }
+          label={
+            <Typography variant="body2" data-testid="activity-follow-up-section">
+              Create a follow-up task
+              {followUpDuePreview && (
+                <>
+                  {' — '}
+                  <Typography component="span" variant="body2" color="primary.main">
+                    {formatFollowUpPresetLabel(
+                      followUpPreset as Exclude<FollowUpPreset, 'custom'>,
+                      followUpDuePreview,
+                    )}
+                  </Typography>
+                </>
+              )}
+            </Typography>
+          }
+        />
+      )}
 
-      {createFollowUp && (
+      {(createFollowUp || lockFollowUp) && (
         <Box sx={{ width: '100%', minWidth: 0 }}>
           <Button
             size="small"
