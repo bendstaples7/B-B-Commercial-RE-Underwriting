@@ -92,7 +92,7 @@ def test_mail_invalid_address():
 
 def test_outreach_dnc_blocks_call_and_email():
     lead = SimpleNamespace(lead_status='do_not_contact')
-    for action in ('log_call', 'log_email'):
+    for action in ('log_call', 'log_email', 'log_meeting'):
         result = evaluate_outreach_log(lead, action)
         assert result.ok is False
         assert result.reason_code == REASON_DNC_BLOCKS_OUTREACH

@@ -2292,6 +2292,7 @@ def log_note(lead_id: int):
         email_label=data.get('email_label'),
         subject=data.get('subject'),
         sent_from_email=data.get('sent_from_email'),
+        activity_kind=data.get('activity_kind'),
         complete_task_id=data.get('complete_task_id'),
         follow_up=data.get('follow_up'),
     )

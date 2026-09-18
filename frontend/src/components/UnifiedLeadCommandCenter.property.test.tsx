@@ -178,7 +178,7 @@ vi.mock('@/components/LogActivityForm', () => ({
     onSaved,
     leadId,
   }: {
-    mode: 'call' | 'note' | 'email'
+    mode: 'call' | 'note' | 'email' | 'meeting'
     onSaved: (entry: any) => void
     leadId: number
   }) => {
@@ -292,6 +292,7 @@ const EXPECTED_TIMELINE_EVENT_PRIORITY: Record<string, number> = {
   hubspot_call: 3,
   hubspot_note: 3,
   hubspot_meeting: 3,
+  meeting_logged: 3,
   task_completed: 2,
   task_created: 1,
 }

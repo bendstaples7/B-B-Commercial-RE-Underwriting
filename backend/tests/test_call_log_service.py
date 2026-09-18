@@ -166,6 +166,28 @@ def test_log_email_creates_email_logged_timeline_entry(app):
         assert entry.event_metadata['email_address'] == 'jane@example.com'
 
 
+def test_log_meeting_creates_meeting_logged_timeline_entry(app):
+    """log_note with activity_kind=meeting creates a meeting_logged timeline entry."""
+    with app.app_context():
+        lead = _make_lead(app, '8c Meeting St')
+        svc = CallLogService()
+
+        with patch(_REFRESH_PATCH):
+            entry = svc.log_note(
+                lead.id,
+                body='Had coffee and talked through timing.',
+                activity_kind='meeting',
+            )
+
+        assert entry.event_type == 'meeting_logged'
+        assert entry.summary.startswith('Meeting:')
+        assert 'Had coffee' in entry.summary
+        assert entry.event_metadata['body'] == 'Had coffee and talked through timing.'
+        from app.models import Lead
+        updated = Lead.query.get(lead.id)
+        assert updated.last_contact_date == date.today()
+
+
 def test_note_empty_body_raises_validation_error(app):
     """Logging a note with empty body raises LeadTaskValidationError."""
     with app.app_context():

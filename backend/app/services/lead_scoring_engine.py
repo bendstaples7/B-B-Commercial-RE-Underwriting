@@ -170,6 +170,7 @@ ENGAGEMENT_MODIFIERS = {
     "call_not_interested": -40.0,
     "call_wrong_number": -30.0,
     "email_logged": +5.0,
+    "meeting_logged": +10.0,
     "note_motivation": +10.0,
     "stale_outreach": -5.0,
     "recent_contact": +5.0,
@@ -1552,6 +1553,9 @@ class LeadScoringEngine:
             elif entry.event_type == 'email_logged' and 'email_logged' not in applied:
                 applied.add('email_logged')
                 modifier += ENGAGEMENT_MODIFIERS['email_logged']
+            elif entry.event_type == 'meeting_logged' and 'meeting_logged' not in applied:
+                applied.add('meeting_logged')
+                modifier += ENGAGEMENT_MODIFIERS['meeting_logged']
             elif entry.event_type == 'note_added' and 'note_motivation' not in applied:
                 body = meta.get('body') or entry.summary or ''
                 if HubSpotSignalExtractorService.text_has_motivation_signal(body):

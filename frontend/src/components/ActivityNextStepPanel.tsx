@@ -1,5 +1,5 @@
 /**
- * Shared Next-step panel for LogActivityForm (call / note / email).
+ * Shared Next-step panel for LogActivityForm (call / note / email / meeting).
  * Sole owner of complete-task + create-follow-up + horizon controls.
  */
 import {

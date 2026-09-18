@@ -1050,9 +1050,12 @@ describe('LeadTimeline', () => {
       ).toBe('Email Logged')
     })
 
-    it('returns Meeting Logged for hubspot_meeting events', () => {
+    it('returns Meeting Logged for hubspot_meeting and meeting_logged events', () => {
       expect(
         getTimelineEventLabel(makeEntry(1, { event_type: 'hubspot_meeting' })),
+      ).toBe('Meeting Logged')
+      expect(
+        getTimelineEventLabel(makeEntry(1, { event_type: 'meeting_logged' })),
       ).toBe('Meeting Logged')
     })
 

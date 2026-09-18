@@ -1,8 +1,8 @@
 import { buildLeadQueueSearch } from '@/utils/fromQueue'
 
-export type LogActivityType = 'call' | 'note' | 'email'
+export type LogActivityType = 'call' | 'note' | 'email' | 'meeting'
 
-const LOG_ACTIVITY_TYPES = new Set<LogActivityType>(['call', 'note', 'email'])
+const LOG_ACTIVITY_TYPES = new Set<LogActivityType>(['call', 'note', 'email', 'meeting'])
 
 export function parseLogActivityParam(param: string | null): LogActivityType | null {
   if (!param) return null

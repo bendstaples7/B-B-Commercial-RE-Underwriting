@@ -939,6 +939,7 @@ const ACTIVITY_SUCCESS_MESSAGES: Record<ActivityLogType, string> = {
   note: 'Note saved.',
   call: 'Call logged.',
   email: 'Email logged.',
+  meeting: 'Meeting logged.',
 }
 
 function normalizeTimelineEntriesForLead(
@@ -1944,6 +1945,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       case 'log_email':
         setEditingTask(null)
         setActivityModal('email')
+        return
+      case 'log_meeting':
+        setActivityModal('meeting')
         return
       case 'create_task':
         tasksPanelRef.current?.scrollIntoView()

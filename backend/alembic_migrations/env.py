@@ -178,6 +178,8 @@ _KNOWN_REVISIONS = frozenset({
     # HubSpot MEETING engagements → Command Center timeline
     'hs_mtg_20260918',
     'hs_mtg_bf_20260918',
+    # Native Action Center Log Meeting
+    'mtg_log_20260918',
 })
 
 

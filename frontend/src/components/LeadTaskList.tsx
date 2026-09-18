@@ -665,6 +665,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                 : null
             const activityContextPrefix =
               activityContext?.eventType === 'call_logged'
+                || activityContext?.eventType === 'meeting_logged'
                 ? 'With'
                 : activityContext?.eventType === 'email_logged'
                   ? 'To'

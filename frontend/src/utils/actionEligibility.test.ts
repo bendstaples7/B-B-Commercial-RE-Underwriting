@@ -79,6 +79,9 @@ describe('actionEligibility', () => {
     expect(evaluateOutreachLog('do_not_contact', 'log_call').reasonCode).toBe(
       REASON_DNC_BLOCKS_OUTREACH,
     )
+    expect(evaluateOutreachLog('do_not_contact', 'log_meeting').reasonCode).toBe(
+      REASON_DNC_BLOCKS_OUTREACH,
+    )
     expect(evaluateOutreachLog('do_not_contact', 'log_note').ok).toBe(true)
   })
 

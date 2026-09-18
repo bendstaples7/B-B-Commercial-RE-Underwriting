@@ -124,6 +124,15 @@ describe('findCompletableTaskForMode', () => {
     expect(findCompletableTaskForMode('call', tasks)?.id).toBe(2)
     expect(findCompletableTaskForMode('note', tasks)?.id).toBe(2)
     expect(findCompletableTaskForMode('email', tasks)?.id).toBe(1)
+    expect(findCompletableTaskForMode('meeting', tasks)?.id).toBe(2)
+  })
+
+  it('meeting mode matches a meeting-titled task', () => {
+    const tasks = [
+      makeTask({ id: 1, title: 'Email outreach', task_type: 'custom' }),
+      makeTask({ id: 3, title: 'In-person meeting downtown', task_type: 'custom' }),
+    ]
+    expect(findCompletableTaskForMode('meeting', tasks)?.id).toBe(3)
   })
 
   it('never auto-completes skip_trace_owner or mail batch from note', () => {

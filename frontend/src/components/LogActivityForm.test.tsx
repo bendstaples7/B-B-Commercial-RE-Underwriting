@@ -415,12 +415,55 @@ describe('LogActivityForm — mode="email"', () => {
   })
 })
 
+describe('LogActivityForm — mode="meeting"', () => {
+  it('shows meeting notes, contact picker without a phone/email method, and Log meeting CTA', () => {
+    render(<LogActivityForm mode="meeting" leadId={1} onSaved={vi.fn()} />)
+
+    expect(screen.getByTestId('log-meeting-form')).toBeInTheDocument()
+    expect(screen.getByLabelText('Meeting notes')).toBeInTheDocument()
+    expect(screen.getByTestId('contact-method-contact-select')).toBeInTheDocument()
+    expect(screen.queryByTestId('contact-method-method-select')).not.toBeInTheDocument()
+    expect(screen.getByTestId('meeting-save-btn')).toHaveTextContent('Log meeting')
+  })
+
+  it('validates empty notes', async () => {
+    render(<LogActivityForm mode="meeting" leadId={1} onSaved={vi.fn()} />)
+
+    await user.click(screen.getByTestId('meeting-save-btn'))
+    expect(screen.getByText('Notes cannot be empty.')).toBeInTheDocument()
+    expect(mockLogNote).not.toHaveBeenCalled()
+  })
+
+  it('sends activity_kind=meeting on save', async () => {
+    mockLogNote.mockResolvedValue(makeTimelineEntry({ event_type: 'meeting_logged', summary: 'Meeting: Coffee' }))
+    const onSaved = vi.fn()
+    render(<LogActivityForm mode="meeting" leadId={1} onSaved={onSaved} />)
+
+    await user.type(screen.getByTestId('meeting-notes-input'), 'Had coffee downtown')
+    await user.click(screen.getByTestId('meeting-save-btn'))
+
+    await waitFor(() => {
+      expect(mockLogNote).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({
+          body: 'Had coffee downtown',
+          activity_kind: 'meeting',
+        }),
+      )
+    })
+    expect(onSaved).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'meeting_logged' }),
+      undefined,
+    )
+  })
+})
+
 // ---------------------------------------------------------------------------
 // Cross-mode next-step parity (Detect)
 // ---------------------------------------------------------------------------
 
 describe('LogActivityForm — cross-mode next-step parity', () => {
-  it.each(['call', 'note', 'email'] as const)(
+  it.each(['call', 'note', 'email', 'meeting'] as const)(
     'mode=%s shows complete + follow-up checked for the same open task fixture',
     (mode) => {
       render(
@@ -432,7 +475,7 @@ describe('LogActivityForm — cross-mode next-step parity', () => {
     },
   )
 
-  it.each(['note', 'email'] as const)(
+  it.each(['note', 'email', 'meeting'] as const)(
     'mode=%s does not offer complete for skip_trace_owner',
     (mode) => {
       render(

@@ -1,12 +1,12 @@
 /**
- * LogActivityForm — unified call / note / email activity logging form.
+ * LogActivityForm — unified call / note / email / meeting activity logging form.
  *
  * Consolidates the former LogCallForm, LogNoteForm, and LogEmailForm into a
  * single component keyed by `mode`. Call mode keeps every prior capability:
  * outcomes (including Not Interested), direction, duration, contact method,
  * mail attribution, complete-task, follow-up cadence, next-step types, and
- * HubSpot task completion. Note and email modes share the same Next-step panel
- * (complete task + follow-up) via ActivityNextStepPanel.
+ * HubSpot task completion. Note, email, and meeting modes share the same
+ * Next-step panel (complete task + follow-up) via ActivityNextStepPanel.
  */
 import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import {
@@ -61,7 +61,7 @@ const MAX_BODY_LENGTH = 5000
 const MAX_SUBJECT_LENGTH = 200
 const ADD_NEW_SENT_FROM = '__add_new__'
 
-export type LogActivityMode = 'call' | 'note' | 'email'
+export type LogActivityMode = 'call' | 'note' | 'email' | 'meeting'
 
 export type LogCallSavedMeta = {
   completedTaskId?: number
@@ -73,6 +73,28 @@ const ROOT_TESTID: Record<LogActivityMode, string> = {
   call: 'log-call-form',
   note: 'log-note-form',
   email: 'log-email-form',
+  meeting: 'log-meeting-form',
+}
+
+const SUBMIT_ERROR_TESTID: Record<LogActivityMode, string> = {
+  call: 'call-submit-error',
+  note: 'note-submit-error',
+  email: 'email-submit-error',
+  meeting: 'meeting-submit-error',
+}
+
+const CANCEL_BTN_TESTID: Record<LogActivityMode, string> = {
+  call: 'call-cancel-btn',
+  note: 'note-cancel-btn',
+  email: 'email-cancel-btn',
+  meeting: 'meeting-cancel-btn',
+}
+
+const SAVE_BTN_TESTID: Record<LogActivityMode, string> = {
+  call: 'call-save-btn',
+  note: 'note-save-btn',
+  email: 'email-save-btn',
+  meeting: 'meeting-save-btn',
 }
 
 function resolveContactName(
@@ -490,8 +512,8 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       }
     }
 
-    const handleNoteSubmit = async () => {
-      const error = validateBody(body, 'Note')
+    const handleNoteLikeSubmit = async (kind: 'note' | 'meeting') => {
+      const error = validateBody(body, kind === 'meeting' ? 'Notes' : 'Note')
       if (error) {
         setBodyError(error)
         return
@@ -511,16 +533,30 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       const { completedTaskId, hubSpotTaskId } = buildCompletionIds()
       const payload: LogNotePayload = {
         body,
+        activity_kind: kind,
         complete_task_id: completedTaskId,
         follow_up: buildFollowUpPayload(followUpDue),
+        ...(kind === 'meeting' && contactMethod.contactId != null
+          ? { contact_id: contactMethod.contactId }
+          : {}),
       }
 
       try {
         const entry = await callLogService.logNote(leadId, payload)
         const { completedHubSpotTaskId, completionWarning } = await maybeCompleteHubSpot(
           hubSpotTaskId,
-          'Note saved; the HubSpot task is still open.',
+          kind === 'meeting'
+            ? 'Meeting saved; the HubSpot task is still open.'
+            : 'Note saved; the HubSpot task is still open.',
         )
+        const contactName = resolveContactName(contacts, contactMethod.contactId)
+        const metadataFallback: Record<string, unknown> = { body }
+        if (kind === 'meeting' && contactMethod.contactId != null) {
+          metadataFallback.contact_id = contactMethod.contactId
+        }
+        if (kind === 'meeting' && contactName) {
+          metadataFallback.contact_name = contactName
+        }
         const savedMeta: LogCallSavedMeta | undefined =
           completedTaskId != null || completedHubSpotTaskId != null || completionWarning
             ? {
@@ -533,21 +569,29 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
           {
             ...entry,
             summary: entry.summary ?? body.slice(0, 500),
-            event_type: entry.event_type ?? 'note_added',
+            event_type: entry.event_type ?? (kind === 'meeting' ? 'meeting_logged' : 'note_added'),
             source: entry.source ?? 'manual',
-            metadata: entry.metadata ?? { body },
+            metadata: entry.metadata ?? metadataFallback,
           },
           savedMeta,
         )
         setBody('')
+        if (kind === 'meeting') setContactMethod(EMPTY_CONTACT_METHOD)
         resetNextStepState(completableTask)
       } catch (err) {
-        // Preserve form data on server error — do NOT clear body
-        setSubmitError(err instanceof Error ? err.message : 'Failed to save note. Please try again.')
+        setSubmitError(
+          err instanceof Error
+            ? err.message
+            : kind === 'meeting'
+              ? 'Failed to log meeting. Please try again.'
+              : 'Failed to save note. Please try again.',
+        )
       } finally {
         setSubmitting(false)
       }
     }
+
+    const handleNoteSubmit = async () => handleNoteLikeSubmit('note')
 
     const handleEmailSubmit = async () => {
       const error = validateBody(body, 'Notes')
@@ -629,6 +673,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       }
       if (mode === 'call') await handleCallSubmit()
       else if (mode === 'note') await handleNoteSubmit()
+      else if (mode === 'meeting') await handleNoteLikeSubmit('meeting')
       else await handleEmailSubmit()
     }
 
@@ -718,7 +763,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
             severity="error"
             sx={{ mb: 1.25 }}
             onClose={() => setSubmitError(null)}
-            data-testid={mode === 'call' ? 'call-submit-error' : mode === 'note' ? 'note-submit-error' : 'email-submit-error'}
+            data-testid={SUBMIT_ERROR_TESTID[mode]}
           >
             {submitError}
           </Alert>
@@ -972,6 +1017,45 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
               </>
             )}
 
+            {mode === 'meeting' && (
+              <>
+                <ContactMethodFields
+                  dense
+                  mode="contact"
+                  contacts={contacts}
+                  contactsLoading={contactsLoading}
+                  value={contactMethod}
+                  onChange={setContactMethod}
+                />
+                <TextField
+                  label="Meeting notes"
+                  multiline
+                  minRows={4}
+                  value={body}
+                  onChange={(e) => {
+                    setBody(e.target.value)
+                    if (bodyError) setBodyError(null)
+                  }}
+                  error={!!bodyError || isBodyOverLimit}
+                  helperText={
+                    bodyError ?? (
+                      <Typography
+                        component="span"
+                        variant="caption"
+                        color={isBodyOverLimit ? 'error' : 'text.secondary'}
+                        data-testid="meeting-char-count"
+                      >
+                        {body.length}/{MAX_BODY_LENGTH.toLocaleString()}
+                      </Typography>
+                    )
+                  }
+                  fullWidth
+                  sx={{ mb: 2 }}
+                  inputProps={{ 'data-testid': 'meeting-notes-input' }}
+                />
+              </>
+            )}
+
             {mode === 'email' && (
               <>
                 <ContactMethodFields
@@ -1098,7 +1182,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
               size="small"
               onClick={onCancel}
               disabled={submitting}
-              data-testid={mode === 'call' ? 'call-cancel-btn' : mode === 'note' ? 'note-cancel-btn' : 'email-cancel-btn'}
+              data-testid={CANCEL_BTN_TESTID[mode]}
             >
               Cancel
             </Button>
@@ -1109,15 +1193,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
             size="small"
             disabled={submitting}
             startIcon={submitting ? <CircularProgress size={14} color="inherit" /> : undefined}
-            data-testid={
-              isEditingTask
-                ? 'edit-task-save-btn'
-                : mode === 'call'
-                  ? 'call-save-btn'
-                  : mode === 'note'
-                    ? 'note-save-btn'
-                    : 'email-save-btn'
-            }
+            data-testid={isEditingTask ? 'edit-task-save-btn' : SAVE_BTN_TESTID[mode]}
           >
             {submitting
               ? 'Saving…'
@@ -1127,6 +1203,8 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
                   ? (completeTask && completableTask ? 'Log call and complete task' : 'Log call')
                   : mode === 'note'
                     ? (completeTask && completableTask ? 'Save note and complete task' : 'Save Note')
+                    : mode === 'meeting'
+                      ? (completeTask && completableTask ? 'Log meeting and complete task' : 'Log meeting')
                     : (completeTask && completableTask ? 'Log email and complete task' : 'Log email')}
           </Button>
         </Stack>

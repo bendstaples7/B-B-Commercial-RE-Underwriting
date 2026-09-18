@@ -6,6 +6,7 @@
 import type { LeadTask, LeadTaskType } from '@/types'
 
 const CALL_TITLE_RE = /\b(call|phone|voicemail)\b/i
+const MEETING_TITLE_RE = /\bmeeting\b/i
 const FOLLOW_UP_TITLE_RE = /\bfollow[\s-]?up\b/i
 const MAIL_OR_EMAIL_TITLE_RE = /\b(email|e-mail|mail|letter)\b/i
 
@@ -155,11 +156,32 @@ export function findEmailCompletableTask(tasks: LeadTask[]): LeadTask | null {
   )
 }
 
+export function isMeetingCompletableTask(
+  taskType: string | null | undefined,
+  title: string | null | undefined,
+): boolean {
+  const ttype = (taskType || 'custom').trim()
+  if (NEVER_NOTE_EMAIL_COMPLETE.has(ttype as LeadTaskType)) return false
+  if (MEETING_TITLE_RE.test(title || '')) return true
+  return isCallCompletableTask(taskType, title)
+}
+
+export function findMeetingCompletableTask(tasks: LeadTask[]): LeadTask | null {
+  return findFirstMatching(
+    tasks,
+    (task) => isMeetingCompletableTask(task.task_type, task.title),
+    (task) =>
+      !NEVER_NOTE_EMAIL_COMPLETE.has((task.task_type || 'custom') as LeadTaskType)
+      && (task.task_type || 'custom') !== 'add_to_mail_batch',
+  )
+}
+
 /** Mode-aware completable task for LogActivityForm next-step panel. */
 export function findCompletableTaskForMode(
-  mode: 'call' | 'note' | 'email',
+  mode: 'call' | 'note' | 'email' | 'meeting',
   tasks: LeadTask[],
 ): LeadTask | null {
-  if (mode === 'call' || mode === 'note') return findCallCompletableTask(tasks)
-  return findEmailCompletableTask(tasks)
+  if (mode === 'email') return findEmailCompletableTask(tasks)
+  if (mode === 'meeting') return findMeetingCompletableTask(tasks)
+  return findCallCompletableTask(tasks)
 }

@@ -131,7 +131,7 @@ async function main() {
       })
       page = await context.newPage()
       await injectSession(page, session)
-      await page.goto(targetUrl, { waitUntil: 'networkidle', timeout: 120000 })
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 120000 })
       channel = `auth-playwright:${session.source}`
     }
 

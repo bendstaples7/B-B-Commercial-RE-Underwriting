@@ -33,6 +33,7 @@ import AnalyticsOutlinedIcon from '@mui/icons-material/AnalyticsOutlined'
 import ContactMailOutlinedIcon from '@mui/icons-material/ContactMailOutlined'
 import PinDropOutlinedIcon from '@mui/icons-material/PinDropOutlined'
 import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlined'
+import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined'
 import DoNotDisturbOnOutlinedIcon from '@mui/icons-material/DoNotDisturbOnOutlined'
 import BusinessOutlinedIcon from '@mui/icons-material/BusinessOutlined'
 import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline'
@@ -61,12 +62,14 @@ interface ActionButton {
   /** Whether this button is an outreach action (disabled for DNC leads) */
   isOutreach?: boolean
   title?: string
+  ariaLabel?: string
 }
 
 const ACTION_ICONS: Record<string, ReactElement> = {
   log_call: <PhoneIcon fontSize="small" />,
   log_note: <StickyNote2OutlinedIcon fontSize="small" />,
   log_email: <EmailOutlinedIcon fontSize="small" />,
+  log_meeting: <GroupsOutlinedIcon fontSize="small" />,
   add_to_mail_batch: <LocalPostOfficeOutlinedIcon fontSize="small" />,
   move_to_skip_trace: <PersonSearchOutlinedIcon fontSize="small" />,
   research_llc: <BusinessOutlinedIcon fontSize="small" />,
@@ -87,18 +90,21 @@ const CONDO_DEPRIORITIZE_REASON =
 
 /** Fixed Quick actions order for every lead — unavailable actions stay visible but disabled. */
 const UNIVERSAL_ACTIONS: ActionButton[] = [
-  { label: 'Log Call', action: 'log_call', isOutreach: true },
-  { label: 'Log Note', action: 'log_note' },
-  { label: 'Log Email', action: 'log_email', isOutreach: true },
+  { label: 'Call', action: 'log_call', isOutreach: true, ariaLabel: 'Log Call' },
+  { label: 'Note', action: 'log_note', ariaLabel: 'Log Note' },
+  { label: 'Email', action: 'log_email', isOutreach: true, ariaLabel: 'Log Email' },
+  { label: 'Meeting', action: 'log_meeting', isOutreach: true, ariaLabel: 'Log Meeting' },
   {
-    label: 'Add to Mail Queue',
+    label: 'Mail',
     action: 'add_to_mail_batch',
     isOutreach: true,
+    ariaLabel: 'Add to Mail Queue',
   },
   {
-    label: 'Move to Skip Trace',
+    label: 'Skip Trace',
     action: 'move_to_skip_trace',
     isOutreach: true,
+    ariaLabel: 'Move to Skip Trace',
     title: 'Complete the current task, change status to Skip Trace, and create awaiting skip-trace work',
   },
   {
@@ -486,6 +492,7 @@ export function RecommendedActionPanel({
       btn.action === 'log_call'
       || btn.action === 'log_note'
       || btn.action === 'log_email'
+      || btn.action === 'log_meeting'
       || btn.action === 'add_to_mail_batch'
       || btn.action === 'move_to_skip_trace'
     ) {
@@ -557,7 +564,7 @@ export function RecommendedActionPanel({
           )
         }
         data-testid={`${testIdPrefix}-${btn.action}`}
-        aria-label={btn.label}
+        aria-label={btn.ariaLabel ?? btn.label}
         sx={{
           width: { xs: '100%', sm: 'auto' },
           justifyContent: { xs: 'flex-start', sm: 'center' },
@@ -574,7 +581,7 @@ export function RecommendedActionPanel({
           tabIndex={0}
           role="button"
           aria-disabled="true"
-          aria-label={`${btn.label} unavailable: ${unavailableReason}`}
+          aria-label={`${btn.ariaLabel ?? btn.label} unavailable: ${unavailableReason}`}
           style={{ display: 'inline-flex', maxWidth: '100%' }}
         >
           {button}
@@ -745,7 +752,7 @@ export function RecommendedActionPanel({
           }}
           disabled={isDisabled}
           data-testid={`action-center-tile-${btn.action}`}
-          aria-label={btn.label}
+          aria-label={btn.ariaLabel ?? btn.label}
           title={isDisabled ? undefined : title}
           sx={{
             ...ccActionTileSx,
@@ -769,7 +776,7 @@ export function RecommendedActionPanel({
             tabIndex={0}
             role="button"
             aria-disabled="true"
-            aria-label={`${btn.label} unavailable: ${unavailableReason}`}
+            aria-label={`${btn.ariaLabel ?? btn.label} unavailable: ${unavailableReason}`}
             style={{ display: 'inline-flex', flex: '1 1 0', minWidth: 0 }}
           >
             {tileBtn}
@@ -786,9 +793,10 @@ export function RecommendedActionPanel({
         <Box
           sx={{
             display: 'flex',
-            flexWrap: { xs: 'wrap', sm: 'nowrap' },
-            gap: 1,
+            flexWrap: 'nowrap',
+            gap: 0.5,
             width: '100%',
+            minWidth: 0,
           }}
         >
           {tileButtons.map((btn) => renderUniversalTile(btn))}
