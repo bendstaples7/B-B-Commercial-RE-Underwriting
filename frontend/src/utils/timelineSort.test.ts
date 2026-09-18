@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sortTimelineEntriesDesc } from '@/utils/timelineSort'
+import { previewTimelineEntries, sortTimelineEntriesDesc } from '@/utils/timelineSort'
 import type { LeadTimelineEntry, TimelineEventType } from '@/types'
 
 function makeEntry(
@@ -36,6 +36,32 @@ describe('sortTimelineEntriesDesc', () => {
       'note_added',
       'task_completed',
       'task_created',
+    ])
+  })
+})
+
+describe('previewTimelineEntries', () => {
+  it('keeps an older note in the collapsed preview when later system rows would hide it', () => {
+    const later = '2026-09-03T23:51:24.000Z'
+    const capture = '2026-09-03T23:49:48.000Z'
+    const preview = previewTimelineEntries(
+      sortTimelineEntriesDesc([
+        makeEntry(11, 'status_changed', later),
+        makeEntry(10, 'status_changed', later),
+        makeEntry(9, 'category_changed', later),
+        makeEntry(8, 'status_changed', later),
+        makeEntry(7, 'task_created', capture),
+        makeEntry(6, 'note_added', capture),
+        makeEntry(5, 'lead_imported', capture),
+      ]),
+      5,
+    )
+    expect(preview.map((e) => e.event_type)).toEqual([
+      'note_added',
+      'status_changed',
+      'status_changed',
+      'category_changed',
+      'status_changed',
     ])
   })
 })

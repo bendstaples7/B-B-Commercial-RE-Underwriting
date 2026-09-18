@@ -380,6 +380,32 @@ describe('LeadTimeline', () => {
       expect(screen.queryByTestId('load-more-btn')).not.toBeInTheDocument()
     })
 
+    it('keeps a capture note in the collapsed preview when later status rows would hide it', () => {
+      const later = '2026-09-03T23:51:24.000Z'
+      const capture = '2026-09-03T23:49:48.000Z'
+      const entries = [
+        makeEntry(11, { event_type: 'status_changed', occurred_at: later, summary: 'Status to mailing' }),
+        makeEntry(10, { event_type: 'status_changed', occurred_at: later, summary: 'Status to skip trace' }),
+        makeEntry(9, { event_type: 'category_changed', occurred_at: later, summary: 'Category changed' }),
+        makeEntry(8, { event_type: 'status_changed', occurred_at: later, summary: 'Status to mailing again' }),
+        makeEntry(7, { event_type: 'task_created', occurred_at: capture, summary: 'Task created: skip trace' }),
+        makeEntry(6, { event_type: 'note_added', occurred_at: capture, summary: 'Walk-by · 5023 N Winchester Ave' }),
+        makeEntry(5, { event_type: 'lead_imported', occurred_at: capture, summary: 'Quick-add: new lead captured in the field' }),
+      ]
+
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={entries}
+          initialTotal={7}
+        />,
+      )
+
+      expect(screen.getByTestId('timeline-entry-6')).toHaveTextContent('Walk-by · 5023 N Winchester Ave')
+      expect(screen.queryByTestId('timeline-entry-5')).not.toBeInTheDocument()
+      expect(screen.getByTestId('timeline-show-older-btn')).toBeInTheDocument()
+    })
+
     it('shows "Load more" button when more entries exist and total is within preview', () => {
       const entries = [makeEntry(1), makeEntry(2)]
 

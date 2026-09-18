@@ -7,7 +7,7 @@ import pytest
 
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry
-from app.services.quick_add_service import merge_deal_description
+from app.services.quick_add_service import merge_deal_description, quick_add_activity_note_body
 
 _AUTH_HEADERS = {'X-User-Id': 'test-user'}
 
@@ -55,6 +55,38 @@ class TestQuickAddEndpoint:
 
             entries = LeadTimelineEntry.query.filter_by(lead_id=lead.id).all()
             assert len(entries) >= 2
+            notes = [
+                e for e in entries
+                if e.event_type == 'note_added'
+                and not e.is_deleted
+                and (e.event_metadata or {}).get('source') == 'quick_add'
+            ]
+            assert len(notes) == 1
+            assert notes[0].summary.startswith('Looks promising')
+            assert (notes[0].event_metadata or {}).get('body') == 'Looks promising'
+
+    def test_blank_note_still_writes_walk_by_activity_note(self, quick_add_client, app):
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '321 Walk By Note St, Chicago, IL',
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 201
+            lead_id = response.get_json()['lead_id']
+            notes = LeadTimelineEntry.query.filter_by(
+                lead_id=lead_id, event_type='note_added', is_deleted=False,
+            ).all()
+            capture_notes = [
+                e for e in notes
+                if (e.event_metadata or {}).get('source') == 'quick_add'
+            ]
+            assert len(capture_notes) == 1
+            assert capture_notes[0].summary.startswith('Walk-by ·')
+            assert '321 Walk By Note St' in capture_notes[0].summary
 
     def test_parses_places_address_with_zip_and_country(self, quick_add_client, app):
         with app.app_context():
@@ -189,6 +221,14 @@ class TestQuickAddEndpoint:
                 event_type='lead_imported',
             ).count()
             assert imported == 1
+            notes = LeadTimelineEntry.query.filter_by(
+                lead_id=lead.id, event_type='note_added', is_deleted=False,
+            ).order_by(LeadTimelineEntry.id).all()
+            capture_notes = [
+                e for e in notes
+                if (e.event_metadata or {}).get('source') == 'quick_add'
+            ]
+            assert [e.summary for e in capture_notes] == ['First pass', 'Second pass']
 
     def test_lookup_returns_address_matches(self, quick_add_client, app):
         with app.app_context():
@@ -398,6 +438,15 @@ class TestQuickAddEndpoint:
             assert response.status_code == 201
             lead = db.session.get(Lead, response.get_json()['lead_id'])
             assert lead.needs_skip_trace is True
+            notes = LeadTimelineEntry.query.filter_by(
+                lead_id=lead.id, event_type='note_added', is_deleted=False,
+            ).all()
+            capture_notes = [
+                e for e in notes
+                if (e.event_metadata or {}).get('source') == 'quick_add'
+            ]
+            assert len(capture_notes) == 1
+            assert capture_notes[0].summary.startswith('Walk-by ·')
 
 
 class TestMergeDealDescription:
@@ -410,6 +459,20 @@ class TestMergeDealDescription:
         block = 'Walk-by · same capture'
         merged = merge_deal_description(f'Prior\n\n---\n\n{block}', block)
         assert merged.count(block) == 1
+
+
+class TestQuickAddActivityNoteBody:
+    def test_prefers_user_note(self):
+        assert quick_add_activity_note_body(
+            note='  Porch light on  ',
+            walk_by_context='Walk-by · 123 Main · Sep 03, 2026 11:49 PM',
+        ) == 'Porch light on'
+
+    def test_falls_back_to_walk_by_context(self):
+        assert quick_add_activity_note_body(
+            note='   ',
+            walk_by_context='Walk-by · 123 Main · Sep 03, 2026 11:49 PM',
+        ) == 'Walk-by · 123 Main · Sep 03, 2026 11:49 PM'
 
     def test_requires_address(self, quick_add_client, app):
         with app.app_context():

@@ -38,8 +38,8 @@ pytestmark = pytest.mark.skipif(
     reason="MIGRATION_TEST_DB_URL not set — integration tests require a real PostgreSQL 15 database",
 )
 
-# Expected final head revision after a complete upgrade (squash/marker revision).
-_EXPECTED_HEAD = "b3c4d5e6f7a1"
+# Expected final head revision after a complete upgrade.
+_EXPECTED_HEAD = "qa_note_20260918"
 
 # Key application tables that must be created by the chain on upgrade
 # and must be absent after a full downgrade to base.

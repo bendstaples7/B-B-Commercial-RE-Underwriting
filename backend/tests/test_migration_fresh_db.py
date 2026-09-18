@@ -45,9 +45,9 @@ pytestmark = pytest.mark.skipif(
 # Constants
 # ---------------------------------------------------------------------------
 
-#: The expected head revision — the current Alembic head (d6e7f8a9b0c1,
-#: add_hubspot_signals_dedup_unique_index).
-EXPECTED_HEAD_REVISION = 'd6e7f8a9b0c1'
+#: The expected head revision — the current Alembic head (qa_note_20260918,
+#: backfill quick-add Activity notes).
+EXPECTED_HEAD_REVISION = 'qa_note_20260918'
 
 #: Columns that must be present in the users table after upgrade (Req 4.2).
 EXPECTED_USERS_COLUMNS = {
