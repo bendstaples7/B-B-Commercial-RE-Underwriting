@@ -1380,6 +1380,7 @@ class TestMergePreviewAndUnitGuard:
             assert response.status_code == 200
             body = response.get_json()
             assert body['same_building'] is False
+            assert body.get('mergeable') is False
 
     def test_merge_into_rejects_other_unit(self, client, app):
         from app.services.lead_dedup_service import refresh_lead_dedup_fields
@@ -1395,6 +1396,30 @@ class TestMergePreviewAndUnitGuard:
                 headers=_AUTH_HEADERS,
             )
             assert response.status_code == 400
+
+    def test_merge_into_allows_building_husk_vs_unit(self, client, app):
+        from app.services.lead_dedup_service import refresh_lead_dedup_fields
+
+        with app.app_context():
+            husk = _make_lead(app, '2834 N Drake Ave', owner_first_name='Fran', owner_last_name='Solis')
+            unit = _make_lead(app, '2834 N Drake Ave 1r', owner_first_name='Fran', owner_last_name='Solis')
+            for item in (husk, unit):
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ), patch(
+                'app.services.lead_refresh.refresh_lead_scoring',
+            ):
+                response = client.post(
+                    f'/api/leads/{husk.id}/merge-into/{unit.id}',
+                    headers=_AUTH_HEADERS,
+                )
+            assert response.status_code == 200
+            body = response.get_json()
+            assert body['merged'] is True
+            assert body['winner_id'] == unit.id
+            assert body['loser_id'] == husk.id
 
 
 class TestMoveToSkipTrace:

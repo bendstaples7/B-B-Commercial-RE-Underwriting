@@ -366,83 +366,95 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
   })
 
   it('bolds the viewing-from queue in the score-box list', async () => {
-    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
-      makeCommandCenterPayload({
-        work_queues: [
-          { key: 'needs-review', label: 'Needs Review', path: '/queues/needs-review' },
-        ],
-        review_required: true,
-        review_reason: 'duplicate_lead_cluster',
-        duplicate_cluster: {
-          cluster_ids: [1, 99],
-          suggested_winner_id: 99,
-          confidence: 'ambiguous',
-          streets: { 1: '100 Main St', 99: '100 Main St Unit 2' },
-          members: [
-            {
-              id: 1,
-              property_street: '100 Main St',
-              owner_display_name: 'Ada Owner',
-              county_assessor_pin: '11-22-33',
-              hubspot_confirmed: false,
-              has_phone: true,
-              has_email: false,
-              is_suggested_winner: false,
-            },
-            {
-              id: 99,
-              property_street: '100 Main St Unit 2',
-              owner_display_name: 'Ada Owner',
-              county_assessor_pin: '11-22-34',
-              hubspot_confirmed: true,
-              has_phone: true,
-              has_email: true,
-              is_suggested_winner: true,
-            },
+    const scrollIntoView = vi.fn()
+    const originalScroll = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scrollIntoView as typeof Element.prototype.scrollIntoView
+    try {
+      vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+        makeCommandCenterPayload({
+          work_queues: [
+            { key: 'needs-review', label: 'Needs Review', path: '/queues/needs-review' },
           ],
-        },
-      }),
-    )
-
-    const fromQueue = { key: 'needs-review', label: 'Needs Review' }
-    vi.mocked(queueService.getNavigation).mockResolvedValue({
-      queue_key: 'needs-review',
-      lead_id: 1,
-      position: 1,
-      total: 3,
-      prev_id: null,
-      next_id: 2,
-    })
-    render(
-      <MemoryRouter
-        initialEntries={[
-          {
-            pathname: '/leads/1',
-            state: { fromQueue },
+          review_required: true,
+          review_reason: 'duplicate_lead_cluster',
+          duplicate_cluster: {
+            cluster_ids: [1, 99],
+            suggested_winner_id: 99,
+            confidence: 'ambiguous',
+            streets: { 1: '100 Main St', 99: '100 Main St Unit 2' },
+            members: [
+              {
+                id: 1,
+                property_street: '100 Main St',
+                owner_display_name: 'Ada Owner',
+                county_assessor_pin: '11-22-33',
+                hubspot_confirmed: false,
+                has_phone: true,
+                has_email: false,
+                is_suggested_winner: false,
+              },
+              {
+                id: 99,
+                property_street: '100 Main St Unit 2',
+                owner_display_name: 'Ada Owner',
+                county_assessor_pin: '11-22-34',
+                hubspot_confirmed: true,
+                has_phone: true,
+                has_email: true,
+                is_suggested_winner: true,
+              },
+            ],
           },
-        ]}
-      >
-        <UnifiedLeadCommandCenter leadId={1} />
-      </MemoryRouter>,
-    )
+        }),
+      )
 
-    await waitFor(() => {
-      expect(screen.getByTestId('header-current-queues')).toBeInTheDocument()
-    })
-    expect(screen.queryByTestId('work-queue-came-from-needs-review')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('work-queue-currently-in')).not.toBeInTheDocument()
-    expect(screen.queryByText('Came from')).not.toBeInTheDocument()
-    expect(screen.getByTestId('work-queue-strip-needs-review')).toHaveAttribute(
-      'data-viewing-from',
-      'true',
-    )
-    expect(screen.queryByTestId('needs-review-cluster-table')).not.toBeInTheDocument()
+      const fromQueue = { key: 'needs-review', label: 'Needs Review' }
+      vi.mocked(queueService.getNavigation).mockResolvedValue({
+        queue_key: 'needs-review',
+        lead_id: 1,
+        position: 1,
+        total: 3,
+        prev_id: null,
+        next_id: 2,
+      })
+      render(
+        <MemoryRouter
+          initialEntries={[
+            {
+              pathname: '/leads/1',
+              state: { fromQueue },
+            },
+          ]}
+        >
+          <UnifiedLeadCommandCenter leadId={1} />
+        </MemoryRouter>,
+      )
 
-    await userEvent.click(screen.getByTestId('work-queue-strip-needs-review'))
-    expect(await screen.findByTestId('needs-review-cluster-table')).toBeInTheDocument()
-    expect(screen.getByTestId('needs-review-clarity-reason')).toHaveTextContent(
-      'Possible duplicate records',
-    )
+      await waitFor(() => {
+        expect(screen.getByTestId('header-current-queues')).toBeInTheDocument()
+      })
+      expect(screen.queryByTestId('work-queue-came-from-needs-review')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('work-queue-currently-in')).not.toBeInTheDocument()
+      expect(screen.queryByText('Came from')).not.toBeInTheDocument()
+      const needsReviewChip = screen.getByTestId('work-queue-strip-needs-review')
+      expect(needsReviewChip).toHaveAttribute(
+        'data-viewing-from',
+        'true',
+      )
+      expect(screen.getByTestId('needs-review-duplicate-callout')).toBeInTheDocument()
+      expect(screen.getByTestId('needs-review-cluster-comparison')).toBeInTheDocument()
+      expect(screen.getByTestId('needs-review-open-merge')).toBeInTheDocument()
+      expect(screen.getByTestId('needs-review-clarity-reason')).toHaveTextContent(
+        'Possible duplicate records',
+      )
+      await userEvent.click(needsReviewChip)
+      expect(scrollIntoView).toHaveBeenCalledWith(
+        expect.objectContaining({ behavior: 'smooth', block: 'nearest' }),
+      )
+      expect(screen.queryByTestId('needs-review-clarity-popover')).not.toBeInTheDocument()
+    } finally {
+      Element.prototype.scrollIntoView = originalScroll
+    }
   })
 
   it('shows a tight Property Overview header with address, owner link, status, quick stats, and score panel', async () => {

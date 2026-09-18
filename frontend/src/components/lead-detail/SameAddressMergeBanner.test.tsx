@@ -31,6 +31,7 @@ const twin200: SameAddressLeadSummary = {
 
 type MergePreviewResponse = {
   same_building: boolean
+  mergeable?: boolean
   current: SameAddressLeadSummary
   other: SameAddressLeadSummary
 }
@@ -488,6 +489,47 @@ describe('SameAddressMergeBanner', () => {
       expect(commandCenterService.mergeInto).toHaveBeenCalledWith(300, 200)
     })
     expect(onMerged).toHaveBeenCalledWith({ winnerId: 200, loserId: 300 })
+  })
+
+  it('accepts a building husk vs unit when merge preview says mergeable', async () => {
+    const user = userEvent.setup()
+    vi.mocked(commandCenterService.getMergePreview).mockResolvedValue({
+      same_building: false,
+      mergeable: true,
+      current: {
+        id: 100,
+        property_street: '2834 N Drake Ave',
+        owner_display_name: 'Fran',
+        people_names: ['Fran'],
+      },
+      other: {
+        id: 300,
+        property_street: '2834 N Drake Ave 1r',
+        owner_display_name: 'Fran',
+        people_names: ['Fran'],
+      },
+    })
+    render(
+      <MemoryRouter>
+        <ManualMergeHarness
+          leadId={100}
+          currentOwnerLabel="Fran"
+          currentPeopleNames={['Fran']}
+          twins={[]}
+          onMerged={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    await user.type(screen.getByTestId('same-address-merge-paste-id'), '300')
+    await user.tab()
+    await waitFor(() => {
+      expect(screen.getByTestId('same-address-merge-search-selected')).toHaveTextContent('#300')
+    })
+    await user.click(screen.getByTestId('same-address-merge-confirm'))
+    await waitFor(() => {
+      expect(commandCenterService.mergeInto).toHaveBeenCalledWith(300, 100)
+    })
   })
 
   it('rejects paste of a different building via merge preview', async () => {

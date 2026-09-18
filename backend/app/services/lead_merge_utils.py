@@ -166,7 +166,8 @@ def streets_match_normalized(a: Optional[str], b: Optional[str]) -> bool:
 
 _SITUS_UNIT_RE = re.compile(
     r'(?:\b(?:unit|apt|apartment|suite|ste)\b|#)\s*([a-z0-9-]+)\s*$'
-    r'|\s+((?=[a-z0-9-]*[a-z])(?=[a-z0-9-]*\d)[a-z0-9-]+)\s*$',
+    r'|\s+((?=[a-z0-9-]*[a-z])(?=[a-z0-9-]*\d)[a-z0-9-]+)\s*$'
+    r'|\s+(\d{1,4})\s*$',
     re.IGNORECASE,
 )
 
@@ -179,8 +180,11 @@ def situs_unit_token(street: Optional[str]) -> str:
     match = _SITUS_UNIT_RE.search(line)
     if not match:
         return ''
-    raw = match.group(1) or match.group(2) or ''
-    return re.sub(r'[^a-z0-9]', '', raw.lower())
+    raw = match.group(1) or match.group(2) or match.group(3) or ''
+    token = re.sub(r'[^a-z0-9]', '', raw.lower())
+    if token.isdigit():
+        return str(int(token))
+    return token
 
 
 def streets_match_same_situs(a: Optional[str], b: Optional[str]) -> bool:
@@ -195,6 +199,23 @@ def streets_match_same_situs(a: Optional[str], b: Optional[str]) -> bool:
     ub = situs_unit_token(b)
     if ua or ub:
         return ua == ub
+    return True
+
+
+def streets_match_duplicate_merge(a: Optional[str], b: Optional[str]) -> bool:
+    """Human-confirmed duplicate merge: same building, not two distinct units.
+
+    Allows a bare building husk (``100 Main``) to merge into a unit record
+    (``100 Main Unit 2``). Still rejects condo A-30 vs A-206.
+    """
+    if streets_match_same_situs(a, b):
+        return True
+    if not streets_match_normalized(a, b):
+        return False
+    ua = situs_unit_token(a)
+    ub = situs_unit_token(b)
+    if ua and ub and ua != ub:
+        return False
     return True
 
 

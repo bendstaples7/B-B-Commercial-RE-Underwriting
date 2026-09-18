@@ -1,12 +1,11 @@
 /**
- * Needs Review clarity — Option 1: popover on the Needs Review membership chip.
- *
- * Explains why the lead is in Needs Review and offers Keep suggested /
- * Not a duplicate / Mark reviewed. Not a sticky header banner.
+ * Needs Review clarity — chip popover for generic reasons; always-visible
+ * duplicate callout with this-vs-other comparison + merge.
  */
 import { useState, type MouseEvent } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -42,6 +41,9 @@ export interface NeedsReviewClarityContentProps {
   }) => void | Promise<void>
   /** Called after a successful resolve so the popover can close. */
   onClose?: () => void
+  /** Opens the pick-who-stays merge dialog (preferred over silent keep-suggested). */
+  onOpenMerge?: () => void
+  variant?: 'popover' | 'callout'
 }
 
 function memberFlags(member: DuplicateClusterMember): string {
@@ -52,11 +54,119 @@ function memberFlags(member: DuplicateClusterMember): string {
   return bits.length ? bits.join(' · ') : '—'
 }
 
+function ComparisonField({
+  label,
+  current,
+  other,
+}: {
+  label: string
+  current: string
+  other: string
+}) {
+  const differ = current !== other
+  return (
+    <Box
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: '88px 1fr 1fr',
+        gap: 1,
+        py: 0.5,
+        borderBottom: '1px solid',
+        borderColor: 'divider',
+      }}
+    >
+      <Typography variant="caption" color="text.secondary" sx={{ pt: 0.15 }}>
+        {label}
+      </Typography>
+      <Typography variant="body2" fontWeight={differ ? 700 : 400}>
+        {current}
+      </Typography>
+      <Typography variant="body2" fontWeight={differ ? 700 : 400}>
+        {other}
+      </Typography>
+    </Box>
+  )
+}
+
+function DuplicatePairComparison({
+  leadId,
+  current,
+  other,
+}: {
+  leadId: number
+  current: DuplicateClusterMember
+  other: DuplicateClusterMember
+}) {
+  return (
+    <Box sx={{ mt: 1 }} data-testid="needs-review-cluster-comparison">
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: '88px 1fr 1fr',
+          gap: 1,
+          pb: 0.5,
+        }}
+      >
+        <Typography variant="caption" color="text.secondary">
+          Field
+        </Typography>
+        <Typography variant="caption" fontWeight={700}>
+          This lead #{leadId}
+          {current.is_suggested_winner ? ' · suggested keep' : ''}
+        </Typography>
+        <Typography
+          variant="caption"
+          fontWeight={700}
+          data-testid={`needs-review-cluster-compare-${other.id}`}
+        >
+          <Link
+            component={RouterLink}
+            to={`/leads/${other.id}?queue=needs-review`}
+            underline="hover"
+            variant="caption"
+            fontWeight={700}
+          >
+            #{other.id}
+          </Link>
+          {other.is_suggested_winner ? ' · suggested keep' : ''}
+        </Typography>
+      </Box>
+      <ComparisonField
+        label="Owner"
+        current={current.owner_display_name || '—'}
+        other={other.owner_display_name || '—'}
+      />
+      <ComparisonField
+        label="Street"
+        current={current.property_street || '—'}
+        other={other.property_street || '—'}
+      />
+      <ComparisonField
+        label="PIN"
+        current={current.county_assessor_pin || '—'}
+        other={other.county_assessor_pin || '—'}
+      />
+      <ComparisonField
+        label="Status"
+        current={current.lead_status || '—'}
+        other={other.lead_status || '—'}
+      />
+      <ComparisonField
+        label="Signals"
+        current={memberFlags(current)}
+        other={memberFlags(other)}
+      />
+    </Box>
+  )
+}
+
 export function NeedsReviewClarityContent({
   leadId,
   commandCenterData,
   onResolved,
   onClose,
+  onOpenMerge,
+  variant = 'popover',
 }: NeedsReviewClarityContentProps) {
   const [busy, setBusy] = useState<'merge' | 'dismiss' | 'clear' | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -72,15 +182,29 @@ export function NeedsReviewClarityContent({
     duplicate_confidence: cluster?.confidence,
   })
   const winnerId = cluster?.suggested_winner_id ?? null
+  const members = cluster?.members ?? []
+  const siblings = members.filter((member) => member.id !== leadId)
+  const mergeLoserId = winnerId != null && winnerId !== leadId ? leadId : (siblings[0]?.id ?? null)
+  const mergeWinnerId = winnerId != null && winnerId !== leadId ? winnerId : leadId
   const canMerge =
     isDuplicate
-    && winnerId != null
-    && winnerId !== leadId
-    && String(cluster?.confidence || '').toLowerCase() !== 'ambiguous'
-  const members = cluster?.members ?? []
+    && mergeLoserId != null
+    && mergeWinnerId != null
+    && mergeLoserId !== mergeWinnerId
+  const pairCurrent = members.find((member) => member.id === leadId) ?? members[0]
+  const pairOther = members.find((member) => (
+    member.id !== pairCurrent?.id
+    && (member.is_suggested_winner || member.id === winnerId)
+  )) ?? members.find((member) => member.id !== pairCurrent?.id) ?? null
+  const showClusterTable = isDuplicate && members.length > 0 && (members.length > 2 || !pairOther)
   const triggeredAt = commandCenterData.review_triggered_at
     ? formatDate(commandCenterData.review_triggered_at)
     : null
+  const keepLabel = winnerId != null && winnerId !== leadId
+    ? `Keep suggested (#${winnerId})`
+    : mergeLoserId != null
+      ? `Merge #${mergeLoserId} into this`
+      : 'Merge'
 
   const run = async (kind: 'merge' | 'dismiss' | 'clear', fn: () => Promise<void>) => {
     setBusy(kind)
@@ -96,7 +220,10 @@ export function NeedsReviewClarityContent({
   }
 
   return (
-    <Box sx={{ p: 2, width: 400, maxWidth: '92vw' }} data-testid="needs-review-clarity-panel">
+    <Box
+      sx={{ p: variant === 'callout' ? 0 : 2, width: variant === 'callout' ? '100%' : 440, maxWidth: '92vw' }}
+      data-testid="needs-review-clarity-panel"
+    >
       <Typography variant="subtitle2" fontWeight={700} data-testid="needs-review-clarity-reason">
         {isDuplicate ? POSSIBLE_DUPLICATE_RECORDS_LABEL : reasonLabel}
       </Typography>
@@ -116,7 +243,11 @@ export function NeedsReviewClarityContent({
         </Typography>
       )}
 
-      {isDuplicate && members.length > 0 && (
+      {isDuplicate && pairCurrent && pairOther ? (
+        <DuplicatePairComparison leadId={leadId} current={pairCurrent} other={pairOther} />
+      ) : null}
+
+      {showClusterTable && (
         <Box sx={{ overflowX: 'auto', mt: 1 }} data-testid="needs-review-cluster-table">
           <Table size="small">
             <TableHead>
@@ -169,7 +300,23 @@ export function NeedsReviewClarityContent({
       )}
 
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1.5 }}>
-        {canMerge && winnerId != null && (
+        {onOpenMerge && isDuplicate ? (
+          <Button
+            size="small"
+            variant="contained"
+            startIcon={<MergeTypeIcon />}
+            disabled={busy != null}
+            data-testid="needs-review-open-merge"
+            onClick={() => {
+              onOpenMerge()
+              onClose?.()
+            }}
+            sx={{ cursor: 'pointer' }}
+          >
+            Merge
+          </Button>
+        ) : null}
+        {!onOpenMerge && canMerge && mergeLoserId != null && mergeWinnerId != null && (
           <Button
             size="small"
             variant="contained"
@@ -178,16 +325,17 @@ export function NeedsReviewClarityContent({
             data-testid="needs-review-merge-into-winner"
             onClick={() => {
               const ok = window.confirm(
-                `Merge lead #${leadId} into #${winnerId}? This soft-merges the duplicate and cannot be undone from this screen.`,
+                `Merge lead #${mergeLoserId} into #${mergeWinnerId}? This soft-merges the duplicate and cannot be undone from this screen.`,
               )
               if (!ok) return
               void run('merge', async () => {
-                await commandCenterService.mergeInto(leadId, winnerId)
-                await onResolved({ kind: 'merged', winnerId, loserId: leadId })
+                await commandCenterService.mergeInto(mergeLoserId, mergeWinnerId)
+                await onResolved({ kind: 'merged', winnerId: mergeWinnerId, loserId: mergeLoserId })
               })
             }}
+            sx={{ cursor: 'pointer' }}
           >
-            Keep suggested (#{winnerId})
+            {keepLabel}
           </Button>
         )}
         {isDuplicate ? (
@@ -203,6 +351,7 @@ export function NeedsReviewClarityContent({
                 await onResolved({ kind: 'dismissed' })
               })
             }}
+            sx={{ cursor: 'pointer' }}
           >
             Not a duplicate
           </Button>
@@ -219,6 +368,7 @@ export function NeedsReviewClarityContent({
                 await onResolved({ kind: 'cleared' })
               })
             }}
+            sx={{ cursor: 'pointer' }}
           >
             Mark reviewed
           </Button>
@@ -228,6 +378,7 @@ export function NeedsReviewClarityContent({
           component={RouterLink}
           to="/queues/needs-review"
           data-testid="needs-review-clarity-queue-link"
+          sx={{ cursor: 'pointer' }}
         >
           Open queue
         </Button>
@@ -252,6 +403,7 @@ export interface NeedsReviewChipPopoverProps {
   variant?: 'chip' | 'inline'
   /** Bold when this is the queue the user opened the lead from. */
   viewingFrom?: boolean
+  onOpenMerge?: () => void
 }
 
 /** Warning chip (or inline name) that opens the Needs Review clarity popover. */
@@ -262,6 +414,7 @@ export function NeedsReviewChipPopover({
   onResolved,
   variant = 'chip',
   viewingFrom = false,
+  onOpenMerge,
 }: NeedsReviewChipPopoverProps) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const open = Boolean(anchor)
@@ -270,9 +423,17 @@ export function NeedsReviewChipPopover({
   )
   if (!reviewActive) return null
 
-  const openPopover = (e: MouseEvent<HTMLElement>) => {
+  const isDuplicate = isDuplicateClusterReason(commandCenterData.review_reason)
+  const handleClick = (e: MouseEvent<HTMLElement>) => {
     e.preventDefault()
     e.stopPropagation()
+    if (isDuplicate) {
+      document.getElementById('needs-review-duplicate-callout')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      })
+      return
+    }
     setAnchor(e.currentTarget)
   }
 
@@ -282,11 +443,11 @@ export function NeedsReviewChipPopover({
         component="button"
         type="button"
         underline="hover"
-        onClick={openPopover}
+        onClick={handleClick}
         data-testid="work-queue-strip-needs-review"
         data-viewing-from={viewingFrom ? 'true' : undefined}
-        aria-haspopup="dialog"
-        aria-expanded={open}
+        aria-haspopup={isDuplicate ? undefined : 'dialog'}
+        aria-expanded={isDuplicate ? undefined : open}
         sx={{
           fontFamily: 'inherit',
           fontSize: 'inherit',
@@ -305,10 +466,10 @@ export function NeedsReviewChipPopover({
         color="warning"
         label={label}
         clickable
-        onClick={openPopover}
+        onClick={handleClick}
         data-testid="work-queue-strip-needs-review"
-        aria-haspopup="dialog"
-        aria-expanded={open}
+        aria-haspopup={isDuplicate ? undefined : 'dialog'}
+        aria-expanded={isDuplicate ? undefined : open}
         sx={{ fontWeight: 700, cursor: 'pointer' }}
       />
     )
@@ -316,22 +477,54 @@ export function NeedsReviewChipPopover({
   return (
     <>
       {trigger}
-      <Popover
-        open={open}
-        anchorEl={anchor}
-        onClose={() => setAnchor(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-        PaperProps={{ 'data-testid': 'needs-review-clarity-popover' } as object}
-      >
-        <NeedsReviewClarityContent
-          leadId={leadId}
-          commandCenterData={commandCenterData}
-          onResolved={onResolved}
+      {isDuplicate ? null : (
+        <Popover
+          open={open}
+          anchorEl={anchor}
           onClose={() => setAnchor(null)}
-        />
-      </Popover>
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+          transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+          PaperProps={{ 'data-testid': 'needs-review-clarity-popover' } as object}
+        >
+          <NeedsReviewClarityContent
+            leadId={leadId}
+            commandCenterData={commandCenterData}
+            onResolved={onResolved}
+            onClose={() => setAnchor(null)}
+            onOpenMerge={onOpenMerge}
+          />
+        </Popover>
+      )}
     </>
+  )
+}
+
+export function DuplicateReviewCallout({
+  leadId,
+  commandCenterData,
+  onResolved,
+  onOpenMerge,
+}: NeedsReviewClarityContentProps) {
+  if (!isDuplicateClusterReason(commandCenterData.review_reason)) return null
+  return (
+    <Alert
+      id="needs-review-duplicate-callout"
+      severity="warning"
+      data-testid="needs-review-duplicate-callout"
+      sx={{
+        cursor: 'auto',
+        alignItems: 'flex-start',
+        '& .MuiAlert-message': { width: '100%', cursor: 'auto' },
+      }}
+    >
+      <NeedsReviewClarityContent
+        leadId={leadId}
+        commandCenterData={commandCenterData}
+        onResolved={onResolved}
+        onOpenMerge={onOpenMerge}
+        variant="callout"
+      />
+    </Alert>
   )
 }
 
