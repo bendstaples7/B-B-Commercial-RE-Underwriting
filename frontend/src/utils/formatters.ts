@@ -25,6 +25,8 @@ const CENTRAL_DATE_TIME_OPTS: Intl.DateTimeFormatOptions = {
 export interface FormatDateTimeOptions {
   /** Split calendar date and clock+zone onto two lines for narrow tables. */
   multiline?: boolean
+  /** Include seconds (webhook event logs). Default is minute precision. */
+  seconds?: boolean
 }
 
 function formatCalendarDay(year: number, month: number, day: number): string {
@@ -43,13 +45,21 @@ function formatCalendarDay(year: number, month: number, day: number): string {
   })
 }
 
+/**
+ * Expand 2-digit years with a Windows-style pivot: 00–68 → 2000s, 69–99 → 1900s.
+ * Mail history is historical, so `6/21/99` is 1999 (not 2099).
+ */
+function expandTwoDigitYear(year: number): number {
+  if (year >= 100) return year
+  return year <= 68 ? 2000 + year : 1900 + year
+}
+
 function parseSlashDate(text: string): { year: number; month: number; day: number } | null {
   const slash = DATE_ONLY_SLASH_RE.exec(text)
   if (!slash) return null
   const month = Number(slash[1])
   const day = Number(slash[2])
-  let year = Number(slash[3])
-  if (year < 100) year += 2000
+  const year = expandTwoDigitYear(Number(slash[3]))
   if (formatCalendarDay(year, month, day) === '—') return null
   return { year, month, day }
 }
@@ -66,7 +76,7 @@ export function parseDisplayTimestamp(value: unknown): Date | null {
   if (slashMatch) {
     const slash = parseSlashDate(text)
     if (!slash) return null
-    return new Date(slash.year, slash.month - 1, slash.day)
+    return new Date(Date.UTC(slash.year, slash.month - 1, slash.day))
   }
   const isoDate = DATE_ONLY_ISO_RE.exec(text)
   if (isoDate) {
@@ -130,7 +140,10 @@ export function formatDateTime(
   }
   const parsed = parseDisplayTimestamp(text)
   if (!parsed) return '—'
-  const formatted = parsed.toLocaleString('en-US', CENTRAL_DATE_TIME_OPTS)
+  const opts: Intl.DateTimeFormatOptions = options?.seconds
+    ? { ...CENTRAL_DATE_TIME_OPTS, second: '2-digit' }
+    : CENTRAL_DATE_TIME_OPTS
+  const formatted = parsed.toLocaleString('en-US', opts)
   if (options?.multiline) {
     return formatted.replace(/, (?=\d{1,2}:)/, '\n')
   }

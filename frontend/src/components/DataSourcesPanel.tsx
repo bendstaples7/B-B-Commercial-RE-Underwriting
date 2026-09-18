@@ -180,7 +180,9 @@ export function DataSourcesError({ onRetry }: { onRetry: () => void }) {
  */
 export function formatTimestamp(isoString: string | null): string {
   if (!isoString) return 'No successful sync has occurred'
-  return formatDateTime(isoString)
+  const formatted = formatDateTime(isoString)
+  // Keep the raw string when the shared formatter cannot parse it.
+  return formatted === '—' ? isoString : formatted
 }
 
 /**

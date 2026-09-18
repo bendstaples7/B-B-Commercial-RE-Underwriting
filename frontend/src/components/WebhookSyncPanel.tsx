@@ -461,10 +461,10 @@ export const WebhookSyncPanel: React.FC<WebhookSyncPanelProps> = ({
                       </TableCell>
                       <TableCell sx={{ fontSize: '0.75rem' }}>{log.event_type}</TableCell>
                       <TableCell sx={{ whiteSpace: 'nowrap', fontSize: '0.75rem' }}>
-                        {formatDateTime(log.received_at)}
+                        {formatDateTime(log.received_at, { seconds: true })}
                       </TableCell>
                       <TableCell sx={{ whiteSpace: 'nowrap', fontSize: '0.75rem' }}>
-                        {formatDateTime(log.processed_at)}
+                        {formatDateTime(log.processed_at, { seconds: true })}
                       </TableCell>
                       <TableCell>
                         {log.status === 'failed' && (

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { formatAssessorPinAddress, formatDate, formatDateOnly, formatDateTime, formatLeadCategoryLabel, formatPropertyTypeLabel } from '@/utils/formatters'
+import {
+  formatAssessorPinAddress,
+  formatDate,
+  formatDateOnly,
+  formatDateTime,
+  formatLeadCategoryLabel,
+  formatPropertyTypeLabel,
+  parseDisplayTimestamp,
+} from '@/utils/formatters'
 
 describe('formatDate', () => {
   it('parses YYYY-MM-DD as a calendar date without shifting days', () => {
@@ -15,6 +23,13 @@ describe('formatDate', () => {
     expect(formatDate('2024-02-30')).toBe('—')
     expect(formatDate('2024-13-01')).toBe('—')
     expect(formatDate('2/30/2024')).toBe('—')
+  })
+
+  it('expands two-digit slash years with a Windows-style pivot', () => {
+    expect(formatDate('6/21/24')).toBe('Jun 21, 2024')
+    expect(formatDate('6/21/99')).toBe('Jun 21, 1999')
+    expect(formatDate('6/21/68')).toBe('Jun 21, 2068')
+    expect(formatDate('6/21/69')).toBe('Jun 21, 1969')
   })
 })
 
@@ -47,6 +62,24 @@ describe('formatDateTime', () => {
     expect(formatDateTime(null)).toBe('—')
     expect(formatDateTime('')).toBe('—')
     expect(formatDateTime('not-a-date')).toBe('—')
+  })
+
+  it('can include seconds for monitoring logs', () => {
+    expect(formatDateTime('2026-07-29T03:35:23.127597', { seconds: true })).toBe(
+      'Jul 28, 2026, 10:35:23 PM CDT',
+    )
+    expect(formatDateTime('2026-07-29T03:35:23.127597', { seconds: true, multiline: true })).toBe(
+      'Jul 28, 2026\n10:35:23 PM CDT',
+    )
+  })
+})
+
+describe('parseDisplayTimestamp', () => {
+  it('treats slash dates and ISO date-only strings as the same UTC calendar day', () => {
+    expect(parseDisplayTimestamp('6/21/2024')?.getTime()).toBe(
+      parseDisplayTimestamp('2024-06-21')?.getTime(),
+    )
+    expect(parseDisplayTimestamp('6/21/2024')?.toISOString()).toBe('2024-06-21T00:00:00.000Z')
   })
 })
 
