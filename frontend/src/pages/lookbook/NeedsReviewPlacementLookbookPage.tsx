@@ -271,8 +271,18 @@ function OptionMergeBanner() {
         Possible duplicate records show a this-vs-other comparison and Merge on
         Command Center — not buried in the Needs Review chip.
       </Typography>
-      <FakeHeader />
+      <FakeHeader
+        needsReviewInteractive
+        onNeedsReviewClick={(e) => {
+          e.preventDefault()
+          document.getElementById('lookbook-merge-review-banner')?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'nearest',
+          })
+        }}
+      />
       <Box
+        id="lookbook-merge-review-banner"
         data-testid="lookbook-merge-review-banner"
         sx={{
           mt: 1.5,

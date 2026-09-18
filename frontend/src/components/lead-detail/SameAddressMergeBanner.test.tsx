@@ -526,6 +526,10 @@ describe('SameAddressMergeBanner', () => {
     await waitFor(() => {
       expect(screen.getByTestId('same-address-merge-search-selected')).toHaveTextContent('#300')
     })
+    await user.click(screen.getByTestId('same-address-merge-confirm'))
+    await waitFor(() => {
+      expect(commandCenterService.mergeInto).toHaveBeenCalledWith(300, 100)
+    })
   })
 
   it('rejects paste of a different building via merge preview', async () => {

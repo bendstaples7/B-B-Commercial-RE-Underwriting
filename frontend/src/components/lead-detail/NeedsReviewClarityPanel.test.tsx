@@ -204,7 +204,7 @@ describe('NeedsReviewChipPopover', () => {
 })
 
 describe('DuplicateReviewCallout', () => {
-  it('shows this-vs-other comparison and merge without a chip click', () => {
+  it('shows this-vs-other comparison and dialog merge without a chip click', () => {
     render(
       <MemoryRouter>
         <DuplicateReviewCallout
@@ -241,6 +241,59 @@ describe('DuplicateReviewCallout', () => {
     expect(screen.getByTestId('needs-review-duplicate-callout')).toBeInTheDocument()
     expect(screen.getByTestId('needs-review-cluster-comparison')).toBeInTheDocument()
     expect(screen.getByTestId('needs-review-open-merge')).toBeInTheDocument()
+    expect(screen.queryByTestId('needs-review-merge-into-winner')).not.toBeInTheDocument()
     expect(screen.getByText('100 Main Unit 2')).toBeInTheDocument()
+  })
+
+  it('compares the active lead against a sibling while listing larger clusters', () => {
+    render(
+      <MemoryRouter>
+        <DuplicateReviewCallout
+          leadId={10}
+          commandCenterData={basePayload({
+            review_reason: 'duplicate_lead_cluster',
+            duplicate_cluster: {
+              cluster_ids: [10, 20, 30],
+              suggested_winner_id: 20,
+              confidence: 'ambiguous',
+              streets: {
+                10: '100 Main',
+                20: '100 Main Unit 2',
+                30: '100 Main Unit 3',
+              },
+              members: [
+                {
+                  id: 10,
+                  property_street: '100 Main',
+                  owner_display_name: 'Ada',
+                  is_suggested_winner: false,
+                },
+                {
+                  id: 20,
+                  property_street: '100 Main Unit 2',
+                  owner_display_name: 'Ada',
+                  is_suggested_winner: true,
+                  hubspot_confirmed: true,
+                },
+                {
+                  id: 30,
+                  property_street: '100 Main Unit 3',
+                  owner_display_name: 'Ada',
+                  is_suggested_winner: false,
+                  has_phone: true,
+                },
+              ],
+            },
+          })}
+          onResolved={vi.fn()}
+          onOpenMerge={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByTestId('needs-review-cluster-comparison')).toBeInTheDocument()
+    expect(screen.getAllByTestId('needs-review-cluster-row-20')).toHaveLength(2)
+    expect(screen.getByTestId('needs-review-cluster-table')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-review-cluster-row-30')).toBeInTheDocument()
   })
 })

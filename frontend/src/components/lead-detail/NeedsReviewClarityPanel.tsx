@@ -188,9 +188,11 @@ export function NeedsReviewClarityContent({
     && mergeWinnerId != null
     && mergeLoserId !== mergeWinnerId
   const pairCurrent = members.find((member) => member.id === leadId) ?? members[0]
-  const pairOther = members.length === 2
-    ? members.find((member) => member.id !== pairCurrent?.id) ?? null
-    : null
+  const pairOther = members.find((member) => (
+    member.id !== pairCurrent?.id
+    && (member.is_suggested_winner || member.id === winnerId)
+  )) ?? members.find((member) => member.id !== pairCurrent?.id) ?? null
+  const showClusterTable = isDuplicate && members.length > 0 && (members.length > 2 || !pairOther)
   const triggeredAt = commandCenterData.review_triggered_at
     ? formatDate(commandCenterData.review_triggered_at)
     : null
@@ -241,7 +243,7 @@ export function NeedsReviewClarityContent({
         <DuplicatePairComparison leadId={leadId} current={pairCurrent} other={pairOther} />
       ) : null}
 
-      {isDuplicate && members.length > 0 && !pairOther && (
+      {showClusterTable && (
         <Box sx={{ overflowX: 'auto', mt: 1 }} data-testid="needs-review-cluster-table">
           <Table size="small">
             <TableHead>
@@ -310,10 +312,10 @@ export function NeedsReviewClarityContent({
             Merge
           </Button>
         ) : null}
-        {canMerge && mergeLoserId != null && mergeWinnerId != null && (
+        {!onOpenMerge && canMerge && mergeLoserId != null && mergeWinnerId != null && (
           <Button
             size="small"
-            variant={onOpenMerge ? 'outlined' : 'contained'}
+            variant="contained"
             startIcon={busy === 'merge' ? <CircularProgress size={14} /> : <MergeTypeIcon />}
             disabled={busy != null}
             data-testid="needs-review-merge-into-winner"

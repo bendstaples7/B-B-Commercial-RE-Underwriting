@@ -833,7 +833,14 @@ def cluster_preview_for_lead(lead: Lead) -> dict[str, Any] | None:
     confirmed_ids = confirmed_hubspot_lead_ids()
     records = [_lead_to_merge_record(item) for item in cluster]
     winner = pick_merge_winner(records, confirmed_ids)
-    names = _people_names_for_lead_ids([item.id for item in cluster])
+    lead_owner_user_id = getattr(lead, 'owner_user_id', None)
+    visible_name_ids = [
+        item.id for item in cluster
+        if item.id == lead.id or (
+            lead_owner_user_id and getattr(item, 'owner_user_id', None) == lead_owner_user_id
+        )
+    ]
+    names = _people_names_for_lead_ids(visible_name_ids)
     members = []
     for item in cluster:
         members.append({
