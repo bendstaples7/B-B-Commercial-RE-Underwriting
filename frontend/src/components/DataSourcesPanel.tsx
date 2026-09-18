@@ -28,6 +28,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import { dataSourcesService } from '@/services/api'
 import type { DataSourceStatus, EnrichmentSourceStatus, GISConnectorStatus, HubSpotSourceStatus, ImportSourceStatus, SocrataDatasetStatus } from '@/types'
+import { formatDateTime } from '@/utils/formatters'
 
 // ---------------------------------------------------------------------------
 // StatusChip
@@ -174,19 +175,12 @@ export function DataSourcesError({ onRetry }: { onRetry: () => void }) {
 // ---------------------------------------------------------------------------
 
 /**
- * Formats an ISO-8601 UTC timestamp as "MM/DD/YYYY HH:MM" in the local timezone.
+ * Formats an ISO-8601 UTC timestamp in US Central Time.
  * Returns "No successful sync has occurred" when the input is null.
  */
 export function formatTimestamp(isoString: string | null): string {
   if (!isoString) return 'No successful sync has occurred'
-  const d = new Date(isoString)
-  if (isNaN(d.getTime())) return isoString   // fall back to raw string if unparseable
-  const mm = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  const yyyy = d.getFullYear()
-  const hh = String(d.getHours()).padStart(2, '0')
-  const min = String(d.getMinutes()).padStart(2, '0')
-  return `${mm}/${dd}/${yyyy} ${hh}:${min}`
+  return formatDateTime(isoString)
 }
 
 /**

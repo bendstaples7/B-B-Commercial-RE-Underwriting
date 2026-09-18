@@ -43,6 +43,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hubSpotService } from '@/services/api'
 import type { HubSpotMatch } from '@/types'
 import { MatchConfidence, MatchStatus } from '@/types'
+import { formatDate } from '@/utils/formatters'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -78,15 +79,6 @@ function getConfidenceSx(confidence: MatchConfidence): Record<string, string> {
       return { bgcolor: 'error.main', color: 'error.contrastText' }
     default:
       return {}
-  }
-}
-
-function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return '—'
-  try {
-    return new Date(dateStr).toLocaleDateString()
-  } catch {
-    return '—'
   }
 }
 

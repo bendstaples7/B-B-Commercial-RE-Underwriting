@@ -28,6 +28,7 @@ import type {
   CondoRiskStatus,
   BuildingSalePossible,
 } from '@/types'
+import { formatDate } from '@/utils/formatters'
 
 export interface CondoResultsTableProps {
   filters: CondoFilterParams
@@ -65,15 +66,6 @@ function getRiskStatusColor(status: CondoRiskStatus): 'error' | 'success' | 'war
     case 'partial_condo_possible': return 'warning'
     case 'needs_review': return 'info'
     default: return 'default'
-  }
-}
-
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '—'
-  try {
-    return new Date(dateStr).toLocaleDateString()
-  } catch {
-    return '—'
   }
 }
 

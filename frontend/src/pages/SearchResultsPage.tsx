@@ -27,6 +27,7 @@ import { RelatedPropertyRow } from '@/components/RelatedPropertyRow'
 import { highlightMatch, matchTypeLabel } from '@/utils/searchResultDisplay'
 import { groupSearchLeadsByPerson } from '@/utils/groupSearchLeadsByPerson'
 import { clampPage, computeTotalPages } from '@/utils/pagination'
+import { formatDate } from '@/utils/formatters'
 
 const PER_PAGE = 25
 const SEARCH_DEBOUNCE_MS = 300
@@ -380,11 +381,7 @@ export function SearchResultsPage() {
                         }
                         secondary={
                           session.created_at
-                            ? new Date(session.created_at).toLocaleDateString('en-US', {
-                                month: 'short',
-                                day: 'numeric',
-                                year: 'numeric',
-                              })
+                            ? formatDate(session.created_at)
                             : undefined
                         }
                       />

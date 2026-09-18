@@ -17,6 +17,7 @@ FORBIDDEN_PATHS = [
     "frontend/src/components/LeadDetailPage.tsx",
     "frontend/src/components/HubSpotLeadViews.tsx",
     "frontend/src/components/HubSpotLeadViews.test.tsx",
+    "frontend/src/utils/formatLastMailedDate.ts",
     "frontend/src/components/TimelinePanel.tsx",
     "frontend/src/components/TimelinePanel.test.tsx",
 ]

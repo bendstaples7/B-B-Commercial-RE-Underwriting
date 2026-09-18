@@ -28,6 +28,7 @@ import channelRoiService, {
   type ChannelCampaignRow,
   type ChannelSummary,
 } from '@/services/channelRoiApi'
+import { formatDateTime } from '@/utils/formatters'
 
 const headerCellSx = {
   fontWeight: 600,
@@ -499,7 +500,7 @@ export const ChannelRoiPage: React.FC = () => {
                 <Typography variant="subtitle2">Assumptions & Meta</Typography>
                 <Typography variant="caption" color="text.secondary">
                   {settings?.last_synced_at
-                    ? `Last synced ${new Date(settings.last_synced_at).toLocaleString()}`
+                    ? `Last synced ${formatDateTime(settings.last_synced_at)}`
                     : 'Never synced'}
                   {isFetching || syncMutation.isPending ? ' · refreshing…' : ''}
                 </Typography>

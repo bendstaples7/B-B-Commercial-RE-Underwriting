@@ -19,6 +19,7 @@ import DownloadIcon from '@mui/icons-material/Download'
 import ShareIcon from '@mui/icons-material/Share'
 import type { Report } from '@/types'
 import { analysisService } from '@/services/api'
+import { formatDate } from '@/utils/formatters'
 
 interface ReportDisplayProps {
   report: Report
@@ -79,14 +80,6 @@ export const ReportDisplay: React.FC<ReportDisplayProps> = ({
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(value)
-  }
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    })
   }
 
   return (

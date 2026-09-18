@@ -49,6 +49,7 @@ import UploadFileIcon from '@mui/icons-material/UploadFile'
 import { multifamilyService } from '@/services/api'
 import type { DealCreatePayload, DealSummary } from '@/types'
 import { useGoogleMapsLoaded } from '@/context/GoogleMapsContext'
+import { formatDate } from '@/utils/formatters'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -62,15 +63,6 @@ function formatCurrency(value: string | number): string {
     currency: 'USD',
     maximumFractionDigits: 0,
   }).format(num)
-}
-
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  return new Date(value).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  })
 }
 
 function dealStatusColor(status: string): 'default' | 'primary' | 'success' | 'warning' {

@@ -23,6 +23,7 @@ import ReplayIcon from '@mui/icons-material/Replay'
 import type { ImportJob, ImportJobListResponse } from '@/types'
 import { ImportJobStatus } from '@/types'
 import { leadService } from '@/services/leadApi'
+import { formatDateTime } from '@/utils/formatters'
 
 /** Props accepted by ImportHistoryTable. */
 export interface ImportHistoryTableProps {
@@ -47,16 +48,6 @@ function getStatusColor(
       return 'error'
     default:
       return 'default'
-  }
-}
-
-/** Format an ISO date string for display. */
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '—'
-  try {
-    return new Date(dateStr).toLocaleString()
-  } catch {
-    return '—'
   }
 }
 
@@ -263,12 +254,12 @@ export const ImportHistoryTable: React.FC<ImportHistoryTableProps> = ({
                       </TableCell>
                       <TableCell>
                         <Typography variant="body2">
-                          {formatDate(job.started_at)}
+                          {formatDateTime(job.started_at)}
                         </Typography>
                       </TableCell>
                       <TableCell>
                         <Typography variant="body2">
-                          {formatDate(job.completed_at)}
+                          {formatDateTime(job.completed_at)}
                         </Typography>
                       </TableCell>
                       <TableCell align="right">

@@ -49,6 +49,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link as RouterLink } from 'react-router-dom'
 import { hubSpotService } from '@/services/api'
 import type { HubSpotConfig, HubSpotImportRun } from '@/types'
+import { formatDateTime } from '@/utils/formatters'
 import { WebhookSyncPanel } from '@/components/WebhookSyncPanel'
 import { usePipelineStatus } from '@/context/PipelineStatusContext'
 import { useAuth } from '@/context/AuthContext'
@@ -96,18 +97,6 @@ function statusColor(
   }
 }
 
-function formatDateTime(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  try {
-    return new Date(iso).toLocaleString()
-  } catch {
-    return iso
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
 
 export const HubSpotImportArea: React.FC = () => {
   const queryClient = useQueryClient()

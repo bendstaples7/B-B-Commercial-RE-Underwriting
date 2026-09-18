@@ -3,7 +3,7 @@
  *
  * Renders on the Lead Detail page to show how a lead's score has evolved
  * over time. Each entry displays:
- *   • created_at (formatted via `toLocaleString`)
+ *   • created_at (US Central via formatDateTime)
  *   • total_score with score_tier via LeadScoreBadge
  *   • data_quality_score
  *   • recommended_action (human-readable)
@@ -27,7 +27,7 @@ import {
 import { Fragment } from 'react'
 import type { PropertyScoreRecord, RecommendedAction } from '@/types'
 import { SCORING_ACTION_LABELS } from '@/constants/scoringRecommendedActions'
-import { humanize } from '@/utils/formatters'
+import { humanize, formatDateTime } from '@/utils/formatters'
 import { LeadScoreBadge } from './LeadScoreBadge'
 
 export interface ScoreHistoryTimelineProps {
@@ -43,19 +43,6 @@ function actionLabel(action: RecommendedAction): string {
   return SCORING_ACTION_LABELS[action] ?? humanize(action)
 }
 
-/**
- * Format an ISO timestamp via `toLocaleString`. Falls back to the raw value
- * when the input cannot be parsed (e.g. a malformed server response).
- */
-function formatTimestamp(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) {
-    return iso
-  }
-  return d.toLocaleString()
-}
-
-/** Format a signed delta like "+5" or "-3" (zero collapses to "0"). */
 function formatDelta(delta: number): string {
   if (delta > 0) return `+${delta}`
   if (delta < 0) return `${delta}`
@@ -152,7 +139,7 @@ export function ScoreHistoryTimeline({
                         color="text.secondary"
                         data-testid="score-history-timestamp"
                       >
-                        {formatTimestamp(record.created_at)}
+                        {formatDateTime(record.created_at)}
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
                         Data quality: {Math.round(record.data_quality_score)} / 100

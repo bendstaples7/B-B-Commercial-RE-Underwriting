@@ -20,6 +20,7 @@ import {
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord'
 import { commandCenterService } from '@/services/api'
+import { formatDateTime } from '@/utils/formatters'
 import { ccCardSx, ccSectionTitleSx, ccMetaSx } from '@/components/lead-detail/commandCenterChrome'
 import type { QuickBriefing } from '@/types'
 
@@ -40,14 +41,8 @@ interface LeadBriefingState {
 
 function formatTimestamp(iso: string | undefined): string | null {
   if (!iso) return null
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return null
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
+  const formatted = formatDateTime(iso)
+  return formatted === '—' ? null : formatted
 }
 
 function toState(briefing: QuickBriefing | LeadBriefingState | null | undefined, leadId: number): LeadBriefingState | null {

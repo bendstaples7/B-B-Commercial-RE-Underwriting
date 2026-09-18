@@ -2,13 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { formatDateOnly, formatShortCalendarDay, formatUtcDateRange } from './helpers'
 
 describe('formatDateOnly', () => {
-  it('formats ISO date-only values in local time', () => {
-    expect(formatDateOnly('2026-07-15')).toBe(
-      new Date(Date.UTC(2026, 6, 15)).toLocaleDateString(
-        undefined,
-        { timeZone: 'UTC' },
-      ),
-    )
+  it('formats ISO date-only values as calendar dates', () => {
+    expect(formatDateOnly('2026-07-15')).toBe('Jul 15, 2026')
   })
 
   it('uses the standard empty display for missing or invalid values', () => {

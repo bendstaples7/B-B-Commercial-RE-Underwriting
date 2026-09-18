@@ -16,6 +16,7 @@ import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
 import { formatNeedsReviewReason } from '@/utils/needsReviewReason'
+import { formatDate } from '@/utils/formatters'
 
 export function NeedsReviewQueue() {
   const [page, setPage] = useState(1)
@@ -51,10 +52,7 @@ export function NeedsReviewQueue() {
     {
       key: 'review_triggered_at',
       label: 'Triggered',
-      render: (row: QueueRow) =>
-        row.review_triggered_at
-          ? new Date(row.review_triggered_at).toLocaleDateString()
-          : '—',
+      render: (row: QueueRow) => formatDate(row.review_triggered_at),
     },
   ]
 

@@ -24,7 +24,7 @@ import openLetterService, {
   type MailQueueSummary,
 } from '@/services/openLetterApi'
 import { afterLeadWorkspaceMutation } from '@/utils/afterCommandCenterMutation'
-import { formatLastMailedDate, formatLastSaleDate } from '@/utils/formatLastMailedDate'
+import { formatDate } from '@/utils/formatters'
 import {
   analyzeMailBatchDuplicates,
   sortStagedItemsByMailingDedupe,
@@ -350,9 +350,9 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
                         .filter(Boolean)
                         .join(', ') || '—'}
                     </TableCell>
-                    <TableCell>{formatLastMailedDate(item.last_mailed_at)}</TableCell>
-                    <TableCell>{formatLastSaleDate(item.last_sale_at)}</TableCell>
-                    <TableCell>{formatLastMailedDate(item.created_at)}</TableCell>
+                    <TableCell>{formatDate(item.last_mailed_at)}</TableCell>
+                    <TableCell>{formatDate(item.last_sale_at)}</TableCell>
+                    <TableCell>{formatDate(item.created_at)}</TableCell>
                     <TableCell align="right">
                       <IconButton
                         size="small"

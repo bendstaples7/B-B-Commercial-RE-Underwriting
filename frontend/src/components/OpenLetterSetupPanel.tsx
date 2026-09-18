@@ -40,7 +40,7 @@ import {
   isDirectMailReadyToSend,
 } from '@/utils/directMailSetup'
 import { formatPhoneNumber } from '@/utils/phone'
-import { formatLastMailedDate } from '@/utils/formatLastMailedDate'
+import { formatDate } from '@/utils/formatters'
 import {
   describeOlcProduct,
   findOlcProductForEnvelope,
@@ -111,7 +111,7 @@ function ProductSelectionSummary({
         <Typography variant="body2" sx={{ mt: 1 }}>
           Estimated Ready to Mail totals use <strong>${knownCostPerPiece.toFixed(2)}/piece</strong>
           {costSourceSentAt
-            ? `, based on mailer cost from the batch sent on ${formatLastMailedDate(costSourceSentAt)}.`
+            ? `, based on mailer cost from the batch sent on ${formatDate(costSourceSentAt)}.`
             : ', based on your last recorded mailer cost per piece.'}
         </Typography>
       )}

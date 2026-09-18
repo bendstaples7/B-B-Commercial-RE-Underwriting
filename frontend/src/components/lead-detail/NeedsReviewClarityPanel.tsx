@@ -30,6 +30,7 @@ import {
   isDuplicateClusterReason,
   POSSIBLE_DUPLICATE_RECORDS_LABEL,
 } from '@/utils/needsReviewReason'
+import { formatDate } from '@/utils/formatters'
 
 export interface NeedsReviewClarityContentProps {
   leadId: number
@@ -78,7 +79,7 @@ export function NeedsReviewClarityContent({
     && String(cluster?.confidence || '').toLowerCase() !== 'ambiguous'
   const members = cluster?.members ?? []
   const triggeredAt = commandCenterData.review_triggered_at
-    ? new Date(commandCenterData.review_triggered_at).toLocaleDateString()
+    ? formatDate(commandCenterData.review_triggered_at)
     : null
 
   const run = async (kind: 'merge' | 'dismiss' | 'clear', fn: () => Promise<void>) => {

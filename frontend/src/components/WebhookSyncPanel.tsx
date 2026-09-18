@@ -41,6 +41,7 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hubSpotService } from '@/services/api'
 import type { WebhookLog, WebhookLogStatus, WebhookLogSummary } from '@/types'
+import { formatDateTime } from '@/utils/formatters'
 
 // ---------------------------------------------------------------------------
 // Props
@@ -87,15 +88,6 @@ function statusColor(
       return 'default'
     default:
       return 'default'
-  }
-}
-
-function formatDateTime(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  try {
-    return new Date(iso).toLocaleString()
-  } catch {
-    return iso
   }
 }
 

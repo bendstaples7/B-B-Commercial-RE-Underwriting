@@ -546,7 +546,7 @@ export function LeadDetailTabPanel({
                   .filter(Boolean)
                   .join(', ')
                 const captured = snap.captured_at
-                  ? new Date(snap.captured_at).toLocaleDateString()
+                  ? formatDate(snap.captured_at)
                   : null
                 return (
                   <Box

@@ -18,6 +18,7 @@ import { queueService, commandCenterService } from '@/services/api'
 import type { QueueRow } from '@/types'
 import { resolveBulkActions } from './queueBulkActions'
 import { useQueueSelection } from '@/hooks/useQueueSelection'
+import { formatDate } from '@/utils/formatters'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
 
@@ -46,10 +47,7 @@ export function DoNotContactQueue() {
     {
       key: 'dnc_date',
       label: 'DNC Date',
-      render: (row: QueueRow) =>
-        row.last_contact_date
-          ? new Date(row.last_contact_date).toLocaleDateString()
-          : '—',
+      render: (row: QueueRow) => formatDate(row.last_contact_date),
     },
     {
       key: 'dnc_actor',

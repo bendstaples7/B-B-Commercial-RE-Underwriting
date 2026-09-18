@@ -49,6 +49,7 @@ import {
 import { resolveCreateTaskPayload, type CreateTaskPresetId } from '@/utils/createTaskPresets'
 import { addSentFromAddress, getSentFromAddresses } from '@/utils/emailSentFromAddresses'
 import { extractPhoneDigitsFromText, normalizePhoneDigits } from '@/utils/phone'
+import { formatDate } from '@/utils/formatters'
 
 const MAX_CALL_NOTES_LENGTH = 2000
 const MAX_BODY_LENGTH = 5000
@@ -801,7 +802,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
                       <MenuItem value="">— Not mail-related —</MenuItem>
                       {mailCampaignOptions.map((c) => (
                         <MenuItem key={c.id} value={c.id}>
-                          {c.submitted_at ? new Date(c.submitted_at).toLocaleDateString() : 'Campaign'}{' '}
+                          {c.submitted_at ? formatDate(c.submitted_at) : 'Campaign'}{' '}
                           — {c.template_name || `Template ${c.template_id}`}
                         </MenuItem>
                       ))}

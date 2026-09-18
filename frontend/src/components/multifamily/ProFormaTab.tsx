@@ -32,6 +32,7 @@ import {
 } from 'recharts'
 import { multifamilyService } from '@/services/api'
 import type { ProFormaResult, MonthlyRow } from '@/types'
+import { formatDateTime } from '@/utils/formatters'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -255,7 +256,7 @@ export function ProFormaTab({ dealId }: ProFormaTabProps) {
           <Typography variant="h6">Pro Forma</Typography>
           {result?.computed_at && (
             <Typography variant="caption" color="text.secondary">
-              Last computed: {new Date(result.computed_at).toLocaleString()}
+              Last computed: {formatDateTime(result.computed_at)}
             </Typography>
           )}
         </Box>

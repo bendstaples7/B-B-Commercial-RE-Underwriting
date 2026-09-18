@@ -25,6 +25,7 @@ import {
   type CeleryTaskSummary,
 } from '@/services/adminApi'
 import openLetterService from '@/services/openLetterApi'
+import { formatDateTime } from '@/utils/formatters'
 
 function TaskTable({ title, tasks }: { title: string; tasks: CeleryTaskSummary[] }) {
   if (tasks.length === 0) {
@@ -225,7 +226,7 @@ export default function BackgroundJobsPage() {
                       </TableCell>
                       <TableCell>{c.status}</TableCell>
                       <TableCell>{c.lead_count}</TableCell>
-                      <TableCell>{c.created_at ?? '—'}</TableCell>
+                      <TableCell>{formatDateTime(c.created_at)}</TableCell>
                       <TableCell align="right">
                         {c.orphan && c.status === 'pending' && data.celery_inspect_ok && (
                           <Button

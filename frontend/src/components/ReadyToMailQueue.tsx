@@ -32,7 +32,7 @@ import type { ExtraColumn, RowAction } from './QueueTable'
 import { queueService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
-import { formatLastMailedDate, formatLastSaleDate } from '@/utils/formatLastMailedDate'
+import { formatDate } from '@/utils/formatters'
 import { useShellStatus } from '@/context/ShellStatusContext'
 import {
   enqueueResultSeverity,
@@ -289,13 +289,13 @@ export function ReadyToMailQueue() {
   const lastMailedColumn: ExtraColumn = {
     key: 'last_mailed_at',
     label: 'Last mailed',
-    render: (row) => formatLastMailedDate(row.last_mailed_at),
+    render: (row) => formatDate(row.last_mailed_at),
   }
 
   const lastSaleColumn: ExtraColumn = {
     key: 'last_sale_at',
     label: 'Last sale',
-    render: (row) => formatLastSaleDate(row.last_sale_at),
+    render: (row) => formatDate(row.last_sale_at),
   }
 
   const queueErrorMessage =

@@ -6,6 +6,8 @@
  * raw `mailer_history` only.
  */
 
+import { formatDateTime, parseDisplayTimestamp } from '@/utils/formatters'
+
 export type MailerHistorySource = 'olc' | 'imported' | 'timeline'
 
 export interface MailerHistoryRow {
@@ -31,23 +33,6 @@ export interface MailerHistorySummary {
 }
 
 const LEGACY_DATE_RE = /^(?<label>.*?),\s*(?<date>\d{1,2}\/\d{1,2}\/\d{2,4})\s*$/
-const DATE_ONLY_SLASH_RE = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/
-const DATE_ONLY_ISO_RE = /^(\d{4})-(\d{2})-(\d{2})$/
-const NAIVE_ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T/
-const HAS_TZ_RE = /(Z|[+-]\d{2}:?\d{2})$/i
-
-/** Product timestamps display in US Central (America/Chicago). */
-export const MAILER_DISPLAY_TIME_ZONE = 'America/Chicago'
-
-const CENTRAL_DATE_TIME_OPTS: Intl.DateTimeFormatOptions = {
-  timeZone: MAILER_DISPLAY_TIME_ZONE,
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-  timeZoneName: 'short',
-}
 
 function asEntries(raw: unknown): unknown[] {
   if (raw == null || raw === '' || (Array.isArray(raw) && raw.length === 0)) {
@@ -59,49 +44,7 @@ function asEntries(raw: unknown): unknown[] {
 
 /** Parse ISO or US slash dates for last-sent ordering. Naive ISO datetimes are UTC. */
 export function parseMailerSentAt(value: unknown): Date | null {
-  if (value == null) return null
-  const text = String(value).trim()
-  if (!text) return null
-  const slash = DATE_ONLY_SLASH_RE.exec(text)
-  if (slash) {
-    const month = Number(slash[1])
-    const day = Number(slash[2])
-    let year = Number(slash[3])
-    if (year < 100) year += 2000
-    const d = new Date(year, month - 1, day)
-    if (
-      Number.isNaN(d.getTime())
-      || d.getFullYear() !== year
-      || d.getMonth() !== month - 1
-      || d.getDate() !== day
-    ) {
-      return null
-    }
-    return d
-  }
-  const isoText =
-    NAIVE_ISO_DATETIME_RE.test(text) && !HAS_TZ_RE.test(text) ? `${text}Z` : text
-  const ms = Date.parse(isoText)
-  if (!Number.isNaN(ms)) return new Date(ms)
-  return null
-}
-
-function formatCalendarDay(year: number, month: number, day: number): string {
-  const utc = new Date(Date.UTC(year, month - 1, day))
-  if (
-    Number.isNaN(utc.getTime())
-    || utc.getUTCFullYear() !== year
-    || utc.getUTCMonth() !== month - 1
-    || utc.getUTCDate() !== day
-  ) {
-    return '—'
-  }
-  return utc.toLocaleDateString('en-US', {
-    timeZone: 'UTC',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })
+  return parseDisplayTimestamp(value)
 }
 
 /**
@@ -112,34 +55,7 @@ export function formatMailerSentAtDisplay(
   value: string | null | undefined,
   options?: { multiline?: boolean },
 ): string {
-  if (value == null) return '—'
-  const text = String(value).trim()
-  if (!text) return '—'
-
-  const slash = DATE_ONLY_SLASH_RE.exec(text)
-  if (slash) {
-    let year = Number(slash[3])
-    if (year < 100) year += 2000
-    return formatCalendarDay(year, Number(slash[1]), Number(slash[2]))
-  }
-
-  const isoDate = DATE_ONLY_ISO_RE.exec(text)
-  if (isoDate) {
-    return formatCalendarDay(
-      Number(isoDate[1]),
-      Number(isoDate[2]),
-      Number(isoDate[3]),
-    )
-  }
-
-  const parsed = parseMailerSentAt(text)
-  if (!parsed) return '—'
-  const formatted = parsed.toLocaleString('en-US', CENTRAL_DATE_TIME_OPTS)
-  if (options?.multiline) {
-    // Keep calendar date on one line and clock + zone on the next in narrow tables.
-    return formatted.replace(/, (?=\d{1,2}:)/, '\n')
-  }
-  return formatted
+  return formatDateTime(value, options)
 }
 
 /** Coerce API creative (string | preset dict | null) to a display string. */

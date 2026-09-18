@@ -13,17 +13,8 @@ import {
   Chip,
 } from '@mui/material'
 import { hubSpotService } from '@/services/api'
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-const formatDate = (dateStr: string | null | undefined): string => {
-  if (!dateStr) return 'N/A'
-  try {
-    return new Date(dateStr).toLocaleString()
-  } catch {
-    return 'N/A'
-  }
-}
+import { formatDateTime } from '@/utils/formatters'
+
 const ImportRunStatusChip: React.FC<{ status: string | null | undefined }> = ({ status }) => {
   let color: 'default' | 'primary' | 'success' | 'warning' | 'error' = 'default'
   switch ((status || '').toLowerCase()) {
@@ -95,11 +86,11 @@ export function SocialMediaPage() {
                     secondary={
                       <>
                         <Typography variant='caption' color='text.secondary' display='block'>
-                          Started: {formatDate(run.started_at)}
+                          Started: {formatDateTime(run.started_at)}
                         </Typography>
                         {run.completed_at && (
                           <Typography variant='caption' color='text.secondary' display='block'>
-                            Completed: {formatDate(run.completed_at)}
+                            Completed: {formatDateTime(run.completed_at)}
                           </Typography>
                         )}
                         {run.total_records_processed != null && (

@@ -17,7 +17,7 @@ import {
 } from '@mui/material'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { formatLastMailedDate } from '@/utils/formatLastMailedDate'
+import { formatDate } from '@/utils/formatters'
 import {
   mailCampaignStatusChipLabel,
   mailCampaignStatusColor,
@@ -179,7 +179,7 @@ function CampaignRow({
         )}
       </TableCell>
       <TableCell sx={nowrapCellSx}>
-        {formatLastMailedDate(campaign.submitted_at || campaign.created_at)}
+        {formatDate(campaign.submitted_at || campaign.created_at)}
       </TableCell>
       <TableCell sx={nowrapCellSx}>{creativeSender(creative)}</TableCell>
       <TableCell sx={nowrapCellSx}>{creative?.envelope_color || '—'}</TableCell>

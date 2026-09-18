@@ -137,10 +137,8 @@ describe('AdminUserDetail', () => {
     // Admin chip — No
     expect(screen.getByText('No')).toBeInTheDocument()
 
-    // Member Since — formatted date (use same formatter as component)
-    const d = new Date('2024-01-15T10:00:00Z')
-    const memberSince = isNaN(d.getTime()) ? '—' : d.toLocaleDateString()
-    expect(screen.getByText(memberSince)).toBeInTheDocument()
+    // Member Since — US Central calendar day of the UTC instant
+    expect(screen.getByText('Jan 15, 2024')).toBeInTheDocument()
 
     // Lead count
     expect(screen.getByText('5')).toBeInTheDocument()

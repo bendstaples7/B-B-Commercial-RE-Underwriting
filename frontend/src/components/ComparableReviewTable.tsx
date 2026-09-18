@@ -31,6 +31,7 @@ import {
   ConstructionType,
   InteriorCondition,
 } from '@/types'
+import { formatDate } from '@/utils/formatters'
 
 // Feature: gemini-comparable-search, Property 10: Similarity notes truncation threshold
 interface SimilarityNotesCellProps {
@@ -85,14 +86,6 @@ export const ComparableReviewTable: React.FC<ComparableReviewTableProps> = ({
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(value)
-  }
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    })
   }
 
   const formatPropertyType = (type: PropertyType) => {
