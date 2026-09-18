@@ -39,8 +39,7 @@ import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline'
 import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction, OutreachContact, EntityResearchSummary, OwnerMailingReadiness } from '@/types'
 import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
 import { OutreachContactInline, OutreachContactMissingHint } from '@/components/OutreachContactCallout'
-import { formatDateOnly } from '@/utils/helpers'
-import { formatDate } from '@/utils/formatters'
+import { formatDate, formatDateOnly } from '@/utils/formatters'
 import {
   type QuickActionId,
   evaluateMoveToSkipTrace,

@@ -13,17 +13,9 @@ import {
   Chip,
 } from '@mui/material'
 import { hubSpotService } from '@/services/api'
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-const formatDate = (dateStr: string | null | undefined): string => {
-  if (!dateStr) return 'N/A'
-  try {
-    return new Date(dateStr).toLocaleString()
-  } catch {
-    return 'N/A'
-  }
-}
+import type { HubSpotImportRun } from '@/types'
+import { formatDateTime } from '@/utils/formatters'
+
 const ImportRunStatusChip: React.FC<{ status: string | null | undefined }> = ({ status }) => {
   let color: 'default' | 'primary' | 'success' | 'warning' | 'error' = 'default'
   switch ((status || '').toLowerCase()) {
@@ -82,7 +74,7 @@ export function SocialMediaPage() {
         )}
         {!isLoadingImports && !isErrorImports && importRuns && importRuns.runs.length > 0 && (
           <List dense>
-            {importRuns.runs.map((run: any) => (
+            {importRuns.runs.map((run: HubSpotImportRun) => (
               <React.Fragment key={run.id}>
                 <ListItem disablePadding>
                   <ListItemText
@@ -95,26 +87,23 @@ export function SocialMediaPage() {
                     secondary={
                       <>
                         <Typography variant='caption' color='text.secondary' display='block'>
-                          Started: {formatDate(run.started_at)}
+                          Started: {formatDateTime(run.start_time)}
                         </Typography>
-                        {run.completed_at && (
+                        {run.end_time && (
                           <Typography variant='caption' color='text.secondary' display='block'>
-                            Completed: {formatDate(run.completed_at)}
+                            Completed: {formatDateTime(run.end_time)}
                           </Typography>
                         )}
-                        {run.total_records_processed != null && (
-                          <Typography variant='caption' color='text.secondary' display='block'>
-                            Processed: {run.total_records_processed} records
-                          </Typography>
-                        )}
-                        {run.successful_matches != null && (
-                          <Typography variant='caption' color='text.secondary' display='block'>
-                            Matches: {run.successful_matches}
-                          </Typography>
-                        )}
-                        {run.errors && run.errors.length > 0 && (
+                        <Typography variant='caption' color='text.secondary' display='block'>
+                          Fetched: {run.total_fetched} records
+                        </Typography>
+                        <Typography variant='caption' color='text.secondary' display='block'>
+                          Created: {run.created_count} · Updated: {run.updated_count}
+                        </Typography>
+                        {run.error_count > 0 && (
                           <Typography variant='caption' color='error' display='block'>
-                            Errors: {run.errors.length}
+                            Errors: {run.error_count}
+                            {run.error_message ? ` — ${run.error_message}` : ''}
                           </Typography>
                         )}
                       </>

@@ -6,6 +6,8 @@
  * raw `mailer_history` only.
  */
 
+import { formatDateTime, parseDisplayTimestamp } from '@/utils/formatters'
+
 export type MailerHistorySource = 'olc' | 'imported' | 'timeline'
 
 export interface MailerHistoryRow {
@@ -40,23 +42,20 @@ function asEntries(raw: unknown): unknown[] {
   return [raw]
 }
 
-/** Parse ISO or US slash dates for last-sent ordering. */
+/** Parse ISO or US slash dates for last-sent ordering. Naive ISO datetimes are UTC. */
 export function parseMailerSentAt(value: unknown): Date | null {
-  if (value == null) return null
-  const text = String(value).trim()
-  if (!text) return null
-  const iso = Date.parse(text)
-  if (!Number.isNaN(iso)) return new Date(iso)
-  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(text)
-  if (m) {
-    const month = Number(m[1])
-    const day = Number(m[2])
-    let year = Number(m[3])
-    if (year < 100) year += 2000
-    const d = new Date(year, month - 1, day)
-    return Number.isNaN(d.getTime()) ? null : d
-  }
-  return null
+  return parseDisplayTimestamp(value)
+}
+
+/**
+ * Readable mail-history timestamp in US Central Time.
+ * Date-only values stay calendar dates (no invented clock time / TZ shift).
+ */
+export function formatMailerSentAtDisplay(
+  value: string | null | undefined,
+  options?: { multiline?: boolean },
+): string {
+  return formatDateTime(value, options)
 }
 
 /** Coerce API creative (string | preset dict | null) to a display string. */

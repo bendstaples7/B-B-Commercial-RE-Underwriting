@@ -12,6 +12,7 @@ import { QueueLoadingState } from './QueueLoadingState'
 import { queueService, commandCenterService } from '@/services/api'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
+import { formatDate } from '@/utils/formatters'
 import type { QueueRow } from '@/types'
 import {
   createCreateTaskRowAction,
@@ -70,10 +71,7 @@ export function PreviouslyWarmQueue() {
     {
       key: 'last_hubspot_sync_at',
       label: 'Last Sync',
-      render: (row: QueueRow) =>
-        row.last_hubspot_sync_at
-          ? new Date(row.last_hubspot_sync_at).toLocaleDateString()
-          : '—',
+      render: (row: QueueRow) => formatDate(row.last_hubspot_sync_at),
     },
   ]
 

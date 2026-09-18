@@ -47,6 +47,7 @@ import {
   formatEnqueueSummary,
   type EnqueueSeverity,
 } from '@/utils/formatEnqueueSummary'
+import { formatDate } from '@/utils/formatters'
 import {
   MailEnqueueResultDialog,
   type MailEnqueueDisplayResult,
@@ -77,15 +78,6 @@ const statusColor = (
       return 'error'
     default:
       return 'default'
-  }
-}
-
-const formatDate = (dateStr: string | null): string => {
-  if (!dateStr) return '—'
-  try {
-    return new Date(dateStr).toLocaleDateString()
-  } catch {
-    return '—'
   }
 }
 

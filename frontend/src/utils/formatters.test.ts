@@ -1,16 +1,92 @@
 import { describe, expect, it } from 'vitest'
-import { formatAssessorPinAddress, formatDate, formatLeadCategoryLabel, formatPropertyTypeLabel } from '@/utils/formatters'
+import {
+  formatAssessorPinAddress,
+  formatDate,
+  formatDateOnly,
+  formatDateTime,
+  formatLeadCategoryLabel,
+  formatPropertyTypeLabel,
+  parseDisplayTimestamp,
+} from '@/utils/formatters'
 
 describe('formatDate', () => {
-  it('parses YYYY-MM-DD as a local calendar date without shifting days', () => {
-    const expected = new Date(2024, 6, 17).toLocaleDateString()
-    expect(formatDate('2024-07-17')).toBe(expected)
-    expect(formatDate('2024-07-17T00:00:00Z')).toBe(expected)
+  it('parses YYYY-MM-DD as a calendar date without shifting days', () => {
+    expect(formatDate('2024-07-17')).toBe('Jul 17, 2024')
+    expect(formatDate('6/21/2024')).toBe('Jun 21, 2024')
+  })
+
+  it('uses the Central calendar day for UTC datetimes', () => {
+    expect(formatDate('2024-07-17T00:00:00Z')).toBe('Jul 16, 2024')
   })
 
   it('rejects invalid calendar dates instead of rolling over', () => {
     expect(formatDate('2024-02-30')).toBe('—')
     expect(formatDate('2024-13-01')).toBe('—')
+    expect(formatDate('2/30/2024')).toBe('—')
+  })
+
+  it('expands two-digit slash years with the legacy JavaScript slash-date pivot', () => {
+    expect(formatDate('6/21/24')).toBe('Jun 21, 2024')
+    expect(formatDate('6/21/49')).toBe('Jun 21, 2049')
+    expect(formatDate('6/21/50')).toBe('Jun 21, 1950')
+    expect(formatDate('6/21/68')).toBe('Jun 21, 1968')
+    expect(formatDate('6/21/99')).toBe('Jun 21, 1999')
+  })
+})
+
+describe('formatDateOnly', () => {
+  it('is an alias of formatDate for calendar dates', () => {
+    expect(formatDateOnly('2026-07-15')).toBe('Jul 15, 2026')
+    expect(formatDateOnly(null)).toBe('—')
+  })
+})
+
+describe('formatDateTime', () => {
+  it('formats naive UTC ISO timestamps in US Central Time', () => {
+    expect(formatDateTime('2026-07-29T03:35:23.127597')).toBe('Jul 28, 2026, 10:35 PM CDT')
+    expect(formatDateTime('2026-07-29T03:35:23.127597Z')).toBe('Jul 28, 2026, 10:35 PM CDT')
+    expect(formatDateTime('2026-01-15T18:00:00Z')).toBe('Jan 15, 2026, 12:00 PM CST')
+  })
+
+  it('keeps date-only values as calendar dates without a clock time', () => {
+    expect(formatDateTime('6/21/2024')).toBe('Jun 21, 2024')
+    expect(formatDateTime('2025-01-01')).toBe('Jan 1, 2025')
+  })
+
+  it('can split date and Central Time onto two lines', () => {
+    expect(formatDateTime('2026-07-29T03:35:23.127597', { multiline: true })).toBe(
+      'Jul 28, 2026\n10:35 PM CDT',
+    )
+  })
+
+  it('returns an em dash for missing or invalid values', () => {
+    expect(formatDateTime(null)).toBe('—')
+    expect(formatDateTime('')).toBe('—')
+    expect(formatDateTime('not-a-date')).toBe('—')
+    expect(formatDateTime('2024-02-30T00:00:00Z')).toBe('—')
+  })
+
+  it('can include seconds for monitoring logs', () => {
+    expect(formatDateTime('2026-07-29T03:35:23.127597', { seconds: true })).toBe(
+      'Jul 28, 2026, 10:35:23 PM CDT',
+    )
+    expect(formatDateTime('2026-07-29T03:35:23.127597', { seconds: true, multiline: true })).toBe(
+      'Jul 28, 2026\n10:35:23 PM CDT',
+    )
+  })
+})
+
+describe('parseDisplayTimestamp', () => {
+  it('treats slash dates and ISO date-only strings as the same UTC calendar day', () => {
+    expect(parseDisplayTimestamp('6/21/2024')?.getTime()).toBe(
+      parseDisplayTimestamp('2024-06-21')?.getTime(),
+    )
+    expect(parseDisplayTimestamp('6/21/2024')?.toISOString()).toBe('2024-06-21T00:00:00.000Z')
+  })
+
+  it('rejects ISO datetimes with impossible calendar dates', () => {
+    expect(parseDisplayTimestamp('2024-02-30T00:00:00Z')).toBeNull()
+    expect(parseDisplayTimestamp('2024-02-30T00:00:00')).toBeNull()
   })
 })
 

@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@/test/testUtils'
 import * as fc from 'fast-check'
-import DataSourcesPanel, { StatusSummaryBanner, GISConnectorCard } from './DataSourcesPanel'
+import DataSourcesPanel, { StatusSummaryBanner, GISConnectorCard, formatTimestamp } from './DataSourcesPanel'
 import { dataSourcesService } from '@/services/api'
 import type {
   DataSourceStatus,
@@ -404,5 +404,19 @@ describe('GISConnectorCard — coverage clamp', () => {
   it('shows a clamped 100% label rather than an out-of-range value', () => {
     render(<GISConnectorCard source={makeGISConnector({ matched_count: 150, total_count: 100 })} />)
     expect(screen.getByText(/\(100%\)/)).toBeInTheDocument()
+  })
+})
+
+describe('formatTimestamp', () => {
+  it('explains a missing sync', () => {
+    expect(formatTimestamp(null)).toBe('No successful sync has occurred')
+  })
+
+  it('formats parseable ISO timestamps in US Central Time', () => {
+    expect(formatTimestamp('2026-07-29T03:35:23.127597Z')).toBe('Jul 28, 2026, 10:35 PM CDT')
+  })
+
+  it('returns the raw string when the timestamp cannot be parsed', () => {
+    expect(formatTimestamp('not-a-date')).toBe('not-a-date')
   })
 })

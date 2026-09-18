@@ -21,7 +21,7 @@ import InsightsIcon from '@mui/icons-material/Insights'
 import type { PropertyScoreRecord, ScoreSignal, WorkQueueMembership } from '@/types'
 import type { ScoreTier } from '@/components/LeadScoreBadge'
 import { getDimensionMeta } from '@/utils/scoreDimensionMeta'
-import { formatDateOnly } from '@/utils/helpers'
+import { formatDateOnly } from '@/utils/formatters'
 import { queuePath } from '@/utils/fromQueue'
 
 const ATTRIBUTION_ONLY = new Set(['notes_keywords'])

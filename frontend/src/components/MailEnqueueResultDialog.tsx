@@ -13,7 +13,7 @@ import {
 } from '@mui/material'
 import { Link as RouterLink } from 'react-router-dom'
 import type { EnqueueLeadResult, EnqueueResult } from '@/services/openLetterApi'
-import { formatDateOnly } from '@/utils/helpers'
+import { formatDateOnly } from '@/utils/formatters'
 
 export type MailEnqueueDisplayResult = Pick<
   EnqueueResult,

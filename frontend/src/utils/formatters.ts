@@ -1,28 +1,159 @@
-export function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return '—'
-  const trimmed = dateStr.trim()
-  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed)
-  if (dateOnly) {
-    const [, year, month, day] = dateOnly
-    const y = Number(year)
-    const m = Number(month) - 1
-    const d = Number(day)
-    const local = new Date(y, m, d)
-    if (local.getFullYear() !== y || local.getMonth() !== m || local.getDate() !== d) {
-      return '—'
-    }
-    return local.toLocaleDateString()
-  }
-  const d = new Date(trimmed)
-  if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleDateString()
+/** Product clock times display in US Central (America/Chicago). */
+export const BUSINESS_TIME_ZONE = 'America/Chicago'
+
+const DATE_ONLY_SLASH_RE = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/
+const DATE_ONLY_ISO_RE = /^(\d{4})-(\d{2})-(\d{2})$/
+const ISO_DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2})T/
+const HAS_TZ_RE = /(Z|[+-]\d{2}:?\d{2})$/i
+
+const CALENDAR_DATE_OPTS: Intl.DateTimeFormatOptions = {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
 }
 
-export function formatDateTime(dateStr: string | null | undefined): string {
+const CENTRAL_DATE_TIME_OPTS: Intl.DateTimeFormatOptions = {
+  timeZone: BUSINESS_TIME_ZONE,
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  timeZoneName: 'short',
+}
+
+export interface FormatDateTimeOptions {
+  /** Split calendar date and clock+zone onto two lines for narrow tables. */
+  multiline?: boolean
+  /** Include seconds (webhook event logs). Default is minute precision. */
+  seconds?: boolean
+}
+
+function formatCalendarDay(year: number, month: number, day: number): string {
+  const utc = new Date(Date.UTC(year, month - 1, day))
+  if (
+    Number.isNaN(utc.getTime())
+    || utc.getUTCFullYear() !== year
+    || utc.getUTCMonth() !== month - 1
+    || utc.getUTCDate() !== day
+  ) {
+    return '—'
+  }
+  return utc.toLocaleDateString('en-US', {
+    timeZone: 'UTC',
+    ...CALENDAR_DATE_OPTS,
+  })
+}
+
+/**
+ * Expand 2-digit slash years with V8 Date.parse-style legacy behavior:
+ * 00-49 -> 2000s, 50-99 -> 1900s.
+ */
+function expandTwoDigitYear(year: number): number {
+  if (year >= 100) return year
+  return year < 50 ? 2000 + year : 1900 + year
+}
+
+function parseSlashDate(text: string): { year: number; month: number; day: number } | null {
+  const slash = DATE_ONLY_SLASH_RE.exec(text)
+  if (!slash) return null
+  const month = Number(slash[1])
+  const day = Number(slash[2])
+  const year = expandTwoDigitYear(Number(slash[3]))
+  if (formatCalendarDay(year, month, day) === '—') return null
+  return { year, month, day }
+}
+
+/**
+ * Parse ISO or US slash dates for display. Naive ISO datetimes are UTC.
+ * Date-only values are calendar days (UTC midnight of that date).
+ */
+export function parseDisplayTimestamp(value: unknown): Date | null {
+  if (value == null) return null
+  const text = String(value).trim()
+  if (!text) return null
+  const slashMatch = DATE_ONLY_SLASH_RE.exec(text)
+  if (slashMatch) {
+    const slash = parseSlashDate(text)
+    if (!slash) return null
+    return new Date(Date.UTC(slash.year, slash.month - 1, slash.day))
+  }
+  const isoDate = DATE_ONLY_ISO_RE.exec(text)
+  if (isoDate) {
+    const year = Number(isoDate[1])
+    const month = Number(isoDate[2])
+    const day = Number(isoDate[3])
+    if (formatCalendarDay(year, month, day) === '—') return null
+    return new Date(Date.UTC(year, month - 1, day))
+  }
+  const isoDateTime = ISO_DATETIME_RE.exec(text)
+  if (isoDateTime) {
+    const year = Number(isoDateTime[1])
+    const month = Number(isoDateTime[2])
+    const day = Number(isoDateTime[3])
+    if (formatCalendarDay(year, month, day) === '—') return null
+  }
+  const isoText = isoDateTime && !HAS_TZ_RE.test(text) ? `${text}Z` : text
+  const ms = Date.parse(isoText)
+  if (!Number.isNaN(ms)) return new Date(ms)
+  return null
+}
+
+/**
+ * Calendar date for UI. Date-only values keep the written day (no TZ shift).
+ * Datetimes use the US Central calendar day of that instant.
+ */
+export function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '—'
-  const d = new Date(dateStr.trim())
-  if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleString()
+  const text = String(dateStr).trim()
+  if (!text) return '—'
+  const slash = parseSlashDate(text)
+  if (slash) return formatCalendarDay(slash.year, slash.month, slash.day)
+  const isoDate = DATE_ONLY_ISO_RE.exec(text)
+  if (isoDate) {
+    return formatCalendarDay(
+      Number(isoDate[1]),
+      Number(isoDate[2]),
+      Number(isoDate[3]),
+    )
+  }
+  const parsed = parseDisplayTimestamp(text)
+  if (!parsed) return '—'
+  return parsed.toLocaleDateString('en-US', {
+    timeZone: BUSINESS_TIME_ZONE,
+    ...CALENDAR_DATE_OPTS,
+  })
+}
+
+/** Alias of formatDate — ISO date-only strings stay calendar dates. */
+export function formatDateOnly(value: string | null | undefined): string {
+  return formatDate(value)
+}
+
+/**
+ * Clock time for UI in US Central Time (CDT/CST).
+ * Date-only values stay calendar dates (no invented clock time).
+ */
+export function formatDateTime(
+  dateStr: string | null | undefined,
+  options?: FormatDateTimeOptions,
+): string {
+  if (!dateStr) return '—'
+  const text = String(dateStr).trim()
+  if (!text) return '—'
+  if (DATE_ONLY_SLASH_RE.test(text) || DATE_ONLY_ISO_RE.test(text)) {
+    return formatDate(text)
+  }
+  const parsed = parseDisplayTimestamp(text)
+  if (!parsed) return '—'
+  const opts: Intl.DateTimeFormatOptions = options?.seconds
+    ? { ...CENTRAL_DATE_TIME_OPTS, second: '2-digit' }
+    : CENTRAL_DATE_TIME_OPTS
+  const formatted = parsed.toLocaleString('en-US', opts)
+  if (options?.multiline) {
+    return formatted.replace(/, (?=\d{1,2}:)/, '\n')
+  }
+  return formatted
 }
 
 export function humanize(snake: string): string {

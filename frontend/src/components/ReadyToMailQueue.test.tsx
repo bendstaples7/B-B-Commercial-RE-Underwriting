@@ -210,8 +210,8 @@ describe('ReadyToMailQueue', () => {
     await waitFor(() => {
       expect(screen.getAllByText('Last mailed').length).toBeGreaterThanOrEqual(1)
     })
-    expect(screen.getByText('8/1/2024')).toBeInTheDocument()
-    expect(screen.getByText('6/15/2010')).toBeInTheDocument()
+    expect(screen.getByText('Aug 1, 2024')).toBeInTheDocument()
+    expect(screen.getByText('Jun 15, 2010')).toBeInTheDocument()
   })
 
   it('shows API error message and still renders recommended section', async () => {

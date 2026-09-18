@@ -30,6 +30,7 @@ import type { LeadTimelineEntry } from '@/types'
 import { formatPhoneNumber } from '@/utils/phone'
 import { scopeRowsToLead, scopeRowsToLeadWithTotal } from '@/utils/leadScopedRows'
 import { stripHtmlTags } from '@/utils/helpers'
+import { formatDateTime } from '@/utils/formatters'
 import { previewTimelineEntries, sortTimelineEntriesDesc } from '@/utils/timelineSort'
 
 // ---------------------------------------------------------------------------
@@ -296,27 +297,6 @@ function getPreviewText(entry: LeadTimelineEntry): string {
   return fullText.slice(0, SUMMARY_COLLAPSE_THRESHOLD).trimEnd() + '…'
 }
 
-/**
- * Format an ISO timestamp in the browser's local timezone.
- * Returns "—" for empty or invalid timestamps.
- */
-function formatLocalTimestamp(iso: string): string {
-  if (!iso) return '—'
-  try {
-    const d = new Date(iso)
-    if (isNaN(d.getTime())) return '—'
-    return d.toLocaleString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    })
-  } catch {
-    return '—'
-  }
-}
 
 /**
  * Human-readable label for a timeline entry type.
@@ -448,7 +428,7 @@ function TimelineEntryRow({ entry, highlighted = false }: TimelineEntryRowProps)
               {getTimelineEventLabel(entry)}
             </Typography>
             <Typography variant="caption" color="text.secondary" data-testid={`entry-timestamp-${entry.id}`} sx={{ flexShrink: 0 }}>
-              {formatLocalTimestamp(entry.occurred_at)}
+              {formatDateTime(entry.occurred_at)}
             </Typography>
             <Typography variant="caption" color="text.secondary" data-testid={`entry-actor-${entry.id}`} sx={{ overflowWrap: 'anywhere' }}>
               — {entry.actor}

@@ -18,6 +18,7 @@ import { resolveBulkActions } from './queueBulkActions'
 import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
+import { formatDate } from '@/utils/formatters'
 
 export function SkipTraceExhaustedQueue() {
   const [page, setPage] = useState(1)
@@ -50,10 +51,7 @@ export function SkipTraceExhaustedQueue() {
     {
       key: 'skip_trace_exhausted_at',
       label: 'Exhausted',
-      render: (row: QueueRow) =>
-        row.skip_trace_exhausted_at
-          ? new Date(row.skip_trace_exhausted_at).toLocaleDateString()
-          : '—',
+      render: (row: QueueRow) => formatDate(row.skip_trace_exhausted_at),
     },
   ]
 

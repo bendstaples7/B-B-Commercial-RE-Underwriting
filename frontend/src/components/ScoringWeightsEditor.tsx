@@ -14,6 +14,7 @@ import SaveIcon from '@mui/icons-material/Save'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import type { ScoringWeights, ScoringCalibrationReport } from '@/types'
 import { leadService } from '@/services/leadApi'
+import { formatDateTime } from '@/utils/formatters'
 
 /** Describes a single scoring criterion for the editor. */
 interface CriterionConfig {
@@ -68,12 +69,6 @@ const WEIGHT_MAX = 1
 
 /** Tolerance for floating-point comparison when checking weight sum. */
 const SUM_TOLERANCE = 0.005
-const TIMEZONE_OFFSET_PATTERN = /(?:Z|[+-]\d{2}:\d{2})$/i
-
-const formatCalibrationTimestamp = (value: string): string => {
-  const timestamp = TIMEZONE_OFFSET_PATTERN.test(value) ? value : `${value}Z`
-  return new Date(timestamp).toLocaleString()
-}
 
 /**
  * Editor for lead scoring criterion weights.
@@ -401,7 +396,7 @@ export const ScoringWeightsEditor: React.FC = () => {
         </Typography>
         {lastCalibratedAt && (
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-            Last applied: {formatCalibrationTimestamp(lastCalibratedAt)}
+            Last applied: {formatDateTime(lastCalibratedAt)}
           </Typography>
         )}
         {calibrationPreview && !calibrationPreview.skipped_reason && (

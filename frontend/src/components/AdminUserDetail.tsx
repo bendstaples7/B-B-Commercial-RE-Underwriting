@@ -25,14 +25,7 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import { adminService } from '@/services/api'
 import { LeadStatusChip } from './LeadStatusChip'
-
-/** Format a date string safely. Returns '—' for null/undefined/invalid values. */
-function safeFormatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return '—'
-  const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return '—'
-  return d.toLocaleDateString()
-}
+import { formatDate } from '@/utils/formatters'
 
 /** Extract a human-readable error message from an unknown error (e.g. Axios error). */
 function extractErrorMessage(err: unknown): string {
@@ -207,7 +200,7 @@ export default function AdminUserDetail() {
                 Member Since
               </Typography>
               <Typography variant="body1">
-                {safeFormatDate(summary.created_at)}
+                {formatDate(summary.created_at)}
               </Typography>
             </Box>
             <Box>
@@ -302,7 +295,7 @@ export default function AdminUserDetail() {
                   </TableCell>
                   <TableCell align="right">{lead.lead_score}</TableCell>
                   <TableCell>
-                    {safeFormatDate(lead.created_at)}
+                    {formatDate(lead.created_at)}
                   </TableCell>
                 </TableRow>
               ))

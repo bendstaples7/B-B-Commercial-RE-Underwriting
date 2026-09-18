@@ -19,6 +19,7 @@ import {
   ConstructionType,
   InteriorCondition,
 } from '@/types'
+import { formatDate } from '@/utils/formatters'
 
 interface ComparableSalesDisplayProps {
   subjectProperty: PropertyFacts
@@ -39,14 +40,6 @@ export const ComparableSalesDisplay: React.FC<ComparableSalesDisplayProps> = ({
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(value)
-  }
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    })
   }
 
   const formatPropertyType = (type: PropertyType) => {

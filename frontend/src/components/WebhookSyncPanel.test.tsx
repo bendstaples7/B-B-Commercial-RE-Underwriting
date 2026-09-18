@@ -279,6 +279,26 @@ describe('WebhookSyncPanel', () => {
       })
     })
 
+    it('shows warning when last_synced_at cannot be parsed', async () => {
+      mockedHubSpotService.getWebhookLogSummary.mockResolvedValue({
+        ...recentSummary,
+        last_synced_at: 'not-a-date',
+      })
+
+      render(
+        <WebhookSyncPanel
+          hasClientSecret={false}
+          onClientSecretSaved={vi.fn()}
+        />
+      )
+
+      await waitFor(() => {
+        expect(
+          screen.getByLabelText('No webhook events received in the last 24 hours')
+        ).toBeInTheDocument()
+      })
+    })
+
     it('does not show stale warning when last_synced_at is recent', async () => {
       mockedHubSpotService.getWebhookLogSummary.mockResolvedValue(recentSummary)
 
@@ -318,6 +338,31 @@ describe('WebhookSyncPanel', () => {
         expect(screen.getByLabelText('1 failed events')).toBeInTheDocument()
         expect(screen.getByLabelText('2 deduplicated events')).toBeInTheDocument()
       })
+    })
+  })
+
+  describe('log timestamps', () => {
+    it('shows seconds on received and processed times', async () => {
+      mockedHubSpotService.getWebhookLog.mockResolvedValue({
+        ...logResponseWithFailedRow,
+        logs: [
+          {
+            ...logResponseWithFailedRow.logs[0],
+            received_at: '2026-07-29T03:35:23.127597Z',
+            processed_at: '2026-07-29T03:35:45.000Z',
+          },
+        ],
+      })
+
+      render(
+        <WebhookSyncPanel
+          hasClientSecret={false}
+          onClientSecretSaved={vi.fn()}
+        />
+      )
+
+      expect(await screen.findByText('Jul 28, 2026, 10:35:23 PM CDT')).toBeInTheDocument()
+      expect(screen.getByText('Jul 28, 2026, 10:35:45 PM CDT')).toBeInTheDocument()
     })
   })
 })

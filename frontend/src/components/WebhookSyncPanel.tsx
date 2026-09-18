@@ -41,6 +41,7 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hubSpotService } from '@/services/api'
 import type { WebhookLog, WebhookLogStatus, WebhookLogSummary } from '@/types'
+import { formatDateTime, parseDisplayTimestamp } from '@/utils/formatters'
 
 // ---------------------------------------------------------------------------
 // Props
@@ -90,18 +91,11 @@ function statusColor(
   }
 }
 
-function formatDateTime(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  try {
-    return new Date(iso).toLocaleString()
-  } catch {
-    return iso
-  }
-}
-
 function isStale(lastSyncedAt: string | null): boolean {
   if (!lastSyncedAt) return true
-  const diff = Date.now() - new Date(lastSyncedAt).getTime()
+  const parsed = parseDisplayTimestamp(lastSyncedAt)
+  if (!parsed) return true
+  const diff = Date.now() - parsed.getTime()
   return diff > 24 * 60 * 60 * 1000
 }
 
@@ -469,10 +463,10 @@ export const WebhookSyncPanel: React.FC<WebhookSyncPanelProps> = ({
                       </TableCell>
                       <TableCell sx={{ fontSize: '0.75rem' }}>{log.event_type}</TableCell>
                       <TableCell sx={{ whiteSpace: 'nowrap', fontSize: '0.75rem' }}>
-                        {formatDateTime(log.received_at)}
+                        {formatDateTime(log.received_at, { seconds: true })}
                       </TableCell>
                       <TableCell sx={{ whiteSpace: 'nowrap', fontSize: '0.75rem' }}>
-                        {formatDateTime(log.processed_at)}
+                        {formatDateTime(log.processed_at, { seconds: true })}
                       </TableCell>
                       <TableCell>
                         {log.status === 'failed' && (

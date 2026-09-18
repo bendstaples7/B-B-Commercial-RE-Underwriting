@@ -47,7 +47,8 @@ import {
   ownerDisplayEntries,
 } from '@/utils/propertyContacts'
 import { formatImportNote } from './leadDetailFormatters'
-import { resolveMailerHistorySummary } from '@/utils/mailerHistory'
+import { formatDate } from '@/utils/formatters'
+import { formatMailerSentAtDisplay, resolveMailerHistorySummary } from '@/utils/mailerHistory'
 import { formatNeedsReviewReason } from '@/utils/needsReviewReason'
 import { hasNonBlankPhones, PhoneList } from '@/components/PhoneRow'
 import { ccCardSx } from '@/components/lead-detail/commandCenterChrome'
@@ -930,7 +931,10 @@ export function PropertySidebar({
           </Typography>
           <SidebarRow label="Tracer" value={data.skip_tracer} />
           <SidebarRow label="Next source" value={data.skip_trace_next_source_id} />
-          <SidebarRow label="Date" value={data.date_skip_traced} />
+          <SidebarRow
+            label="Date"
+            value={data.date_skip_traced ? formatDate(data.date_skip_traced) : null}
+          />
           {data.skip_trace_exhausted_at && (
             <Chip
               label="Sources exhausted"
@@ -978,7 +982,9 @@ export function PropertySidebar({
                 )}
                 <Typography variant="caption" display="block" sx={{ mb: 0.5 }}>
                   {summary.count} mailer{summary.count === 1 ? '' : 's'}
-                  {summary.last_sent_at ? ` · Last ${summary.last_sent_at}` : ''}
+                  {summary.last_sent_at
+                    ? ` · Last ${formatMailerSentAtDisplay(summary.last_sent_at)}`
+                    : ''}
                 </Typography>
                 {summary.rows.slice(0, 3).map((row) => (
                   <Typography
@@ -988,7 +994,7 @@ export function PropertySidebar({
                     display="block"
                     sx={{ mb: 0.25 }}
                   >
-                    {row.sent_at ? `${row.sent_at}: ` : ''}
+                    {row.sent_at ? `${formatMailerSentAtDisplay(row.sent_at)}: ` : ''}
                     {row.label}
                   </Typography>
                 ))}
@@ -1025,8 +1031,8 @@ export function PropertySidebar({
               <Typography variant="caption" fontWeight={500} display="block">{m.list_name}</Typography>
               <Typography variant="caption" color="text.secondary" display="block">
                 Status: {m.outreach_status}
-                {m.status_updated_at && ` · Updated ${new Date(m.status_updated_at).toLocaleDateString()}`}
-                {m.added_at && ` · Added ${new Date(m.added_at).toLocaleDateString()}`}
+                {m.status_updated_at && ` · Updated ${formatDate(m.status_updated_at)}`}
+                {m.added_at && ` · Added ${formatDate(m.added_at)}`}
               </Typography>
             </Box>
           ))}
@@ -1075,16 +1081,19 @@ export function PropertySidebar({
         <SidebarRow label="Import note" value={formatImportNote(commandCenterData)} />
         <SidebarRow label="Category" value={commandCenterData.lead_category} />
         <SidebarRow label="Import channel" value={data.data_source} />
-        <SidebarRow label="Identified" value={data.date_identified} />
+        <SidebarRow
+          label="Identified"
+          value={data.date_identified ? formatDate(data.date_identified) : null}
+        />
         <SidebarRow
           label="Added"
-          value={data.created_at ? new Date(data.created_at).toLocaleDateString() : null}
+          value={data.created_at ? formatDate(data.created_at) : null}
         />
         <SidebarRow
           label="Last Sync"
           value={
             commandCenterData.last_hubspot_sync_at
-              ? new Date(commandCenterData.last_hubspot_sync_at).toLocaleDateString()
+              ? formatDate(commandCenterData.last_hubspot_sync_at)
               : null
           }
         />
@@ -1092,12 +1101,22 @@ export function PropertySidebar({
           label="Last Contact"
           value={
             commandCenterData.last_contact_date
-              ? new Date(commandCenterData.last_contact_date).toLocaleDateString()
+              ? formatDate(commandCenterData.last_contact_date)
               : null
           }
         />
-        <SidebarRow label="Follow-up Date" value={data.follow_up_date} />
-        <SidebarRow label="Added to HS" value={commandCenterData.date_added_to_hubspot} />
+        <SidebarRow
+          label="Follow-up Date"
+          value={data.follow_up_date ? formatDate(data.follow_up_date) : null}
+        />
+        <SidebarRow
+          label="Added to HS"
+          value={
+            commandCenterData.date_added_to_hubspot
+              ? formatDate(commandCenterData.date_added_to_hubspot)
+              : null
+          }
+        />
       </SidebarSection>
 
       <SidebarSection title="Data Quality">

@@ -22,7 +22,8 @@ import AddIcon from '@mui/icons-material/Add'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import { multifamilyService } from '@/services/api'
 import type { DealSummary } from '@/types'
-import { formatCurrency, formatDate, statusColor } from '@/utils/helpers'
+import { formatCurrency, statusColor } from '@/utils/helpers'
+import { formatDate } from '@/utils/formatters'
 
 // ---------------------------------------------------------------------------
 // Quotes Table (adapted from DealTable)

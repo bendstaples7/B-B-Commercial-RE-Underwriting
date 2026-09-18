@@ -50,6 +50,7 @@ import {
   followUpDueForPreset,
   resolveFollowUpDueDate,
 } from '@/utils/followUpPresets'
+import { formatDate } from '@/utils/formatters'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -92,9 +93,7 @@ function sortTasks(tasks: LeadTask[]): LeadTask[] {
 
 function formatDueDate(dueDate: string | null): string {
   if (!dueDate) return 'Pending'
-  // dueDate is a date string like "2024-01-15"
-  const [year, month, day] = dueDate.split('-')
-  return `Due ${month}/${day}/${year}`
+  return `Due ${formatDate(dueDate)}`
 }
 
 // ---------------------------------------------------------------------------

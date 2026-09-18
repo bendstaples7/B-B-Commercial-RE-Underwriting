@@ -24,7 +24,7 @@ import {
   getOlcCatalogSendLines,
   isDirectMailReadyToSend,
 } from '@/utils/directMailSetup'
-import { formatLastMailedDate } from '@/utils/formatLastMailedDate'
+import { formatDate } from '@/utils/formatters'
 import { analyzeMailBatchDuplicates } from '@/utils/mailBatchDuplicates'
 import type { OlcProduct } from '@/utils/olcProductHelpers'
 
@@ -243,7 +243,7 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
                   </Typography>
                   <Typography variant="caption" color="text.secondary" display="block">
                     {queueData.estimated_cost_source_sent_at
-                      ? `Based on mailer cost from the batch sent on ${formatLastMailedDate(queueData.estimated_cost_source_sent_at)}.`
+                      ? `Based on mailer cost from the batch sent on ${formatDate(queueData.estimated_cost_source_sent_at)}.`
                       : 'Based on your last recorded mailer cost per piece.'}
                   </Typography>
                 </Box>

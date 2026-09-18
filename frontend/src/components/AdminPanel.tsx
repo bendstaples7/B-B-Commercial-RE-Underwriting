@@ -16,14 +16,7 @@ import {
 } from '@mui/material'
 import { adminService } from '@/services/api'
 import type { AdminUserSummary } from '@/types'
-
-/** Format an ISO date string as a locale date (no time). Returns '—' for null/undefined/invalid. */
-function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return '—'
-  const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return '—'
-  return d.toLocaleDateString()
-}
+import { formatDate } from '@/utils/formatters'
 
 /**
  * AdminPanel — read-only cross-user visibility page at /admin.

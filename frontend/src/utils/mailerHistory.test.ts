@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  formatMailerSentAtDisplay,
   mailerHistorySummary,
   parseMailerSentAt,
   resolveMailerHistorySummary,
@@ -123,7 +124,29 @@ describe('mailerHistory', () => {
 
   it('parseMailerSentAt handles ISO and US dates', () => {
     expect(parseMailerSentAt('2024-06-01T00:00:00Z')).not.toBeNull()
-    expect(parseMailerSentAt('6/21/2024')?.getMonth()).toBe(5)
+    expect(parseMailerSentAt('6/21/2024')?.getTime()).toBe(parseMailerSentAt('2024-06-21')?.getTime())
+    expect(parseMailerSentAt('6/21/99')?.getUTCFullYear()).toBe(1999)
+    expect(parseMailerSentAt('6/21/68')?.getUTCFullYear()).toBe(1968)
+    expect(parseMailerSentAt('6/21/24')?.getUTCFullYear()).toBe(2024)
     expect(parseMailerSentAt('nope')).toBeNull()
+  })
+
+  it('treats naive ISO datetimes as UTC', () => {
+    const naive = parseMailerSentAt('2026-07-29T03:35:23.127597')
+    const zulu = parseMailerSentAt('2026-07-29T03:35:23.127597Z')
+    expect(naive?.getTime()).toBe(zulu?.getTime())
+  })
+})
+
+describe('formatMailerSentAtDisplay', () => {
+  it('wires mail history display through the shared formatter', () => {
+    expect(formatMailerSentAtDisplay('2026-07-29T03:35:23.127597')).toBe(
+      'Jul 28, 2026, 10:35 PM CDT',
+    )
+    expect(
+      formatMailerSentAtDisplay('2026-07-29T03:35:23.127597', { multiline: true }),
+    ).toBe('Jul 28, 2026\n10:35 PM CDT')
+    expect(formatMailerSentAtDisplay('6/21/2024')).toBe('Jun 21, 2024')
+    expect(formatMailerSentAtDisplay('not-a-date')).toBe('—')
   })
 })
