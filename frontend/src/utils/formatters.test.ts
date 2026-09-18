@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatAssessorPinAddress, formatDate, formatDateTime, formatLeadCategoryLabel, formatPropertyTypeLabel } from '@/utils/formatters'
+import { formatAssessorPinAddress, formatDate, formatDateOnly, formatDateTime, formatLeadCategoryLabel, formatPropertyTypeLabel } from '@/utils/formatters'
 
 describe('formatDate', () => {
   it('parses YYYY-MM-DD as a calendar date without shifting days', () => {
@@ -15,6 +15,13 @@ describe('formatDate', () => {
     expect(formatDate('2024-02-30')).toBe('—')
     expect(formatDate('2024-13-01')).toBe('—')
     expect(formatDate('2/30/2024')).toBe('—')
+  })
+})
+
+describe('formatDateOnly', () => {
+  it('is an alias of formatDate for calendar dates', () => {
+    expect(formatDateOnly('2026-07-15')).toBe('Jul 15, 2026')
+    expect(formatDateOnly(null)).toBe('—')
   })
 })
 

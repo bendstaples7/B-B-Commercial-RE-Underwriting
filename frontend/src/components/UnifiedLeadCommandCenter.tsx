@@ -104,7 +104,7 @@ import {
   enqueueResultSeverity,
   formatEnqueueSummary,
 } from '@/utils/formatEnqueueSummary'
-import { formatDateOnly } from '@/utils/helpers'
+import { formatDateOnly } from '@/utils/formatters'
 import { formatCookCountyPin } from '@/utils/cookCountyPin'
 import { MissingPinActions } from '@/components/lead-detail/PinLookupControl'
 import {

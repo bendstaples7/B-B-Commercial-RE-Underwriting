@@ -15,7 +15,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { RecommendedActionPanel } from './RecommendedActionPanel'
 import type { RecommendedActionMeta, LeadTask } from '@/types'
-import { formatDateOnly } from '@/utils/helpers'
+import { formatDateOnly } from '@/utils/formatters'
 
 // ---------------------------------------------------------------------------
 // Test data helpers

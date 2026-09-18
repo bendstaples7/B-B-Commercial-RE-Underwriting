@@ -16,7 +16,7 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import ApartmentIcon from '@mui/icons-material/Apartment'
 import type { CommandCenterPayload } from '@/types'
-import { formatDateOnly } from '@/utils/helpers'
+import { formatDateOnly } from '@/utils/formatters'
 import {
   mapCondoConfidencePercent,
   resolveCondoCheckLines,

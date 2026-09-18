@@ -1,17 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatDateOnly, formatShortCalendarDay, formatUtcDateRange } from './helpers'
-
-describe('formatDateOnly', () => {
-  it('formats ISO date-only values as calendar dates', () => {
-    expect(formatDateOnly('2026-07-15')).toBe('Jul 15, 2026')
-  })
-
-  it('uses the standard empty display for missing or invalid values', () => {
-    expect(formatDateOnly(null)).toBe('—')
-    expect(formatDateOnly('not-a-date')).toBe('—')
-    expect(formatDateOnly('2026-02-30')).toBe('—')
-  })
-})
+import { formatShortCalendarDay, formatUtcDateRange } from './helpers'
 
 describe('formatUtcDateRange', () => {
   it('formats an exclusive end bound as an inclusive day range', () => {

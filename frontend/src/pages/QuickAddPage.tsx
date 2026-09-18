@@ -38,7 +38,7 @@ import { commandCenterService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
 import type { QuickAddPayload, QuickAddResponse } from '@/types'
 import { QUICK_ADD_DEAL_SOURCES } from '@/types'
-import { formatDateOnly } from '@/utils/helpers'
+import { formatDateOnly } from '@/utils/formatters'
 
 type Priority = 'high' | 'medium' | 'low'
 

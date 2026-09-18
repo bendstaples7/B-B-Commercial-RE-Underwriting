@@ -34,7 +34,8 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import UploadFileIcon from '@mui/icons-material/UploadFile'
 import { multifamilyService } from '@/services/api'
 import type { DealCreatePayload, DealSummary } from '@/types'
-import { formatCurrency, formatDate, statusColor } from '@/utils/helpers'
+import { formatCurrency, statusColor } from '@/utils/helpers'
+import { formatDate } from '@/utils/formatters'
 
 // ---------------------------------------------------------------------------
 // Create Deal Dialog

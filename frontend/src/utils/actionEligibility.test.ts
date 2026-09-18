@@ -12,7 +12,7 @@ import {
   evaluateOutreachLog,
   unavailableReasonForQuickAction,
 } from '@/utils/actionEligibility'
-import { formatDateOnly } from '@/utils/helpers'
+import { formatDateOnly } from '@/utils/formatters'
 
 describe('actionEligibility', () => {
   it('allows move_to_skip_trace for active statuses', () => {
