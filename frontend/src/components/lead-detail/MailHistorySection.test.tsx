@@ -49,7 +49,7 @@ describe('MailHistorySection', () => {
     expect(screen.getByText('Mail history')).toBeInTheDocument()
     expect(screen.getByText('1 mailer')).toBeInTheDocument()
     expect(screen.getByText('Boyfriend, OLM, Blue')).toBeInTheDocument()
-    expect(screen.getByText('6/21/2024')).toBeInTheDocument()
+    expect(screen.getByText('Jun 21, 2024')).toBeInTheDocument()
     expect(screen.getByText(/No attributed responses/i)).toBeInTheDocument()
   })
 
@@ -89,6 +89,8 @@ describe('MailHistorySection', () => {
     )
     expect(screen.getByText('Timeline')).toBeInTheDocument()
     expect(screen.queryByText('Imported')).not.toBeInTheDocument()
+    expect(screen.getByText('Last: Feb 1, 2024')).toBeInTheDocument()
+    expect(screen.getByText('Feb 1, 2024')).toBeInTheDocument()
   })
 
   it('shows returned addresses and attributed responses when present', () => {
@@ -122,5 +124,52 @@ describe('MailHistorySection', () => {
     expect(screen.getByText(/Returned addresses: 200 Alt Ave/)).toBeInTheDocument()
     expect(screen.getByText('Callback after letter')).toBeInTheDocument()
     expect(screen.getByText('44')).toBeInTheDocument()
+    expect(screen.getByText('Feb 1, 2024, 6:00 AM CST')).toBeInTheDocument()
+  })
+
+  it('formats naive UTC mailer timestamps in Central Time without wrapping ISO strings', () => {
+    render(
+      <ThemeProvider theme={theme}>
+        <MailHistorySection
+          commandCenterData={basePayload({
+            mailer_history_summary: {
+              count: 2,
+              last_sent_at: '2026-07-29T03:35:23.127597',
+              rows: [
+                {
+                  id: 'mail-2',
+                  sent_at: '2026-07-27T04:12:43.690795',
+                  label: 'Standard, Bessy Tam',
+                  creative: 'Bessy Tam',
+                  template_name: 'Standard',
+                  campaign_id: 2,
+                  olc_order_id: null,
+                  address_feedback: null,
+                  cancelled: false,
+                  source: 'olc',
+                },
+                {
+                  id: 'mail-3',
+                  sent_at: '2026-07-29T03:35:23.127597',
+                  label: 'Standard, Bessy Tam',
+                  creative: 'Bessy Tam',
+                  template_name: 'Standard',
+                  campaign_id: 3,
+                  olc_order_id: null,
+                  address_feedback: null,
+                  cancelled: false,
+                  source: 'olc',
+                },
+              ],
+            },
+          } as Partial<CommandCenterPayload>)}
+        />
+      </ThemeProvider>,
+    )
+
+    expect(screen.getByText('Last: Jul 28, 2026, 10:35 PM CDT')).toBeInTheDocument()
+    expect(screen.getByText('Jul 26, 2026, 11:12 PM CDT')).toBeInTheDocument()
+    expect(screen.getByText('Jul 28, 2026, 10:35 PM CDT')).toBeInTheDocument()
+    expect(screen.queryByText(/2026-07-29T/)).not.toBeInTheDocument()
   })
 })

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  formatMailerSentAtDisplay,
   mailerHistorySummary,
   parseMailerSentAt,
   resolveMailerHistorySummary,
@@ -125,5 +126,36 @@ describe('mailerHistory', () => {
     expect(parseMailerSentAt('2024-06-01T00:00:00Z')).not.toBeNull()
     expect(parseMailerSentAt('6/21/2024')?.getMonth()).toBe(5)
     expect(parseMailerSentAt('nope')).toBeNull()
+  })
+
+  it('treats naive ISO datetimes as UTC', () => {
+    const naive = parseMailerSentAt('2026-07-29T03:35:23.127597')
+    const zulu = parseMailerSentAt('2026-07-29T03:35:23.127597Z')
+    expect(naive?.getTime()).toBe(zulu?.getTime())
+  })
+})
+
+describe('formatMailerSentAtDisplay', () => {
+  it('formats naive UTC ISO timestamps in US Central Time', () => {
+    expect(formatMailerSentAtDisplay('2026-07-29T03:35:23.127597')).toBe(
+      'Jul 28, 2026, 10:35 PM CDT',
+    )
+    expect(formatMailerSentAtDisplay('2026-07-29T03:35:23.127597Z')).toBe(
+      'Jul 28, 2026, 10:35 PM CDT',
+    )
+    expect(formatMailerSentAtDisplay('2026-01-15T18:00:00Z')).toBe(
+      'Jan 15, 2026, 12:00 PM CST',
+    )
+  })
+
+  it('keeps date-only values as calendar dates without a clock time', () => {
+    expect(formatMailerSentAtDisplay('6/21/2024')).toBe('Jun 21, 2024')
+    expect(formatMailerSentAtDisplay('2025-01-01')).toBe('Jan 1, 2025')
+  })
+
+  it('returns an em dash for missing or invalid values', () => {
+    expect(formatMailerSentAtDisplay(null)).toBe('—')
+    expect(formatMailerSentAtDisplay('')).toBe('—')
+    expect(formatMailerSentAtDisplay('not-a-date')).toBe('—')
   })
 })

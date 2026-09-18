@@ -18,8 +18,11 @@ import {
 } from '@mui/material'
 import type { CommandCenterPayload, PropertyDetail } from '@/types'
 import { ccSubsectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
-import { formatDateTime } from '@/utils/formatters'
-import { parseMailerSentAt, resolveMailerHistorySummary } from '@/utils/mailerHistory'
+import {
+  formatMailerSentAtDisplay,
+  parseMailerSentAt,
+  resolveMailerHistorySummary,
+} from '@/utils/mailerHistory'
 
 export interface MailHistorySectionProps {
   commandCenterData: CommandCenterPayload
@@ -111,7 +114,11 @@ export function MailHistorySection({
           label={`${mailSummary.count} mailer${mailSummary.count === 1 ? '' : 's'}`}
         />
         {mailSummary.last_sent_at && (
-          <Chip size="small" variant="outlined" label={`Last: ${mailSummary.last_sent_at}`} />
+          <Chip
+            size="small"
+            variant="outlined"
+            label={`Last: ${formatMailerSentAtDisplay(mailSummary.last_sent_at)}`}
+          />
         )}
         {queued && <Chip size="small" color="primary" label="In mail queue" />}
         {Boolean(upNext) && !queued && (
@@ -139,7 +146,9 @@ export function MailHistorySection({
             <TableBody>
               {mailSummary.rows.map((row) => (
                 <TableRow key={row.id}>
-                  <TableCell>{row.sent_at || '—'}</TableCell>
+                  <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                    {formatMailerSentAtDisplay(row.sent_at)}
+                  </TableCell>
                   <TableCell>
                     {row.label}
                     {row.campaign_id != null ? ` (#${row.campaign_id})` : ''}
@@ -196,7 +205,9 @@ export function MailHistorySection({
                 const meta = (e.metadata || {}) as Record<string, unknown>
                 return (
                   <TableRow key={e.id}>
-                    <TableCell>{formatDateTime(e.occurred_at || e.created_at)}</TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                      {formatMailerSentAtDisplay(e.occurred_at || e.created_at)}
+                    </TableCell>
                     <TableCell>{e.event_type}</TableCell>
                     <TableCell>
                       {meta.mail_campaign_id != null ? String(meta.mail_campaign_id) : '—'}

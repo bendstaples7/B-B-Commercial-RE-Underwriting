@@ -47,7 +47,7 @@ import {
   ownerDisplayEntries,
 } from '@/utils/propertyContacts'
 import { formatImportNote } from './leadDetailFormatters'
-import { resolveMailerHistorySummary } from '@/utils/mailerHistory'
+import { formatMailerSentAtDisplay, resolveMailerHistorySummary } from '@/utils/mailerHistory'
 import { formatNeedsReviewReason } from '@/utils/needsReviewReason'
 import { hasNonBlankPhones, PhoneList } from '@/components/PhoneRow'
 import { ccCardSx } from '@/components/lead-detail/commandCenterChrome'
@@ -978,7 +978,9 @@ export function PropertySidebar({
                 )}
                 <Typography variant="caption" display="block" sx={{ mb: 0.5 }}>
                   {summary.count} mailer{summary.count === 1 ? '' : 's'}
-                  {summary.last_sent_at ? ` · Last ${summary.last_sent_at}` : ''}
+                  {summary.last_sent_at
+                    ? ` · Last ${formatMailerSentAtDisplay(summary.last_sent_at)}`
+                    : ''}
                 </Typography>
                 {summary.rows.slice(0, 3).map((row) => (
                   <Typography
@@ -988,7 +990,7 @@ export function PropertySidebar({
                     display="block"
                     sx={{ mb: 0.25 }}
                   >
-                    {row.sent_at ? `${row.sent_at}: ` : ''}
+                    {row.sent_at ? `${formatMailerSentAtDisplay(row.sent_at)}: ` : ''}
                     {row.label}
                   </Typography>
                 ))}

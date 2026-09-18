@@ -31,6 +31,23 @@ export interface MailerHistorySummary {
 }
 
 const LEGACY_DATE_RE = /^(?<label>.*?),\s*(?<date>\d{1,2}\/\d{1,2}\/\d{2,4})\s*$/
+const DATE_ONLY_SLASH_RE = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/
+const DATE_ONLY_ISO_RE = /^(\d{4})-(\d{2})-(\d{2})$/
+const NAIVE_ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T/
+const HAS_TZ_RE = /(Z|[+-]\d{2}:?\d{2})$/i
+
+/** Product timestamps display in US Central (America/Chicago). */
+export const MAILER_DISPLAY_TIME_ZONE = 'America/Chicago'
+
+const CENTRAL_DATE_TIME_OPTS: Intl.DateTimeFormatOptions = {
+  timeZone: MAILER_DISPLAY_TIME_ZONE,
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  timeZoneName: 'short',
+}
 
 function asEntries(raw: unknown): unknown[] {
   if (raw == null || raw === '' || (Array.isArray(raw) && raw.length === 0)) {
@@ -40,23 +57,81 @@ function asEntries(raw: unknown): unknown[] {
   return [raw]
 }
 
-/** Parse ISO or US slash dates for last-sent ordering. */
+/** Parse ISO or US slash dates for last-sent ordering. Naive ISO datetimes are UTC. */
 export function parseMailerSentAt(value: unknown): Date | null {
   if (value == null) return null
   const text = String(value).trim()
   if (!text) return null
-  const iso = Date.parse(text)
-  if (!Number.isNaN(iso)) return new Date(iso)
-  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(text)
-  if (m) {
-    const month = Number(m[1])
-    const day = Number(m[2])
-    let year = Number(m[3])
+  const slash = DATE_ONLY_SLASH_RE.exec(text)
+  if (slash) {
+    const month = Number(slash[1])
+    const day = Number(slash[2])
+    let year = Number(slash[3])
     if (year < 100) year += 2000
     const d = new Date(year, month - 1, day)
-    return Number.isNaN(d.getTime()) ? null : d
+    if (
+      Number.isNaN(d.getTime())
+      || d.getFullYear() !== year
+      || d.getMonth() !== month - 1
+      || d.getDate() !== day
+    ) {
+      return null
+    }
+    return d
   }
+  const isoText =
+    NAIVE_ISO_DATETIME_RE.test(text) && !HAS_TZ_RE.test(text) ? `${text}Z` : text
+  const ms = Date.parse(isoText)
+  if (!Number.isNaN(ms)) return new Date(ms)
   return null
+}
+
+function formatCalendarDay(year: number, month: number, day: number): string {
+  const utc = new Date(Date.UTC(year, month - 1, day))
+  if (
+    Number.isNaN(utc.getTime())
+    || utc.getUTCFullYear() !== year
+    || utc.getUTCMonth() !== month - 1
+    || utc.getUTCDate() !== day
+  ) {
+    return '—'
+  }
+  return utc.toLocaleDateString('en-US', {
+    timeZone: 'UTC',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
+/**
+ * Readable mail-history timestamp in US Central Time.
+ * Date-only values stay calendar dates (no invented clock time / TZ shift).
+ */
+export function formatMailerSentAtDisplay(value: string | null | undefined): string {
+  if (value == null) return '—'
+  const text = String(value).trim()
+  if (!text) return '—'
+
+  const slash = DATE_ONLY_SLASH_RE.exec(text)
+  if (slash) {
+    let year = Number(slash[3])
+    if (year < 100) year += 2000
+    return formatCalendarDay(year, Number(slash[1]), Number(slash[2]))
+  }
+
+  const isoDate = DATE_ONLY_ISO_RE.exec(text)
+  if (isoDate) {
+    return formatCalendarDay(
+      Number(isoDate[1]),
+      Number(isoDate[2]),
+      Number(isoDate[3]),
+    )
+  }
+
+  const parsed = parseMailerSentAt(text)
+  if (!parsed) return '—'
+  return parsed.toLocaleString('en-US', CENTRAL_DATE_TIME_OPTS)
 }
 
 /** Coerce API creative (string | preset dict | null) to a display string. */
