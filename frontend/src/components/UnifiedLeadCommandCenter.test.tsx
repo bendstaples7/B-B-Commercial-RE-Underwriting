@@ -330,7 +330,7 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     expect(screen.getByTestId('lead-briefing-ai-badge')).toBeInTheDocument()
   })
 
-  it('renders work-queue membership chips without alert banners', async () => {
+  it('renders work-queue membership in the score box without alert banners', async () => {
     vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
       makeCommandCenterPayload({
         work_queues: [
@@ -346,11 +346,15 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     renderComponent()
 
     await waitFor(() => {
-      expect(screen.getByTestId('work-queue-membership-strip')).toBeInTheDocument()
+      expect(screen.getByTestId('header-current-queues')).toBeInTheDocument()
     })
+    expect(screen.getByTestId('header-current-queues')).toHaveTextContent('Current queues:')
     expect(screen.getByTestId('work-queue-strip-needs-review')).toBeInTheDocument()
     expect(screen.getByTestId('work-queue-strip-follow-up-overdue')).toBeInTheDocument()
     expect(screen.getByTestId('work-queue-strip-previously-warm')).toBeInTheDocument()
+    expect(screen.queryByTestId('work-queue-membership-strip')).not.toBeInTheDocument()
+    expect(screen.queryByText('Came from')).not.toBeInTheDocument()
+    expect(screen.queryByText('Currently in')).not.toBeInTheDocument()
     // Clarity lives in chip popover — not a sticky header banner
     expect(screen.queryByTestId('needs-review-clarity-panel')).not.toBeInTheDocument()
     expect(screen.queryByTestId('work-queue-banner-needs-review')).not.toBeInTheDocument()
@@ -361,7 +365,7 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     expect(screen.getByTestId('needs-review-clarity-reason')).toHaveTextContent('Manual review needed')
   })
 
-  it('splits came-from routing context from live work-queue membership', async () => {
+  it('bolds the viewing-from queue in the score-box list', async () => {
     vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
       makeCommandCenterPayload({
         work_queues: [
@@ -423,10 +427,15 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByTestId('work-queue-came-from-needs-review')).toBeInTheDocument()
+      expect(screen.getByTestId('header-current-queues')).toBeInTheDocument()
     })
-    expect(screen.getByTestId('work-queue-currently-in')).toBeInTheDocument()
-    expect(screen.getByTestId('work-queue-strip-needs-review')).toBeInTheDocument()
+    expect(screen.queryByTestId('work-queue-came-from-needs-review')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('work-queue-currently-in')).not.toBeInTheDocument()
+    expect(screen.queryByText('Came from')).not.toBeInTheDocument()
+    expect(screen.getByTestId('work-queue-strip-needs-review')).toHaveAttribute(
+      'data-viewing-from',
+      'true',
+    )
     expect(screen.queryByTestId('needs-review-cluster-table')).not.toBeInTheDocument()
 
     await userEvent.click(screen.getByTestId('work-queue-strip-needs-review'))

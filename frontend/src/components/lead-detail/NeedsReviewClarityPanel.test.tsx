@@ -150,4 +150,24 @@ describe('NeedsReviewChipPopover', () => {
       'Possible duplicate records',
     )
   })
+
+  it('opens popover from inline Current queues name', async () => {
+    render(
+      <MemoryRouter>
+        <NeedsReviewChipPopover
+          leadId={10}
+          commandCenterData={basePayload({
+            review_reason: 'duplicate_lead_cluster',
+          })}
+          variant="inline"
+          viewingFrom
+          onResolved={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    const trigger = screen.getByTestId('work-queue-strip-needs-review')
+    expect(trigger).toHaveAttribute('data-viewing-from', 'true')
+    await userEvent.click(trigger)
+    expect(await screen.findByTestId('needs-review-clarity-panel')).toBeInTheDocument()
+  })
 })

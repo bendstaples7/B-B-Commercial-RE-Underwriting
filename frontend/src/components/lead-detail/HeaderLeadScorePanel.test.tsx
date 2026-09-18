@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import {
   HeaderLeadScorePanel,
+  resolveHeaderCurrentQueues,
   resolveTopScoreDrivers,
   scorePriorityLabel,
 } from './HeaderLeadScorePanel'
@@ -76,7 +78,7 @@ describe('HeaderLeadScorePanel', () => {
         onOpenBreakdown={onOpenBreakdown}
       />,
     )
-    await user.click(screen.getByTestId('header-lead-score'))
+    await user.click(screen.getByRole('button', { name: /Lead score 87/ }))
     expect(onOpenBreakdown).toHaveBeenCalledTimes(1)
   })
 
@@ -124,6 +126,76 @@ describe('HeaderLeadScorePanel', () => {
     const label = chip.querySelector('.MuiChip-label') as HTMLElement
     expect(getComputedStyle(label).whiteSpace).toMatch(/normal|pre-wrap/)
     expect(getComputedStyle(label).textOverflow).not.toBe('ellipsis')
+  })
+})
+
+describe('resolveHeaderCurrentQueues', () => {
+  it('keeps membership order and prepends viewing-from when missing', () => {
+    const queues = resolveHeaderCurrentQueues(
+      [{ key: 'follow-up-overdue', label: 'Follow-Up Overdue', path: '/queues/follow-up-overdue' }],
+      { key: 'todays-action', label: "Today's Action" },
+    )
+    expect(queues.map((q) => q.key)).toEqual(['todays-action', 'follow-up-overdue'])
+  })
+
+  it('does not duplicate the viewing-from queue', () => {
+    const queues = resolveHeaderCurrentQueues(
+      [{ key: 'todays-action', label: "Today's Action", path: '/queues/todays-action' }],
+      { key: 'todays-action', label: "Today's Action" },
+    )
+    expect(queues).toHaveLength(1)
+  })
+
+  it('adds Needs Review when review is active but missing from membership', () => {
+    const queues = resolveHeaderCurrentQueues([], null, { reviewActive: true })
+    expect(queues.map((q) => q.key)).toEqual(['needs-review'])
+  })
+})
+
+describe('HeaderLeadScorePanel current queues', () => {
+  it('lists current queues and bolds the viewing-from queue', () => {
+    render(
+      <MemoryRouter>
+        <HeaderLeadScorePanel
+          score={87}
+          tier="A"
+          scoreRecord={makeScore()}
+          currentQueues={[
+            { key: 'todays-action', label: "Today's Action", path: '/queues/todays-action' },
+            { key: 'follow-up-overdue', label: 'Follow-Up Overdue', path: '/queues/follow-up-overdue' },
+          ]}
+          viewingFromQueueKey="todays-action"
+        />
+      </MemoryRouter>,
+    )
+    const line = screen.getByTestId('header-current-queues')
+    expect(line).toHaveTextContent("Current queues: Today's Action, Follow-Up Overdue")
+    expect(screen.getByTestId('work-queue-strip-todays-action')).toHaveAttribute(
+      'data-viewing-from',
+      'true',
+    )
+    expect(screen.getByTestId('work-queue-strip-follow-up-overdue')).not.toHaveAttribute(
+      'data-viewing-from',
+    )
+    expect(screen.getByTestId('work-queue-strip-todays-action').querySelector('strong')).toHaveTextContent(
+      "Today's Action",
+    )
+    expect(screen.getByTestId('work-queue-strip-follow-up-overdue').querySelector('strong')).toBeNull()
+  })
+
+  it('shows None when membership is empty', () => {
+    render(
+      <MemoryRouter>
+        <HeaderLeadScorePanel score={87} tier="A" scoreRecord={makeScore()} currentQueues={[]} />
+      </MemoryRouter>,
+    )
+    expect(screen.getByTestId('header-current-queues')).toHaveTextContent('Current queues: None')
+    expect(screen.getByTestId('work-queue-strip-empty')).toBeInTheDocument()
+  })
+
+  it('omits the line when currentQueues is not passed', () => {
+    render(<HeaderLeadScorePanel score={87} tier="A" scoreRecord={makeScore()} />)
+    expect(screen.queryByTestId('header-current-queues')).not.toBeInTheDocument()
   })
 })
 
