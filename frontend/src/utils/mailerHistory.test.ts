@@ -148,6 +148,12 @@ describe('formatMailerSentAtDisplay', () => {
     )
   })
 
+  it('can split date and Central Time onto two lines for narrow tables', () => {
+    expect(
+      formatMailerSentAtDisplay('2026-07-29T03:35:23.127597', { multiline: true }),
+    ).toBe('Jul 28, 2026\n10:35 PM CDT')
+  })
+
   it('keeps date-only values as calendar dates without a clock time', () => {
     expect(formatMailerSentAtDisplay('6/21/2024')).toBe('Jun 21, 2024')
     expect(formatMailerSentAtDisplay('2025-01-01')).toBe('Jan 1, 2025')

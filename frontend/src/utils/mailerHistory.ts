@@ -108,7 +108,10 @@ function formatCalendarDay(year: number, month: number, day: number): string {
  * Readable mail-history timestamp in US Central Time.
  * Date-only values stay calendar dates (no invented clock time / TZ shift).
  */
-export function formatMailerSentAtDisplay(value: string | null | undefined): string {
+export function formatMailerSentAtDisplay(
+  value: string | null | undefined,
+  options?: { multiline?: boolean },
+): string {
   if (value == null) return '—'
   const text = String(value).trim()
   if (!text) return '—'
@@ -131,7 +134,12 @@ export function formatMailerSentAtDisplay(value: string | null | undefined): str
 
   const parsed = parseMailerSentAt(text)
   if (!parsed) return '—'
-  return parsed.toLocaleString('en-US', CENTRAL_DATE_TIME_OPTS)
+  const formatted = parsed.toLocaleString('en-US', CENTRAL_DATE_TIME_OPTS)
+  if (options?.multiline) {
+    // Keep calendar date on one line and clock + zone on the next in narrow tables.
+    return formatted.replace(/, (?=\d{1,2}:)/, '\n')
+  }
+  return formatted
 }
 
 /** Coerce API creative (string | preset dict | null) to a display string. */

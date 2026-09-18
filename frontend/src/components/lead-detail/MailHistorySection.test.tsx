@@ -124,7 +124,8 @@ describe('MailHistorySection', () => {
     expect(screen.getByText(/Returned addresses: 200 Alt Ave/)).toBeInTheDocument()
     expect(screen.getByText('Callback after letter')).toBeInTheDocument()
     expect(screen.getByText('44')).toBeInTheDocument()
-    expect(screen.getByText('Feb 1, 2024, 6:00 AM CST')).toBeInTheDocument()
+    expect(screen.getByText(/Feb 1, 2024/)).toBeInTheDocument()
+    expect(screen.getByText(/6:00 AM CST/)).toBeInTheDocument()
   })
 
   it('formats naive UTC mailer timestamps in Central Time without wrapping ISO strings', () => {
@@ -168,8 +169,9 @@ describe('MailHistorySection', () => {
     )
 
     expect(screen.getByText('Last: Jul 28, 2026, 10:35 PM CDT')).toBeInTheDocument()
-    expect(screen.getByText('Jul 26, 2026, 11:12 PM CDT')).toBeInTheDocument()
-    expect(screen.getByText('Jul 28, 2026, 10:35 PM CDT')).toBeInTheDocument()
+    expect(screen.getByText(/Jul 26, 2026/)).toBeInTheDocument()
+    expect(screen.getByText(/11:12 PM CDT/)).toBeInTheDocument()
+    expect(screen.getAllByText(/10:35 PM CDT/).length).toBeGreaterThanOrEqual(2)
     expect(screen.queryByText(/2026-07-29T/)).not.toBeInTheDocument()
   })
 })

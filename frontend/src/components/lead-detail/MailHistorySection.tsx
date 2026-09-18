@@ -137,7 +137,7 @@ export function MailHistorySection({
           <Table size="small" aria-label="Mail history">
             <TableHead>
               <TableRow>
-                <TableCell sx={{ fontWeight: 'bold' }}>When</TableCell>
+                <TableCell sx={{ fontWeight: 'bold', minWidth: 118 }}>When</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Mailer</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Source</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Notes</TableCell>
@@ -146,8 +146,8 @@ export function MailHistorySection({
             <TableBody>
               {mailSummary.rows.map((row) => (
                 <TableRow key={row.id}>
-                  <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                    {formatMailerSentAtDisplay(row.sent_at)}
+                  <TableCell sx={{ whiteSpace: 'pre-line', minWidth: 118, verticalAlign: 'top' }}>
+                    {formatMailerSentAtDisplay(row.sent_at, { multiline: true })}
                   </TableCell>
                   <TableCell>
                     {row.label}
@@ -194,7 +194,7 @@ export function MailHistorySection({
           <Table size="small" aria-label="Mail-attributed responses">
             <TableHead>
               <TableRow>
-                <TableCell sx={{ fontWeight: 'bold' }}>When</TableCell>
+                <TableCell sx={{ fontWeight: 'bold', minWidth: 118 }}>When</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Event</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Campaign</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Summary</TableCell>
@@ -205,8 +205,10 @@ export function MailHistorySection({
                 const meta = (e.metadata || {}) as Record<string, unknown>
                 return (
                   <TableRow key={e.id}>
-                    <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                      {formatMailerSentAtDisplay(e.occurred_at || e.created_at)}
+                    <TableCell sx={{ whiteSpace: 'pre-line', minWidth: 118, verticalAlign: 'top' }}>
+                      {formatMailerSentAtDisplay(e.occurred_at || e.created_at, {
+                        multiline: true,
+                      })}
                     </TableCell>
                     <TableCell>{e.event_type}</TableCell>
                     <TableCell>
