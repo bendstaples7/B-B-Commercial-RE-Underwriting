@@ -290,46 +290,7 @@ export function PropertyOverviewQuickStats({
         }`
       : undefined
 
-  const cells: {
-    id: string
-    label: string
-    value: string
-    tooltip?: string
-    allowWrap?: boolean
-  }[] = [
-    {
-      id: 'est-value',
-      label: 'Est. value',
-      value: estValue ?? EM_DASH,
-      tooltip: 'Assessor assessed value (not analysis ARV)',
-    },
-    {
-      id: 'last-sale',
-      label: 'Last sale',
-      value: lastSale ?? noSaleCopy ?? EM_DASH,
-      // Allow wrap on narrow phones so "$1,546,500" is not ellipsized away.
-      allowWrap: true,
-    },
-    {
-      id: 'units-details',
-      label: 'Units / details',
-      // User lock 1B: Units may wrap — never nowrap into Category / condo.
-      value: unitsDetails ?? EM_DASH,
-      allowWrap: true,
-      tooltip: noteUnitsHint,
-    },
-    {
-      id: 'category',
-      label: 'Category',
-      value: categoryLabel || EM_DASH,
-      allowWrap: true,
-    },
-  ]
-
-  const editableKinds = new Set(['est-value', 'last-sale', 'units-details'])
-  const canEdit = typeof leadId === 'number'
   const askingDisplay = askingValue ?? EM_DASH
-
   const renderAskingBlock = () => {
     const askingBody = (
       <Box
@@ -376,6 +337,45 @@ export function PropertyOverviewQuickStats({
       </Tooltip>
     )
   }
+
+  const cells: {
+    id: string
+    label: string
+    value: string
+    tooltip?: string
+    allowWrap?: boolean
+  }[] = [
+    {
+      id: 'est-value',
+      label: 'Est. value',
+      value: estValue ?? EM_DASH,
+      tooltip: 'Assessor assessed value (not analysis ARV)',
+    },
+    {
+      id: 'last-sale',
+      label: 'Last sale',
+      value: lastSale ?? noSaleCopy ?? EM_DASH,
+      // Allow wrap on narrow phones so "$1,546,500" is not ellipsized away.
+      allowWrap: true,
+    },
+    {
+      id: 'units-details',
+      label: 'Units / details',
+      // User lock 1B: Units may wrap — never nowrap into Category / condo.
+      value: unitsDetails ?? EM_DASH,
+      allowWrap: true,
+      tooltip: noteUnitsHint,
+    },
+    {
+      id: 'category',
+      label: 'Category',
+      value: categoryLabel || EM_DASH,
+      allowWrap: true,
+    },
+  ]
+
+  const editableKinds = new Set(['est-value', 'last-sale', 'units-details'])
+  const canEdit = typeof leadId === 'number'
 
   return (
     <Box
