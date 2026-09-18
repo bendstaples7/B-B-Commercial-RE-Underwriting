@@ -77,6 +77,16 @@ class TestDedupStreetKey:
         assert streets_match_same_situs('1867 N Howe St', '1867/1869 N Howe St')
         assert not streets_match_same_situs('1867 N Howe St', '1869 N Howe St')
 
+    def test_duplicate_merge_allows_husk_vs_unit_not_two_units(self):
+        from app.services.lead_merge_utils import streets_match_duplicate_merge
+
+        assert streets_match_duplicate_merge('2834 N Drake Ave', '2834 N Drake Ave 1r')
+        assert streets_match_duplicate_merge('100 Main St', '100 Main St Unit 2')
+        assert not streets_match_duplicate_merge(
+            '1 Oak Brook Club Dr Unit A-30',
+            '1 Oak Brook Club Dr Unit A-206',
+        )
+
     def test_legacy_glued_range_key_for_stale_index_rows(self):
         from app.services.lead_merge_utils import legacy_glued_house_range_key
 
@@ -558,6 +568,65 @@ class TestSiblingAbsorbAndSoftMerge:
             assert refreshed.review_required is False
             assert refreshed.review_reason is None
 
+    def test_merge_loser_into_winner_allows_building_husk_vs_unit(self, app):
+        from app.services.lead_dedup_service import merge_loser_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='2834 N Drake Ave 1r',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60618',
+                owner_first_name='Francisco',
+                owner_last_name='R Solis',
+                review_required=True,
+                review_reason='duplicate_lead_cluster',
+            )
+            loser = Lead(
+                property_street='2834 N Drake Ave',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60618',
+                owner_first_name='Francisco',
+                owner_last_name='R Solis',
+                review_required=True,
+                review_reason='duplicate_lead_cluster',
+            )
+            db.session.add_all([winner, loser])
+            db.session.commit()
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ), patch(
+                'app.services.lead_refresh.refresh_lead_scoring',
+            ):
+                result = merge_loser_into_winner(
+                    winner.id, loser.id, changed_by='test', commit=True,
+                )
+
+            assert result['merged'] is True
+            assert db.session.get(Lead, loser.id) is None
+
+    def test_merge_loser_into_winner_rejects_two_distinct_units(self, app):
+        from app.services.lead_dedup_service import merge_loser_into_winner
+
+        with app.app_context():
+            a = Lead(
+                property_street='1 Oak Brook Club Dr Unit A-30',
+                owner_first_name='Ada',
+                owner_last_name='Owner',
+            )
+            b = Lead(
+                property_street='1 Oak Brook Club Dr Unit A-206',
+                owner_first_name='Ada',
+                owner_last_name='Owner',
+            )
+            db.session.add_all([a, b])
+            db.session.commit()
+
+            with pytest.raises(ValueError, match='same address'):
+                merge_loser_into_winner(a.id, b.id, changed_by='test', commit=False)
+
     def test_merge_prefers_unit_street_onto_bare_winner(self, app):
         from app.services.lead_dedup_service import merge_lead_into_winner
 
@@ -988,19 +1057,23 @@ class TestSameBuildingBannerAndAdditivePeople:
             except ValueError as exc:
                 assert 'address' in str(exc).lower() or 'unit' in str(exc).lower()
 
-    def test_merge_rejects_bare_building_vs_unit(self, app):
+    def test_merge_allows_bare_building_vs_unit(self, app):
         from app.services.lead_dedup_service import merge_loser_into_winner
 
         with app.app_context():
-            winner = Lead(property_street='1 Oak Brook Club Dr')
-            loser = Lead(property_street='1 Oak Brook Club Dr Unit A-30')
+            winner = Lead(property_street='1 Oak Brook Club Dr Unit A-30')
+            loser = Lead(property_street='1 Oak Brook Club Dr')
             db.session.add_all([winner, loser])
             db.session.commit()
-            try:
-                merge_loser_into_winner(winner.id, loser.id, changed_by='test', commit=False)
-                assert False, 'expected bare↔unit merge to fail'
-            except ValueError as exc:
-                assert 'address' in str(exc).lower() or 'unit' in str(exc).lower()
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ), patch(
+                'app.services.lead_refresh.refresh_lead_scoring',
+            ):
+                result = merge_loser_into_winner(
+                    winner.id, loser.id, changed_by='test', commit=False,
+                )
+            assert result['merged'] is True
 
     def test_merge_skips_category_copy_when_winner_locked(self, app):
         from app.services.lead_dedup_service import merge_lead_into_winner

@@ -80,7 +80,6 @@ export function NeedsReviewQueue() {
         row.review_reason === 'duplicate_lead_cluster'
         && Boolean(row.suggested_winner_id)
         && row.suggested_winner_id !== row.id
-        && String(row.duplicate_confidence || '').toLowerCase() !== 'ambiguous'
       ),
       onClick: async (row: QueueRow) => {
         const winnerId = row.suggested_winner_id

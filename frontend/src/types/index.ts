@@ -2085,6 +2085,7 @@ export interface DuplicateClusterMember {
   has_email?: boolean;
   hubspot_confirmed?: boolean;
   is_suggested_winner?: boolean;
+  people_names?: string[];
 }
 
 export interface DuplicateClusterPreview {

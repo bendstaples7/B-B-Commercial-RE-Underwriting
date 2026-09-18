@@ -1331,7 +1331,12 @@ export const commandCenterService = {
   getMergePreview: (
     leadId: number,
     otherId: number,
-  ): Promise<{ same_building: boolean; current: SameAddressLeadSummary; other: SameAddressLeadSummary }> =>
+  ): Promise<{
+    same_building: boolean
+    mergeable?: boolean
+    current: SameAddressLeadSummary
+    other: SameAddressLeadSummary
+  }> =>
     api.get(`/leads/${leadId}/merge-preview/${otherId}`).then(r => r.data),
   updateCategory: (
     leadId: number,

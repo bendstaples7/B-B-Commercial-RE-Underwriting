@@ -436,10 +436,9 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
       'data-viewing-from',
       'true',
     )
-    expect(screen.queryByTestId('needs-review-cluster-table')).not.toBeInTheDocument()
-
-    await userEvent.click(screen.getByTestId('work-queue-strip-needs-review'))
-    expect(await screen.findByTestId('needs-review-cluster-table')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-review-duplicate-callout')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-review-cluster-comparison')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-review-open-merge')).toBeInTheDocument()
     expect(screen.getByTestId('needs-review-clarity-reason')).toHaveTextContent(
       'Possible duplicate records',
     )

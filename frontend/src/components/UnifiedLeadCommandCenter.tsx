@@ -93,8 +93,9 @@ import { KeyContactCard } from '@/components/lead-detail/KeyContactCard'
 import { PropertyKpiCard } from '@/components/lead-detail/PropertyKpiCard'
 import { PropertyOverviewQuickStats, shouldShowCondoCheckCell } from '@/components/lead-detail/PropertyOverviewQuickStats'
 import { SameAddressMergeBanner } from '@/components/lead-detail/SameAddressMergeBanner'
-import { NeedsReviewChipPopover } from '@/components/lead-detail/NeedsReviewClarityPanel'
+import { DuplicateReviewCallout, NeedsReviewChipPopover } from '@/components/lead-detail/NeedsReviewClarityPanel'
 import { afterCommandCenterMutation } from '@/utils/afterCommandCenterMutation'
+import { isDuplicateClusterReason, mergeDuplicateTwins } from '@/utils/needsReviewReason'
 import { HeaderCondoCheckPanel } from '@/components/lead-detail/HeaderCondoCheckPanel'
 import { HeaderLeadScorePanel, resolveHeaderCurrentQueues, type ScoreFlash } from '@/components/lead-detail/HeaderLeadScorePanel'
 import { DeepDiveDetailsCard } from '@/components/lead-detail/DeepDiveDetailsCard'
@@ -545,6 +546,7 @@ function PropertyOverviewHeader({
                     variant="inline"
                     viewingFrom={viewingFrom}
                     onResolved={onNeedsReviewResolved}
+                    onOpenMerge={onMergeDuplicate}
                   />
                 )
               }}
@@ -1406,6 +1408,15 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     }
   }, [])
   const [sameAddressMergeOpen, setSameAddressMergeOpen] = useState(false)
+  const duplicateReviewActive = isDuplicateClusterReason(commandCenterData?.review_reason)
+  const mergeTwins = useMemo(
+    () => mergeDuplicateTwins(
+      leadId,
+      commandCenterData?.same_address_leads,
+      commandCenterData?.duplicate_cluster,
+    ),
+    [commandCenterData?.duplicate_cluster, commandCenterData?.same_address_leads, leadId],
+  )
   const [activitySnackbar, setActivitySnackbar] = useState<{
     open: boolean
     message: string
@@ -1416,6 +1427,31 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     open: false,
     message: '',
   })
+  const handleNeedsReviewResolved = useCallback(async (result: {
+    kind: 'merged' | 'dismissed' | 'cleared'
+    winnerId?: number
+    loserId?: number
+  }) => {
+    if (result.kind === 'merged' && result.winnerId != null && result.loserId != null) {
+      const mergeFlash = { message: 'Records combined.' }
+      setActivitySnackbar({ open: true, ...mergeFlash })
+      await afterCommandCenterMutation(queryClient, {
+        winnerId: result.winnerId,
+        loserId: result.loserId,
+        navigate,
+        fromQueue,
+        flashSnackbar: result.winnerId === leadId ? undefined : mergeFlash,
+      })
+      return
+    }
+    setActivitySnackbar({
+      open: true,
+      message: result.kind === 'dismissed' ? 'Marked not a duplicate.' : 'Marked reviewed.',
+    })
+    await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+    void queryClient.invalidateQueries({ queryKey: ['queue-needs-review'] })
+    void queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+  }, [fromQueue, leadId, navigate, queryClient])
   const [suppressDialogOpen, setSuppressDialogOpen] = useState(false)
   const [dncDialogOpen, setDncDialogOpen] = useState(false)
   const [dncPending, setDncPending] = useState(false)
@@ -2296,27 +2332,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             fromQueue={fromQueue}
             statusSelectorRef={statusSelectorRef}
             scoreFlash={scoreFlash}
-            onNeedsReviewResolved={async (result) => {
-              if (result.kind === 'merged' && result.winnerId != null && result.loserId != null) {
-                const mergeFlash = { message: 'Records combined.' }
-                setActivitySnackbar({ open: true, ...mergeFlash })
-                await afterCommandCenterMutation(queryClient, {
-                  winnerId: result.winnerId,
-                  loserId: result.loserId,
-                  navigate,
-                  fromQueue,
-                  flashSnackbar: result.winnerId === leadId ? undefined : mergeFlash,
-                })
-                return
-              }
-              setActivitySnackbar({
-                open: true,
-                message: result.kind === 'dismissed' ? 'Marked not a duplicate.' : 'Marked reviewed.',
-              })
-              await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-              void queryClient.invalidateQueries({ queryKey: ['queue-needs-review'] })
-              void queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
-            }}
+            onNeedsReviewResolved={handleNeedsReviewResolved}
             onCategoryChanged={async () => {
               await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
             }}
@@ -2338,11 +2354,18 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             }}
             onMergeDuplicate={() => setSameAddressMergeOpen(true)}
           />
+          <DuplicateReviewCallout
+            leadId={leadId}
+            commandCenterData={commandCenterData}
+            onOpenMerge={() => setSameAddressMergeOpen(true)}
+            onResolved={handleNeedsReviewResolved}
+          />
           <SameAddressMergeBanner
             leadId={leadId}
             open={sameAddressMergeOpen}
             onOpenChange={setSameAddressMergeOpen}
-            twins={commandCenterData.same_address_leads ?? []}
+            hideBanner={duplicateReviewActive}
+            twins={mergeTwins}
             currentOwnerLabel={
               primaryOwnerDisplayName(
                 commandCenterData.contacts,

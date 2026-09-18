@@ -198,6 +198,23 @@ def streets_match_same_situs(a: Optional[str], b: Optional[str]) -> bool:
     return True
 
 
+def streets_match_duplicate_merge(a: Optional[str], b: Optional[str]) -> bool:
+    """Human-confirmed duplicate merge: same building, not two distinct units.
+
+    Allows a bare building husk (``100 Main``) to merge into a unit record
+    (``100 Main Unit 2``). Still rejects condo A-30 vs A-206.
+    """
+    if streets_match_same_situs(a, b):
+        return True
+    if not streets_match_normalized(a, b):
+        return False
+    ua = situs_unit_token(a)
+    ub = situs_unit_token(b)
+    if ua and ub and ua != ub:
+        return False
+    return True
+
+
 def owner_group_key(
     first: Optional[str],
     last: Optional[str],

@@ -48,6 +48,8 @@ export interface SameAddressMergeBannerProps {
   /** Controlled dialog open (header ⋯ → Merge duplicate…). */
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /** Hide the auto-detect banner when a richer duplicate callout is already showing. */
+  hideBanner?: boolean
 }
 
 function peopleLine(names: string[]): string {
@@ -69,6 +71,7 @@ export function SameAddressMergeBanner({
   onMerged,
   open: openProp,
   onOpenChange,
+  hideBanner = false,
 }: SameAddressMergeBannerProps) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
   const isControlled = openProp !== undefined
@@ -249,7 +252,7 @@ export function SameAddressMergeBanner({
         if (!isCurrentLookup()) {
           return false
         }
-        if (!preview.same_building) {
+        if (!preview.same_building && !preview.mergeable) {
           setPasteError('That record is not the same address.')
           setPastePreview(null)
           setValidatedOtherId(null)
@@ -369,7 +372,7 @@ export function SameAddressMergeBanner({
 
   return (
     <>
-      {hasTwins ? (
+      {hasTwins && !hideBanner ? (
         <Alert
           severity="info"
           data-testid="same-address-merge-banner"

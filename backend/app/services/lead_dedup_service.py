@@ -16,6 +16,7 @@ from app.services.lead_merge_utils import (
     legacy_glued_house_range_key,
     merge_mailer_history,
     pick_merge_winner,
+    streets_match_duplicate_merge,
     streets_match_normalized,
     streets_match_same_situs,
     winner_sort_key,
@@ -803,9 +804,11 @@ def merge_preview_for_ids(lead_id: int, other_id: int) -> dict[str, Any]:
     if lead is None or other is None:
         raise ValueError('winner or loser lead not found')
     same_building = streets_match_same_situs(lead.property_street, other.property_street)
+    mergeable = streets_match_duplicate_merge(lead.property_street, other.property_street)
     names = _people_names_for_lead_ids([lead_id, other_id])
     return {
         'same_building': bool(same_building),
+        'mergeable': bool(mergeable),
         'current': {
             'id': lead.id,
             'property_street': lead.property_street,
@@ -830,6 +833,7 @@ def cluster_preview_for_lead(lead: Lead) -> dict[str, Any] | None:
     confirmed_ids = confirmed_hubspot_lead_ids()
     records = [_lead_to_merge_record(item) for item in cluster]
     winner = pick_merge_winner(records, confirmed_ids)
+    names = _people_names_for_lead_ids([item.id for item in cluster])
     members = []
     for item in cluster:
         members.append({
@@ -842,6 +846,7 @@ def cluster_preview_for_lead(lead: Lead) -> dict[str, Any] | None:
             'has_email': bool(item.has_email),
             'hubspot_confirmed': item.id in confirmed_ids,
             'is_suggested_winner': item.id == winner['id'],
+            'people_names': names.get(item.id) or [],
         })
     return {
         'cluster_ids': [item.id for item in cluster],
@@ -868,7 +873,7 @@ def merge_loser_into_winner(
     loser = db.session.get(Lead, loser_id)
     if winner is None or loser is None:
         raise ValueError('winner or loser lead not found')
-    if not streets_match_same_situs(winner.property_street, loser.property_street):
+    if not streets_match_duplicate_merge(winner.property_street, loser.property_street):
         raise ValueError('leads do not share the same address / unit')
 
     with db.session.begin_nested():

@@ -265,10 +265,11 @@ function OptionMergeBanner() {
       data-live-ui-surface
     >
       <Typography variant="overline" color="text.secondary">
-        Option 2 — Same-address merge area
+        Shipped — Same-address merge area (always-visible comparison)
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-        Review reason lives with the existing merge entry — one place for twin work.
+        Possible duplicate records show a this-vs-other comparison and Merge on
+        Command Center — not buried in the Needs Review chip.
       </Typography>
       <FakeHeader />
       <Box
@@ -369,8 +370,9 @@ export default function NeedsReviewPlacementLookbookPage() {
         Needs Review placement options
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3, maxWidth: 720 }}>
-        Wording locked to <strong>{REASON}</strong>. No sticky top banner — three alternate homes for
-        the same clarity content.
+        Wording locked to <strong>{REASON}</strong>. Duplicate clusters use the
+        always-visible comparison callout (option 2). Chip popover remains for
+        other Needs Review reasons.
       </Typography>
       <Stack spacing={3}>
         <OptionChipPopover />
