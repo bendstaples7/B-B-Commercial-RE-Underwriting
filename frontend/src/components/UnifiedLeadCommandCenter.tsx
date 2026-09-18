@@ -1630,28 +1630,31 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     navigate(queuePath(fromQueue.key))
   }, [fromQueue, navigate])
 
-  const advanceAfterTaskComplete = useCallback(async (
-    snapshottedNextId?: number | null,
-    flash?: QueueFlashSnackbar,
-  ) => {
+  const refreshQueueCachesForAdvance = useCallback(() => {
     if (!fromQueue) return
     const queueListKey = `queue-${fromQueue.key}`
-    // Refresh list/counts before leaving so Back lands on fresh data; clear
-    // cache so remount shows QueueLoadingState instead of stale rows. Run this
-    // even when nav isn't ready yet (nextId undefined) so the queue list is
-    // never left stale just because we're staying put this time.
-    await queryClient.invalidateQueries({
+    // Fire-and-forget: navigation must not wait on list refetch. Kick this off
+    // when the hold starts so Back still lands on fresh data after the drain.
+    void queryClient.invalidateQueries({
       queryKey: [queueListKey],
       refetchType: 'all',
     })
-    await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+    void queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
     if (fromQueue.key === 'todays-action') {
-      await queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: ['queue-todays-action-outreach-counts'],
         refetchType: 'all',
       })
     }
     queryClient.removeQueries({ queryKey: [queueListKey] })
+  }, [fromQueue, queryClient])
+
+  const advanceAfterTaskComplete = useCallback((
+    snapshottedNextId?: number | null,
+    flash?: QueueFlashSnackbar,
+  ) => {
+    if (!fromQueue) return
+    refreshQueueCachesForAdvance()
 
     // undefined = nav not ready — stay put (never re-fetch neighbour after removal).
     if (snapshottedNextId === undefined) {
@@ -1670,7 +1673,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     } catch {
       exitQueueCaughtUp(flash)
     }
-  }, [fromQueue, advanceInQueue, exitQueueCaughtUp, queryClient])
+  }, [fromQueue, advanceInQueue, exitQueueCaughtUp, refreshQueueCachesForAdvance])
 
   type QueueAdvanceHoldState = {
     startedAt: number
@@ -1678,21 +1681,15 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     nextId: number | null
     flash?: QueueFlashSnackbar
     message: string
-    progress: number
   }
 
   const [queueAdvanceHold, setQueueAdvanceHold] = useState<QueueAdvanceHoldState | null>(null)
   const holdTimeoutRef = useRef<number | null>(null)
-  const holdRafRef = useRef<number | null>(null)
 
   const clearQueueAdvanceHoldTimers = useCallback(() => {
     if (holdTimeoutRef.current != null) {
       window.clearTimeout(holdTimeoutRef.current)
       holdTimeoutRef.current = null
-    }
-    if (holdRafRef.current != null) {
-      window.cancelAnimationFrame(holdRafRef.current)
-      holdRafRef.current = null
     }
   }, [])
 
@@ -1732,27 +1729,18 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       nextId,
       flash,
       message: opts.message,
-      progress: 100,
     })
 
-    const tick = () => {
-      const elapsed = Date.now() - startedAt
-      const remaining = Math.max(0, 100 * (1 - elapsed / durationMs))
-      setQueueAdvanceHold((prev) => (
-        prev ? { ...prev, progress: remaining } : null
-      ))
-      if (elapsed < durationMs) {
-        holdRafRef.current = window.requestAnimationFrame(tick)
-      }
-    }
-    holdRafRef.current = window.requestAnimationFrame(tick)
+    // Warm caches during the drain so we can navigate the instant it finishes.
+    refreshQueueCachesForAdvance()
 
     holdTimeoutRef.current = window.setTimeout(() => {
       clearQueueAdvanceHoldTimers()
-      setQueueAdvanceHold(null)
-      void advanceAfterTaskComplete(nextId, flash)
+      // Leave the banner mounted until the next lead remounts so the drain
+      // and the route change happen in the same beat — no empty-bar linger.
+      advanceAfterTaskComplete(nextId, flash)
     }, durationMs)
-  }, [fromQueue, advanceAfterTaskComplete, clearQueueAdvanceHoldTimers])
+  }, [fromQueue, advanceAfterTaskComplete, clearQueueAdvanceHoldTimers, refreshQueueCachesForAdvance])
 
   // Drop a pending hold when the lead identity changes; always clear timers on unmount.
   useEffect(() => {
@@ -2345,8 +2333,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         )}
         {queueAdvanceHold && (
           <QueueAdvanceHoldBanner
+            key={queueAdvanceHold.startedAt}
             message={queueAdvanceHold.message}
-            progress={queueAdvanceHold.progress}
+            durationMs={queueAdvanceHold.durationMs}
             onPause={() => cancelQueueAdvanceHold({ snackStay: true })}
           />
         )}

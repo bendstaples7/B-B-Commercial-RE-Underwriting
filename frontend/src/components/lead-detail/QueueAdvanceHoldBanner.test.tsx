@@ -1,9 +1,11 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import {
   QueueAdvanceHoldBanner,
+  QUEUE_ADVANCE_HOLD_MS,
   QUEUE_ADVANCE_HOLD_Z_INDEX,
+  queueAdvanceDrainTransition,
 } from '@/components/lead-detail/QueueAdvanceHoldBanner'
 
 describe('QueueAdvanceHoldBanner', () => {
@@ -12,7 +14,6 @@ describe('QueueAdvanceHoldBanner', () => {
     render(
       <QueueAdvanceHoldBanner
         message="Lead deprioritized"
-        progress={72}
         onPause={onPause}
       />,
     )
@@ -21,18 +22,39 @@ describe('QueueAdvanceHoldBanner', () => {
     expect(hold).toBeInTheDocument()
     expect(hold).toHaveTextContent('Lead deprioritized')
     expect(hold).toHaveTextContent('Next lead…')
-    expect(screen.getByRole('progressbar', { name: 'Advancing to next lead' })).toBeInTheDocument()
+    const bar = screen.getByRole('progressbar', { name: 'Advancing to next lead' })
+    expect(bar).toBeInTheDocument()
+    expect(bar).toHaveAttribute('data-drain-ms', String(QUEUE_ADVANCE_HOLD_MS))
+    expect(QUEUE_ADVANCE_HOLD_MS).toBe(5000)
     expect(screen.getByTestId('queue-advance-pause')).toBeInTheDocument()
 
     await userEvent.click(screen.getByTestId('queue-advance-pause'))
     expect(onPause).toHaveBeenCalledTimes(1)
   })
 
+  it('starts full then commits a CSS drain matching the hold duration', async () => {
+    render(
+      <QueueAdvanceHoldBanner
+        message="Activity saved"
+        durationMs={QUEUE_ADVANCE_HOLD_MS}
+        onPause={() => {}}
+      />,
+    )
+
+    const bar = screen.getByTestId('queue-advance-hold-bar')
+    expect(bar).toHaveAttribute('aria-valuenow', '100')
+    expect(queueAdvanceDrainTransition(QUEUE_ADVANCE_HOLD_MS)).toBe(
+      `transform ${QUEUE_ADVANCE_HOLD_MS}ms linear`,
+    )
+    await waitFor(() => {
+      expect(bar).toHaveAttribute('aria-valuenow', '0')
+    })
+  })
+
   it('overlays cc-sticky-chrome with zero in-flow height instead of pushing content down', () => {
     render(
       <QueueAdvanceHoldBanner
         message="Lead deprioritized"
-        progress={72}
         onPause={() => {}}
       />,
     )
