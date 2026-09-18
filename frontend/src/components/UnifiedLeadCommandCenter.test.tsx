@@ -11,11 +11,12 @@
  * Requirements: 5.1, 5.4, 5.5, 5.6, 5.7, 10.1, 10.2, 11.5
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { QueryClient } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@/test/testUtils'
 import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom'
 import userEvent from '@testing-library/user-event'
 import { UnifiedLeadCommandCenter } from './UnifiedLeadCommandCenter'
-import { QUEUE_ADVANCE_HOLD_MS } from '@/components/lead-detail/QueueAdvanceHoldBanner'
+import { QUEUE_ADVANCE_HOLD_MS, QUEUE_ADVANCE_QUEUE_LABEL } from '@/components/lead-detail/QueueAdvanceHoldBanner'
 import type { CommandCenterPayload, PropertyDetail } from '@/types'
 import { callLogService, queueService } from '@/services/api'
 
@@ -1672,6 +1673,10 @@ describe('UnifiedLeadCommandCenter — queue advance', () => {
       expect(api.commandCenterService.moveToSkipTrace).toHaveBeenCalledWith(1, 17)
     })
     expect(await screen.findByTestId('queue-advance-hold')).toBeInTheDocument()
+    expect(screen.getByTestId('queue-advance-hold-bar')).toHaveAttribute(
+      'data-drain-ms',
+      String(QUEUE_ADVANCE_HOLD_MS),
+    )
     await vi.advanceTimersByTimeAsync(QUEUE_ADVANCE_HOLD_MS + 50)
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith(
@@ -1679,6 +1684,97 @@ describe('UnifiedLeadCommandCenter — queue advance', () => {
         { state: { fromQueue: { ...fromQueue, visitedHistory: [1], forwardStack: [] } } },
       )
     })
+  }, 20000)
+
+  it('advances when the drain ends even if queue refetch never resolves', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const invalidateSpy = vi
+      .spyOn(QueryClient.prototype, 'invalidateQueries')
+      .mockImplementation(() => new Promise(() => {}))
+    const api = await import('@/services/api')
+    const user = userEvent.setup({
+      pointerEventsCheck: 0,
+      advanceTimers: vi.advanceTimersByTime,
+    })
+
+    vi.mocked(api.commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        lead_status: 'mailing_no_contact_made',
+        recommended_action: {
+          value: 'nurture',
+          label: 'Nurture',
+          explanation: null,
+          signals: {},
+        },
+        open_tasks: [{
+          id: 17,
+          lead_id: 1,
+          task_type: 'custom',
+          title: 'Call owner for mailing address',
+          status: 'open',
+          due_date: '2026-07-20',
+          created_at: '2023-01-01T00:00:00Z',
+          completed_at: null,
+          created_by: 'user',
+          source: 'native',
+        }],
+      }),
+    )
+    vi.mocked(api.commandCenterService.moveToSkipTrace).mockResolvedValue({
+      lead_id: 1,
+      lead_status: 'skip_trace',
+      completed_task_id: 17,
+      skip_trace_task_id: 18,
+      changed: true,
+      already_done: false,
+      reason_code: null,
+      lead_score: 70,
+      recommended_action: null,
+    })
+    vi.mocked(api.queueService.getNavigation).mockResolvedValue({
+      queue_key: 'todays-action',
+      lead_id: 1,
+      position: null,
+      total: 4,
+      prev_id: null,
+      next_id: 4405,
+    })
+
+    const fromQueue = { key: 'todays-action', label: "Today's Action", outreach: 'call_now' }
+    try {
+      render(
+        <MemoryRouter
+          initialEntries={[
+            {
+              pathname: '/leads/1',
+              search: '?queue=todays-action&outreach=call_now',
+              state: { fromQueue },
+            },
+          ]}
+        >
+          <UnifiedLeadCommandCenter leadId={1} />
+        </MemoryRouter>,
+      )
+
+      await user.click(
+        await screen.findByTestId('action-center-tile-move_to_skip_trace'),
+      )
+      expect(await screen.findByTestId('queue-advance-hold')).toBeInTheDocument()
+      mockNavigate.mockClear()
+
+      await vi.advanceTimersByTimeAsync(QUEUE_ADVANCE_HOLD_MS - 250)
+      expect(mockNavigate).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(300)
+      await waitFor(() => {
+        expect(mockNavigate).toHaveBeenCalledWith(
+          '/leads/4405?queue=todays-action&outreach=call_now',
+          expect.anything(),
+        )
+      })
+    } finally {
+      invalidateSpy.mockRestore()
+    }
   }, 20000)
 
   it('does not advance after Move to Skip Trace when already in the pipeline', async () => {
@@ -2020,6 +2116,7 @@ describe('UnifiedLeadCommandCenter — mail stage advances queue', () => {
     })
     await user.click(screen.getByTestId('action-center-tile-add_to_mail_batch'))
     expect(await screen.findByTestId('queue-advance-hold')).toBeInTheDocument()
+    expect(screen.getByTestId('queue-advance-hold')).toHaveTextContent(QUEUE_ADVANCE_QUEUE_LABEL)
     await vi.advanceTimersByTimeAsync(QUEUE_ADVANCE_HOLD_MS + 50)
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith(
@@ -2089,6 +2186,67 @@ describe('UnifiedLeadCommandCenter — mail stage advances queue', () => {
     await user.click(screen.getByTestId('queue-advance-pause'))
     expect(screen.queryByTestId('queue-advance-hold')).not.toBeInTheDocument()
     expect(screen.getByText('Staying on this lead.')).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(QUEUE_ADVANCE_HOLD_MS + 100)
+    expect(mockNavigate).not.toHaveBeenCalledWith(
+      expect.stringContaining('/leads/55'),
+      expect.anything(),
+    )
+  })
+
+  it('Back to queue during the hold does not later auto-advance', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const openLetterService = (await import('@/services/openLetterApi')).default
+    const api = await import('@/services/api')
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+
+    vi.mocked(openLetterService.enqueue).mockResolvedValue({
+      attempt_id: 42,
+      added: 1,
+      skipped: 0,
+      invalid: 0,
+      queued_count: 1,
+      batch_minimum: 1,
+      allow_send_below_minimum: true,
+      can_send: true,
+      results: [{ lead_id: 1, status: 'queued', owner_name: 'Jane', property_street: '456 Oak Ave' }],
+    })
+    vi.mocked(api.queueService.getNavigation).mockResolvedValue({
+      queue_key: 'todays-action',
+      lead_id: 1,
+      position: 2,
+      total: 10,
+      prev_id: null,
+      next_id: 55,
+    })
+    vi.mocked(api.commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        is_mailable: true,
+        mail_eligible: true,
+        mail_queue_status: null,
+      }),
+    )
+
+    const fromQueue = { key: 'todays-action', label: "Today's Action" }
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: '/leads/1',
+            search: '?queue=todays-action',
+            state: { fromQueue },
+          },
+        ]}
+      >
+        <UnifiedLeadCommandCenter leadId={1} />
+      </MemoryRouter>,
+    )
+
+    await user.click(await screen.findByTestId('action-center-tile-add_to_mail_batch'))
+    expect(await screen.findByTestId('queue-advance-hold')).toBeInTheDocument()
+    mockNavigate.mockClear()
+    await user.click(screen.getByTestId('queue-back-to-list'))
+    expect(mockNavigate).toHaveBeenCalledWith('/queues/todays-action')
+    mockNavigate.mockClear()
     await vi.advanceTimersByTimeAsync(QUEUE_ADVANCE_HOLD_MS + 100)
     expect(mockNavigate).not.toHaveBeenCalledWith(
       expect.stringContaining('/leads/55'),
