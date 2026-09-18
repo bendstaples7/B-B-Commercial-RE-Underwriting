@@ -318,8 +318,8 @@ describe('ReadyToMailQueue', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('add-count-preset-20')).toHaveTextContent('Min 20')
+      expect(screen.getByTestId('add-count-input')).toHaveValue(20)
     })
-    expect(screen.getByTestId('add-count-input')).toHaveValue(20)
     expect(screen.getByTestId('add-count-button')).toHaveTextContent('Add 20 to batch')
   })
 
