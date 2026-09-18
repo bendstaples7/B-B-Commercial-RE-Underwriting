@@ -34,10 +34,10 @@ function payload(overrides: Partial<CommandCenterPayload> = {}): CommandCenterPa
 }
 
 describe('tabular-layout — KPI band (wiring; packing ALIGNED is Playwright)', () => {
-  it('renders four KPI cells with expected testids', () => {
+  it('renders four KPI cells plus asking stacked under est. value', () => {
     render(<PropertyOverviewQuickStats commandCenterData={payload()} />)
     const band = screen.getByTestId('property-overview-quick-stats')
-    for (const id of ['est-value', 'last-sale', 'units-details', 'category'] as const) {
+    for (const id of ['est-value', 'asking-price', 'last-sale', 'units-details', 'category'] as const) {
       expect(within(band).getByTestId(`quick-stat-${id}`)).toBeInTheDocument()
     }
   })

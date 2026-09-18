@@ -469,6 +469,7 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     expect(screen.queryByTestId('property-type-chip')).not.toBeInTheDocument()
     expect(screen.getByTestId('property-overview-quick-stats')).toBeInTheDocument()
     expect(screen.getByTestId('quick-stat-est-value')).toHaveTextContent('$520,000')
+    expect(screen.getByTestId('quick-stat-asking-price')).toHaveTextContent('—')
     expect(screen.queryByTestId('quick-stat-est-rent')).not.toBeInTheDocument()
     expect(screen.getByTestId('quick-stat-last-sale')).toHaveTextContent('$310,000')
     expect(screen.getByTestId('quick-stat-last-sale')).toHaveTextContent(/1993|04/)

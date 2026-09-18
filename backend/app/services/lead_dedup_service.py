@@ -34,6 +34,7 @@ COPYABLE_FIELDS = [
     'ownership_type', 'acquisition_date',
     'bedrooms', 'bathrooms', 'square_footage', 'lot_size', 'year_built',
     'units', 'units_allowed', 'zoning',
+    'asking_price',
     'most_recent_sale', 'owner_2_first_name', 'owner_2_last_name',
     'address_2', 'returned_addresses', 'up_next_to_mail', 'mailer_history',
     'lead_score', 'lead_category', 'property_type',

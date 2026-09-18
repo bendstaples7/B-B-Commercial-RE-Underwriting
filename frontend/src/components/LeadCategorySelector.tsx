@@ -66,6 +66,7 @@ export function LeadCategorySelector({
           alignItems: 'center',
           gap: 0.25,
           maxWidth: '100%',
+          minWidth: 'max-content',
           justifyContent: 'flex-start',
           cursor: 'pointer',
           textAlign: 'left',
@@ -78,9 +79,11 @@ export function LeadCategorySelector({
             fontSize: '0.875rem',
             mt: 0.125,
             lineHeight: 1.25,
-            minWidth: 0,
-            overflowWrap: 'break-word',
-            wordBreak: 'break-word',
+            // One-word labels (Residential / Commercial) must stay intact —
+            // break-word was splitting "Residentia" / "l" in the 2×2 KPI band.
+            whiteSpace: 'nowrap',
+            overflowWrap: 'normal',
+            wordBreak: 'keep-all',
           }}
         >
           {label}
