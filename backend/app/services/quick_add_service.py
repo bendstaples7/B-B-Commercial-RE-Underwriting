@@ -89,6 +89,24 @@ def merge_deal_description(existing: str | None, new_block: str | None) -> str |
     return f'{existing_text}\n\n---\n\n{new_block}'
 
 
+def quick_add_activity_note_body(
+    *,
+    note: str | None,
+    walk_by_context: str | None,
+) -> str:
+    """Body shown in Activity for a quick-add capture.
+
+    Prefer the optional field note. When that is blank, still surface the
+    walk-by capture line so the visit appears as a Note Added row instead of
+    only a generic lead_imported event buried under later system activity.
+    """
+    user_note = (note or '').strip()
+    if user_note:
+        return user_note
+    context = (walk_by_context or '').strip()
+    return context or 'Walk-by capture'
+
+
 class QuickAddService:
     """Orchestrates quick-add lead creation."""
 
@@ -307,14 +325,18 @@ class QuickAddService:
             actor='quick_add',
             commit=False,
         )
+        capture_meta = {
+            'source': QUICK_ADD_DATA_SOURCE,
+            'capture_location_label': capture_location_label,
+            'capture_latitude': capture_latitude,
+            'capture_longitude': capture_longitude,
+        }
         db.session.flush()
         self._add_timeline_entries(
             lead_id=lead.id,
             user_id=user_id,
             note=note,
-            capture_location_label=capture_location_label,
-            capture_latitude=capture_latitude,
-            capture_longitude=capture_longitude,
+            capture_meta=capture_meta,
             created=created,
         )
         db.session.commit()
@@ -339,6 +361,23 @@ class QuickAddService:
                         db.session.rollback()
             lead = db.session.get(Lead, lead.id) or lead
 
+        # Write the Activity note *after* skip-trace side effects so it is not
+        # immediately sorted under task_created at the same timestamp.
+        try:
+            self._add_capture_note(
+                lead_id=lead.id,
+                user_id=user_id,
+                body=quick_add_activity_note_body(
+                    note=note,
+                    walk_by_context=walk_by_context,
+                ),
+                capture_meta=capture_meta,
+            )
+            db.session.commit()
+        except Exception:
+            logger.exception('Could not write quick-add activity note for lead %s', lead.id)
+            db.session.rollback()
+
         return lead, created
 
     @staticmethod
@@ -347,18 +386,11 @@ class QuickAddService:
         lead_id: int,
         user_id: str,
         note: str | None,
-        capture_location_label: str | None,
-        capture_latitude: float | None,
-        capture_longitude: float | None,
+        capture_meta: dict[str, Any],
         created: bool,
     ) -> None:
         now = datetime.now(timezone.utc)
-        capture_meta = {
-            'source': QUICK_ADD_DATA_SOURCE,
-            'capture_location_label': capture_location_label,
-            'capture_latitude': capture_latitude,
-            'capture_longitude': capture_longitude,
-        }
+        has_user_note = bool(note and note.strip())
 
         if created:
             db.session.add(LeadTimelineEntry(
@@ -370,18 +402,7 @@ class QuickAddService:
                 summary='Quick-add: new lead captured in the field'[:500],
                 event_metadata=capture_meta,
             ))
-
-        if note and note.strip():
-            db.session.add(LeadTimelineEntry(
-                lead_id=lead_id,
-                event_type='note_added',
-                occurred_at=now,
-                source='manual',
-                actor=user_id,
-                summary=note.strip()[:500],
-                event_metadata={'body': note.strip(), **capture_meta},
-            ))
-        elif not created:
+        elif not has_user_note:
             db.session.add(LeadTimelineEntry(
                 lead_id=lead_id,
                 event_type='lead_imported',
@@ -391,3 +412,24 @@ class QuickAddService:
                 summary='Quick-add: walk-by capture appended to existing lead'[:500],
                 event_metadata=capture_meta,
             ))
+
+    @staticmethod
+    def _add_capture_note(
+        *,
+        lead_id: int,
+        user_id: str,
+        body: str,
+        capture_meta: dict[str, Any],
+    ) -> None:
+        text = (body or '').strip()
+        if not text:
+            return
+        db.session.add(LeadTimelineEntry(
+            lead_id=lead_id,
+            event_type='note_added',
+            occurred_at=datetime.now(timezone.utc),
+            source='manual',
+            actor=user_id,
+            summary=text[:500],
+            event_metadata={'body': text, **capture_meta},
+        ))

@@ -30,7 +30,7 @@ import type { LeadTimelineEntry } from '@/types'
 import { formatPhoneNumber } from '@/utils/phone'
 import { scopeRowsToLead, scopeRowsToLeadWithTotal } from '@/utils/leadScopedRows'
 import { stripHtmlTags } from '@/utils/helpers'
-import { sortTimelineEntriesDesc } from '@/utils/timelineSort'
+import { previewTimelineEntries, sortTimelineEntriesDesc } from '@/utils/timelineSort'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -696,7 +696,7 @@ export function LeadTimeline({
   const hasMore = entries.length < total
   const inPreview = previewMode && !showAllLoaded && total > TIMELINE_PREVIEW_COUNT
   const visibleEntries = inPreview
-    ? entries.slice(0, TIMELINE_PREVIEW_COUNT)
+    ? previewTimelineEntries(entries, TIMELINE_PREVIEW_COUNT)
     : entries
   const olderRemaining = Math.max(0, total - TIMELINE_PREVIEW_COUNT)
 
