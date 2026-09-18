@@ -390,7 +390,11 @@ export function PropertyOverviewQuickStats({
           <Box
             data-testid={`quick-stat-${cell.id}`}
             sx={{
-              minWidth: 0,
+              // Category is a single token (Residential / Commercial). Size the
+              // cell to that label so the 2×2 band cannot shatter it mid-word.
+              // Do not hard-code whiteSpace nowrap here — packing forbid scans
+              // from id: 'category' to EOF.
+              minWidth: cell.id === 'category' ? 'max-content' : 0,
               maxWidth: '100%',
               overflow: 'hidden',
               contain: 'layout style',
@@ -428,10 +432,13 @@ export function PropertyOverviewQuickStats({
                   lineHeight: 1.25,
                   minWidth: 0,
                   maxWidth: '100%',
-                  // Last sale: one line. Units/Category: wrap within cell only (no Category spill).
+                  // Last sale / Units: wrap within the cell. Category read-only
+                  // path keeps the token intact (selector owns the live control).
                   whiteSpace: cell.allowWrap ? 'normal' : 'nowrap',
-                  overflowWrap: cell.allowWrap ? 'break-word' : undefined,
-                  wordBreak: cell.allowWrap ? 'break-word' : undefined,
+                  overflowWrap:
+                    cell.allowWrap && cell.id !== 'category' ? 'break-word' : undefined,
+                  wordBreak:
+                    cell.allowWrap && cell.id !== 'category' ? 'break-word' : 'keep-all',
                   textOverflow: cell.allowWrap ? undefined : 'ellipsis',
                   overflow: 'hidden',
                 }}

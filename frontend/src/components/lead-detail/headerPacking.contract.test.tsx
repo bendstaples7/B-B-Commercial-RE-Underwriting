@@ -134,6 +134,9 @@ describe('header packing contracts (structure + forbid)', () => {
     expect(src).toMatch(/id:\s*'category'[\s\S]*?allowWrap:\s*true/)
     expect(src).toMatch(/contain:\s*'layout style'/)
     expect(src).toMatch(/overflow:\s*'hidden'/)
+    // Category cell sizes to the label; nowrap stays in LeadCategorySelector
+    // (forbid scan covers this file from id: 'category' to EOF).
+    expect(src).toMatch(/cell\.id === 'category' \? 'max-content'/)
   })
 
   it('packing tokens set contain + isolation', () => {

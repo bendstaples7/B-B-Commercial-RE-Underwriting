@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { render, screen, waitFor } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import { LeadCategorySelector } from '@/components/LeadCategorySelector'
@@ -53,5 +55,14 @@ describe('LeadCategorySelector', () => {
     await waitFor(() => {
       expect(onChanged).toHaveBeenCalledWith('residential')
     })
+  })
+
+  it('keeps Residential / Commercial on one line (no mid-word shatter)', () => {
+    const src = readFileSync(resolve(__dirname, './LeadCategorySelector.tsx'), 'utf8')
+    expect(src).not.toMatch(/overflowWrap:\s*['"]break-word['"]/)
+    expect(src).not.toMatch(/wordBreak:\s*['"]break-word['"]/)
+    expect(src).toMatch(/whiteSpace:\s*['"]nowrap['"]/)
+    expect(src).toMatch(/wordBreak:\s*['"]keep-all['"]/)
+    expect(src).toMatch(/minWidth:\s*['"]max-content['"]/)
   })
 })
