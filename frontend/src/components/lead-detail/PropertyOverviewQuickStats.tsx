@@ -1,5 +1,6 @@
 /**
- * Property Overview Quick-Stats — Est. value / Last sale / Units in the header middle band.
+ * Property Overview Quick-Stats — Est. value (+ Asking) / Last sale / Units in the header middle band.
+ * Asking is stacked under Est. value in the same 2×2 cell so packing stays locked.
  * Condo check lives in HeaderCondoCheckPanel (score-style), not in this grid.
  */
 import React from 'react'
@@ -271,6 +272,7 @@ export function PropertyOverviewQuickStats({
   onPropertyOverviewChanged,
 }: PropertyOverviewQuickStatsProps) {
   const estValue = formatMoneyValue(commandCenterData.assessed_value ?? null)
+  const askingValue = formatMoneyValue(commandCenterData.asking_price ?? null)
   const lastSale = resolveLastSaleCell(commandCenterData)
   const lastSaleEditor = resolveLastSaleEditorFields(commandCenterData)
   const noSaleCopy = lastSale ? null : resolveNoSaleCopy(commandCenterData)
@@ -326,6 +328,54 @@ export function PropertyOverviewQuickStats({
 
   const editableKinds = new Set(['est-value', 'last-sale', 'units-details'])
   const canEdit = typeof leadId === 'number'
+  const askingDisplay = askingValue ?? EM_DASH
+
+  const renderAskingBlock = () => {
+    const askingBody = (
+      <Box
+        data-testid="quick-stat-asking-price"
+        sx={{
+          minWidth: 0,
+          maxWidth: '100%',
+          overflow: 'hidden',
+          mt: 0.65,
+        }}
+      >
+        <Typography sx={{ ...ccKpiLabelSx, fontSize: '0.65rem' }}>Asking</Typography>
+        {typeof leadId === 'number' ? (
+          <PropertyOverviewKpiEditor
+            leadId={leadId}
+            kind="asking-price"
+            displayValue={askingDisplay}
+            askingPrice={commandCenterData.asking_price}
+            onSaved={onPropertyOverviewChanged}
+          />
+        ) : (
+          <Typography
+            data-testid="quick-stat-asking-price-value"
+            sx={{
+              ...ccKpiValueSx,
+              fontSize: '0.875rem',
+              mt: 0.125,
+              lineHeight: 1.25,
+              minWidth: 0,
+              maxWidth: '100%',
+              whiteSpace: 'nowrap',
+              textOverflow: 'ellipsis',
+              overflow: 'hidden',
+            }}
+          >
+            {askingDisplay}
+          </Typography>
+        )}
+      </Box>
+    )
+    return (
+      <Tooltip title="Seller asking price (not assessor estimated value)" enterDelay={400}>
+        <Box sx={{ minWidth: 0 }}>{askingBody}</Box>
+      </Tooltip>
+    )
+  }
 
   return (
     <Box
@@ -392,6 +442,21 @@ export function PropertyOverviewQuickStats({
             )}
           </Box>
         )
+
+        if (cell.id === 'est-value') {
+          return (
+            <Box key={cell.id} sx={{ minWidth: 0 }}>
+              {cell.tooltip ? (
+                <Tooltip title={cell.tooltip} enterDelay={400}>
+                  <Box sx={{ minWidth: 0 }}>{body}</Box>
+                </Tooltip>
+              ) : (
+                body
+              )}
+              {renderAskingBlock()}
+            </Box>
+          )
+        }
 
         return cell.tooltip ? (
           <Tooltip key={cell.id} title={cell.tooltip} enterDelay={400}>

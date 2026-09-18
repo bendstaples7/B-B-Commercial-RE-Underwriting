@@ -1345,6 +1345,7 @@ export const commandCenterService = {
     leadId: number,
     data: {
       assessed_value?: number | null
+      asking_price?: number | null
       most_recent_sale?: string | null
       acquisition_date?: string | null
       most_recent_sale_price?: number | null
@@ -1353,6 +1354,7 @@ export const commandCenterService = {
     },
   ): Promise<{
     assessed_value: number | null
+    asking_price: number | null
     most_recent_sale: string | null
     acquisition_date: string | null
     most_recent_sale_price: number | null

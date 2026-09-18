@@ -2430,6 +2430,8 @@ export interface CommandCenterPayload {
   most_recent_sale_price?: number | null;
   /** Assessor assessed value (not analysis ARV). */
   assessed_value?: number | null;
+  /** User-entered seller asking price (not assessor estimated value). */
+  asking_price?: number | null;
   tax_bill_2021?: number | null;
   /** Newest-first Cook County parcel sales for this PIN (cache or live fallback). */
   sale_history?: Array<{

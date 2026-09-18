@@ -166,6 +166,7 @@ class TestGetCommandCenter:
             assert isinstance(data['contacts'], list)
             assert data['id'] == lead.id
             assert 'assessed_value' in data
+            assert 'asking_price' in data
 
     def test_dial_target_prefers_former_owner_hubspot_phone(self, client, app):
         """4490-shaped: CC dial_target is HubSpot primary on former_owner, not GIS primary."""
@@ -226,6 +227,14 @@ class TestGetCommandCenter:
             data = json.loads(response.data)
             assert response.status_code == 200
             assert data['assessed_value'] == 520000.0
+
+    def test_asking_price_serialized_when_present(self, client, app):
+        """asking_price is included on the command center payload when set on the lead."""
+        with app.app_context():
+            lead = _make_lead(app, '2d Asking St', asking_price=575000.0)
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            data = response.get_json()
+            assert data['asking_price'] == 575000.0
 
     def test_contacts_ordered_primary_first(self, client, app):
         """contacts[] is primary-first with nested phones/emails; flat fields remain."""
@@ -1221,6 +1230,47 @@ class TestUpdatePropertyOverview:
                 'Updated Est. value, Last sale date, Last sale price, Units, '
                 'Property type'
             )
+
+    def test_updates_asking_price_without_touching_assessed_value(self, client, app):
+        with app.app_context():
+            lead = _make_lead(
+                app, '12b Asking St',
+                assessed_value=425000.0,
+                asking_price=None,
+            )
+            response = client.patch(
+                f'/api/leads/{lead.id}/property-overview',
+                data=json.dumps({'asking_price': 575000}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            assert body['asking_price'] == 575000
+            assert body['assessed_value'] == 425000
+            db.session.refresh(lead)
+            assert lead.asking_price == 575000
+            assert lead.assessed_value == 425000
+            entry = LeadTimelineEntry.query.filter_by(
+                lead_id=lead.id, event_type='property_overview_changed',
+            ).first()
+            assert entry is not None
+            assert entry.summary == 'Updated Asking price'
+
+    def test_clears_asking_price(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '12c Asking Clear St', asking_price=600000.0)
+            response = client.patch(
+                f'/api/leads/{lead.id}/property-overview',
+                data=json.dumps({'asking_price': None}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            assert body['asking_price'] is None
+            db.session.refresh(lead)
+            assert lead.asking_price is None
 
     def test_rejects_empty_body(self, client, app):
         with app.app_context():

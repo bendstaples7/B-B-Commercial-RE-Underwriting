@@ -81,6 +81,7 @@ def main() -> int:
                 most_recent_sale='01/15/2020',
                 most_recent_sale_price=500000.0,
                 assessed_value=450000.0,
+                asking_price=525000.0,
                 lead_status='skip_trace',
                 owner_user_id=user.user_id,
                 source='live-ui-ci',

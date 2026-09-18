@@ -79,6 +79,8 @@ class Property(db.Model):
     # Enrichment — assessed value and recent sale price (from assessor data sources)
     assessed_value = db.Column(db.Float, nullable=True)
     most_recent_sale_price = db.Column(db.Float, nullable=True)
+    # User-entered seller asking price (not assessor estimated value / ARV)
+    asking_price = db.Column(db.Float, nullable=True)
 
     # Second owner
     owner_2_first_name = db.Column(db.String(128), nullable=True)

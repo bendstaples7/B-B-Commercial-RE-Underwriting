@@ -1199,6 +1199,7 @@ def get_command_center(lead_id: int):
         'zoning': lead.zoning,
         'tax_bill_2021': lead.tax_bill_2021,
         'assessed_value': lead.assessed_value,
+        'asking_price': lead.asking_price,
         'most_recent_sale': lead.most_recent_sale,
         'most_recent_sale_display': display_most_recent_sale(lead),
         'most_recent_sale_price': getattr(lead, 'most_recent_sale_price', None),
@@ -1787,7 +1788,7 @@ def update_property_overview(lead_id: int):
     """
     PATCH /api/leads/<lead_id>/property-overview
 
-    Update header KPIs: assessed value, last sale date/price, units, property type.
+    Update header KPIs: assessed value, asking price, last sale date/price, units, property type.
     """
     from app import db
     import datetime as _dt
@@ -1819,6 +1820,8 @@ def update_property_overview(lead_id: int):
 
     if 'assessed_value' in data:
         _set('assessed_value', data['assessed_value'])
+    if 'asking_price' in data:
+        _set('asking_price', data['asking_price'])
     if 'most_recent_sale' in data:
         sale = data['most_recent_sale']
         if isinstance(sale, str):
@@ -1842,6 +1845,7 @@ def update_property_overview(lead_id: int):
         seen_labels = set()
         labels = {
             'assessed_value': 'Est. value',
+            'asking_price': 'Asking price',
             'most_recent_sale': 'Last sale date',
             'acquisition_date': 'Last sale date',
             'most_recent_sale_price': 'Last sale price',
@@ -1878,6 +1882,7 @@ def update_property_overview(lead_id: int):
 
     return jsonify({
         'assessed_value': lead.assessed_value,
+        'asking_price': lead.asking_price,
         'most_recent_sale': lead.most_recent_sale,
         'acquisition_date': lead.acquisition_date.isoformat() if lead.acquisition_date else None,
         'most_recent_sale_price': lead.most_recent_sale_price,

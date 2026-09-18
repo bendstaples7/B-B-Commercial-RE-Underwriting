@@ -158,7 +158,10 @@ export const ccKpiValueSx: SxProps<Theme> = {
  *
  * KPI grid (locked):
  *   Est. value     | Last sale
+ *     Asking       |
  *   Units/details  | Category
+ *
+ * Asking is stacked under Est. value in the same first cell (not a 5th grid item).
  *
  * Proportional clamp() slots (not fixed px) so the bar holds at any viewport.
  * Address/KPIs hug; trail panels grow into leftover slack (clamp ~10–13vw,
@@ -227,7 +230,7 @@ export const ccHeaderPaperSx: SxProps<Theme> = {
 }
 
 /**
- * 2×2 KPI band — Est | Last sale / Units | Category.
+ * 2×2 KPI band — Est (+ Asking) | Last sale / Units | Category.
  * Grow within the primary cluster so the KPI→condo gap never parks slack.
  * With condo: left-align cells beside condo (tight packing).
  */

@@ -43,6 +43,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(commandCenterService.updatePropertyOverview).mockResolvedValue({
     assessed_value: null,
+    asking_price: null,
     most_recent_sale: null,
     acquisition_date: null,
     most_recent_sale_price: null,
@@ -151,6 +152,7 @@ describe('PropertyOverviewQuickStats', () => {
   it('renders value / sale / units cells and omits Est. rent until a source exists', () => {
     render(<PropertyOverviewQuickStats commandCenterData={basePayload()} />)
     expect(screen.getByTestId('quick-stat-est-value')).toHaveTextContent('—')
+    expect(screen.getByTestId('quick-stat-asking-price')).toHaveTextContent('—')
     expect(screen.queryByTestId('quick-stat-est-rent')).not.toBeInTheDocument()
     expect(screen.getByTestId('quick-stat-last-sale')).toHaveTextContent('—')
     expect(screen.getByTestId('quick-stat-units-details')).toHaveTextContent('—')
@@ -162,6 +164,7 @@ describe('PropertyOverviewQuickStats', () => {
       <PropertyOverviewQuickStats
         commandCenterData={basePayload({
           assessed_value: 520000,
+          asking_price: 575000,
           most_recent_sale_price: 310000,
           most_recent_sale_display: '1993-04-01',
           units: 3,
@@ -170,6 +173,7 @@ describe('PropertyOverviewQuickStats', () => {
       />,
     )
     expect(screen.getByTestId('quick-stat-est-value')).toHaveTextContent('$520,000')
+    expect(screen.getByTestId('quick-stat-asking-price')).toHaveTextContent('$575,000')
     expect(screen.queryByTestId('quick-stat-est-rent')).not.toBeInTheDocument()
     const lastSale = screen.getByTestId('quick-stat-last-sale')
     expect(lastSale).toHaveTextContent('04/01/1993')
@@ -381,5 +385,35 @@ describe('PropertyOverviewQuickStats', () => {
       />,
     )
     expect(screen.getByTestId('quick-stat-category')).toHaveTextContent('Residential')
+  })
+
+  it('saves asking price without sending assessed_value', async () => {
+    const user = userEvent.setup()
+    render(
+      <PropertyOverviewQuickStats
+        commandCenterData={basePayload({
+          assessed_value: 520000,
+          asking_price: null,
+        })}
+        leadId={1}
+      />,
+    )
+
+    await user.click(screen.getByTestId('quick-stat-asking-price-edit-trigger'))
+    const input = screen.getByTestId('quick-stat-asking-price-input')
+    await waitFor(() => {
+      expect(input).toHaveValue('')
+    })
+    fireEvent.change(input, { target: { value: '575000' } })
+    await user.click(screen.getByTestId('quick-stat-asking-price-save'))
+
+    await waitFor(() => {
+      expect(commandCenterService.updatePropertyOverview).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ asking_price: 575000 }),
+      )
+    })
+    const submitted = vi.mocked(commandCenterService.updatePropertyOverview).mock.calls[0][1]
+    expect(submitted).not.toHaveProperty('assessed_value')
   })
 })

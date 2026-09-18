@@ -1,5 +1,6 @@
 /**
- * Click-to-edit popover for Command Center header KPIs (est. value / sale / units).
+ * Click-to-edit popover for Command Center header KPIs
+ * (est. value / asking / sale / units).
  * Category stays a dropdown; these fields use text/number inputs.
  */
 import { useEffect, useState } from 'react'
@@ -16,7 +17,7 @@ import { commandCenterService } from '@/services/api'
 import { ccKpiValueSx } from '@/components/lead-detail/commandCenterChrome'
 import { AppSnackbar } from '@/components/AppSnackbar'
 
-export type PropertyOverviewEditKind = 'est-value' | 'last-sale' | 'units-details'
+export type PropertyOverviewEditKind = 'est-value' | 'asking-price' | 'last-sale' | 'units-details'
 export type PropertyOverviewSaleDateField = 'most_recent_sale' | 'acquisition_date'
 
 export interface PropertyOverviewKpiEditorProps {
@@ -24,6 +25,7 @@ export interface PropertyOverviewKpiEditorProps {
   kind: PropertyOverviewEditKind
   displayValue: string
   assessedValue?: number | null
+  askingPrice?: number | null
   mostRecentSale?: string | null
   saleDateField?: PropertyOverviewSaleDateField
   mostRecentSalePrice?: number | null
@@ -52,6 +54,7 @@ export function PropertyOverviewKpiEditor({
   kind,
   displayValue,
   assessedValue,
+  askingPrice,
   mostRecentSale,
   saleDateField = 'most_recent_sale',
   mostRecentSalePrice,
@@ -75,7 +78,10 @@ export function PropertyOverviewKpiEditor({
 
   useEffect(() => {
     if (!open) return
-    setValueDraft(assessedValue != null && Number.isFinite(Number(assessedValue)) ? String(assessedValue) : '')
+    const numericSeed = kind === 'asking-price' ? askingPrice : assessedValue
+    setValueDraft(
+      numericSeed != null && Number.isFinite(Number(numericSeed)) ? String(numericSeed) : '',
+    )
     const nextSaleDateDraft = saleDateInputValue(mostRecentSale)
     setSaleDateDraft(nextSaleDateDraft)
     setInitialSaleDateDraft(nextSaleDateDraft)
@@ -87,14 +93,26 @@ export function PropertyOverviewKpiEditor({
     )
     setUnitsDraft(units != null && Number.isFinite(Number(units)) ? String(units) : '')
     setTypeDraft((propertyType || '').trim())
-  }, [open, assessedValue, mostRecentSale, mostRecentSalePrice, units, propertyType, leadId])
+  }, [
+    open,
+    kind,
+    assessedValue,
+    askingPrice,
+    mostRecentSale,
+    mostRecentSalePrice,
+    units,
+    propertyType,
+    leadId,
+  ])
 
   const ariaLabel =
     kind === 'est-value'
       ? `Est. value: ${displayValue}. Click to edit.`
-      : kind === 'last-sale'
-        ? `Last sale: ${displayValue}. Click to edit.`
-        : `Units and details: ${displayValue}. Click to edit.`
+      : kind === 'asking-price'
+        ? `Asking price: ${displayValue}. Click to edit.`
+        : kind === 'last-sale'
+          ? `Last sale: ${displayValue}. Click to edit.`
+          : `Units and details: ${displayValue}. Click to edit.`
 
   const parseOptionalNumber = (raw: string): number | null => {
     const t = raw.trim()
@@ -114,6 +132,8 @@ export function PropertyOverviewKpiEditor({
       const body: Record<string, number | string | null> = {}
       if (kind === 'est-value') {
         body.assessed_value = parseOptionalNumber(valueDraft)
+      } else if (kind === 'asking-price') {
+        body.asking_price = parseOptionalNumber(valueDraft)
       } else if (kind === 'last-sale') {
         const nextSaleDate = saleDateDraft.trim()
         const setSaleDateBody = (value: string | null) => {
@@ -208,14 +228,17 @@ export function PropertyOverviewKpiEditor({
             void handleSave()
           }}
         >
-          {kind === 'est-value' ? (
+          {kind === 'est-value' || kind === 'asking-price' ? (
             <TextField
-              label="Est. value"
+              label={kind === 'asking-price' ? 'Asking price' : 'Est. value'}
               size="small"
               value={valueDraft}
               onChange={(e) => setValueDraft(e.target.value)}
               inputProps={{
-                'data-testid': 'quick-stat-est-value-input',
+                'data-testid':
+                  kind === 'asking-price'
+                    ? 'quick-stat-asking-price-input'
+                    : 'quick-stat-est-value-input',
                 inputMode: 'decimal',
               }}
               autoFocus
