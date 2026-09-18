@@ -63,6 +63,7 @@ describe('formatDateTime', () => {
     expect(formatDateTime(null)).toBe('—')
     expect(formatDateTime('')).toBe('—')
     expect(formatDateTime('not-a-date')).toBe('—')
+    expect(formatDateTime('2024-02-30T00:00:00Z')).toBe('—')
   })
 
   it('can include seconds for monitoring logs', () => {
@@ -81,6 +82,11 @@ describe('parseDisplayTimestamp', () => {
       parseDisplayTimestamp('2024-06-21')?.getTime(),
     )
     expect(parseDisplayTimestamp('6/21/2024')?.toISOString()).toBe('2024-06-21T00:00:00.000Z')
+  })
+
+  it('rejects ISO datetimes with impossible calendar dates', () => {
+    expect(parseDisplayTimestamp('2024-02-30T00:00:00Z')).toBeNull()
+    expect(parseDisplayTimestamp('2024-02-30T00:00:00')).toBeNull()
   })
 })
 

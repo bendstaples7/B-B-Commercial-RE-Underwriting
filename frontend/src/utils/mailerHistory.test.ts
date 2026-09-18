@@ -139,32 +139,14 @@ describe('mailerHistory', () => {
 })
 
 describe('formatMailerSentAtDisplay', () => {
-  it('formats naive UTC ISO timestamps in US Central Time', () => {
+  it('wires mail history display through the shared formatter', () => {
     expect(formatMailerSentAtDisplay('2026-07-29T03:35:23.127597')).toBe(
       'Jul 28, 2026, 10:35 PM CDT',
     )
-    expect(formatMailerSentAtDisplay('2026-07-29T03:35:23.127597Z')).toBe(
-      'Jul 28, 2026, 10:35 PM CDT',
-    )
-    expect(formatMailerSentAtDisplay('2026-01-15T18:00:00Z')).toBe(
-      'Jan 15, 2026, 12:00 PM CST',
-    )
-  })
-
-  it('can split date and Central Time onto two lines for narrow tables', () => {
     expect(
       formatMailerSentAtDisplay('2026-07-29T03:35:23.127597', { multiline: true }),
     ).toBe('Jul 28, 2026\n10:35 PM CDT')
-  })
-
-  it('keeps date-only values as calendar dates without a clock time', () => {
     expect(formatMailerSentAtDisplay('6/21/2024')).toBe('Jun 21, 2024')
-    expect(formatMailerSentAtDisplay('2025-01-01')).toBe('Jan 1, 2025')
-  })
-
-  it('returns an em dash for missing or invalid values', () => {
-    expect(formatMailerSentAtDisplay(null)).toBe('—')
-    expect(formatMailerSentAtDisplay('')).toBe('—')
     expect(formatMailerSentAtDisplay('not-a-date')).toBe('—')
   })
 })

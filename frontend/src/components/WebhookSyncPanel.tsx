@@ -41,7 +41,7 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hubSpotService } from '@/services/api'
 import type { WebhookLog, WebhookLogStatus, WebhookLogSummary } from '@/types'
-import { formatDateTime } from '@/utils/formatters'
+import { formatDateTime, parseDisplayTimestamp } from '@/utils/formatters'
 
 // ---------------------------------------------------------------------------
 // Props
@@ -93,7 +93,9 @@ function statusColor(
 
 function isStale(lastSyncedAt: string | null): boolean {
   if (!lastSyncedAt) return true
-  const diff = Date.now() - new Date(lastSyncedAt).getTime()
+  const parsed = parseDisplayTimestamp(lastSyncedAt)
+  if (!parsed) return true
+  const diff = Date.now() - parsed.getTime()
   return diff > 24 * 60 * 60 * 1000
 }
 

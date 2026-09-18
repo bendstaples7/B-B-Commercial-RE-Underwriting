@@ -47,7 +47,7 @@ import {
   ownerDisplayEntries,
 } from '@/utils/propertyContacts'
 import { formatImportNote } from './leadDetailFormatters'
-import { formatDate, formatDateTime } from '@/utils/formatters'
+import { formatDate } from '@/utils/formatters'
 import { formatMailerSentAtDisplay, resolveMailerHistorySummary } from '@/utils/mailerHistory'
 import { formatNeedsReviewReason } from '@/utils/needsReviewReason'
 import { hasNonBlankPhones, PhoneList } from '@/components/PhoneRow'
@@ -1087,13 +1087,13 @@ export function PropertySidebar({
         />
         <SidebarRow
           label="Added"
-          value={data.created_at ? formatDateTime(data.created_at) : null}
+          value={data.created_at ? formatDate(data.created_at) : null}
         />
         <SidebarRow
           label="Last Sync"
           value={
             commandCenterData.last_hubspot_sync_at
-              ? formatDateTime(commandCenterData.last_hubspot_sync_at)
+              ? formatDate(commandCenterData.last_hubspot_sync_at)
               : null
           }
         />

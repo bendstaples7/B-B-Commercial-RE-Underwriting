@@ -3,7 +3,7 @@ export const BUSINESS_TIME_ZONE = 'America/Chicago'
 
 const DATE_ONLY_SLASH_RE = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/
 const DATE_ONLY_ISO_RE = /^(\d{4})-(\d{2})-(\d{2})$/
-const NAIVE_ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T/
+const ISO_DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2})T/
 const HAS_TZ_RE = /(Z|[+-]\d{2}:?\d{2})$/i
 
 const CALENDAR_DATE_OPTS: Intl.DateTimeFormatOptions = {
@@ -86,8 +86,14 @@ export function parseDisplayTimestamp(value: unknown): Date | null {
     if (formatCalendarDay(year, month, day) === '—') return null
     return new Date(Date.UTC(year, month - 1, day))
   }
-  const isoText =
-    NAIVE_ISO_DATETIME_RE.test(text) && !HAS_TZ_RE.test(text) ? `${text}Z` : text
+  const isoDateTime = ISO_DATETIME_RE.exec(text)
+  if (isoDateTime) {
+    const year = Number(isoDateTime[1])
+    const month = Number(isoDateTime[2])
+    const day = Number(isoDateTime[3])
+    if (formatCalendarDay(year, month, day) === '—') return null
+  }
+  const isoText = isoDateTime && !HAS_TZ_RE.test(text) ? `${text}Z` : text
   const ms = Date.parse(isoText)
   if (!Number.isNaN(ms)) return new Date(ms)
   return null

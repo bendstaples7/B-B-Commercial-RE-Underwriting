@@ -279,6 +279,26 @@ describe('WebhookSyncPanel', () => {
       })
     })
 
+    it('shows warning when last_synced_at cannot be parsed', async () => {
+      mockedHubSpotService.getWebhookLogSummary.mockResolvedValue({
+        ...recentSummary,
+        last_synced_at: 'not-a-date',
+      })
+
+      render(
+        <WebhookSyncPanel
+          hasClientSecret={false}
+          onClientSecretSaved={vi.fn()}
+        />
+      )
+
+      await waitFor(() => {
+        expect(
+          screen.getByLabelText('No webhook events received in the last 24 hours')
+        ).toBeInTheDocument()
+      })
+    })
+
     it('does not show stale warning when last_synced_at is recent', async () => {
       mockedHubSpotService.getWebhookLogSummary.mockResolvedValue(recentSummary)
 
