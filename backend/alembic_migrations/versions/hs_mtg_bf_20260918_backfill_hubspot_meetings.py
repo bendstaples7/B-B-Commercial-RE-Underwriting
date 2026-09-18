@@ -83,29 +83,29 @@ _ASSOC_IDS = """
     FROM hubspot_engagements he
     CROSS JOIN LATERAL (
         SELECT 'deal'::text AS record_type, elem #>> '{}' AS hs_id
-        FROM jsonb_array_elements(
+        FROM json_array_elements(
             CASE
-                WHEN jsonb_typeof(he.raw_payload #> '{associations,dealIds}') = 'array'
+                WHEN json_typeof(he.raw_payload #> '{associations,dealIds}') = 'array'
                 THEN he.raw_payload #> '{associations,dealIds}'
-                ELSE '[]'::jsonb
+                ELSE '[]'::json
             END
         ) AS elem
         UNION ALL
         SELECT 'contact'::text, elem #>> '{}'
-        FROM jsonb_array_elements(
+        FROM json_array_elements(
             CASE
-                WHEN jsonb_typeof(he.raw_payload #> '{associations,contactIds}') = 'array'
+                WHEN json_typeof(he.raw_payload #> '{associations,contactIds}') = 'array'
                 THEN he.raw_payload #> '{associations,contactIds}'
-                ELSE '[]'::jsonb
+                ELSE '[]'::json
             END
         ) AS elem
         UNION ALL
         SELECT 'company'::text, elem #>> '{}'
-        FROM jsonb_array_elements(
+        FROM json_array_elements(
             CASE
-                WHEN jsonb_typeof(he.raw_payload #> '{associations,companyIds}') = 'array'
+                WHEN json_typeof(he.raw_payload #> '{associations,companyIds}') = 'array'
                 THEN he.raw_payload #> '{associations,companyIds}'
-                ELSE '[]'::jsonb
+                ELSE '[]'::json
             END
         ) AS elem
     ) rec
@@ -218,7 +218,7 @@ def upgrade():
                 COALESCE(NULLIF(BTRIM(i.body), ''), 'HubSpot meeting activity'),
                 500
             ),
-            jsonb_build_object(
+            json_build_object(
                 'id', i.hubspot_engagement_id,
                 'type', 'MEETING',
                 'body', i.body,
