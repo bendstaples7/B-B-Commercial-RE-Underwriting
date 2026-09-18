@@ -942,6 +942,73 @@ class TestMeetingEngagementConversion:
                 hubspot_engagement_id="111073080718"
             ).count() == 1
 
+    def test_backfill_script_converts_stored_meeting_engagements(self, app):
+        """The operational backfill, not Alembic, converts stored meetings."""
+        from scripts.backfill_hubspot_interactions_to_timeline import (
+            convert_missing_meeting_interactions,
+        )
+
+        with app.app_context():
+            lead = Lead(
+                property_street="2551 W Eastwood Ave",
+                lead_status="skip_trace",
+            )
+            db.session.add(lead)
+            db.session.flush()
+
+            db.session.add(HubSpotMatch(
+                hubspot_record_type="contact",
+                hubspot_id="107753",
+                internal_record_type="lead",
+                internal_record_id=lead.id,
+                confidence="HIGH",
+                status="confirmed",
+                matching_criteria="address_match",
+            ))
+            engagement = HubSpotEngagement(
+                hubspot_id="111073080719",
+                engagement_type="MEETING",
+                raw_payload={
+                    "engagement": {
+                        "id": 111073080719,
+                        "type": "MEETING",
+                        "createdAt": 1781551566511,
+                        "timestamp": 1781119500000,
+                        "bodyPreview": "coffee follow-up",
+                    },
+                    "metadata": {
+                        "body": "<p>coffee follow-up</p>",
+                        "startTime": 1781119500000,
+                    },
+                    "associations": {
+                        "dealIds": [],
+                        "contactIds": [107753],
+                        "companyIds": [],
+                    },
+                },
+            )
+            db.session.add(engagement)
+            db.session.commit()
+
+            created, failed = convert_missing_meeting_interactions(lead.id)
+
+            assert (created, failed) == (1, 0)
+            interaction = Interaction.query.filter_by(
+                hubspot_engagement_id="111073080719",
+            ).one()
+            assert interaction.interaction_type == 'meeting'
+            assert InteractionAssociation.query.filter_by(
+                interaction_id=interaction.id,
+                target_type='lead',
+                target_id=lead.id,
+            ).count() == 1
+
+            # Idempotent on re-run.
+            assert convert_missing_meeting_interactions(lead.id) == (0, 0)
+            assert Interaction.query.filter_by(
+                hubspot_engagement_id="111073080719",
+            ).count() == 1
+
 
 # ===========================================================================
 # Preservation Tests — Property 2

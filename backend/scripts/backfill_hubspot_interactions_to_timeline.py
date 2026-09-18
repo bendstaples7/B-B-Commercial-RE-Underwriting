@@ -2,6 +2,7 @@
 
 Bridges existing hubspot_import Interactions (note/call/email/meeting) that are
 associated to a lead into LeadTimelineEntry via HubSpotTimelineImportService.
+Also converts stored HubSpot MEETING engagements that predate meeting support.
 Uses mark_review=False so historical backfill does not flood Needs Review.
 
 Dry-run by default. Pass --apply to mutate the database.
@@ -16,6 +17,8 @@ import logging
 import sys
 from pathlib import Path
 
+from sqlalchemy import func
+
 _backend_dir = Path(__file__).resolve().parent.parent
 if str(_backend_dir) not in sys.path:
     sys.path.insert(0, str(_backend_dir))
@@ -28,7 +31,15 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(mes
 logger = logging.getLogger('backfill_hubspot_interactions_to_timeline')
 
 from app import create_app, db
-from app.models import Interaction, InteractionAssociation, LeadTimelineEntry
+from app.models import (
+    HubSpotEngagement,
+    Interaction,
+    InteractionAssociation,
+    LeadTimelineEntry,
+)
+from app.services.hubspot_activity_converter_service import (
+    HubSpotActivityConverterService,
+)
 from app.services.hubspot_timeline_import_service import (
     BRIDGE_INTERACTION_TYPES,
     HubSpotTimelineImportService,
@@ -92,6 +103,73 @@ def _missing_count_for_lead(lead_id: int) -> int:
     return len(engagement_ids - existing)
 
 
+def _meeting_engagements_missing_interactions(
+    lead_id: int | None = None,
+) -> list[HubSpotEngagement]:
+    """Return stored HubSpot MEETING engagements that still need Interactions."""
+    existing_interaction_ids = (
+        db.session.query(Interaction.hubspot_engagement_id)
+        .filter(Interaction.hubspot_engagement_id.isnot(None))
+        .subquery()
+    )
+    q = (
+        HubSpotEngagement.query
+        .outerjoin(
+            existing_interaction_ids,
+            HubSpotEngagement.hubspot_id
+            == existing_interaction_ids.c.hubspot_engagement_id,
+        )
+        .filter(func.upper(HubSpotEngagement.engagement_type) == 'MEETING')
+        .filter(existing_interaction_ids.c.hubspot_engagement_id.is_(None))
+        .order_by(HubSpotEngagement.id.asc())
+    )
+    engagements = q.all()
+    if lead_id is None:
+        return engagements
+
+    converter = HubSpotActivityConverterService()
+    filtered: list[HubSpotEngagement] = []
+    for engagement in engagements:
+        # Reuse the converter's match resolution so --lead-id dry-runs match apply.
+        associations = converter._resolve_associations(engagement)  # noqa: SLF001
+        if any(
+            assoc.get('target_type') == 'lead'
+            and assoc.get('target_id') is not None
+            and int(assoc['target_id']) == lead_id
+            for assoc in associations
+        ):
+            filtered.append(engagement)
+    return filtered
+
+
+def convert_missing_meeting_interactions(lead_id: int | None = None) -> tuple[int, int]:
+    """Convert stored HubSpot MEETING engagements into Interactions.
+
+    Returns ``(created, failed)``. The converter is idempotent; this helper only
+    selects engagements without an Interaction so repeated script runs are cheap.
+    """
+    converter = HubSpotActivityConverterService()
+    created = 0
+    failed = 0
+
+    for engagement in _meeting_engagements_missing_interactions(lead_id):
+        try:
+            result = converter.convert_engagement(engagement)
+        except Exception as exc:
+            db.session.rollback()
+            failed += 1
+            logger.warning(
+                'Failed to convert HubSpot MEETING engagement hubspot_id=%s: %s',
+                engagement.hubspot_id,
+                exc,
+            )
+            continue
+        if result is not None:
+            created += 1
+
+    return created, failed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -109,9 +187,16 @@ def main() -> None:
 
     app = create_app()
     with app.app_context():
+        meetings_to_convert = _meeting_engagements_missing_interactions(args.lead_id)
         lead_ids = _lead_ids_with_bridgeable_interactions(args.lead_id)
         logger.info('Found %s lead(s) with HubSpot interactions to bridge', len(lead_ids))
         print(f'Found {len(lead_ids)} lead(s) with HubSpot interactions', flush=True)
+        if meetings_to_convert:
+            print(
+                f'Found {len(meetings_to_convert)} stored HubSpot meeting engagement(s) '
+                'without Interactions',
+                flush=True,
+            )
 
         would_create = 0
         for lid in lead_ids:
@@ -123,11 +208,22 @@ def main() -> None:
         if not args.apply:
             print(
                 f'Done (dry-run): leads={len(lead_ids)} '
-                f'would_create~={would_create}',
+                f'would_create~={would_create} '
+                f'would_convert_meetings={len(meetings_to_convert)}',
                 flush=True,
             )
             return
 
+        converted, conversion_failures = convert_missing_meeting_interactions(
+            args.lead_id,
+        )
+        if converted:
+            print(f'Converted {converted} HubSpot meeting Interaction(s)', flush=True)
+        if conversion_failures:
+            print(f'Failed meeting conversions: {conversion_failures}', flush=True)
+            sys.exit(1)
+
+        lead_ids = _lead_ids_with_bridgeable_interactions(args.lead_id)
         svc = HubSpotTimelineImportService()
         results = svc.sync_leads_from_interactions(lead_ids, mark_review=False)
         failed_ids = [lid for lid, count in results.items() if count < 0]
