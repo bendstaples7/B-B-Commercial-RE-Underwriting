@@ -100,6 +100,6 @@ def test_handle_errors_uses_generic_message_for_non_unique_integrity_error():
     response = app.test_client().get('/boom')
     assert response.status_code == 409
     body = response.get_json()
-    assert body['error'] == 'Integrity error'
+    assert body['error'] == 'Conflict'
     assert body['constraint'] is None
     assert body['message'] == 'This save was blocked by a database integrity rule.'

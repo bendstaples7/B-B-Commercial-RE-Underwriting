@@ -7,11 +7,7 @@ from marshmallow import ValidationError
 from sqlalchemy.exc import IntegrityError
 from werkzeug.exceptions import HTTPException
 
-from app.db_errors import (
-    integrity_constraint_name,
-    integrity_error_message,
-    is_unique_integrity_error,
-)
+from app.db_errors import integrity_constraint_name, integrity_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +31,7 @@ def handle_errors(f):
                 exc_info=True,
             )
             return jsonify({
-                'error': 'Conflict' if is_unique_integrity_error(e) else 'Integrity error',
+                'error': 'Conflict',
                 'message': integrity_error_message(e, action='This save'),
                 'constraint': integrity_constraint_name(e),
             }), 409

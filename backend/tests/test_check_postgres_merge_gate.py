@@ -72,6 +72,13 @@ def _configure_files(tmp_path, workflow=VALID_WORKFLOW, test_src=VALID_GATE_TEST
     return module
 
 
+def test_accepts_valid_gate_fixture(tmp_path, capsys):
+    module = _configure_files(tmp_path)
+
+    assert module.main() == 0
+    assert 'Postgres merge gate is required before deploy.' in capsys.readouterr().out
+
+
 def test_rejects_continue_on_error_in_gate_job(tmp_path, capsys):
     workflow = VALID_WORKFLOW.replace(
         '  postgres-merge-gate:\n',
