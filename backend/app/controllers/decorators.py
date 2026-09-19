@@ -4,7 +4,10 @@ from functools import wraps
 
 from flask import jsonify
 from marshmallow import ValidationError
+from sqlalchemy.exc import IntegrityError
 from werkzeug.exceptions import HTTPException
+
+from app.db_errors import integrity_constraint_name, integrity_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +22,19 @@ def handle_errors(f):
             return jsonify({'error': 'Validation error', 'details': e.messages}), 400
         except ValueError as e:
             return jsonify({'error': 'Invalid request', 'message': str(e)}), 400
+        except IntegrityError as e:
+            name = integrity_constraint_name(e) or 'unknown'
+            logger.error(
+                "Database integrity rule %s blocked a request: %s",
+                name,
+                e,
+                exc_info=True,
+            )
+            return jsonify({
+                'error': 'Conflict',
+                'message': integrity_error_message(e, action='This save'),
+                'constraint': integrity_constraint_name(e),
+            }), 409
         except HTTPException as e:
             response = e.get_response()
             response.data = jsonify({

@@ -61,6 +61,11 @@ def app():
     # (which only runs when effective_env == 'development').  Without this,
     # celery_worker.py's load_dotenv() sets FLASK_ENV=development from .env,
     # causing Alembic to run against the empty in-memory SQLite DB and fail.
+    # The parallel suite stays on SQLite. xdist workers cannot share one
+    # Postgres database, and create_all() does not build the partial unique
+    # indexes that production enforces. Those indexes are checked by the
+    # always-on "Backend — Postgres merge gate" job (tests/test_merge_postgres_gate.py).
+    # Do not point this fixture at Postgres and call that a substitute.
     os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
     os.environ['FLASK_ENV'] = 'testing'
     # celery_worker import (below) reloads backend/.env with override=True and

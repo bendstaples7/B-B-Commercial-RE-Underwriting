@@ -90,6 +90,46 @@ def _dedup_index_conflict_exists(
     return db.session.query(query.exists()).scalar()
 
 
+def _assessor_pin_conflict_exists(
+    *,
+    lead: Lead,
+    proposed_pin: Any,
+    ignore_ids: set[int],
+) -> bool:
+    """True when a PIN write would hit uq_leads_owner_assessor_pin."""
+    pin = '' if proposed_pin is None else str(proposed_pin).strip()
+    owner_user_id = getattr(lead, 'owner_user_id', None)
+    if not (pin and owner_user_id):
+        return False
+    query = Lead.query.filter(
+        Lead.owner_user_id == owner_user_id,
+        Lead.county_assessor_pin == pin,
+    )
+    if ignore_ids:
+        query = query.filter(~Lead.id.in_(ignore_ids))
+    return bool(db.session.query(query.exists()).scalar())
+
+
+def _vacate_loser_dedup_keys(loser: Lead) -> None:
+    """Release unique-index keys on the row that is about to be deleted.
+
+    Postgres checks ``uq_leads_owner_normalized_street`` and
+    ``uq_leads_owner_assessor_pin`` on each UPDATE. Copying the PIN, or
+    aligning the owner and street, fails while this row still holds those
+    keys. ``normalized_street`` is cleared without touching
+    ``property_street`` so the before-update listener does not recompute it.
+    """
+    changed = False
+    if (getattr(loser, 'county_assessor_pin', None) or '').strip():
+        loser.county_assessor_pin = None
+        changed = True
+    if (getattr(loser, 'normalized_street', None) or '').strip():
+        loser.normalized_street = None
+        changed = True
+    if changed:
+        db.session.flush()
+
+
 def _street_prefilter(query, street: str):
     """Bound owner-name scans with a coarse building-level SQL predicate."""
     key = dedup_street_key(street)
@@ -378,10 +418,13 @@ def _prefer_cleaner_property_street(winner: Lead, loser: Lead) -> None:
         ):
             preferred = l_street
     if preferred:
+        ignore_ids = {winner.id} if isinstance(winner.id, int) else set()
+        if isinstance(loser.id, int):
+            ignore_ids.add(loser.id)
         if _dedup_index_conflict_exists(
             lead=winner,
             proposed_street=preferred,
-            ignore_ids={winner.id} if isinstance(winner.id, int) else set(),
+            ignore_ids=ignore_ids,
         ):
             logger.info(
                 'skipping cleaner street preference for winner=%s; normalized street would collide',
@@ -634,18 +677,24 @@ def apply_merge_field_choices(
     names = choices.get('people_names')
     if isinstance(names, list):
         cleaned = [str(name).strip() for name in names if str(name).strip()]
-        winner.owner_first_name = None
-        winner.owner_last_name = None
-        winner.owner_2_first_name = None
-        winner.owner_2_last_name = None
-        if cleaned:
-            first, last = _split_person_name(cleaned[0])
-            winner.owner_first_name = first or None
-            winner.owner_last_name = last or None
-            if len(cleaned) > 1:
-                second_first, second_last = _split_person_name(cleaned[1])
-                winner.owner_2_first_name = second_first or None
-                winner.owner_2_last_name = second_last or None
+        first, last = _split_person_name(cleaned[0]) if cleaned else ('', '')
+        if cleaned and _owner_name_street_conflict(winner, first, last):
+            logger.info(
+                'keeping winner=%s owner name; selected name would collide',
+                winner.id,
+            )
+        else:
+            winner.owner_first_name = None
+            winner.owner_last_name = None
+            winner.owner_2_first_name = None
+            winner.owner_2_last_name = None
+            if cleaned:
+                winner.owner_first_name = first or None
+                winner.owner_last_name = last or None
+                if len(cleaned) > 1:
+                    second_first, second_last = _split_person_name(cleaned[1])
+                    winner.owner_2_first_name = second_first or None
+                    winner.owner_2_last_name = second_last or None
     for field, limit in _MERGE_TEXT_LIMITS.items():
         if field not in choices:
             continue
@@ -664,6 +713,20 @@ def apply_merge_field_choices(
                 )
                 continue
             setattr(winner, field, proposed_street)
+            continue
+        if field == 'county_assessor_pin':
+            proposed_pin = _clip_choice(choices.get(field), limit)
+            if proposed_pin and _assessor_pin_conflict_exists(
+                lead=winner,
+                proposed_pin=proposed_pin,
+                ignore_ids=ignore_conflict_ids or set(),
+            ):
+                logger.info(
+                    'skipping merge-choice PIN for winner=%s; PIN would collide',
+                    winner.id,
+                )
+                continue
+            setattr(winner, field, proposed_pin)
             continue
         setattr(winner, field, _clip_choice(choices.get(field), limit))
     if 'units' in choices:
@@ -696,6 +759,9 @@ def merge_lead_into_winner(
     """Merge loser into winner (ORM). Caller must commit."""
     winner_id = winner.id
     loser_id = loser.id
+    # Snapshot before vacating — the copy loop still needs the loser's PIN.
+    loser_pin = getattr(loser, 'county_assessor_pin', None)
+    _vacate_loser_dedup_keys(loser)
     explicit_choices = isinstance(choices, dict)
     explicit_people_names = choices.get('people_names') if explicit_choices else None
     if isinstance(choices, dict):
@@ -738,6 +804,8 @@ def merge_lead_into_winner(
             continue
         w_val = getattr(winner, field, None)
         l_val = getattr(loser, field, None)
+        if field == 'county_assessor_pin':
+            l_val = loser_pin
         if field == 'lead_score':
             # Scoring has a single writer — caller must rescore after commit.
             continue
@@ -750,6 +818,16 @@ def merge_lead_into_winner(
             # Locked Residential/Commercial must not pick up loser CoStar/type fills.
             continue
         if (w_val is None or w_val == '') and l_val not in (None, ''):
+            if field == 'county_assessor_pin' and _assessor_pin_conflict_exists(
+                lead=winner,
+                proposed_pin=l_val,
+                ignore_ids={winner_id, loser_id},
+            ):
+                logger.info(
+                    'skipping copied PIN for winner=%s; PIN would collide',
+                    winner_id,
+                )
+                continue
             setattr(winner, field, l_val)
 
     for field in ('property_city', 'property_state', 'property_zip'):
@@ -1510,17 +1588,33 @@ def merge_loser_into_winner(
     if not streets_match_duplicate_merge(winner.property_street, loser.property_street):
         raise ValueError('leads do not share the same address / unit')
 
-    with db.session.begin_nested():
-        merge_lead_into_winner(winner, loser, changed_by=changed_by, choices=choices)
-        winner.review_required = False
-        if winner.review_reason == 'duplicate_lead_cluster':
-            winner.review_reason = None
-            winner.review_triggered_at = None
+    try:
+        with db.session.begin_nested():
+            merge_lead_into_winner(winner, loser, changed_by=changed_by, choices=choices)
+            winner.review_required = False
+            if winner.review_reason == 'duplicate_lead_cluster':
+                winner.review_reason = None
+                winner.review_triggered_at = None
 
-    if commit:
-        db.session.commit()
-        from app.services.lead_refresh import refresh_lead_scoring
-        refresh_lead_scoring(winner_id)
+        if commit:
+            db.session.commit()
+            from app.services.lead_refresh import refresh_lead_scoring
+            refresh_lead_scoring(winner_id)
+    except IntegrityError as exc:
+        if commit:
+            db.session.rollback()
+        from app.db_errors import integrity_constraint_name, integrity_error_message
+
+        constraint = integrity_constraint_name(exc)
+        logger.exception(
+            'merge blocked winner=%s loser=%s constraint=%s',
+            winner_id,
+            loser_id,
+            constraint,
+        )
+        raise ValueError(
+            integrity_error_message(exc, action='Combine')
+        ) from None
 
     return {
         'winner_id': winner_id,

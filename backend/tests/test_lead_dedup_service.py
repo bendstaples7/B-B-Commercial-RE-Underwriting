@@ -613,6 +613,41 @@ class TestSiblingAbsorbAndSoftMerge:
             assert result['merged'] is True
             assert db.session.get(Lead, loser.id) is None
 
+    def test_merge_integrity_error_preserves_outer_transaction_when_commit_false(self, app):
+        from app.services.lead_dedup_service import merge_loser_into_winner
+
+        with app.app_context():
+            winner = Lead(property_street='100 Outer Tx St', owner_first_name='Ada')
+            loser = Lead(property_street='100 Outer Tx Street', owner_first_name='Ada')
+            db.session.add_all([winner, loser])
+            db.session.commit()
+
+            sentinel = Lead(property_street='200 Outer Tx St', owner_first_name='Pending')
+            db.session.add(sentinel)
+            try:
+                with patch(
+                    'app.services.lead_dedup_service.merge_lead_into_winner',
+                    side_effect=IntegrityError(
+                        'UPDATE',
+                        {},
+                        Exception(
+                            'duplicate key value violates unique constraint '
+                            '"uq_leads_owner_normalized_street"'
+                        ),
+                    ),
+                ), pytest.raises(ValueError, match='uq_leads_owner_normalized_street'):
+                    merge_loser_into_winner(
+                        winner.id,
+                        loser.id,
+                        changed_by='test',
+                        commit=False,
+                    )
+
+                assert sentinel.id is not None
+                assert db.session.get(Lead, sentinel.id) is sentinel
+            finally:
+                db.session.rollback()
+
     def test_merge_prefers_unit_street_onto_bare_winner(self, app):
         from app.services.lead_dedup_service import merge_lead_into_winner
 
@@ -1443,3 +1478,165 @@ class TestSameBuildingBannerAndAdditivePeople:
             assert refreshed.lead_category == 'residential'
             assert refreshed.property_type is None
             assert refreshed.lead_category_locked is True
+
+
+def _install_prod_dedup_indexes() -> None:
+    """The partial owner+street and owner+PIN indexes exist on Postgres, not create_all."""
+    from sqlalchemy import text
+
+    db.session.execute(text(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_owner_normalized_street
+        ON leads (
+            owner_user_id,
+            lower(trim(owner_first_name)),
+            lower(trim(owner_last_name)),
+            normalized_street
+        )
+        WHERE owner_user_id IS NOT NULL
+          AND owner_first_name IS NOT NULL AND owner_first_name != ''
+          AND owner_last_name IS NOT NULL AND owner_last_name != ''
+          AND normalized_street IS NOT NULL AND normalized_street != ''
+        """
+    ))
+    db.session.execute(text(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_owner_assessor_pin
+        ON leads (owner_user_id, county_assessor_pin)
+        WHERE owner_user_id IS NOT NULL
+          AND county_assessor_pin IS NOT NULL AND county_assessor_pin != ''
+        """
+    ))
+    db.session.commit()
+
+
+def _drop_prod_dedup_indexes() -> None:
+    from sqlalchemy import text
+
+    db.session.execute(text('DROP INDEX IF EXISTS uq_leads_owner_assessor_pin'))
+    db.session.execute(text('DROP INDEX IF EXISTS uq_leads_owner_normalized_street'))
+    db.session.commit()
+
+
+class TestMergeUnderDedupUniqueIndexes:
+    def test_combine_copies_pin_while_loser_row_still_exists(self, app):
+        """Different people, same owner account: copying the PIN must not 500."""
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            _install_prod_dedup_indexes()
+            try:
+                winner = Lead(
+                    property_street='10 Same St',
+                    owner_first_name='Ada',
+                    owner_last_name='Lovelace',
+                    owner_user_id='owner-1',
+                )
+                loser = Lead(
+                    property_street='10 Same St',
+                    county_assessor_pin='13262220410000',
+                    owner_first_name='Grace',
+                    owner_last_name='Hopper',
+                    owner_user_id='owner-1',
+                )
+                db.session.add_all([winner, loser])
+                db.session.commit()
+                for lead in (winner, loser):
+                    refresh_lead_dedup_fields(lead)
+                db.session.commit()
+
+                with patch(
+                    'app.services.property_address_service.ensure_lead_property_address_complete',
+                ):
+                    merge_lead_into_winner(winner, loser, changed_by='test')
+                    db.session.commit()
+
+                refreshed = db.session.get(Lead, winner.id)
+                assert db.session.get(Lead, loser.id) is None
+                assert refreshed.county_assessor_pin == '13262220410000'
+            finally:
+                db.session.rollback()
+                _drop_prod_dedup_indexes()
+
+    def test_combine_can_align_street_for_the_same_owner(self, app):
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            _install_prod_dedup_indexes()
+            try:
+                winner = Lead(
+                    property_street='2834 N Drake',
+                    owner_first_name='Francisco',
+                    owner_last_name='R Solis',
+                    owner_user_id='owner-1',
+                )
+                loser = Lead(
+                    property_street='2834 N Drake Rear',
+                    owner_first_name='Francisco',
+                    owner_last_name='R Solis',
+                    owner_user_id='owner-1',
+                )
+                db.session.add_all([winner, loser])
+                db.session.commit()
+                for lead in (winner, loser):
+                    refresh_lead_dedup_fields(lead)
+                db.session.commit()
+
+                with patch(
+                    'app.services.property_address_service.ensure_lead_property_address_complete',
+                ):
+                    merge_lead_into_winner(winner, loser, changed_by='test')
+                    db.session.commit()
+
+                refreshed = db.session.get(Lead, winner.id)
+                assert refreshed.property_street == '2834 N Drake Rear'
+                assert db.session.get(Lead, loser.id) is None
+            finally:
+                db.session.rollback()
+                _drop_prod_dedup_indexes()
+
+    def test_combine_can_take_the_other_persons_name(self, app):
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            _install_prod_dedup_indexes()
+            try:
+                winner = Lead(
+                    property_street='10 Same St',
+                    owner_first_name='Ada',
+                    owner_last_name='Lovelace',
+                    owner_user_id='owner-1',
+                )
+                loser = Lead(
+                    property_street='10 Same St',
+                    owner_first_name='Grace',
+                    owner_last_name='Hopper',
+                    owner_user_id='owner-1',
+                )
+                db.session.add_all([winner, loser])
+                db.session.commit()
+                for lead in (winner, loser):
+                    refresh_lead_dedup_fields(lead)
+                db.session.commit()
+
+                with patch(
+                    'app.services.property_address_service.ensure_lead_property_address_complete',
+                ):
+                    merge_lead_into_winner(
+                        winner,
+                        loser,
+                        changed_by='test',
+                        choices={
+                            'people_names': ['Grace Hopper'],
+                            'property_street': '10 Same St',
+                        },
+                    )
+                    db.session.commit()
+
+                refreshed = db.session.get(Lead, winner.id)
+                assert refreshed.owner_first_name == 'Grace'
+                assert refreshed.owner_last_name == 'Hopper'
+                assert db.session.get(Lead, loser.id) is None
+            finally:
+                db.session.rollback()
+                _drop_prod_dedup_indexes()
