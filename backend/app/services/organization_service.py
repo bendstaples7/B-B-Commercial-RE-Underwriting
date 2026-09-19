@@ -14,7 +14,7 @@ from typing import Optional
 from app import db
 from app.models.organization import Organization
 from app.models.organization_audit_log import OrganizationAuditLog
-from sqlalchemy import or_
+from sqlalchemy import false, or_
 
 from app.models.property_organization_link import PropertyOrganizationLink
 from app.models.owner_organization_link import OwnerOrganizationLink
@@ -433,17 +433,42 @@ class OrganizationService:
         linked_lead_ids = filters.get('linked_lead_ids')
         if linked_lead_ids is not None:
             if not linked_lead_ids:
-                return [], 0
+                linked_lead_ids = set()
             property_orgs = db.session.query(
                 PropertyOrganizationLink.organization_id,
             ).filter(PropertyOrganizationLink.property_id.in_(linked_lead_ids))
             owner_orgs = db.session.query(
                 OwnerOrganizationLink.organization_id,
             ).filter(OwnerOrganizationLink.owner_id.in_(linked_lead_ids))
+            created_by_user_id = filters.get('created_by_user_id')
+            creator_unlinked = false()
+            if created_by_user_id:
+                created_orgs = db.session.query(
+                    OrganizationAuditLog.organization_id,
+                ).filter(
+                    OrganizationAuditLog.field_name == '__created__',
+                    OrganizationAuditLog.changed_by == created_by_user_id,
+                )
+                property_link_exists = db.session.query(
+                    PropertyOrganizationLink.id,
+                ).filter(
+                    PropertyOrganizationLink.organization_id == Organization.id,
+                ).correlate(Organization).exists()
+                owner_link_exists = db.session.query(
+                    OwnerOrganizationLink.id,
+                ).filter(
+                    OwnerOrganizationLink.organization_id == Organization.id,
+                ).correlate(Organization).exists()
+                creator_unlinked = (
+                    Organization.id.in_(created_orgs)
+                    & ~property_link_exists
+                    & ~owner_link_exists
+                )
             query = query.filter(
                 or_(
                     Organization.id.in_(property_orgs),
                     Organization.id.in_(owner_orgs),
+                    creator_unlinked,
                 )
             )
 

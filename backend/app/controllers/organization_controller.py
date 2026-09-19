@@ -266,6 +266,7 @@ def list_organizations():
     scope = owned_lead_ids_for_current_user()
     if scope is not None:
         filters['linked_lead_ids'] = scope
+        filters['created_by_user_id'] = get_current_user_id()
 
     records, total = _org_service.list(page=page, per_page=per_page, filters=filters)
 
@@ -317,13 +318,7 @@ def get_organization(org_id):
     # Use the service's internal helper via a list query with exact id
     # (service exposes _get_or_raise indirectly through other methods;
     # we query directly here for a clean GET)
-    from app.models.organization import Organization
-    from app import db
-
-    org = db.session.get(Organization, org_id)
-    if org is None:
-        _org_not_found(org_id)
-    _require_org_access(org)
+    org = _load_authorized_org(org_id, allow_unlinked=True)
 
     return jsonify(_serialize_org(org)), 200
 
@@ -382,7 +377,7 @@ def get_organization_audit_log(org_id):
     ----------
     org_id : int
     """
-    _load_authorized_org(org_id)
+    _load_authorized_org(org_id, allow_unlinked=True)
     entries = _org_service.get_audit_log(org_id)
 
     return jsonify({
