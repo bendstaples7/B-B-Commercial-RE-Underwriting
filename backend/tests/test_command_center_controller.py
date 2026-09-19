@@ -1567,6 +1567,8 @@ class TestMergePreviewAndUnitGuard:
                 owner_first_name='Ada',
                 owner_last_name='Lovelace',
                 source='Cityscape',
+                deal_source='Existing deal',
+                data_source='manual',
                 lead_status='skip_trace',
                 county_assessor_pin='14-1',
             )
@@ -1615,13 +1617,77 @@ class TestMergePreviewAndUnitGuard:
             db.session.refresh(winner)
             assert winner.property_street == '10 Choice Street'
             assert winner.property_city == 'Chicago'
+            assert winner.property_state == 'IL'
+            assert winner.property_zip == '60614'
             assert winner.county_assessor_pin == '99-00'
             assert winner.source == 'Picked source'
+            assert winner.deal_source is None
+            assert winner.data_source is None
             assert winner.lead_status == 'negotiating_remote'
             assert winner.units == 6
             assert winner.owner_first_name == 'Pat'
             assert winner.owner_last_name == 'Malone'
             assert LeadTask.query.filter_by(lead_id=winner.id, title='Do not keep').count() == 0
+
+    def test_merge_into_keeps_incoming_activities_when_selected(self, client, app):
+        from app.services.lead_dedup_service import refresh_lead_dedup_fields
+
+        with app.app_context():
+            winner = _make_lead(
+                app,
+                '11 Choice St',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+            )
+            loser = _make_lead(
+                app,
+                '11 Choice St',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+            )
+            for item in (winner, loser):
+                refresh_lead_dedup_fields(item)
+            db.session.add(LeadTask(
+                lead_id=loser.id,
+                task_type='custom',
+                title='Keep this task',
+                status='open',
+                created_by='test',
+            ))
+            db.session.add(LeadTimelineEntry(
+                lead_id=loser.id,
+                event_type='note_logged',
+                occurred_at=datetime(2026, 5, 4, 15, 0, 0),
+                source='manual',
+                actor='test',
+                summary='Keep this timeline entry',
+            ))
+            db.session.commit()
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ), patch(
+                'app.services.lead_refresh.refresh_lead_scoring',
+            ):
+                response = client.post(
+                    f'/api/leads/{loser.id}/merge-into/{winner.id}',
+                    headers=_AUTH_HEADERS,
+                    json={'choices': {
+                        'people_names': ['Ada Lovelace'],
+                        'keep_incoming_activities': True,
+                        'keep_primary_activities': True,
+                    }},
+                )
+
+            assert response.status_code == 200, response.get_json()
+            assert LeadTask.query.filter_by(
+                lead_id=winner.id,
+                title='Keep this task',
+            ).count() == 1
+            assert LeadTimelineEntry.query.filter_by(
+                lead_id=winner.id,
+                summary='Keep this timeline entry',
+            ).count() == 1
 
 
 class TestMoveToSkipTrace:

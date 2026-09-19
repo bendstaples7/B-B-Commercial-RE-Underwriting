@@ -928,6 +928,9 @@ describe('SameAddressMergeBanner', () => {
       '(773) 555-0199',
     )
     expect((screen.getByTestId('same-address-merge-after-contact') as HTMLInputElement).value).toContain(
+      'yoko@holdings.example',
+    )
+    expect((screen.getByTestId('same-address-merge-after-contact') as HTMLInputElement).value).toContain(
       'edwin@example.com',
     )
     expect(screen.getByTestId('same-address-merge-pick-100-source')).toBeChecked()
