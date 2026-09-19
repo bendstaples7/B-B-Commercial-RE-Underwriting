@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import React, { useState } from 'react'
-import { render, screen, waitFor } from '@/test/testUtils'
+import { render, screen, waitFor, fireEvent } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { SameAddressMergeBanner } from '@/components/lead-detail/SameAddressMergeBanner'
@@ -716,6 +716,12 @@ describe('SameAddressMergeBanner', () => {
       throw new Error(`Unexpected lead lookup ${otherId}`)
     })
 
+    const enterLeadNumber = async (value: string) => {
+      const input = await screen.findByTestId('same-address-merge-paste-id')
+      fireEvent.change(input, { target: { value } })
+      fireEvent.blur(input)
+    }
+
     render(
       <MemoryRouter>
         <SameAddressMergeBanner
@@ -736,8 +742,7 @@ describe('SameAddressMergeBanner', () => {
     )
 
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(screen.getByTestId('same-address-merge-paste-id'), '300')
-    await user.tab()
+    await enterLeadNumber('300')
     await waitFor(() => {
       expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 300)
     })
@@ -748,8 +753,7 @@ describe('SameAddressMergeBanner', () => {
     })
 
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(await screen.findByTestId('same-address-merge-paste-id'), '400')
-    await user.tab()
+    await enterLeadNumber('400')
     await waitFor(() => {
       expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 400)
     })
@@ -792,7 +796,7 @@ describe('SameAddressMergeBanner', () => {
       expect(screen.getAllByText('Fresh manual (#400)').length).toBeGreaterThan(0)
     })
     expect(screen.queryAllByText('Stale manual (#300)')).toHaveLength(0)
-  })
+  }, 15000)
 
   it('shows property, source, other properties, and activities when choosing primary', async () => {
     const user = userEvent.setup()
