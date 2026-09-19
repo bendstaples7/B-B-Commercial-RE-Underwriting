@@ -1600,15 +1600,19 @@ def merge_loser_into_winner(
             db.session.commit()
             from app.services.lead_refresh import refresh_lead_scoring
             refresh_lead_scoring(winner_id)
-    except IntegrityError:
+    except IntegrityError as exc:
         db.session.rollback()
+        from app.db_errors import integrity_constraint_name, integrity_error_message
+
+        constraint = integrity_constraint_name(exc)
         logger.exception(
-            'merge blocked by a unique constraint winner=%s loser=%s',
+            'merge blocked winner=%s loser=%s constraint=%s',
             winner_id,
             loser_id,
+            constraint,
         )
         raise ValueError(
-            'Combine could not finish because another record already uses that owner, address, or PIN.'
+            integrity_error_message(exc, action='Combine')
         ) from None
 
     return {

@@ -3,6 +3,7 @@
   "Validation error",
   "An error occurred",
   "Internal server error",
+  "Conflict",
   "HTTP error",
   "Provider not configured",
   "Mail queue error",
