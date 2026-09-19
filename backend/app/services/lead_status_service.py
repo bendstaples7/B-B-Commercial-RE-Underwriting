@@ -66,6 +66,31 @@ def _sync_cancelled_hubspot_tasks(hubspot_task_ids: set[str]) -> None:
         )
 
 
+def _sync_cancelled_hubspot_tasks_after_commit(hubspot_task_ids: set[str]) -> None:
+    """Queue HubSpot completion sync until the caller-owned transaction commits."""
+    if not hubspot_task_ids:
+        return
+    from sqlalchemy import event
+
+    session = db.session()
+    pending = session.info.setdefault('pending_hubspot_completion_sync_ids', set())
+    pending.update(str(task_id) for task_id in hubspot_task_ids if task_id)
+    if session.info.get('hubspot_completion_sync_listener_registered'):
+        return
+    session.info['hubspot_completion_sync_listener_registered'] = True
+
+    @event.listens_for(session, 'after_commit', once=True)
+    def _after_commit(committed_session):  # pragma: no cover - SQLAlchemy event glue
+        ids = committed_session.info.pop('pending_hubspot_completion_sync_ids', set())
+        committed_session.info.pop('hubspot_completion_sync_listener_registered', None)
+        _sync_cancelled_hubspot_tasks(set(ids))
+
+    @event.listens_for(session, 'after_rollback', once=True)
+    def _after_rollback(rolled_back_session):  # pragma: no cover - SQLAlchemy event glue
+        rolled_back_session.info.pop('pending_hubspot_completion_sync_ids', None)
+        rolled_back_session.info.pop('hubspot_completion_sync_listener_registered', None)
+
+
 def lead_has_active_outreach_work(lead_id: int) -> bool:
     """True when the lead has queued mail or an open call/follow-up/mail task."""
     return lead_id in _active_outreach_work_lead_ids([lead_id])
@@ -314,8 +339,11 @@ def apply_lead_status_change(
                 status=new_status,
             )
             db.session.add(lead)
-            db.session.commit()
-            _sync_cancelled_hubspot_tasks(cancelled_hubspot_ids)
+            if commit:
+                db.session.commit()
+                _sync_cancelled_hubspot_tasks(cancelled_hubspot_ids)
+            else:
+                _sync_cancelled_hubspot_tasks_after_commit(cancelled_hubspot_ids)
             return
         # Do not force needs_skip_trace mid recent-sale hold.
         if new_status == 'skip_trace' and not lead.needs_skip_trace:
@@ -369,8 +397,7 @@ def apply_lead_status_change(
         db.session.commit()
         _sync_cancelled_hubspot_tasks(cancelled_hubspot_ids)
     elif cancelled_hubspot_ids:
-        # Caller owns the transaction; sync after they commit.
-        pass
+        _sync_cancelled_hubspot_tasks_after_commit(cancelled_hubspot_ids)
 
     if recompute_action and new_status not in (
         'do_not_contact',

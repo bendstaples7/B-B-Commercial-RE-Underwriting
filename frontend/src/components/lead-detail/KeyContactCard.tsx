@@ -177,6 +177,25 @@ function resolveContactChannels(contact: PropertyContactSummary | null): KeyCont
   return channels
 }
 
+function mergeContactAndFallbackChannels(
+  contactChannels: KeyContactChannel[],
+  fallbackChannels: KeyContactChannel[],
+): KeyContactChannel[] {
+  const merged = [...contactChannels]
+  for (const fallback of fallbackChannels) {
+    const duplicate = merged.some((contact) => {
+      if (fallback.kind === 'phone') {
+        return contact.kind === 'phone'
+          && phoneKey(contact.phone.value) === phoneKey(fallback.phone.value)
+      }
+      return contact.kind === 'email'
+        && contact.value.toLowerCase() === fallback.value.toLowerCase()
+    })
+    if (!duplicate) merged.push(fallback)
+  }
+  return merged
+}
+
 function formatContactRole(contact: PropertyContactSummary): string {
   const role = (contact.role || 'owner').replace(/_/g, ' ')
   return role.replace(/\b\w/g, (c) => c.toUpperCase())
@@ -334,7 +353,10 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
     || 'No contact on file'
   const contactChannels = resolveContactChannels(editablePerson)
   const channels = editablePerson
-    ? (contactChannels.length > 0 ? contactChannels : resolveKeyContactChannels(commandCenterData))
+    ? mergeContactAndFallbackChannels(
+        contactChannels,
+        resolveKeyContactChannels(commandCenterData),
+      )
     : []
   const mailing = formatKeyContactMailing(commandCenterData)
   const phoneChannels = channels.filter(

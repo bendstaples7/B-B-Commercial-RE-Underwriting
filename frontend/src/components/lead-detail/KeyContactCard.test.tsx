@@ -389,7 +389,7 @@ describe('KeyContactCard', () => {
       role: 'owner',
       role_description: null,
       notes: null,
-      phones: [{ id: 1, contact_id: 88, value: '555-9999', label: 'mobile' }],
+      phones: [{ id: 1, contact_id: 88, value: '600-0001', label: 'mobile' }],
       emails: [],
       created_at: null,
       updated_at: null,
@@ -424,6 +424,71 @@ describe('KeyContactCard', () => {
     })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(contactService.getContact).not.toHaveBeenCalled()
+  })
+
+  it('shows an error when inline phone save fails', async () => {
+    const user = userEvent.setup()
+    vi.mocked(contactService.updateContact).mockRejectedValue(new Error('Could not update phone'))
+
+    renderCard(
+      basePayload({
+        contacts: [{
+          id: 88,
+          first_name: 'Jane',
+          last_name: 'Doe',
+          role: 'owner',
+          is_primary: true,
+          phones: [{ value: '(312) 555-0199', label: 'mobile' }],
+          emails: [],
+        }],
+        phones: [{ value: '(312) 555-0199', label: 'mobile' }],
+      }),
+      'Jane Doe',
+    )
+
+    await user.click(screen.getByTestId('key-contact-phone-edit'))
+    await user.clear(screen.getByTestId('key-contact-phone-edit-input'))
+    await user.type(screen.getByTestId('key-contact-phone-edit-input'), '600-0001')
+    await user.click(screen.getByLabelText('Save phone'))
+
+    expect(await screen.findByText('Could not update phone')).toBeInTheDocument()
+    expect(screen.getByTestId('key-contact-phone-edit-input')).toBeInTheDocument()
+  })
+
+  it('clears a linked key contact from the lead', async () => {
+    const user = userEvent.setup()
+    vi.mocked(contactService.clearOwnerPerson).mockResolvedValue({
+      display_name: 'Jane Doe',
+    } as any)
+
+    renderCard(
+      basePayload({
+        contacts: [{
+          id: 88,
+          first_name: 'Jane',
+          last_name: 'Doe',
+          role: 'owner',
+          is_primary: true,
+          phones: [{ value: '(312) 555-0199', label: 'mobile' }],
+          emails: [],
+        }],
+      }),
+      'Jane Doe',
+    )
+
+    await user.click(screen.getByTestId('key-contact-clear-owner-btn'))
+    expect(screen.getByRole('dialog')).toHaveTextContent('Clear owner from lead?')
+    await user.click(screen.getByTestId('confirm-key-contact-clear-owner-btn'))
+
+    await waitFor(() => {
+      expect(contactService.clearOwnerPerson).toHaveBeenCalledWith(634, {
+        contact_id: 88,
+        first_name: 'Jane',
+        last_name: 'Doe',
+        reason: 'cleared_from_key_contact',
+      })
+    })
+    expect(await screen.findByText('Jane Doe cleared from this lead.')).toBeInTheDocument()
   })
 
   it('does not offer Clear from lead for a name that is not a saved person', () => {

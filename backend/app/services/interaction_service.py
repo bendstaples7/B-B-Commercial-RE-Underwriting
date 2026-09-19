@@ -12,6 +12,8 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy import and_, or_
+
 from app import db
 from app.models.interaction import Interaction
 from app.models.interaction_association import InteractionAssociation
@@ -232,6 +234,7 @@ class InteractionService:
         per_page: int = 20,
         lead_id_scope=None,
         association_access_checker=None,
+        association_access_scope=None,
     ) -> tuple:
         """Return a paginated list of Interactions with optional filters.
 
@@ -242,6 +245,9 @@ class InteractionService:
         ``association_access_checker``:
             optional callable used to retain only interactions whose complete
             association set is authorized for the caller.
+        ``association_access_scope``:
+            optional mapping of accessible target ids by association type.
+            Applied in SQL before pagination for scoped callers.
         """
         filters = filters or {}
         if lead_id_scope is not None and not lead_id_scope:
@@ -279,6 +285,30 @@ class InteractionService:
             )
             query = query.filter(Interaction.id.in_(scoped))
 
+        if association_access_scope is not None:
+            lead_ids = association_access_scope.get('lead', set())
+            organization_ids = association_access_scope.get('organization', set())
+            contact_ids = association_access_scope.get('contact', set())
+            inaccessible_assoc = db.session.query(InteractionAssociation.id).filter(
+                InteractionAssociation.interaction_id == Interaction.id,
+                or_(
+                    and_(
+                        InteractionAssociation.target_type == 'lead',
+                        ~InteractionAssociation.target_id.in_(lead_ids),
+                    ),
+                    and_(
+                        InteractionAssociation.target_type == 'organization',
+                        ~InteractionAssociation.target_id.in_(organization_ids),
+                    ),
+                    and_(
+                        InteractionAssociation.target_type == 'contact',
+                        ~InteractionAssociation.target_id.in_(contact_ids),
+                    ),
+                    ~InteractionAssociation.target_type.in_(('lead', 'organization', 'contact')),
+                ),
+            ).correlate(Interaction).exists()
+            query = query.filter(~inaccessible_assoc)
+
         query = query.order_by(Interaction.occurred_at.desc())
 
         if association_access_checker is not None:
@@ -304,6 +334,7 @@ class InteractionService:
         target_type: str,
         target_id: int,
         filters: Optional[dict] = None,
+        association_access_scope=None,
     ) -> list:
         """Return a unified timeline for a target by delegating to TimelineService.
 
@@ -330,6 +361,7 @@ class InteractionService:
             subtype=filters.get('subtype'),
             date_from=filters.get('date_from'),
             date_to=filters.get('date_to'),
+            association_access_scope=association_access_scope,
         )
 
     # ------------------------------------------------------------------

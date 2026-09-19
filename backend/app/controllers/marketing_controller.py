@@ -342,7 +342,7 @@ def get_list_members(list_id):
         list_id,
         page=page,
         per_page=per_page,
-        lead_access_checker=None if current_user_is_admin() else user_can_access_lead,
+        lead_owner_user_id=None if current_user_is_admin() else get_current_user_id(),
     )
 
     return jsonify({

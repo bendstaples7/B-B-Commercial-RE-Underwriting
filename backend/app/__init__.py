@@ -537,6 +537,15 @@ def create_app(config_name='development'):
             # as a convenience identity mechanism since the frontend sends it.
             g.user_id = _request.headers.get('X-User-Id', 'anonymous')
         else:
+            legacy_user_id = _request.headers.get('X-User-Id')
+            if legacy_user_id:
+                from app.api_utils import _allow_legacy_header
+                if _allow_legacy_header():
+                    from app.models.user import User
+                    g.user_id = legacy_user_id
+                    header_user = User.query.filter_by(user_id=g.user_id).first()
+                    g.is_admin = bool(header_user and header_user.is_admin)
+                    return
             # In production/development, never trust the unauthenticated X-User-Id
             # header. No valid Bearer token means anonymous.
             g.user_id = 'anonymous'

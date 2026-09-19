@@ -869,7 +869,20 @@ def get_command_center(lead_id: int):
     from app.models.property_organization_link import PropertyOrganizationLink
 
     try:
-        ContactService().ensure_key_contact_linked(lead_id)
+        linked_key_contact = ContactService().ensure_key_contact_linked(lead_id)
+        if linked_key_contact:
+            from app.services.lead_refresh import refresh_lead_scoring
+            refresh_lead_scoring(lead_id)
+            lead = Lead.query.get(lead_id) or lead
+            data_quality_breakdown = build_data_quality_breakdown(lead)
+            data_completeness_score = data_quality_breakdown['total']
+            ra, contact_method, ra_display, winning_rule, winning_signals = (
+                _build_recommended_action_snapshot(lead)
+            )
+            open_tasks = _lead_task_service.list_open(lead_id)
+            timeline_entries, timeline_total = _lead_timeline_service.get_page(
+                lead_id, page=1, per_page=25,
+            )
     except Exception:  # noqa: BLE001 — never block the lead page
         logger.exception('ensure_key_contact_linked failed for lead %s', lead_id)
         try:

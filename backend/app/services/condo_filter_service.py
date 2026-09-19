@@ -196,23 +196,26 @@ class CondoFilterService:
                     if owner_user_id not in group_owners:
                         foreign_linked = True
                         break
+            if foreign_linked:
+                summary_by_status[result.condo_risk_status] += 1
+                summary_by_building_sale[result.building_sale_possible] += 1
+                continue
 
-            if not foreign_linked:
-                analysis.property_count = metrics.property_count
-                analysis.pin_count = metrics.pin_count
-                analysis.owner_count = metrics.owner_count
-                analysis.has_unit_number = metrics.has_unit_number
-                analysis.has_condo_language = metrics.has_condo_language
-                analysis.missing_pin_count = metrics.missing_pin_count
-                analysis.missing_owner_count = metrics.missing_owner_count
-                analysis.condo_risk_status = result.condo_risk_status
-                analysis.building_sale_possible = result.building_sale_possible
-                analysis.analysis_details = {
-                    'triggered_rules': result.triggered_rules,
-                    'reason': result.reason,
-                    'confidence': result.confidence,
-                }
-                analysis.analyzed_at = now
+            analysis.property_count = metrics.property_count
+            analysis.pin_count = metrics.pin_count
+            analysis.owner_count = metrics.owner_count
+            analysis.has_unit_number = metrics.has_unit_number
+            analysis.has_condo_language = metrics.has_condo_language
+            analysis.missing_pin_count = metrics.missing_pin_count
+            analysis.missing_owner_count = metrics.missing_owner_count
+            analysis.condo_risk_status = result.condo_risk_status
+            analysis.building_sale_possible = result.building_sale_possible
+            analysis.analysis_details = {
+                'triggered_rules': result.triggered_rules,
+                'reason': result.reason,
+                'confidence': result.confidence,
+            }
+            analysis.analyzed_at = now
 
             # Flush to get the ID for new records
             db.session.flush()

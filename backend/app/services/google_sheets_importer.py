@@ -1075,8 +1075,15 @@ class GoogleSheetsImporter:
         """Update lead fields and create audit trail entries for changes."""
         skip_owner_names = False
         if any(name in data for name in ('owner_first_name', 'owner_last_name')):
-            from app.services.contact_service import ContactService
-            skip_owner_names = ContactService.primary_owner_name_locked(lead.id)
+            incoming_first = data.get('owner_first_name', lead.owner_first_name)
+            incoming_last = data.get('owner_last_name', lead.owner_last_name)
+            owner_names_unchanged = (
+                str(lead.owner_first_name or '') == str(incoming_first or '')
+                and str(lead.owner_last_name or '') == str(incoming_last or '')
+            )
+            if not owner_names_unchanged:
+                from app.services.contact_service import ContactService
+                skip_owner_names = ContactService.primary_owner_name_locked(lead.id)
         for field_name in self.AUDITABLE_FIELDS:
             if field_name not in data or field_name in _PROTECTED_IMPORT_FIELDS:
                 continue

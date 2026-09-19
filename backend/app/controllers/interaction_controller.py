@@ -21,6 +21,7 @@ from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
 from app.api_utils import (
+    accessible_association_target_ids_for_current_user,
     current_user_is_admin,
     load_authorized_lead,
     user_can_access_association_target,
@@ -229,8 +230,9 @@ def list_interactions():
         page=page,
         per_page=per_page,
         lead_id_scope=None,
-        association_access_checker=(
-            None if current_user_is_admin() else _can_access_interaction
+        association_access_scope=(
+            None if current_user_is_admin()
+            else accessible_association_target_ids_for_current_user()
         ),
     )
 
@@ -363,6 +365,10 @@ def get_lead_interaction_timeline(lead_id):
         target_type='lead',
         target_id=lead_id,
         filters=filters,
+        association_access_scope=(
+            None if current_user_is_admin()
+            else accessible_association_target_ids_for_current_user()
+        ),
     )
     response = jsonify({'timeline': entries, 'lead_id': lead_id})
     response.headers['Deprecation'] = 'Sat, 11 Jul 2026 00:00:00 GMT'
@@ -402,5 +408,9 @@ def get_organization_timeline(org_id):
         target_type='organization',
         target_id=org_id,
         filters=filters,
+        association_access_scope=(
+            None if current_user_is_admin()
+            else accessible_association_target_ids_for_current_user()
+        ),
     )
     return jsonify({'timeline': entries, 'organization_id': org_id}), 200

@@ -12,6 +12,7 @@ from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
 from app.api_utils import (
+    accessible_association_target_ids_for_current_user,
     current_user_is_admin,
     user_can_access_association_target,
     user_can_access_association_targets,
@@ -223,7 +224,10 @@ def list_tasks():
         page=page,
         per_page=per_page,
         lead_id_scope=None,
-        association_access_checker=None if current_user_is_admin() else _can_access_task,
+        association_access_scope=(
+            None if current_user_is_admin()
+            else accessible_association_target_ids_for_current_user()
+        ),
     )
 
     return jsonify({
@@ -251,6 +255,9 @@ def create_task():
     """
     body = dict(request.json or {})
     raw_associations = body.pop('associations', [])
+    body['source'] = 'manual'
+    body.pop('hubspot_task_id', None)
+    body.pop('raw_payload', None)
     data = _task_schema.load(body)
     assoc_schema = TaskAssociationSchema(many=True, partial=('task_id',))
     associations = assoc_schema.load(raw_associations) if raw_associations else []
@@ -273,10 +280,13 @@ def get_task(task_id):
 
     Applies overdue check on read (Requirement 3.6).
     """
-    task = _service.get(task_id)
+    task = _service.get_without_side_effects(task_id)
+    if task is None:
+        return _task_not_found(task_id)
     denied = _deny_if_cannot_access_task(task)
     if denied is not None:
         return denied
+    task = _service.get(task_id)
     return jsonify(_serialize_task(task)), 200
 
 
@@ -296,7 +306,9 @@ def update_task(task_id):
     body = request.json or {}
     # Use partial=True so only provided fields are validated/updated
     data = _task_schema.load(body, partial=True)
-    task = _service.get(task_id)
+    task = _service.get_without_side_effects(task_id)
+    if task is None:
+        return _task_not_found(task_id)
     denied = _deny_if_cannot_access_task(task)
     if denied is not None:
         return denied
@@ -315,7 +327,9 @@ def delete_task(task_id):
     lead_score + recommended_action don't go stale — open-task count feeds the
     action engine, so removing a task can change the recommended action.
     """
-    task = _service.get(task_id)
+    task = _service.get_without_side_effects(task_id)
+    if task is None:
+        return _task_not_found(task_id)
     denied = _deny_if_cannot_access_task(task)
     if denied is not None:
         return denied
@@ -339,7 +353,9 @@ def complete_task(task_id):
     Requirement 3.2: WHEN a user marks a Task as completed, THE Platform
     SHALL record the completion timestamp.
     """
-    task = _service.get(task_id)
+    task = _service.get_without_side_effects(task_id)
+    if task is None:
+        return _task_not_found(task_id)
     denied = _deny_if_cannot_access_task(task)
     if denied is not None:
         return denied

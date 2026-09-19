@@ -107,6 +107,11 @@ def test_public_health_still_anonymous(anon_client):
     assert body.get('error') != 'Authentication required'
 
 
+def test_public_health_head_still_anonymous(anon_client):
+    resp = anon_client.head('/api/health')
+    assert resp.status_code in (200, 503)
+
+
 def test_public_login_still_anonymous(anon_client):
     resp = anon_client.post(
         '/api/auth/login',

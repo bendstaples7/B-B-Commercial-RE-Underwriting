@@ -250,7 +250,7 @@ def list_organizations():
 
     scope = owned_lead_ids_for_current_user()
     if scope is not None:
-        filters['linked_property_ids'] = scope
+        filters['linked_lead_ids'] = scope
 
     records, total = _org_service.list(page=page, per_page=per_page, filters=filters)
 

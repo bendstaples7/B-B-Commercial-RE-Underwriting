@@ -410,9 +410,10 @@ def check_api_auth_fail_closed() -> list[str]:
     errors: list[str] = []
     init_py = ROOT / "backend" / "app" / "__init__.py"
     api_utils = ROOT / "backend" / "app" / "api_utils.py"
-    if "def enforce_api_auth" not in init_py.read_text(encoding="utf-8"):
+    init_text = init_py.read_text(encoding="utf-8") if init_py.exists() else ""
+    if "def enforce_api_auth" not in init_text:
         errors.append("Missing enforce_api_auth in backend/app/__init__.py")
-    utils_text = api_utils.read_text(encoding="utf-8")
+    utils_text = api_utils.read_text(encoding="utf-8") if api_utils.exists() else ""
     if "PUBLIC_API_ROUTES" not in utils_text:
         errors.append("Missing PUBLIC_API_ROUTES allowlist in backend/app/api_utils.py")
     if re.search(

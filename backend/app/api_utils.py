@@ -70,6 +70,8 @@ def is_public_api_request(method: str | None = None, path: str | None = None) ->
     verb = (method or request.method or '').upper()
     if verb == 'OPTIONS':
         return True
+    if verb == 'HEAD':
+        verb = 'GET'
     raw_path = path if path is not None else (request.path or '')
     if not raw_path.startswith('/api'):
         return True
@@ -459,24 +461,57 @@ def owned_lead_ids_for_current_user() -> set[int] | None:
     }
 
 
-def user_can_access_all_leads(lead_ids) -> bool:
-    """True when every id is a lead the caller may access.
-
-    An empty set is denied for non-admins (fail closed).
-    """
-    ids = {int(lid) for lid in (lead_ids or []) if lid is not None}
+def accessible_association_target_ids_for_current_user() -> dict[str, set[int]] | None:
+    """Association target ids visible to the current caller, or None for admin."""
     if current_user_is_admin():
-        return True
-    if not ids:
-        return False
-    from app import db
-    from app.models.lead import Lead
+        return None
+    lead_ids = owned_lead_ids_for_current_user() or set()
+    current_user_id = getattr(g, 'user_id', None)
+    if not current_user_id or current_user_id == 'anonymous':
+        return {'lead': set(), 'organization': set(), 'contact': set()}
+    from app.models.contact import Contact
+    from app.models.owner_organization_link import OwnerOrganizationLink
+    from app.models.property_contact import PropertyContact
+    from app.models.property_organization_link import PropertyOrganizationLink
 
-    for lid in ids:
-        lead = db.session.get(Lead, lid)
-        if not user_can_access_lead(lead):
-            return False
-    return True
+    organization_ids = set()
+    contact_ids = set()
+    if lead_ids:
+        organization_ids.update(
+            row[0]
+            for row in PropertyOrganizationLink.query.with_entities(
+                PropertyOrganizationLink.organization_id,
+            )
+            .filter(PropertyOrganizationLink.property_id.in_(lead_ids))
+            .all()
+        )
+        organization_ids.update(
+            row[0]
+            for row in OwnerOrganizationLink.query.with_entities(
+                OwnerOrganizationLink.organization_id,
+            )
+            .filter(OwnerOrganizationLink.owner_id.in_(lead_ids))
+            .all()
+        )
+        contact_ids.update(
+            row[0]
+            for row in PropertyContact.query.with_entities(PropertyContact.contact_id)
+            .filter(PropertyContact.property_id.in_(lead_ids))
+            .all()
+        )
+
+    contact_ids.update(
+        row[0]
+        for row in Contact.query.with_entities(Contact.id)
+        .filter(Contact.created_by_user_id == current_user_id)
+        .filter(~Contact.property_contacts.any())
+        .all()
+    )
+    return {
+        'lead': set(lead_ids),
+        'organization': organization_ids,
+        'contact': contact_ids,
+    }
 
 
 def _association_pairs(associations):
@@ -493,7 +528,7 @@ def _association_pairs(associations):
             target_type = getattr(assoc, 'target_type', None)
             target_id = getattr(assoc, 'target_id', None)
         if not target_type or target_id is None:
-            continue
+            return None
         try:
             pairs.append((str(target_type), int(target_id)))
         except (TypeError, ValueError):

@@ -1846,7 +1846,8 @@ def run_rescore_leads_after_import(
 
 _BACKUP_USER_RE = re.compile(r'[^A-Za-z0-9._-]+')
 _BACKUP_NAME_RE = re.compile(
-    r'^hubspot_backup_(?P<user>[A-Za-z0-9._-]+)_(?P<date>\d{8})_(?P<time>\d{6})\.json$'
+    r'^hubspot_backup_(?P<user>[A-Za-z0-9._-]+)_(?P<date>\d{8})_'
+    r'(?P<time>\d{6})(?:_[A-Za-z0-9]+)?\.json$'
 )
 
 
@@ -1999,7 +2000,7 @@ def run_generate_backup_export(user_id: str = 'system') -> str:
                 json.dump(payload, fh, indent=2, default=str)
         except OSError:
             fd, output_path = tempfile.mkstemp(
-                prefix=f'hubspot_backup_{safe_backup_user_id(user_id)}_',
+                prefix=f'hubspot_backup_{safe_backup_user_id(user_id)}_{timestamp_str}_',
                 suffix='.json',
                 dir=backup_dir(),
             )

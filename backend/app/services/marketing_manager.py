@@ -272,6 +272,7 @@ class MarketingManager:
         page: int = 1,
         per_page: int = 25,
         lead_access_checker=None,
+        lead_owner_user_id: str | None = None,
     ) -> PaginatedResult:
         """Get paginated members of a marketing list.
 
@@ -307,20 +308,15 @@ class MarketingManager:
             .filter(MarketingListMember.marketing_list_id == list_id)
             .order_by(MarketingListMember.added_at.desc())
         )
+        if lead_owner_user_id is not None:
+            query = (
+                query.join(Lead, Lead.id == MarketingListMember.lead_id)
+                .filter(Lead.owner_user_id == lead_owner_user_id)
+            )
 
-        if lead_access_checker is not None:
-            accessible = [
-                member for member in query.all()
-                if lead_access_checker(member.lead)
-            ]
-            total = len(accessible)
-            pages = max(1, (total + per_page - 1) // per_page)
-            start = (page - 1) * per_page
-            items = accessible[start:start + per_page]
-        else:
-            total = query.count()
-            pages = max(1, (total + per_page - 1) // per_page)
-            items = query.offset((page - 1) * per_page).limit(per_page).all()
+        total = query.count()
+        pages = max(1, (total + per_page - 1) // per_page)
+        items = query.offset((page - 1) * per_page).limit(per_page).all()
 
         return PaginatedResult(
             items=items,

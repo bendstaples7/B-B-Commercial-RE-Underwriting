@@ -4,7 +4,7 @@ Implements Requirements 3.1, 3.2, 3.3, 3.5, 3.6.
 """
 from datetime import datetime
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 
 from app import db
 from app.models.task import Task
@@ -55,7 +55,9 @@ class TaskService:
             due_date=data.get('due_date'),
             status=data.get('status', 'open'),
             priority=data.get('priority', 'medium'),
-            source='manual',
+            source=data.get('source', 'manual'),
+            hubspot_task_id=data.get('hubspot_task_id'),
+            raw_payload=data.get('raw_payload'),
         )
         db.session.add(task)
         db.session.flush()  # populate task.id before creating associations
@@ -175,6 +177,10 @@ class TaskService:
         self.mark_overdue_if_needed(task)
         return task
 
+    def get_without_side_effects(self, task_id: int) -> Task | None:
+        """Retrieve a Task by ID without marking it overdue or raising."""
+        return db.session.get(Task, task_id)
+
     # ------------------------------------------------------------------
     # List
     # ------------------------------------------------------------------
@@ -186,6 +192,7 @@ class TaskService:
         per_page: int = 20,
         lead_id_scope=None,
         association_access_checker=None,
+        association_access_scope=None,
     ):
         """Return a paginated, filtered list of Tasks.
 
@@ -204,6 +211,9 @@ class TaskService:
         ``association_access_checker``:
             optional callable that must return True for every task retained.
             Used by scoped callers so list semantics match single-task access.
+        ``association_access_scope``:
+            optional mapping of accessible target ids by association type.
+            Applied in SQL before pagination for scoped callers.
         """
         filters = filters or {}
         if lead_id_scope is not None and not lead_id_scope:
@@ -241,6 +251,37 @@ class TaskService:
                     Task.lead_id.in_(lead_id_scope),
                     Task.id.in_(assoc_ids),
                 )
+            )
+
+        if association_access_scope is not None:
+            lead_ids = association_access_scope.get('lead', set())
+            organization_ids = association_access_scope.get('organization', set())
+            contact_ids = association_access_scope.get('contact', set())
+            inaccessible_assoc = db.session.query(TaskAssociation.id).filter(
+                TaskAssociation.task_id == Task.id,
+                or_(
+                    and_(
+                        TaskAssociation.target_type == 'lead',
+                        ~TaskAssociation.target_id.in_(lead_ids),
+                    ),
+                    and_(
+                        TaskAssociation.target_type == 'organization',
+                        ~TaskAssociation.target_id.in_(organization_ids),
+                    ),
+                    and_(
+                        TaskAssociation.target_type == 'contact',
+                        ~TaskAssociation.target_id.in_(contact_ids),
+                    ),
+                    ~TaskAssociation.target_type.in_(('lead', 'organization', 'contact')),
+                ),
+            ).correlate(Task).exists()
+            any_assoc = db.session.query(TaskAssociation.id).filter(
+                TaskAssociation.task_id == Task.id,
+            ).correlate(Task).exists()
+            query = query.filter(
+                or_(Task.lead_id.is_(None), Task.lead_id.in_(lead_ids)),
+                ~inaccessible_assoc,
+                or_(Task.lead_id.in_(lead_ids), any_assoc),
             )
 
         query = query.order_by(Task.created_at.desc())

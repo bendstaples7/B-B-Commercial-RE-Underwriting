@@ -14,6 +14,8 @@ from typing import Optional
 from app import db
 from app.models.organization import Organization
 from app.models.organization_audit_log import OrganizationAuditLog
+from sqlalchemy import or_
+
 from app.models.property_organization_link import PropertyOrganizationLink
 from app.models.owner_organization_link import OwnerOrganizationLink
 from app.exceptions import OrganizationValidationError, ResourceNotFoundError
@@ -423,14 +425,21 @@ class OrganizationService:
         if filters.get('status'):
             query = query.filter(Organization.status == filters['status'])
 
-        linked_property_ids = filters.get('linked_property_ids')
-        if linked_property_ids is not None:
-            if not linked_property_ids:
+        linked_lead_ids = filters.get('linked_lead_ids')
+        if linked_lead_ids is not None:
+            if not linked_lead_ids:
                 return [], 0
-            query = (
-                query.join(PropertyOrganizationLink)
-                .filter(PropertyOrganizationLink.property_id.in_(linked_property_ids))
-                .distinct()
+            property_orgs = db.session.query(
+                PropertyOrganizationLink.organization_id,
+            ).filter(PropertyOrganizationLink.property_id.in_(linked_lead_ids))
+            owner_orgs = db.session.query(
+                OwnerOrganizationLink.organization_id,
+            ).filter(OwnerOrganizationLink.owner_id.in_(linked_lead_ids))
+            query = query.filter(
+                or_(
+                    Organization.id.in_(property_orgs),
+                    Organization.id.in_(owner_orgs),
+                )
             )
 
         query = query.order_by(Organization.created_at.desc())
