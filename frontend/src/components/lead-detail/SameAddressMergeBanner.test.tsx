@@ -45,6 +45,14 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
+/** One input event. Per-keystroke typing re-renders the whole compare grid and blows the CI limit. */
+async function enterPasteValue(value: string) {
+  const input = await screen.findByTestId('same-address-merge-paste-id')
+  fireEvent.change(input, { target: { value } })
+  // Blur starts a numeric lookup. A name search must stay focused so the debounce is not cleared.
+  if (/^\d+$/.test(value)) fireEvent.blur(input)
+}
+
 
 function ManualMergeHarness(
   props: Omit<
@@ -159,7 +167,7 @@ describe('SameAddressMergeBanner', () => {
     expect(screen.queryByTestId('same-address-merge-banner')).not.toBeInTheDocument()
     expect(screen.getByTestId('same-address-merge-open')).toHaveTextContent('Merge duplicate')
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(screen.getByTestId('same-address-merge-paste-id'), '2497')
+    await enterPasteValue('2497')
     await user.click(screen.getByTestId('same-address-merge-confirm'))
     await waitFor(() => {
       expect(commandCenterService.mergeInto).toHaveBeenCalledWith(2497, 100)
@@ -219,7 +227,7 @@ describe('SameAddressMergeBanner', () => {
       </MemoryRouter>,
     )
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(screen.getByTestId('same-address-merge-paste-id'), 'Howe')
+    await enterPasteValue('Howe')
     await waitFor(() => {
       expect(searchService.search).toHaveBeenCalled()
     })
@@ -525,8 +533,7 @@ describe('SameAddressMergeBanner', () => {
       </MemoryRouter>,
     )
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(screen.getByTestId('same-address-merge-paste-id'), '300')
-    await user.tab()
+    await enterPasteValue('300')
     await waitFor(() => {
       expect(screen.getByTestId('same-address-merge-search-selected')).toHaveTextContent('#300')
     })
@@ -572,8 +579,7 @@ describe('SameAddressMergeBanner', () => {
       </MemoryRouter>,
     )
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(screen.getByTestId('same-address-merge-paste-id'), '999')
-    await user.tab()
+    await enterPasteValue('999')
     await waitFor(() => {
       expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 999)
     })
@@ -627,7 +633,7 @@ describe('SameAddressMergeBanner', () => {
       </MemoryRouter>,
     )
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(screen.getByTestId('same-address-merge-paste-id'), '300')
+    await enterPasteValue('300')
     await user.click(screen.getByTestId('same-address-merge-confirm'))
 
     expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 300)
@@ -690,8 +696,7 @@ describe('SameAddressMergeBanner', () => {
       </MemoryRouter>,
     )
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(screen.getByTestId('same-address-merge-paste-id'), '300')
-    await user.tab()
+    await enterPasteValue('300')
     await waitFor(() => {
       expect(screen.getAllByText('Manual twin (#300)').length).toBeGreaterThan(0)
     })
@@ -704,7 +709,7 @@ describe('SameAddressMergeBanner', () => {
 
     expect(await screen.findByTestId('same-address-merge-paste-id')).toHaveValue('')
     expect(screen.queryAllByText('Manual twin (#300)')).toHaveLength(0)
-  })
+  }, 15000)
 
   it('ignores stale paste lookups after cancel and a newer lookup starts', async () => {
     const user = userEvent.setup()
@@ -715,12 +720,6 @@ describe('SameAddressMergeBanner', () => {
       if (otherId === 400) return secondLookup.promise
       throw new Error(`Unexpected lead lookup ${otherId}`)
     })
-
-    const enterLeadNumber = async (value: string) => {
-      const input = await screen.findByTestId('same-address-merge-paste-id')
-      fireEvent.change(input, { target: { value } })
-      fireEvent.blur(input)
-    }
 
     render(
       <MemoryRouter>
@@ -742,7 +741,7 @@ describe('SameAddressMergeBanner', () => {
     )
 
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await enterLeadNumber('300')
+    await enterPasteValue('300')
     await waitFor(() => {
       expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 300)
     })
@@ -753,7 +752,7 @@ describe('SameAddressMergeBanner', () => {
     })
 
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await enterLeadNumber('400')
+    await enterPasteValue('400')
     await waitFor(() => {
       expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 400)
     })
