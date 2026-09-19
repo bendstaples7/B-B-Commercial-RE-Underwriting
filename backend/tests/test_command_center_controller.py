@@ -1400,6 +1400,8 @@ class TestMergePreviewAndUnitGuard:
                 property_type='multi_family',
                 units=4,
                 lead_status='skip_trace',
+                phone_1='3125550100',
+                email_1='ada@example.com',
             )
             twin = _make_lead(
                 app,
@@ -1455,6 +1457,8 @@ class TestMergePreviewAndUnitGuard:
             assert current_row['activity']['calls'] == 1
             assert current_row['activity']['total'] == 1
             assert current_row['activity']['last_summary'] == 'Left voicemail'
+            assert '3125550100' in current_row['phones']
+            assert 'ada@example.com' in current_row['emails']
             related_ids = {row['id'] for row in current_row['related_properties']}
             assert portfolio.id in related_ids
 

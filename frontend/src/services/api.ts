@@ -1280,6 +1280,8 @@ export type MergeFieldChoices = {
   deal_source?: string | null
   data_source?: string | null
   people_names?: string[]
+  phones?: string[]
+  emails?: string[]
   keep_incoming_people?: boolean
   keep_primary_people?: boolean
   keep_incoming_activities?: boolean

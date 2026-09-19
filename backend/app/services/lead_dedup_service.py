@@ -470,6 +470,32 @@ def _choice_flag(choices: dict[str, Any] | None, key: str, default: bool = True)
     return bool(choices.get(key))
 
 
+def _write_contact_slots(winner: Lead, values: list[Any], prefix: str, count: int) -> bool:
+    """Replace flat phone_1.. or email_1.. with the dialog's chosen list."""
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    limit = 255 if prefix == 'email' else 80
+    for raw in values:
+        text = str(raw or '').strip()
+        if not text:
+            continue
+        if prefix == 'phone':
+            key = PhoneConfidenceService.normalize_phone(text) or text.lower()
+        else:
+            key = text.lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(text[:limit])
+        if len(cleaned) >= count:
+            break
+    for index in range(1, count + 1):
+        setattr(winner, f'{prefix}_{index}', cleaned[index - 1] if index <= len(cleaned) else None)
+    return bool(cleaned)
+
+
 def apply_merge_field_choices(winner: Lead, choices: dict[str, Any] | None) -> None:
     """Write the dialog's After combine edits onto the surviving lead.
 
@@ -507,6 +533,10 @@ def apply_merge_field_choices(winner: Lead, choices: dict[str, Any] | None) -> N
                 second_first, second_last = _split_person_name(cleaned[1])
                 winner.owner_2_first_name = second_first or None
                 winner.owner_2_last_name = second_last or None
+    if isinstance(choices.get('phones'), list):
+        winner.has_phone = _write_contact_slots(winner, choices['phones'], 'phone', 7)
+    if isinstance(choices.get('emails'), list):
+        winner.has_email = _write_contact_slots(winner, choices['emails'], 'email', 5)
     if getattr(winner, 'property_street', None):
         refresh_lead_dedup_fields(winner)
 
@@ -1132,6 +1162,37 @@ def _related_properties_for_merge(leads: list[Lead]) -> dict[int, list[dict[str,
     return out
 
 
+def _contact_methods_for_merge(leads: list[Lead]) -> dict[int, dict[str, list[str]]]:
+    """Actual phone numbers and emails on each lead, not just yes/no flags."""
+    from app.services.outreach_method_service import _collect_emails_for_lead
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
+    out: dict[int, dict[str, list[str]]] = {}
+    for lead in leads:
+        phones: list[str] = []
+        try:
+            seen: set[str] = set()
+            for item in PhoneConfidenceService.build_phones_payload(lead.id, lead):
+                value = str(item.get('value') or '').strip()
+                if not value:
+                    continue
+                key = PhoneConfidenceService.normalize_phone(value) or value.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                phones.append(value)
+        except Exception:  # noqa: BLE001 — decision context is best-effort
+            logger.exception('phones for merge context failed lead=%s', lead.id)
+            phones = []
+        try:
+            emails = _collect_emails_for_lead(lead.id, lead)
+        except Exception:  # noqa: BLE001
+            logger.exception('emails for merge context failed lead=%s', lead.id)
+            emails = []
+        out[lead.id] = {'phones': phones, 'emails': emails}
+    return out
+
+
 def _merge_decision_row(
     lead: Lead,
     *,
@@ -1141,6 +1202,8 @@ def _merge_decision_row(
     organizations: list[str],
     hubspot_confirmed: bool,
     related_properties: list[dict[str, Any]],
+    phones: list[str],
+    emails: list[str],
 ) -> dict[str, Any]:
     score = getattr(lead, 'lead_score', None)
     return {
@@ -1164,8 +1227,10 @@ def _merge_decision_row(
         'last_contact_date': _iso_or_none(lead.last_contact_date),
         'date_added_to_hubspot': _iso_or_none(lead.date_added_to_hubspot),
         'hubspot_confirmed': hubspot_confirmed,
-        'has_phone': bool(lead.has_phone),
-        'has_email': bool(lead.has_email),
+        'has_phone': bool(phones) or bool(lead.has_phone),
+        'has_email': bool(emails) or bool(lead.has_email),
+        'phones': phones,
+        'emails': emails,
         'open_task_count': int(open_task_count or 0),
         'organizations': organizations,
         'activity': activity,
@@ -1184,6 +1249,7 @@ def merge_decision_summaries(leads: list[Lead]) -> list[dict[str, Any]]:
     organizations = _organization_names_for_lead_ids(ids)
     confirmed = _confirmed_hubspot_ids_among(ids)
     related = _related_properties_for_merge(leads)
+    methods = _contact_methods_for_merge(leads)
     return [
         _merge_decision_row(
             lead,
@@ -1193,6 +1259,8 @@ def merge_decision_summaries(leads: list[Lead]) -> list[dict[str, Any]]:
             organizations=organizations.get(lead.id) or [],
             hubspot_confirmed=lead.id in confirmed,
             related_properties=related.get(lead.id) or [],
+            phones=(methods.get(lead.id) or {}).get('phones') or [],
+            emails=(methods.get(lead.id) or {}).get('emails') or [],
         )
         for lead in leads
     ]

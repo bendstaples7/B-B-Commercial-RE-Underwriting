@@ -1692,6 +1692,8 @@ export interface SameAddressLeadSummary {
   hubspot_confirmed?: boolean
   has_phone?: boolean
   has_email?: boolean
+  phones?: string[]
+  emails?: string[]
   open_task_count?: number
   organizations?: string[]
   activity?: MergeActivitySummary | null

@@ -39,6 +39,7 @@ import type {
   SearchResultItem,
 } from '@/types'
 import { formatDate, formatPropertyTypeLabel, humanize } from '@/utils/formatters'
+import { formatPhoneNumber, normalizePhoneDigits } from '@/utils/phone'
 
 const SEARCH_DEBOUNCE_MS = 300
 
@@ -274,8 +275,10 @@ function afterCombinePreview(
       incoming.date_added_to_hubspot,
     ),
     hubspot_confirmed: Boolean(primary.hubspot_confirmed || incoming.hubspot_confirmed),
-    has_phone: Boolean(primary.has_phone || incoming.has_phone),
-    has_email: Boolean(primary.has_email || incoming.has_email),
+    has_phone: Boolean(primary.has_phone || incoming.has_phone || (primary.phones ?? []).length || (incoming.phones ?? []).length),
+    has_email: Boolean(primary.has_email || incoming.has_email || (primary.emails ?? []).length || (incoming.emails ?? []).length),
+    phones: unionPhones(primary.phones, incoming.phones),
+    emails: unionEmails(primary.emails, incoming.emails),
     open_task_count: ready
       ? (primary.open_task_count ?? 0) + (incoming.open_task_count ?? 0)
       : primary.open_task_count,
@@ -342,6 +345,7 @@ function fieldValue(row: SameAddressLeadSummary, key: string, ready: boolean): s
     if (row.lead_score == null || Number.isNaN(Number(row.lead_score))) return 'None'
     return String(Math.round(Number(row.lead_score)))
   }
+  if (key === 'contact') return contactLine(row)
   if (!ready) return ''
   if (key === 'source') return sourceLine(row)
   if (key === 'dates') return datesLine(row) || 'None'
@@ -351,12 +355,6 @@ function fieldValue(row: SameAddressLeadSummary, key: string, ready: boolean): s
   }
   if (key === 'related') return relatedValue(row)
   if (key === 'activities') return activityValue(row)
-  if (key === 'contact') {
-    const bits: string[] = []
-    if (row.has_phone) bits.push('phone')
-    if (row.has_email) bits.push('email')
-    return bits.length ? bits.join(' · ') : 'None'
-  }
   return ''
 }
 
@@ -531,6 +529,16 @@ function buildMergeChoices(
   const peoplePick = picks.people || { incoming: false, primary: false }
   const activityPick = picks.activities || { incoming: false, primary: false }
   const companyPick = picks.companies || { incoming: false, primary: false }
+  const contactPick = picks.contact || { incoming: false, primary: false }
+  const contactDraft = drafts.contact || ''
+  const contactComposed = composeField('contact', primary, incoming, contactPick, ready)
+  const methodsKnown = primary.phones != null || incoming.phones != null
+    || primary.emails != null || incoming.emails != null
+  const contactMethods = methodsKnown || contactDraft !== contactComposed
+    ? (contactDraft !== contactComposed
+      ? parseContactDraft(contactDraft)
+      : checkedContactMethods(contactPick, primary, incoming))
+    : null
   return {
     property_street: address.street,
     property_city: address.city,
@@ -550,6 +558,9 @@ function buildMergeChoices(
     keep_primary_activities: activityPick.primary,
     keep_incoming_companies: companyPick.incoming,
     keep_primary_companies: companyPick.primary,
+    ...(contactMethods
+      ? { phones: contactMethods.phones, emails: contactMethods.emails }
+      : {}),
   }
 }
 
@@ -565,6 +576,80 @@ function withDecision(
     people_names: detail.people_names?.length ? detail.people_names : row.people_names,
     property_street: detail.property_street || row.property_street,
   }
+}
+
+function unionEmails(
+  left: string[] | null | undefined,
+  right: string[] | null | undefined,
+): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of [...(left ?? []), ...(right ?? [])]) {
+    const text = (raw || '').trim()
+    if (!text) continue
+    const key = text.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(text)
+  }
+  return out
+}
+
+function unionPhones(
+  left: string[] | null | undefined,
+  right: string[] | null | undefined,
+): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of [...(left ?? []), ...(right ?? [])]) {
+    const text = (raw || '').trim()
+    if (!text) continue
+    const key = normalizePhoneDigits(text) || text.toLowerCase()
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    out.push(text)
+  }
+  return out
+}
+
+function contactLine(row: SameAddressLeadSummary): string {
+  const phones = (row.phones ?? [])
+    .map((phone) => formatPhoneNumber((phone || '').trim()))
+    .filter(Boolean)
+  const emails = (row.emails ?? []).map((email) => (email || '').trim()).filter(Boolean)
+  const bits = [...phones, ...emails]
+  if (!bits.length) {
+    if (row.has_phone) bits.push('phone')
+    if (row.has_email) bits.push('email')
+  }
+  return bits.length ? bits.join(' · ') : 'None'
+}
+
+function checkedContactMethods(
+  pick: FieldPick,
+  primary: SameAddressLeadSummary,
+  incoming: SameAddressLeadSummary,
+): { phones: string[]; emails: string[] } {
+  return {
+    phones: unionPhones(pick.primary ? primary.phones : [], pick.incoming ? incoming.phones : []),
+    emails: unionEmails(pick.primary ? primary.emails : [], pick.incoming ? incoming.emails : []),
+  }
+}
+
+function parseContactDraft(text: string): { phones: string[]; emails: string[] } {
+  const phones: string[] = []
+  const emails: string[] = []
+  const parts = text.split(/[·;\n]/).map((part) => part.trim()).filter((part) => hasFieldValue(part))
+  for (const part of parts) {
+    const lower = part.toLowerCase()
+    if (lower === 'phone' || lower === 'email') continue
+    if (part.includes('@')) {
+      emails.push(part)
+      continue
+    }
+    if (normalizePhoneDigits(part).length >= 7) phones.push(part)
+  }
+  return { phones: unionPhones(phones, []), emails: unionEmails(emails, []) }
 }
 
 function searchHitLabel(item: SearchResultItem): string {

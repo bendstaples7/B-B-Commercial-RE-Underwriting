@@ -813,6 +813,10 @@ describe('SameAddressMergeBanner', () => {
           data_source: 'hubspot',
           hubspot_confirmed: true,
           organizations: ['Yoko Holdings LLC'],
+          phones: ['3125550100'],
+          emails: ['yoko@holdings.example'],
+          has_phone: true,
+          has_email: true,
           related_properties: [
             {
               id: 501,
@@ -849,6 +853,10 @@ describe('SameAddressMergeBanner', () => {
             last_summary: null,
           },
           open_task_count: 0,
+          phones: ['7735550199'],
+          emails: ['edwin@example.com'],
+          has_phone: true,
+          has_email: true,
         },
       ],
     })
@@ -880,6 +888,10 @@ describe('SameAddressMergeBanner', () => {
     expect(screen.getByTestId('same-address-merge-row-activities')).toHaveTextContent('3 total')
     expect(screen.getByTestId('same-address-merge-row-activities')).toHaveTextContent('2 calls')
     expect(screen.getByTestId('same-address-merge-row-activities')).toHaveTextContent('Left voicemail')
+    expect(screen.getByTestId('same-address-merge-row-contact')).toHaveTextContent('(312) 555-0100')
+    expect(screen.getByTestId('same-address-merge-row-contact')).toHaveTextContent('yoko@holdings.example')
+    expect(screen.getByTestId('same-address-merge-row-contact')).toHaveTextContent('(773) 555-0199')
+    expect(screen.getByTestId('same-address-merge-row-contact')).toHaveTextContent('edwin@example.com')
     const other = screen.getByTestId('same-address-merge-facts-200')
     expect(other).toHaveTextContent('Merges in')
     const after = await screen.findByTestId('same-address-merge-after')
@@ -908,6 +920,15 @@ describe('SameAddressMergeBanner', () => {
     )
     expect((screen.getByTestId('same-address-merge-after-activities') as HTMLInputElement).value).toContain(
       '1 open task',
+    )
+    expect((screen.getByTestId('same-address-merge-after-contact') as HTMLInputElement).value).toContain(
+      '(312) 555-0100',
+    )
+    expect((screen.getByTestId('same-address-merge-after-contact') as HTMLInputElement).value).toContain(
+      '(773) 555-0199',
+    )
+    expect((screen.getByTestId('same-address-merge-after-contact') as HTMLInputElement).value).toContain(
+      'edwin@example.com',
     )
     expect(screen.getByTestId('same-address-merge-pick-100-source')).toBeChecked()
     expect(screen.getByTestId('same-address-merge-pick-200-source')).not.toBeChecked()
