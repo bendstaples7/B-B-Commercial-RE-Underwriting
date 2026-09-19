@@ -7,7 +7,11 @@ from marshmallow import ValidationError
 from sqlalchemy.exc import IntegrityError
 from werkzeug.exceptions import HTTPException
 
-from app.db_errors import integrity_constraint_name, integrity_error_message
+from app.db_errors import (
+    integrity_constraint_name,
+    integrity_error_message,
+    is_unique_integrity_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +29,13 @@ def handle_errors(f):
         except IntegrityError as e:
             name = integrity_constraint_name(e) or 'unknown'
             logger.error(
-                "Unique constraint %s blocked a request: %s",
+                "Database integrity rule %s blocked a request: %s",
                 name,
                 e,
                 exc_info=True,
             )
             return jsonify({
-                'error': 'Conflict',
+                'error': 'Conflict' if is_unique_integrity_error(e) else 'Integrity error',
                 'message': integrity_error_message(e, action='This save'),
                 'constraint': integrity_constraint_name(e),
             }), 409

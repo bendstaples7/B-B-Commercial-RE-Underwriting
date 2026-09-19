@@ -25,6 +25,19 @@ REQUIRED_TEST_SNIPPETS = (
     'status_code == 200',
 )
 
+REQUIRED_TEST_CASES = {
+    'PIN and selected-person combine regression': (
+        'def test_combine_keeps_pin_and_selected_person',
+        'assert saved.county_assessor_pin == pin',
+        "assert saved.owner_first_name == 'Grace'",
+        "assert saved.owner_last_name == 'Hopper'",
+    ),
+    'same-owner street alignment regression': (
+        'def test_combine_aligns_street_for_the_same_owner',
+        "assert saved.property_street == '2834 N Drake Rear'",
+    ),
+}
+
 
 def _job_block(workflow: str, job_id: str) -> str:
     lines = workflow.splitlines(keepends=True)
@@ -62,14 +75,31 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    missing_cases = [
+        name
+        for name, snippets in REQUIRED_TEST_CASES.items()
+        if any(snippet not in test_src for snippet in snippets)
+    ]
+    if missing_cases:
+        print(
+            'Postgres merge gate test is missing required regression cases: '
+            + ', '.join(missing_cases),
+            file=sys.stderr,
+        )
+        return 1
 
+    trigger = workflow.split('jobs:', 1)[0]
     block = _job_block(workflow, 'postgres-merge-gate')
     problems: list[str] = []
+    if 'paths:' in trigger or 'paths-ignore:' in trigger:
+        problems.append('App CI workflow must not be path-filtered')
     if 'needs:' in block.split('steps:', 1)[0]:
         problems.append('postgres-merge-gate must not wait on path filters')
     header = block.split('steps:', 1)[0]
     if '\n    if:' in header or header.startswith('if:'):
         problems.append('postgres-merge-gate must not be skippable with if:')
+    if 'continue-on-error:' in block:
+        problems.append('postgres-merge-gate must not use continue-on-error')
     for needle in (
         'flask db upgrade',
         'tests/test_merge_postgres_gate.py',

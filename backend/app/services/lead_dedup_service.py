@@ -1601,7 +1601,8 @@ def merge_loser_into_winner(
             from app.services.lead_refresh import refresh_lead_scoring
             refresh_lead_scoring(winner_id)
     except IntegrityError as exc:
-        db.session.rollback()
+        if commit:
+            db.session.rollback()
         from app.db_errors import integrity_constraint_name, integrity_error_message
 
         constraint = integrity_constraint_name(exc)

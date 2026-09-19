@@ -613,6 +613,41 @@ class TestSiblingAbsorbAndSoftMerge:
             assert result['merged'] is True
             assert db.session.get(Lead, loser.id) is None
 
+    def test_merge_integrity_error_preserves_outer_transaction_when_commit_false(self, app):
+        from app.services.lead_dedup_service import merge_loser_into_winner
+
+        with app.app_context():
+            winner = Lead(property_street='100 Outer Tx St', owner_first_name='Ada')
+            loser = Lead(property_street='100 Outer Tx Street', owner_first_name='Ada')
+            db.session.add_all([winner, loser])
+            db.session.commit()
+
+            sentinel = Lead(property_street='200 Outer Tx St', owner_first_name='Pending')
+            db.session.add(sentinel)
+            try:
+                with patch(
+                    'app.services.lead_dedup_service.merge_lead_into_winner',
+                    side_effect=IntegrityError(
+                        'UPDATE',
+                        {},
+                        Exception(
+                            'duplicate key value violates unique constraint '
+                            '"uq_leads_owner_normalized_street"'
+                        ),
+                    ),
+                ), pytest.raises(ValueError, match='uq_leads_owner_normalized_street'):
+                    merge_loser_into_winner(
+                        winner.id,
+                        loser.id,
+                        changed_by='test',
+                        commit=False,
+                    )
+
+                assert sentinel.id is not None
+                assert db.session.get(Lead, sentinel.id) is sentinel
+            finally:
+                db.session.rollback()
+
     def test_merge_prefers_unit_street_onto_bare_winner(self, app):
         from app.services.lead_dedup_service import merge_lead_into_winner
 
