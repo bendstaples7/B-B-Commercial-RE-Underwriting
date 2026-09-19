@@ -1997,6 +1997,7 @@ export type TimelineEventType =
   | 'note_added'
   | 'email_logged'
   | 'call_logged'
+  | 'meeting_logged'
   | 'mail_sent'
   | 'mail_queued'
   | 'mail_delivered'
@@ -2008,6 +2009,7 @@ export type TimelineEventType =
   | 'status_changed'
   | 'hubspot_note'
   | 'hubspot_call'
+  | 'hubspot_meeting'
   | 'hubspot_task'
   | 'hubspot_deal_stage'
   | 'property_analysis_completed'
@@ -2537,6 +2539,7 @@ export interface LogNotePayload {
   email_label?: string | null;
   subject?: string | null;
   sent_from_email?: string | null;
+  activity_kind?: 'note' | 'email' | 'meeting' | null;
   complete_task_id?: number | null;
   follow_up?: LogCallFollowUpPayload | null;
 }

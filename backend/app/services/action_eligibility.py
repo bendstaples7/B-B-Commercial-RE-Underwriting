@@ -140,10 +140,10 @@ def evaluate_outreach_log(
     lead: _LeadStatusLike,
     action: str,
 ) -> ActionEligibilityResult:
-    """Log Call / Log Email blocked on DNC; Log Note always ok."""
+    """Log Call / Log Email / Log Meeting blocked on DNC; Log Note always ok."""
     if action == 'log_note':
         return _ok()
-    if action in {'log_call', 'log_email'} and lead.lead_status == 'do_not_contact':
+    if action in {'log_call', 'log_email', 'log_meeting'} and lead.lead_status == 'do_not_contact':
         return _blocked(
             REASON_DNC_BLOCKS_OUTREACH,
             'Outreach is blocked — lead is Do Not Contact',

@@ -123,6 +123,7 @@ class TestActivityDashboardService:
             _add_entry(lead.id, 'mail_sent', 'dash-user-1', in_week + timedelta(hours=2))
             _add_entry(lead.id, 'email_logged', 'dash-user-1', in_week + timedelta(hours=3))
             _add_entry(lead.id, 'note_added', 'dash-user-1', in_week + timedelta(hours=4))
+            _add_entry(lead.id, 'meeting_logged', 'dash-user-1', in_week + timedelta(hours=4, minutes=30))
             _add_entry(lead.id, 'task_completed', 'dash-user-1', in_week + timedelta(hours=5))
             _add_entry(lead.id, 'call_logged', 'dash-user-2', in_week)
             _add_entry(
@@ -137,6 +138,7 @@ class TestActivityDashboardService:
 
             assert result['counts'] == {
                 'calls': 2,
+                'meetings': 1,
                 'mailers': 1,
                 'emails': 1,
                 'notes': 1,

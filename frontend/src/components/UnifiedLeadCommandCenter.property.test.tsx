@@ -178,7 +178,7 @@ vi.mock('@/components/LogActivityForm', () => ({
     onSaved,
     leadId,
   }: {
-    mode: 'call' | 'note' | 'email'
+    mode: 'call' | 'note' | 'email' | 'meeting'
     onSaved: (entry: any) => void
     leadId: number
   }) => {
@@ -203,6 +203,30 @@ vi.mock('@/components/LogActivityForm', () => ({
           }
         >
           Log Call
+        </button>
+      )
+    }
+    if (mode === 'meeting') {
+      return (
+        <button
+          data-testid="mock-log-meeting-btn"
+          onClick={() =>
+            onSaved({
+              id: 999997,
+              lead_id: leadId,
+              event_type: 'meeting_logged',
+              occurred_at: new Date().toISOString(),
+              source: 'manual',
+              actor: 'Test User',
+              summary: 'Property 14 test meeting',
+              metadata: null,
+              hubspot_activity_id: null,
+              is_deleted: false,
+              created_at: new Date().toISOString(),
+            })
+          }
+        >
+          Log Meeting
         </button>
       )
     }
@@ -272,7 +296,8 @@ const timelineEntryArb = fc.record({
     'task_completed',
     'status_changed',
     'hubspot_note',
-    'hubspot_call'
+    'hubspot_call',
+    'hubspot_meeting'
   ),
   occurred_at: fc.constant(new Date().toISOString()),
   source: fc.constantFrom('manual', 'system', 'hubspot', 'hubspot_import'),
@@ -290,6 +315,8 @@ const EXPECTED_TIMELINE_EVENT_PRIORITY: Record<string, number> = {
   email_logged: 3,
   hubspot_call: 3,
   hubspot_note: 3,
+  hubspot_meeting: 3,
+  meeting_logged: 3,
   task_completed: 2,
   task_created: 1,
 }
@@ -1440,16 +1467,11 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
 
           await waitForCommandCenterLoaded(container)
 
-          // Preview may hide rows until "Show older" is clicked.
-          const expectedVisible = Math.min(page1.length, TIMELINE_PREVIEW_COUNT)
+          // Center Activity shows the full loaded page (no 5-entry preview collapse).
           const initialRendered = container.querySelectorAll('[data-testid^="timeline-entry-"]')
-          expect(initialRendered.length).toBe(expectedVisible)
+          expect(initialRendered.length).toBe(page1.length)
 
           const { fireEvent } = await import('@testing-library/react')
-          const showOlder = container.querySelector('[data-testid="timeline-show-older-btn"]')
-          if (showOlder) {
-            fireEvent.click(showOlder)
-          }
 
           // Find and click the "Load more" button
           const loadMoreBtn = container.querySelector('[data-testid="load-more-btn"]')

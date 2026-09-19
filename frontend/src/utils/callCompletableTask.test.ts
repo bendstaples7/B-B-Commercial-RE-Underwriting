@@ -6,6 +6,7 @@ import {
   findEmailCompletableTask,
   isCallCompletableTask,
   isEmailCompletableTask,
+  isMeetingCompletableTask,
   parseHubSpotTaskId,
 } from './callCompletableTask'
 import type { LeadTask } from '@/types'
@@ -124,14 +125,38 @@ describe('findCompletableTaskForMode', () => {
     expect(findCompletableTaskForMode('call', tasks)?.id).toBe(2)
     expect(findCompletableTaskForMode('note', tasks)?.id).toBe(2)
     expect(findCompletableTaskForMode('email', tasks)?.id).toBe(1)
+    expect(findCompletableTaskForMode('meeting', tasks)?.id).toBe(2)
+  })
+
+  it('meeting mode matches a meeting-titled task', () => {
+    const tasks = [
+      makeTask({ id: 1, title: 'Email outreach', task_type: 'custom' }),
+      makeTask({ id: 3, title: 'In-person meeting downtown', task_type: 'custom' }),
+    ]
+    expect(findCompletableTaskForMode('meeting', tasks)?.id).toBe(3)
+  })
+
+  it('meeting mode does not complete mail/email tasks whose title mentions meeting', () => {
+    expect(isMeetingCompletableTask('add_to_mail_batch', 'Add to mail for meeting')).toBe(false)
+    expect(isMeetingCompletableTask('custom', 'Email meeting recap')).toBe(false)
+    expect(isMeetingCompletableTask('custom', 'Mail follow-up about meeting')).toBe(false)
+    const tasks = [
+      makeTask({ id: 1, title: 'Send mail about the meeting', task_type: 'add_to_mail_batch' }),
+      makeTask({ id: 2, title: 'Call owner', task_type: 'call_owner_today' }),
+    ]
+    expect(findCompletableTaskForMode('meeting', tasks)?.id).toBe(2)
   })
 
   it('never auto-completes skip_trace_owner or mail batch from note', () => {
     const skip = [makeTask({ id: 1, title: 'Skip trace owner', task_type: 'skip_trace_owner' })]
     const mail = [makeTask({ id: 2, title: 'Add to mail', task_type: 'add_to_mail_batch' })]
+    const emailOnly = [makeTask({ id: 3, title: 'Email outreach', task_type: 'custom' })]
     expect(findCompletableTaskForMode('note', skip)).toBeNull()
     expect(findCompletableTaskForMode('note', mail)).toBeNull()
     expect(findCompletableTaskForMode('email', skip)).toBeNull()
     expect(findEmailCompletableTask(mail)?.id).toBe(2)
+    expect(findCompletableTaskForMode('meeting', skip)).toBeNull()
+    expect(findCompletableTaskForMode('meeting', mail)).toBeNull()
+    expect(findCompletableTaskForMode('meeting', emailOnly)).toBeNull()
   })
 })

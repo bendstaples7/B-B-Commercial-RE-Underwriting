@@ -101,3 +101,35 @@ def test_wrong_number_call_decreases_engagement_score(app_ctx):
         engine = LeadScoringEngine()
         score = engine.compute_score(lead, _make_weights(), signals=[])
         assert score <= 25.0
+
+
+def test_meeting_logged_applies_engagement_modifier_once(app_ctx):
+    """Native meetings add +10 once even when multiple meeting_logged rows exist."""
+    with app_ctx.app_context():
+        lead = Lead(
+            property_street='3 Meeting St',
+            lead_status='mailing_no_contact_made',
+            has_phone=True,
+            has_email=True,
+            has_property_match=True,
+            analysis_complete=True,
+            lead_score=0.0,
+        )
+        db.session.add(lead)
+        db.session.commit()
+
+        now = datetime.now(timezone.utc)
+        for offset_days, summary in ((0, 'First walkthrough'), (1, 'Follow-up meeting')):
+            db.session.add(LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type='meeting_logged',
+                occurred_at=now - timedelta(days=offset_days),
+                source='manual',
+                actor='user',
+                summary=summary,
+            ))
+        db.session.commit()
+
+        engine = LeadScoringEngine()
+        modifier = engine._score_engagement(lead)
+        assert modifier == 10.0

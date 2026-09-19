@@ -1,5 +1,5 @@
 /**
- * LogActivityModal — floating non-modal panel for logging notes, calls, and emails.
+ * LogActivityModal — floating non-modal panel for logging notes, calls, emails, and meetings.
  *
  * Command Center stays visible and interactive (no backdrop / scroll lock).
  * Desktop docks lower-right; mobile bottom-anchors ~65–70vh. Title bar is
@@ -23,12 +23,13 @@ import type { LeadTask, LeadTimelineEntry } from '@/types'
 import { contactService } from '@/services/api'
 import { LogActivityForm, type LogCallSavedMeta, type LogActivityTaskEdit } from '@/components/LogActivityForm'
 
-export type ActivityLogType = 'note' | 'call' | 'email'
+export type ActivityLogType = 'note' | 'call' | 'email' | 'meeting'
 
 const TITLES: Record<ActivityLogType, string> = {
   note: 'Log Note',
   call: 'Log Call',
   email: 'Log Email',
+  meeting: 'Log Meeting',
 }
 
 export type { LogActivityTaskEdit }
@@ -99,9 +100,9 @@ export function LogActivityModal({
   const previouslyFocused = useRef<HTMLElement | null>(null)
   const [offset, setOffset] = useState<PanelOffset>({ x: 0, y: 0 })
 
-  // Log Call only: include former owners so dialed / HubSpot-primary phones
-  // that GIS archived under a rename still appear (matches outreach SQL).
-  // Log Email keeps active contacts only.
+  // Log Call and task-edit: include former owners so dialed / HubSpot-primary
+  // phones that GIS archived under a rename still appear (matches outreach SQL).
+  // Log Email / Meeting keep active contacts only.
   const includeFormerOwners = activityType === 'call' || Boolean(editTask)
   const { data: contacts = [], isLoading: contactsLoading } = useQuery({
     queryKey: ['propertyContacts', leadId, { includeFormerOwners }],

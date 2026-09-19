@@ -96,20 +96,20 @@ export const ccSupportCardSx: SxProps<Theme> = {
 /** Gap between cards in a column stack. */
 export const ccStackGap = 2.5
 
-/** Action Center icon tile button. */
+/** Action Center icon tile button — one row, shrink equally. */
 export const ccActionTileSx: SxProps<Theme> = {
-  // Grow equally; do not cap width ΓÇö a maxWidth leaves empty row space that
-  // is still too small for the next tile's minWidth, so Deprioritize wraps.
   flex: '1 1 0',
-  minWidth: { xs: 'calc(50% - 4px)', sm: 0 },
-  maxWidth: { xs: 'calc(50% - 4px)', sm: 'none' },
+  minWidth: 0,
+  maxWidth: 'none',
+  overflowWrap: 'break-word',
+  wordBreak: 'break-word',
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
   justifyContent: 'center',
-  gap: 0.75,
-  py: 2,
-  px: 1,
+  gap: 0.4,
+  py: 1.1,
+  px: 0.4,
   borderRadius: 1,
   bgcolor: 'grey.100',
   border: '1px solid',
@@ -117,9 +117,10 @@ export const ccActionTileSx: SxProps<Theme> = {
   color: 'text.primary',
   textTransform: 'none',
   fontWeight: 600,
-  fontSize: '0.8rem',
-  lineHeight: 1.2,
+  fontSize: '0.68rem',
+  lineHeight: 1.15,
   whiteSpace: 'normal',
+  textAlign: 'center',
   '&:hover': {
     bgcolor: 'grey.200',
     borderColor: 'divider',

@@ -131,17 +131,29 @@ async function main() {
       })
       page = await context.newPage()
       await injectSession(page, session)
-      await page.goto(targetUrl, { waitUntil: 'networkidle', timeout: 120000 })
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 120000 })
       channel = `auth-playwright:${session.source}`
     }
 
-    await page.waitForTimeout(800)
+    // window 'load' waits for fonts/images without hanging on HMR/capture sockets
+    // the way networkidle did. Resolves immediately if load already fired.
+    await page.waitForLoadState('load', { timeout: 30000 })
     assertNotLoginWall(page.url(), { loginWall: /\/login/i.test(page.url()) })
 
     const selector = await pickSelector(page, args.selector)
     await page.waitForSelector(selector, { state: 'visible', timeout: 60000 }).catch(() => {
       throw new Error(`Selector not visible: ${selector} (url=${page.url()})`)
     })
+
+    // Data-backed pages render MUI skeletons / *-skeleton testids while the
+    // command-center query is in flight. Wait for those to clear so the PNG
+    // is not a loading shell. Bounded: polling SSE pages may keep a spinner.
+    await page
+      .waitForFunction(
+        () => !document.querySelector('.MuiSkeleton-root, [data-testid$="-skeleton"]'),
+        { timeout: 15000 },
+      )
+      .catch(() => {})
 
     const metrics = await page.evaluate(collectMetricsFn(), selector)
     assertNotLoginWall(page.url(), metrics)

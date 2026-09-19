@@ -939,6 +939,7 @@ const ACTIVITY_SUCCESS_MESSAGES: Record<ActivityLogType, string> = {
   note: 'Note saved.',
   call: 'Call logged.',
   email: 'Email logged.',
+  meeting: 'Meeting logged.',
 }
 
 function normalizeTimelineEntriesForLead(
@@ -1144,7 +1145,7 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
         onLoadMore={handleLoadMore}
         highlightEntryId={highlightEntryId}
         variant={fullscreenOpen ? 'feed' : variant}
-        previewMode={fullscreenOpen ? false : undefined}
+        previewMode={false}
       />
     )
 
@@ -1391,9 +1392,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   // Deep-link handling for the `?tab=` query param. The TabPanel selects the
   // tab named by the param (info/score/enrichment/marketing/analysis/contacts).
   // There is no "timeline" tab — the activity timeline lives in the always-
-  // visible ActivityPanel above the tabs — so the Needs Review queue's "View
-  // Activity" deep-link (?tab=timeline) instead scrolls the ActivityPanel into
-  // view once the data has loaded and the panel has rendered.
+  // visible center ActivityPanel (below Open Tasks) — so the Needs Review
+  // queue's "View Activity" deep-link (?tab=timeline) instead scrolls the
+  // ActivityPanel into view once the data has loaded and the panel has rendered.
   const tabParam = searchParams.get('tab')
   const activityRef = useRef<ActivityPanelHandle>(null)
   const tasksPanelRef = useRef<TasksPanelHandle>(null)
@@ -1945,6 +1946,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         setEditingTask(null)
         setActivityModal('email')
         return
+      case 'log_meeting':
+        setActivityModal('meeting')
+        return
       case 'create_task':
         tasksPanelRef.current?.scrollIntoView()
         window.setTimeout(() => tasksPanelRef.current?.openCreateForm(), 300)
@@ -2454,6 +2458,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               gap: ccStackGap,
               overflow: 'hidden',
             }}
+            data-testid="command-center-main-column"
           >
             <Paper sx={ccCardSx} data-testid="lead-action-section">
               <RecommendedActionPanel
@@ -2511,6 +2516,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               />
             </Paper>
 
+            <Box
+              data-testid="command-center-activity-stack"
+              sx={{ display: 'flex', flexDirection: 'column', gap: ccStackGap }}
+            >
             <Paper sx={ccCardSx} data-testid="open-tasks-card">
               <TasksPanel
                 ref={tasksPanelRef}
@@ -2533,6 +2542,17 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 } : undefined}
               />
             </Paper>
+
+            <ActivityPanel
+              ref={activityRef}
+              leadId={leadId}
+              initialEntries={commandCenterData.timeline.entries}
+              initialTotal={commandCenterData.timeline.total}
+              highlightEntryId={highlightEntryId}
+              variant="feed"
+              embedded
+              onEntriesChanged={handleActivityEntriesChanged}
+            />
 
             {!isLgUp && (
               <>
@@ -2558,24 +2578,12 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               leadId={leadId}
               commandCenterData={commandCenterData}
             />
+            </Box>
 
             <LeadBriefingPanel
                 leadId={leadId}
                 initialBriefing={commandCenterData.quick_briefing ?? null}
               />
-
-            {!isLgUp && (
-              <ActivityPanel
-                ref={activityRef}
-                leadId={leadId}
-                initialEntries={commandCenterData.timeline.entries}
-                initialTotal={commandCenterData.timeline.total}
-                highlightEntryId={highlightEntryId}
-                variant="feed"
-                embedded
-                onEntriesChanged={handleActivityEntriesChanged}
-              />
-            )}
 
             <DeepDiveDetailsCard>
               {leadData ? (
@@ -2613,16 +2621,6 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 <PropertyKpiCard
                   commandCenterData={commandCenterData}
                   propertyDetail={leadData}
-                />
-                <ActivityPanel
-                  ref={activityRef}
-                  leadId={leadId}
-                  initialEntries={commandCenterData.timeline.entries}
-                  initialTotal={commandCenterData.timeline.total}
-                  highlightEntryId={highlightEntryId}
-                  variant="feed"
-                  embedded
-                  onEntriesChanged={handleActivityEntriesChanged}
                 />
                 <PropertySidebar
                   commandCenterData={commandCenterData}

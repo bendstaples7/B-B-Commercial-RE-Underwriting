@@ -24,6 +24,7 @@ import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline'
 import PhoneOutlinedIcon from '@mui/icons-material/PhoneOutlined'
 import NoteOutlinedIcon from '@mui/icons-material/NoteOutlined'
 import EmailOutlinedIcon from '@mui/icons-material/EmailOutlined'
+import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined'
 import LocalPostOfficeOutlinedIcon from '@mui/icons-material/LocalPostOfficeOutlined'
 import ManageSearchOutlinedIcon from '@mui/icons-material/ManageSearchOutlined'
 import {
@@ -509,9 +510,6 @@ function FakeTile({
       sx={{
         ...ccActionTileSx,
         cursor: 'default',
-        minWidth: 88,
-        maxWidth: 120,
-        py: 1.25,
         ...(filled
           ? {
               bgcolor: 'primary.main',
@@ -558,16 +556,14 @@ function ActionCenter() {
           </Box>
         </Typography>
       </Box>
-      <Stack direction="row" flexWrap="wrap" useFlexGap gap={1}>
-        <FakeTile label="Log Call" icon={<PhoneOutlinedIcon fontSize="small" />} />
-        <FakeTile label="Log Note" icon={<NoteOutlinedIcon fontSize="small" />} />
-        <FakeTile label="Log Email" icon={<EmailOutlinedIcon fontSize="small" />} />
+      <Stack direction="row" flexWrap="nowrap" useFlexGap gap={0.5} sx={{ minWidth: 0 }}>
+        <FakeTile label="Call" icon={<PhoneOutlinedIcon fontSize="small" />} />
+        <FakeTile label="Note" icon={<NoteOutlinedIcon fontSize="small" />} />
+        <FakeTile label="Email" icon={<EmailOutlinedIcon fontSize="small" />} />
+        <FakeTile label="Meeting" icon={<GroupsOutlinedIcon fontSize="small" />} />
+        <FakeTile label="Mail" icon={<LocalPostOfficeOutlinedIcon fontSize="small" />} />
         <FakeTile
-          label="Add to Mail Queue"
-          icon={<LocalPostOfficeOutlinedIcon fontSize="small" />}
-        />
-        <FakeTile
-          label="Move to Skip Trace"
+          label="Skip Trace"
           icon={<ManageSearchOutlinedIcon fontSize="small" />}
         />
         {/* Same universal Deprioritize slot — elevated label + fill when likely_condo */}

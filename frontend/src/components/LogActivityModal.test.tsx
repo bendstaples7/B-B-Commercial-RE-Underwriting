@@ -145,6 +145,22 @@ describe('LogActivityModal', () => {
     expect(document.querySelector('.MuiBackdrop-root')).not.toBeInTheDocument()
   })
 
+  it('renders the meeting form when activityType is meeting', () => {
+    render(
+      <LogActivityModal
+        open
+        activityType="meeting"
+        leadId={1}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByTestId('log-activity-modal-meeting')).toBeInTheDocument()
+    expect(screen.getByTestId('log-meeting-form')).toBeInTheDocument()
+    expect(screen.getByText('Log Meeting')).toBeInTheDocument()
+  })
+
   it('calls onClose from the title close button', async () => {
     const onClose = vi.fn()
     render(

@@ -1,6 +1,6 @@
 """Unit tests for LeadBriefingService (create/revise + quality guards)."""
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -209,6 +209,104 @@ def test_build_context_uses_metadata_body_when_summary_empty(app):
             'showing' in (row.get('summary') or '').lower()
             for row in ctx['recent_activity']
         )
+
+
+def test_build_context_treats_hubspot_meeting_as_last_contact(app):
+    """hubspot_meeting is a contact event and wins last-contact when newest."""
+    with app.app_context():
+        from app import db
+        from app.models import Lead, LeadTimelineEntry
+
+        lead = Lead(
+            property_street='200 Meeting St',
+            property_city='Chicago',
+            property_state='IL',
+            owner_first_name='Bob',
+            owner_last_name='Owner',
+            lead_status='in_person_appointment',
+            recommended_action='call_ready',
+            owner_user_id='test-user',
+        )
+        db.session.add(lead)
+        db.session.flush()
+        db.session.add(LeadTimelineEntry(
+            lead_id=lead.id,
+            event_type='hubspot_call',
+            occurred_at=datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc),
+            source='hubspot',
+            actor='HubSpot',
+            summary='Left voicemail',
+        ))
+        db.session.add(LeadTimelineEntry(
+            lead_id=lead.id,
+            event_type='hubspot_meeting',
+            occurred_at=datetime(2026, 6, 2, 15, 30, 0, tzinfo=timezone.utc),
+            source='hubspot',
+            actor='HubSpot',
+            summary='In-person walkthrough of the courtyard building',
+        ))
+        db.session.add(LeadTimelineEntry(
+            lead_id=lead.id,
+            event_type='status_changed',
+            occurred_at=datetime(2026, 6, 3, 9, 0, 0, tzinfo=timezone.utc),
+            source='system',
+            actor='system',
+            summary='Status changed to in_person_appointment',
+        ))
+        db.session.commit()
+
+        svc = LeadBriefingService(api_key='test-key')
+        ctx = svc._build_context(lead)
+        assert ctx['last_activity_summary']
+        assert 'walkthrough' in ctx['last_activity_summary'].lower()
+        meeting_rows = [
+            row for row in ctx['recent_activity']
+            if row.get('event_type') == 'hubspot_meeting'
+        ]
+        assert meeting_rows
+        assert ctx['recent_activity'][0]['event_type'] == 'hubspot_meeting'
+
+
+def test_build_context_ignores_future_hubspot_meeting_as_last_contact(app):
+    """Scheduled upcoming meetings must not become LAST CONTACT."""
+    with app.app_context():
+        from app import db
+        from app.models import Lead, LeadTimelineEntry
+
+        lead = Lead(
+            property_street='201 Future Meeting St',
+            property_city='Chicago',
+            property_state='IL',
+            owner_first_name='Bob',
+            owner_last_name='Owner',
+            lead_status='in_person_appointment',
+            recommended_action='call_ready',
+            owner_user_id='test-user',
+        )
+        db.session.add(lead)
+        db.session.flush()
+        db.session.add(LeadTimelineEntry(
+            lead_id=lead.id,
+            event_type='hubspot_call',
+            occurred_at=datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc),
+            source='hubspot',
+            actor='HubSpot',
+            summary='Left voicemail last month',
+        ))
+        db.session.add(LeadTimelineEntry(
+            lead_id=lead.id,
+            event_type='hubspot_meeting',
+            occurred_at=datetime.now(timezone.utc) + timedelta(days=21),
+            source='hubspot',
+            actor='HubSpot',
+            summary='Scheduled courtyard walkthrough next month',
+        ))
+        db.session.commit()
+
+        svc = LeadBriefingService(api_key='test-key')
+        ctx = svc._build_context(lead)
+        assert 'voicemail' in (ctx['last_activity_summary'] or '').lower()
+        assert ctx['recent_activity'][0]['event_type'] == 'hubspot_call'
 
 
 def test_ensure_five_uses_context_not_generic_fillers():

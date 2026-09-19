@@ -25,6 +25,7 @@ export type QuickActionId =
   | 'log_call'
   | 'log_note'
   | 'log_email'
+  | 'log_meeting'
   | 'add_to_mail_batch'
   | 'move_to_skip_trace'
 
@@ -119,11 +120,11 @@ export function evaluateAddToMailBatch(input: {
 
 export function evaluateOutreachLog(
   leadStatus: LeadStatus,
-  action: 'log_call' | 'log_note' | 'log_email',
+  action: 'log_call' | 'log_note' | 'log_email' | 'log_meeting',
 ): ActionEligibilityResult {
   if (action === 'log_note') return ok()
   if (
-    (action === 'log_call' || action === 'log_email')
+    (action === 'log_call' || action === 'log_email' || action === 'log_meeting')
     && leadStatus === 'do_not_contact'
   ) {
     return blocked(
@@ -158,7 +159,7 @@ export function unavailableReasonForQuickAction(
     if (r.reasonCode === REASON_MAIL_ALREADY_QUEUED) return null
     return r.ok ? null : r.message
   }
-  if (action === 'log_call' || action === 'log_email' || action === 'log_note') {
+  if (action === 'log_call' || action === 'log_email' || action === 'log_meeting' || action === 'log_note') {
     const r = evaluateOutreachLog(ctx.leadStatus, action)
     return r.ok ? null : r.message
   }

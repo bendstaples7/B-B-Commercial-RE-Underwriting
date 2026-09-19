@@ -2279,6 +2279,28 @@ class TestLogNote:
             assert data['metadata']['email_address'] == 'jane@work.com'
             assert data['event_type'] == 'email_logged'
 
+    def test_log_meeting_returns_201(self, client, app):
+        """POST /api/leads/<id>/notes with activity_kind=meeting creates meeting_logged."""
+        with app.app_context():
+            lead = _make_lead(app, '21e Meeting St')
+            contact, _email = _make_contact_with_email(app, lead.id)
+            response = client.post(
+                f'/api/leads/{lead.id}/notes',
+                data=json.dumps({
+                    'body': 'Had coffee downtown.',
+                    'activity_kind': 'meeting',
+                    'contact_id': contact.id,
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 201
+            data = response.get_json()
+            assert data['event_type'] == 'meeting_logged'
+            assert 'Jane Doe' in data['summary']
+            assert data['metadata']['contact_name'] == 'Jane Doe'
+            assert data['metadata']['body'] == 'Had coffee downtown.'
+
     def test_log_note_rejects_unlinked_contact(self, client, app):
         """POST /api/leads/<id>/notes rejects contact_id not linked to the lead."""
         with app.app_context():

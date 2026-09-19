@@ -62,4 +62,33 @@ describe('findActivityContextForTask', () => {
       ]),
     ).toBeNull()
   })
+
+  it('returns meeting notes and event type for a meeting_logged follow-up', () => {
+    const context = findActivityContextForTask(88, [
+      makeEntry({
+        id: 10,
+        event_type: 'meeting_logged',
+        summary: 'Meeting: Courtyard walkthrough',
+        metadata: {
+          body: 'Walked the building and talked timing.',
+          contact_name: 'Alice Owner',
+          follow_up_task_id: 88,
+        },
+      }),
+      makeEntry({
+        id: 9,
+        event_type: 'call_logged',
+        metadata: {
+          notes: 'Older call notes',
+          follow_up_task_id: 87,
+        },
+      }),
+    ])
+
+    expect(context).toEqual({
+      body: 'Walked the building and talked timing.',
+      contactName: 'Alice Owner',
+      eventType: 'meeting_logged',
+    })
+  })
 })

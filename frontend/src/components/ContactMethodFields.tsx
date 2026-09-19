@@ -219,7 +219,7 @@ export function contactMethodToEmailPayload(value: ContactMethodValue): ContactE
 }
 
 export interface ContactMethodFieldsProps {
-  mode: 'phone' | 'email'
+  mode: 'phone' | 'email' | 'contact'
   contacts: PropertyContact[]
   contactsLoading?: boolean
   value: ContactMethodValue
@@ -244,7 +244,10 @@ export function ContactMethodFields({
   preferredPhoneDigits = null,
 }: ContactMethodFieldsProps) {
   const methodOptions = useMemo(
-    () => buildMethodOptions(contacts, mode, value.contactId, preferredPhoneDigits),
+    () =>
+      mode === 'contact'
+        ? []
+        : buildMethodOptions(contacts, mode, value.contactId, preferredPhoneDigits),
     [contacts, mode, preferredPhoneDigits, value.contactId],
   )
 
@@ -256,6 +259,7 @@ export function ContactMethodFields({
   const methodLabel = mode === 'phone' ? 'Phone number' : 'Email address'
 
   useEffect(() => {
+    if (mode === 'contact') return
     if (contactsLoading || contacts.length === 0) return
     if (selectionSource.current === 'user') return
 
@@ -460,15 +464,17 @@ export function ContactMethodFields({
   return (
     <>
       {contactSelect}
-      {methodSelect}
+      {mode !== 'contact' && methodSelect}
 
       {contacts.length === 0 && !contactsLoading && (
         <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: fieldMb }}>
-          No contacts linked to this property. Add contacts on the Contacts tab, or enter a method below.
+          {mode === 'contact'
+            ? 'No contacts linked to this property. Add contacts on the Contacts tab.'
+            : 'No contacts linked to this property. Add contacts on the Contacts tab, or enter a method below.'}
         </Typography>
       )}
 
-      {value.methodKey === METHOD_OTHER && (
+      {mode !== 'contact' && value.methodKey === METHOD_OTHER && (
         <TextField
           label={mode === 'phone' ? 'Phone number' : 'Email address'}
           value={value.methodValue ?? ''}

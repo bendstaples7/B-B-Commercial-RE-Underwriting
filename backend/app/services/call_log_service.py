@@ -172,6 +172,12 @@ def _build_email_summary(
     return body[:500]
 
 
+def _build_meeting_summary(body: str, contact_name: str | None) -> str:
+    if contact_name:
+        return f'Meeting with {contact_name}: {body}'[:500]
+    return f'Meeting: {body}'[:500]
+
+
 def _mail_attribution_eligible(lead_id: int, mail_campaign_id: int, actor_user_id: str) -> bool:
     from app.models import MailCampaign, MailQueueItem
 
@@ -450,13 +456,14 @@ class CallLogService:
         sent_from_email: str | None = None,
         complete_task_id: int | None = None,
         follow_up: dict | None = None,
+        activity_kind: str | None = None,
     ) -> LeadTimelineEntry:
-        """Log a note (or email) on a lead.
+        """Log a note, email, or meeting on a lead.
 
         Mirrors ``log_call``'s optional task-completion and follow-up
-        creation so notes/emails have the same "next step" capabilities as
-        calls. Scoring is refreshed once at the end when those side effects
-        run.
+        creation so notes/emails/meetings have the same "next step"
+        capabilities as calls. Scoring is refreshed once at the end when
+        those side effects run.
         """
         if not body or not body.strip():
             raise LeadTaskValidationError("Note body cannot be empty.", field='body')
@@ -504,34 +511,55 @@ class CallLogService:
                     field='follow_up.due_date',
                 )
 
-        has_email_context = any([
+        kind = (activity_kind or '').strip().lower()
+        is_meeting = kind == 'meeting'
+        has_email_context = (not is_meeting) and any([
             contact_email_id, email_address, email_label, subject, sent_from_email,
         ])
-        if has_email_context or body.strip().startswith('[Email]'):
+        is_email = (not is_meeting) and (
+            kind == 'email' or has_email_context or body.strip().startswith('[Email]')
+        )
+        if is_meeting:
+            summary = _build_meeting_summary(body, contact_name)
+        elif is_email:
             summary = _build_email_summary(body, subject, contact_name, email_address, email_label)
         else:
             summary = body[:500]
 
         metadata: dict = {'body': body}
-        if subject:
+        if subject and not is_meeting:
             metadata['subject'] = subject
         if contact_id is not None:
             metadata['contact_id'] = contact_id
         if contact_name:
             metadata['contact_name'] = contact_name
-        if contact_email_id is not None:
-            metadata['contact_email_id'] = contact_email_id
-        if email_address:
-            metadata['email_address'] = email_address
-        if email_label:
-            metadata['email_label'] = email_label
-        if sent_from_email:
-            metadata['sent_from_email'] = sent_from_email
+        if not is_meeting:
+            if contact_email_id is not None:
+                metadata['contact_email_id'] = contact_email_id
+            if email_address:
+                metadata['email_address'] = email_address
+            if email_label:
+                metadata['email_label'] = email_label
+            if sent_from_email:
+                metadata['sent_from_email'] = sent_from_email
 
-        is_email = has_email_context or body.strip().startswith('[Email]')
+        if is_meeting:
+            event_type = 'meeting_logged'
+            lead.last_contact_date = date.today()
+            lead.prefer_direct_mail = False
+            lead.unanswered_call_count = 0
+            lead.unanswered_mail_nudge_dismissed_count = None
+            db.session.add(lead)
+            from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
+            cancel_mail_rematch_tasks(lead_id, actor=actor, reason='logged_meeting')
+        elif is_email:
+            event_type = 'email_logged'
+        else:
+            event_type = 'note_added'
+
         entry = LeadTimelineEntry(
             lead_id=lead_id,
-            event_type='email_logged' if is_email else 'note_added',
+            event_type=event_type,
             occurred_at=datetime.now(timezone.utc),
             source='manual',
             actor=actor,

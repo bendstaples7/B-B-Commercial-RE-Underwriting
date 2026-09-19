@@ -24,12 +24,13 @@ const baseResponse: ActivityDashboardResponse = {
   trend_label: 'WoW',
   range: { start: '2026-07-20T00:00:00Z', end: '2026-07-26T00:00:00Z' },
   previous_range: { start: '2026-07-13T00:00:00Z', end: '2026-07-19T00:00:00Z' },
-  counts: { calls: 3, mailers: 1, emails: 0, notes: 2, tasks: 1 },
-  previous_counts: { calls: 1, mailers: 1, emails: 0, notes: 1, tasks: 0 },
-  goals: { calls: 10, mailers: null, emails: null, notes: null, tasks: null },
-  progress: { calls: 30, mailers: null, emails: null, notes: null, tasks: null },
+  counts: { calls: 3, meetings: 0, mailers: 1, emails: 0, notes: 2, tasks: 1 },
+  previous_counts: { calls: 1, meetings: 0, mailers: 1, emails: 0, notes: 1, tasks: 0 },
+  goals: { calls: 10, meetings: null, mailers: null, emails: null, notes: null, tasks: null },
+  progress: { calls: 30, meetings: null, mailers: null, emails: null, notes: null, tasks: null },
   trends: {
     calls: { delta: 2, pct_change: 200, previous: 1 },
+    meetings: { delta: 0, pct_change: null, previous: 0 },
     mailers: { delta: 0, pct_change: 0, previous: 1 },
     emails: { delta: 0, pct_change: null, previous: 0 },
     notes: { delta: 1, pct_change: 100, previous: 1 },
@@ -38,6 +39,7 @@ const baseResponse: ActivityDashboardResponse = {
   series: {
     comparison: [
       { metric: 'calls', current: 3, previous: 1 },
+      { metric: 'meetings', current: 0, previous: 0 },
       { metric: 'mailers', current: 1, previous: 1 },
       { metric: 'emails', current: 0, previous: 0 },
       { metric: 'notes', current: 2, previous: 1 },

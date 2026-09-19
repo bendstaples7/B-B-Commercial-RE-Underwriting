@@ -5,7 +5,7 @@ from app import db
 
 
 PERIOD_TYPES = ('weekly', 'monthly')
-METRICS = ('calls', 'mailers', 'emails', 'notes', 'tasks')
+METRICS = ('calls', 'meetings', 'mailers', 'emails', 'notes', 'tasks')
 # PostgreSQL INTEGER max (signed 32-bit)
 MAX_TARGET = 2_147_483_647
 
@@ -47,7 +47,7 @@ class UserActivityGoal(db.Model):
             name='ck_user_activity_goals_period_type',
         ),
         db.CheckConstraint(
-            "metric IN ('calls', 'mailers', 'emails', 'notes', 'tasks')",
+            "metric IN ('calls', 'meetings', 'mailers', 'emails', 'notes', 'tasks')",
             name='ck_user_activity_goals_metric',
         ),
         db.CheckConstraint('target >= 0', name='ck_user_activity_goals_target_nonneg'),

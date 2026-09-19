@@ -216,6 +216,59 @@ def test_import_maps_note_type_to_hubspot_note_event(app):
         assert entry.event_type == 'hubspot_note'
 
 
+def test_import_maps_meeting_type_to_hubspot_meeting_event(app):
+    """MEETING activity type maps to event_type='hubspot_meeting'."""
+    from app.models import LeadTimelineEntry
+
+    with app.app_context():
+        lead = _make_lead(app, '3b HubSpot Meeting St')
+        svc = HubSpotTimelineImportService()
+
+        svc.import_activities_for_lead(
+            lead.id,
+            [_make_activity('hs-mtg-004', 'MEETING', 'had coffee with bob')],
+        )
+
+        entry = LeadTimelineEntry.query.filter_by(
+            lead_id=lead.id, hubspot_activity_id='hs-mtg-004'
+        ).first()
+        assert entry is not None
+        assert entry.event_type == 'hubspot_meeting'
+        assert 'coffee' in (entry.summary or '').lower()
+
+
+def test_import_retypes_legacy_meeting_hubspot_note(app):
+    """Meetings previously stored as hubspot_note are relabeled on re-import."""
+    from app.models import LeadTimelineEntry
+
+    with app.app_context():
+        from app import db
+        from datetime import datetime, timezone
+
+        lead = _make_lead(app, '3c Legacy Meeting Note St')
+        db.session.add(LeadTimelineEntry(
+            lead_id=lead.id,
+            event_type='hubspot_note',
+            occurred_at=datetime.now(timezone.utc),
+            source='hubspot',
+            actor='HubSpot',
+            summary='had coffee with bob',
+            hubspot_activity_id='hs-mtg-legacy',
+        ))
+        db.session.commit()
+
+        svc = HubSpotTimelineImportService()
+        svc.import_activities_for_lead(
+            lead.id,
+            [_make_activity('hs-mtg-legacy', 'MEETING', 'had coffee with bob')],
+        )
+
+        entry = LeadTimelineEntry.query.filter_by(
+            lead_id=lead.id, hubspot_activity_id='hs-mtg-legacy'
+        ).one()
+        assert entry.event_type == 'hubspot_meeting'
+
+
 # ---------------------------------------------------------------------------
 # Re-importing same activities creates zero new entries
 # ---------------------------------------------------------------------------
@@ -401,6 +454,40 @@ def test_interaction_to_activity_maps_note_and_call(app):
         assert call_act['disposition'] == 'CONNECTED'
 
 
+def test_interaction_to_activity_meeting_status_is_not_call_disposition(app):
+    """HubSpot meeting status stays off call outcome/disposition fields."""
+    with app.app_context():
+        lead = _make_lead(app, '11b Meeting Status St')
+        from app import db
+        from app.models import Interaction, InteractionAssociation
+
+        interaction = Interaction(
+            interaction_type='meeting',
+            body='Walkthrough downtown',
+            occurred_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            source='hubspot_import',
+            hubspot_engagement_id='eng-mtg-status',
+            raw_payload={'metadata': {'status': 'SCHEDULED', 'title': 'Site walk'}},
+            is_orphaned=False,
+        )
+        db.session.add(interaction)
+        db.session.flush()
+        db.session.add(InteractionAssociation(
+            interaction_id=interaction.id,
+            target_type='lead',
+            target_id=lead.id,
+        ))
+        db.session.commit()
+
+        act = HubSpotTimelineImportService.interaction_to_activity(interaction)
+        assert act is not None
+        assert act['type'] == 'MEETING'
+        assert 'disposition' not in act
+        assert 'outcome' not in act
+        assert act['meeting_status'] == 'SCHEDULED'
+        assert act['title'] == 'Site walk'
+
+
 def test_sync_lead_from_interactions_creates_timeline_entries(app):
     """sync_lead_from_interactions bridges HubSpot Interactions into timeline."""
     from app.models import LeadTimelineEntry
@@ -421,6 +508,29 @@ def test_sync_lead_from_interactions_creates_timeline_entries(app):
         types = {e.event_type for e in entries}
         assert types == {'hubspot_note', 'hubspot_call'}
         assert {e.hubspot_activity_id for e in entries} == {'eng-sync-1', 'eng-sync-2'}
+
+
+def test_sync_lead_from_interactions_bridges_meetings(app):
+    """HubSpot meeting Interactions become hubspot_meeting timeline rows."""
+    from app.models import LeadTimelineEntry
+
+    with app.app_context():
+        lead = _make_lead(app, '12b Meeting Bridge St')
+        _make_hubspot_interaction(
+            lead.id, 'eng-sync-mtg', 'meeting', 'had coffee with bob',
+        )
+        svc = HubSpotTimelineImportService()
+
+        count = svc.sync_lead_from_interactions(lead.id, mark_review=False)
+
+        assert count == 1
+        entry = LeadTimelineEntry.query.filter_by(
+            lead_id=lead.id, hubspot_activity_id='eng-sync-mtg'
+        ).first()
+        assert entry is not None
+        assert entry.event_type == 'hubspot_meeting'
+        assert entry.source == 'hubspot'
+        assert 'coffee' in (entry.summary or '').lower()
 
 
 def test_sync_lead_from_interactions_idempotent(app):

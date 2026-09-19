@@ -1,7 +1,7 @@
 import type { LeadTimelineEntry } from '@/types'
 import { sortTimelineEntriesDesc } from '@/utils/timelineSort'
 
-const CONTEXT_EVENT_TYPES = new Set(['note_added', 'call_logged', 'email_logged'])
+const CONTEXT_EVENT_TYPES = new Set(['note_added', 'call_logged', 'email_logged', 'meeting_logged'])
 
 export interface TaskActivityContext {
   body: string

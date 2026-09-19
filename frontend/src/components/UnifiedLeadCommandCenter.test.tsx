@@ -63,6 +63,11 @@ vi.mock('@/services/api', () => ({
   queueService: {
     getNavigation: vi.fn(),
   },
+  buildingOwnershipService: {
+    get: vi.fn(),
+    analyze: vi.fn(),
+    override: vi.fn(),
+  },
 }))
 
 vi.mock('@/services/leadApi', () => ({
@@ -613,6 +618,34 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     await waitFor(() => {
       expect(screen.getByTestId('activity-panel')).toBeInTheDocument()
     })
+  })
+
+  it('places the activity panel below open tasks and above building ownership', async () => {
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        lead_category: 'commercial',
+        units: 2,
+      }),
+    )
+
+    renderComponent()
+    await waitFor(() => {
+      expect(screen.getByTestId('command-center-activity-stack')).toBeInTheDocument()
+      expect(screen.getByTestId('activity-panel')).toBeInTheDocument()
+      expect(screen.getByTestId('open-tasks-card')).toBeInTheDocument()
+      expect(screen.getByTestId('building-ownership-section')).toBeInTheDocument()
+    })
+
+    const tasks = screen.getByTestId('open-tasks-card')
+    const activity = screen.getByTestId('activity-panel')
+    const ownership = screen.getByTestId('building-ownership-section')
+    const stack = screen.getByTestId('command-center-activity-stack')
+    expect(stack).toContainElement(tasks)
+    expect(stack).toContainElement(activity)
+    expect(stack).toContainElement(ownership)
+    expect(tasks.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(activity.compareDocumentPosition(ownership) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getAllByTestId('activity-panel')).toHaveLength(1)
   })
 
   it('hides recommended_action_changed rows from the default activity feed', async () => {

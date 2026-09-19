@@ -181,7 +181,7 @@ export default function SameAddressMergeLookbookPage() {
               Action Center
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              Log Call · Log Note · Log Email · Mail · Skip Trace · Deprioritize
+              Log Call · Log Note · Log Email · Log Meeting · Mail · Skip Trace · Deprioritize
             </Typography>
           </Box>
         </Paper>

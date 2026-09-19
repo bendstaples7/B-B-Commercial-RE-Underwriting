@@ -104,6 +104,13 @@ function getContactContextLine(entry: LeadTimelineEntry): string | null {
     return `Re: ${contactName}`
   }
 
+  if (
+    (entry.event_type === 'meeting_logged' || entry.event_type === 'hubspot_meeting')
+    && contactName
+  ) {
+    return `With: ${contactName}`
+  }
+
   return null
 }
 
@@ -238,6 +245,24 @@ export function buildTimelineDetailRows(entry: LeadTimelineEntry): TimelineDetai
     return rows
   }
 
+  if (entry.event_type === 'meeting_logged') {
+    if (metadata.contact_name) {
+      rows.push({ label: 'Contact', value: String(metadata.contact_name) })
+    }
+    const body = getFullNoteBody(entry)
+    if (
+      body
+      && (
+        body.length > NOTE_INLINE_THRESHOLD
+        || metadata.contact_name
+        || getEntryDisplayText(entry).length > SUMMARY_COLLAPSE_THRESHOLD
+      )
+    ) {
+      rows.push({ label: 'Notes', value: body })
+    }
+    return rows
+  }
+
   if (entry.event_type === 'mail_sent' || entry.event_type === 'mailer_history') {
     if (metadata.campaign_id != null && metadata.campaign_id !== '') {
       rows.push({ label: 'Campaign', value: String(metadata.campaign_id) })
@@ -304,6 +329,9 @@ function getPreviewText(entry: LeadTimelineEntry): string {
 export function getTimelineEventLabel(entry: LeadTimelineEntry): string {
   if (entry.event_type === 'email_logged' || isEmailEntry(entry)) return 'Email Logged'
   if (entry.event_type === 'call_logged') return 'Call Logged'
+  if (entry.event_type === 'meeting_logged' || entry.event_type === 'hubspot_meeting') {
+    return 'Meeting Logged'
+  }
   if (entry.event_type === 'note_added') return 'Note Added'
   if (entry.event_type === 'mail_sent') return 'Mailer Sent'
   if (entry.event_type === 'mailer_history') return 'Mailer History'
@@ -359,7 +387,9 @@ interface TimelineEntryRowProps {
 
 function TimelineEntryRow({ entry, highlighted = false }: TimelineEntryRowProps) {
   const isHubSpot = entry.source === 'hubspot' || entry.source === 'hubspot_import'
-  const isInlineNote = entry.event_type === 'note_added' && !entryHasExpandableDetails(entry)
+  const isInlineNote =
+    (entry.event_type === 'note_added' || entry.event_type === 'meeting_logged')
+    && !entryHasExpandableDetails(entry)
   const callInlineText = entry.event_type === 'call_logged' ? getCallInlineText(entry) : ''
   const summaryText = isInlineNote ? getNoteInlineText(entry) : getEntryDisplayText(entry)
   const contactContextLine = getContactContextLine(entry)
@@ -565,10 +595,10 @@ export interface LeadTimelineProps {
   initialTotal: number
   onLoadMore?: (page: number) => Promise<{ entries: LeadTimelineEntry[]; total: number }>
   highlightEntryId?: number | null
-  /** Compact scrollable feed (right rail) vs accordion timeline. */
+  /** Compact feed (center Activity card) vs accordion timeline. */
   variant?: 'accordion' | 'feed'
   /**
-   * When false, skip the 5-entry preview collapse (full-screen activity view).
+   * When false, skip the 5-entry preview collapse (center Activity / full-screen).
    * Defaults to true.
    */
   previewMode?: boolean

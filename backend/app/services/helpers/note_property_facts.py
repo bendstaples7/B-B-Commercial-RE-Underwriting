@@ -1,4 +1,4 @@
-"""Parse HubSpot note/call free text into structured property facts.
+"""Parse HubSpot note/call/meeting free text into structured property facts.
 
 Assessor beds/baths on the lead are never overwritten. Note-derived unit counts
 and per-unit bed/bath mixes are stored on ``lead.note_property_facts`` and may
@@ -317,7 +317,7 @@ def note_property_facts_needs_timeline_heal(facts: Any) -> bool:
 
 
 def apply_note_facts_from_timeline(lead: Any) -> list[str]:
-    """Scan HubSpot note/call timeline entries and apply the richest parse.
+    """Scan HubSpot note/call/meeting timeline entries and apply the richest parse.
 
     When nothing parses, stores an empty sentinel so CC does not rescan forever.
     """
@@ -332,7 +332,9 @@ def apply_note_facts_from_timeline(lead: Any) -> list[str]:
         .filter(
             LeadTimelineEntry.lead_id == lead_id,
             LeadTimelineEntry.is_deleted.is_(False),
-            LeadTimelineEntry.event_type.in_(('hubspot_note', 'hubspot_call')),
+            LeadTimelineEntry.event_type.in_(
+                ('hubspot_note', 'hubspot_call', 'hubspot_meeting'),
+            ),
         )
         .order_by(LeadTimelineEntry.occurred_at.desc())
         .all()
@@ -341,11 +343,10 @@ def apply_note_facts_from_timeline(lead: Any) -> list[str]:
     for entry in entries:
         meta = entry.event_metadata if isinstance(entry.event_metadata, dict) else {}
         body = meta.get('body') or entry.summary or ''
-        source = (
-            'hubspot_call'
-            if str(entry.event_type) == 'hubspot_call'
-            else 'hubspot_note'
-        )
+        source = {
+            'hubspot_call': 'hubspot_call',
+            'hubspot_meeting': 'hubspot_meeting',
+        }.get(str(entry.event_type), 'hubspot_note')
         facts = parse_note_property_facts(
             body,
             source=source,

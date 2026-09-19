@@ -442,6 +442,7 @@ describe('RecommendedActionPanel', () => {
         'ra-universal-btn-log_call',
         'ra-universal-btn-log_note',
         'ra-universal-btn-log_email',
+        'ra-universal-btn-log_meeting',
         'ra-universal-btn-add_to_mail_batch',
         'ra-universal-btn-move_to_skip_trace',
         'ra-universal-btn-deprioritize',
@@ -569,7 +570,7 @@ describe('RecommendedActionPanel', () => {
       expect(screen.queryByTestId('dnc-badge')).not.toBeInTheDocument()
     })
 
-    it('disables outreach buttons (log_call, log_email) when leadStatus is do_not_contact', () => {
+    it('disables outreach buttons (log_call, log_email, log_meeting) when leadStatus is do_not_contact', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('follow_up_now')}
@@ -581,6 +582,7 @@ describe('RecommendedActionPanel', () => {
 
       expect(screen.getByTestId('ra-universal-btn-log_call')).toBeDisabled()
       expect(screen.getByTestId('ra-universal-btn-log_email')).toBeDisabled()
+      expect(screen.getByTestId('ra-universal-btn-log_meeting')).toBeDisabled()
       expect(screen.getByTestId('ra-universal-btn-log_note')).not.toBeDisabled()
     })
 
@@ -867,7 +869,7 @@ describe('RecommendedActionPanel', () => {
       )
 
       const buttons = screen.getByTestId('ra-universal-actions').querySelectorAll('button')
-      expect(buttons[3]).toHaveAttribute('data-testid', 'ra-universal-btn-add_to_mail_batch')
+      expect(buttons[4]).toHaveAttribute('data-testid', 'ra-universal-btn-add_to_mail_batch')
     })
 
     it('shows In mail batch in Quick actions when queued and mailable', () => {
@@ -1038,7 +1040,7 @@ describe('RecommendedActionPanel', () => {
   })
 
   describe('Action Center tiles', () => {
-    it('renders the five universal Quick action tiles and no Move / More actions row', () => {
+    it('renders the universal Action Center tiles including Log Meeting', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('call_ready', 'Call Now')}
@@ -1054,8 +1056,10 @@ describe('RecommendedActionPanel', () => {
       expect(screen.getByTestId('action-center-tile-log_call')).toBeInTheDocument()
       expect(screen.getByTestId('action-center-tile-log_note')).toBeInTheDocument()
       expect(screen.getByTestId('action-center-tile-log_email')).toBeInTheDocument()
+      expect(screen.getByTestId('action-center-tile-log_meeting')).toBeInTheDocument()
       expect(screen.getByTestId('action-center-tile-add_to_mail_batch')).toBeInTheDocument()
       expect(screen.getByTestId('action-center-tile-move_to_skip_trace')).toBeInTheDocument()
+      expect(screen.getByLabelText('Log Meeting')).toBeInTheDocument()
       expect(screen.queryByTestId('action-center-tile-move_status')).not.toBeInTheDocument()
       expect(screen.queryByTestId('action-center-tile-create_task')).not.toBeInTheDocument()
       expect(screen.queryByText('More actions')).not.toBeInTheDocument()
@@ -1153,6 +1157,22 @@ describe('RecommendedActionPanel', () => {
 
       await user.click(screen.getByTestId('action-center-tile-log_call'))
       await waitFor(() => expect(onAction).toHaveBeenCalledWith('log_call'))
+    })
+
+    it('Log Meeting tile invokes onAction(log_meeting)', async () => {
+      const onAction = vi.fn().mockResolvedValue(undefined)
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('call_ready', 'Call Now')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={onAction}
+          showActionCenterTiles
+        />,
+      )
+
+      await user.click(screen.getByTestId('action-center-tile-log_meeting'))
+      await waitFor(() => expect(onAction).toHaveBeenCalledWith('log_meeting'))
     })
   })
 

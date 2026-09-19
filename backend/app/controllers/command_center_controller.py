@@ -2278,7 +2278,7 @@ def log_note(lead_id: int):
     """
     POST /api/leads/<lead_id>/notes
 
-    Log a free-text note on a lead.
+    Log a note, email, or meeting on a lead.
     """
     data = LogNoteSchema().load(request.get_json() or {})
     actor = g.user_id
@@ -2294,6 +2294,7 @@ def log_note(lead_id: int):
         sent_from_email=data.get('sent_from_email'),
         complete_task_id=data.get('complete_task_id'),
         follow_up=data.get('follow_up'),
+        activity_kind=data.get('activity_kind'),
     )
     return jsonify(_serialize_timeline_entry(entry)), 201
 

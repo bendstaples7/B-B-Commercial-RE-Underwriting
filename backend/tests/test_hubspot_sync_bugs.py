@@ -848,6 +848,260 @@ class TestBug3bEmailEngagement:
 
 
 # ===========================================================================
+# MEETING engagement was silently skipped (same class as Bug 3b EMAIL)
+# ===========================================================================
+
+class TestMeetingEngagementConversion:
+    """MEETING engagements must become Interaction(type='meeting'), not None."""
+
+    def test_meeting_engagement_creates_interaction(self, app):
+        """HubSpot MEETING with a confirmed contact match is converted.
+
+        occurred_at prefers metadata.startTime over engagement.createdAt so the
+        activity log shows when the meeting happened, not when it was logged.
+        """
+        with app.app_context():
+            lead = Lead(
+                property_street="2551 W Eastwood Ave",
+                lead_status="skip_trace",
+            )
+            db.session.add(lead)
+            db.session.flush()
+
+            contact_match = HubSpotMatch(
+                hubspot_record_type="contact",
+                hubspot_id="107752",
+                internal_record_type="lead",
+                internal_record_id=lead.id,
+                confidence="HIGH",
+                status="confirmed",
+                matching_criteria="address_match",
+            )
+            db.session.add(contact_match)
+            db.session.flush()
+
+            start_ms = 1781119500000  # 2026-06-10 19:25:00 UTC
+            created_ms = 1781551566511  # logged later on 2026-06-15
+            engagement = HubSpotEngagement(
+                hubspot_id="111073080718",
+                engagement_type="MEETING",
+                raw_payload={
+                    "engagement": {
+                        "id": 111073080718,
+                        "type": "MEETING",
+                        "createdAt": created_ms,
+                        "timestamp": created_ms,
+                        "bodyPreview": (
+                            "had coffee with bob really ncie guy "
+                            "follow up every once in a while"
+                        ),
+                    },
+                    "metadata": {
+                        "body": (
+                            "<div><p>had coffee with bob</p>"
+                            "<p>really ncie guy</p>"
+                            "<p>follow up every once in a while</p></div>"
+                        ),
+                        "startTime": start_ms,
+                        "endTime": 1781123100000,
+                    },
+                    "associations": {
+                        "dealIds": [],
+                        "contactIds": [107752],
+                        "companyIds": [],
+                    },
+                },
+            )
+            db.session.add(engagement)
+            db.session.commit()
+
+            converter = HubSpotActivityConverterService()
+            result = converter.convert_engagement(engagement)
+
+            assert result is not None, (
+                "Expected convert_engagement to return an Interaction for MEETING. "
+                "Got None — MEETING was skipped like EMAIL used to be."
+            )
+            assert result.interaction_type == 'meeting'
+            assert result.is_orphaned is False
+            assoc = InteractionAssociation.query.filter_by(
+                interaction_id=result.id,
+                target_type='lead',
+                target_id=lead.id,
+            ).first()
+            assert assoc is not None, (
+                "Expected a lead association so the meeting appears in the timeline"
+            )
+            assert 'coffee' in (result.body or '').lower()
+            assert '<' not in result.body
+            from datetime import datetime
+            assert result.occurred_at == datetime.utcfromtimestamp(start_ms / 1000.0)
+
+            saved = Interaction.query.filter_by(
+                hubspot_engagement_id="111073080718"
+            ).first()
+            assert saved is not None
+            assert saved.interaction_type == 'meeting'
+
+            # Idempotent
+            again = converter.convert_engagement(engagement)
+            assert again is None
+            assert Interaction.query.filter_by(
+                hubspot_engagement_id="111073080718"
+            ).count() == 1
+
+    def test_meeting_occurred_at_skips_unusable_start_time(self, app):
+        """Invalid startTime falls through to engagement.timestamp."""
+        with app.app_context():
+            start_ms = 1781119500000
+            created_ms = 1781551566511
+            parsed = HubSpotActivityConverterService._parse_meeting_occurred_at({
+                'metadata': {'startTime': 'not-a-timestamp'},
+                'engagement': {'timestamp': start_ms, 'createdAt': created_ms},
+            })
+            from datetime import datetime
+            assert parsed == datetime.utcfromtimestamp(start_ms / 1000.0)
+            zeroed = HubSpotActivityConverterService._parse_meeting_occurred_at({
+                'metadata': {'startTime': 0},
+                'engagement': {'timestamp': start_ms},
+            })
+            assert zeroed == datetime.utcfromtimestamp(start_ms / 1000.0)
+
+    def test_backfill_script_converts_stored_meeting_engagements(self, app):
+        """The operational backfill, not Alembic, converts stored meetings."""
+        from scripts.backfill_hubspot_interactions_to_timeline import (
+            convert_missing_meeting_interactions,
+        )
+
+        with app.app_context():
+            lead = Lead(
+                property_street="2551 W Eastwood Ave",
+                lead_status="skip_trace",
+            )
+            db.session.add(lead)
+            db.session.flush()
+
+            db.session.add(HubSpotMatch(
+                hubspot_record_type="contact",
+                hubspot_id="107753",
+                internal_record_type="lead",
+                internal_record_id=lead.id,
+                confidence="HIGH",
+                status="confirmed",
+                matching_criteria="address_match",
+            ))
+            engagement = HubSpotEngagement(
+                hubspot_id="111073080719",
+                engagement_type="MEETING",
+                raw_payload={
+                    "engagement": {
+                        "id": 111073080719,
+                        "type": "MEETING",
+                        "createdAt": 1781551566511,
+                        "timestamp": 1781119500000,
+                        "bodyPreview": "coffee follow-up",
+                    },
+                    "metadata": {
+                        "body": "<p>coffee follow-up</p>",
+                        "startTime": 1781119500000,
+                    },
+                    "associations": {
+                        "dealIds": [],
+                        "contactIds": [107753],
+                        "companyIds": [],
+                    },
+                },
+            )
+            db.session.add(engagement)
+            db.session.commit()
+
+            created, failed = convert_missing_meeting_interactions(lead.id)
+
+            assert (created, failed) == (1, 0)
+            interaction = Interaction.query.filter_by(
+                hubspot_engagement_id="111073080719",
+            ).one()
+            assert interaction.interaction_type == 'meeting'
+            assert InteractionAssociation.query.filter_by(
+                interaction_id=interaction.id,
+                target_type='lead',
+                target_id=lead.id,
+            ).count() == 1
+
+            # Idempotent on re-run.
+            assert convert_missing_meeting_interactions(lead.id) == (0, 0)
+            assert Interaction.query.filter_by(
+                hubspot_engagement_id="111073080719",
+            ).count() == 1
+
+    def test_lead_scoped_backfill_rejects_multi_lead_meeting(self, app):
+        """--lead-id must not convert a meeting that would mutate another lead."""
+        from scripts.backfill_hubspot_interactions_to_timeline import (
+            convert_missing_meeting_interactions,
+        )
+
+        with app.app_context():
+            lead = Lead(
+                property_street="2551 W Eastwood Ave",
+                lead_status="skip_trace",
+            )
+            other_lead = Lead(
+                property_street="2553 W Eastwood Ave",
+                lead_status="skip_trace",
+            )
+            db.session.add_all([lead, other_lead])
+            db.session.flush()
+
+            db.session.add_all([
+                HubSpotMatch(
+                    hubspot_record_type="contact",
+                    hubspot_id="107754",
+                    internal_record_type="lead",
+                    internal_record_id=lead.id,
+                    confidence="HIGH",
+                    status="confirmed",
+                    matching_criteria="address_match",
+                ),
+                HubSpotMatch(
+                    hubspot_record_type="deal",
+                    hubspot_id="deal_107754",
+                    internal_record_type="lead",
+                    internal_record_id=other_lead.id,
+                    confidence="HIGH",
+                    status="confirmed",
+                    matching_criteria="address_match",
+                ),
+            ])
+            db.session.add(HubSpotEngagement(
+                hubspot_id="111073080721",
+                engagement_type="MEETING",
+                raw_payload={
+                    "engagement": {
+                        "id": 111073080721,
+                        "type": "MEETING",
+                        "createdAt": 1781551566511,
+                        "timestamp": 1781119500000,
+                        "bodyPreview": "multi-lead meeting",
+                    },
+                    "metadata": {"body": "multi-lead meeting"},
+                    "associations": {
+                        "dealIds": ["deal_107754"],
+                        "contactIds": [107754],
+                        "companyIds": [],
+                    },
+                },
+            ))
+            db.session.commit()
+
+            created, failed = convert_missing_meeting_interactions(lead.id)
+
+            assert (created, failed) == (0, 1)
+            assert Interaction.query.filter_by(
+                hubspot_engagement_id="111073080721",
+            ).count() == 0
+
+
+# ===========================================================================
 # Preservation Tests — Property 2
 # These tests MUST PASS on UNFIXED code because they verify behavior that
 # is already correct and must remain so after bug fixes.

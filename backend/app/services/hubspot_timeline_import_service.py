@@ -28,7 +28,7 @@ _HUBSPOT_TYPE_TO_EVENT_TYPE = {
     'DEAL_STAGE_CHANGE': 'hubspot_deal_stage',
     # Fallback for unknown types
     'EMAIL': 'hubspot_note',
-    'MEETING': 'hubspot_note',
+    'MEETING': 'hubspot_meeting',
 }
 
 # Interaction.interaction_type → HubSpot-style activity type for import_activities_for_lead
@@ -128,6 +128,16 @@ class HubSpotTimelineImportService:
                 if dialed and not isinstance(dialed, (dict, list)):
                     activity['phone_number'] = str(dialed).strip()
                     break
+        elif activity_type == 'MEETING':
+            # HubSpot meeting metadata.status is SCHEDULED/COMPLETED/CANCELED —
+            # not a call disposition. Keep it off outcome/disposition so
+            # consumers do not render meetings as call results.
+            meeting_status = metadata.get('status') or metadata.get('meetingOutcome')
+            if meeting_status is not None and not isinstance(meeting_status, (dict, list)):
+                activity['meeting_status'] = str(meeting_status)
+            title = metadata.get('title')
+            if title and not isinstance(title, (dict, list)):
+                activity['title'] = str(title)
         elif isinstance(metadata, dict) and metadata:
             disposition = (
                 metadata.get('disposition')
@@ -200,6 +210,21 @@ class HubSpotTimelineImportService:
                 for row in db.session.query(LeadTimelineEntry.hubspot_activity_id)
                 .filter(LeadTimelineEntry.hubspot_activity_id.in_(candidate_ids))
                 .all()
+            )
+
+        meeting_ids = [
+            str(activity.get('id', ''))
+            for activity in hubspot_activities
+            if activity.get('id') and str(activity.get('type', '')).upper() == 'MEETING'
+        ]
+        if meeting_ids:
+            LeadTimelineEntry.query.filter(
+                LeadTimelineEntry.hubspot_activity_id.in_(meeting_ids),
+                LeadTimelineEntry.event_type == 'hubspot_note',
+                LeadTimelineEntry.is_deleted.is_(False),
+            ).update(
+                {LeadTimelineEntry.event_type: 'hubspot_meeting'},
+                synchronize_session=False,
             )
 
         new_entries_count = 0
@@ -295,7 +320,7 @@ class HubSpotTimelineImportService:
                     ),
                     activity_id,
                 ))
-            if activity_type in ('NOTE', 'CALL') and plain_body:
+            if activity_type in ('NOTE', 'CALL', 'MEETING') and plain_body:
                 pending_note_property_facts.append((plain_body, event_type, activity_id, occurred_at))
 
         if pending_call_confidence:
