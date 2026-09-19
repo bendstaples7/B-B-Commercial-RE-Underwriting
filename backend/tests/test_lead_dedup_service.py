@@ -822,6 +822,42 @@ class TestSameBuildingBannerAndAdditivePeople:
             assert same_unit.id in ids
             assert other_unit.id not in ids
 
+    def test_find_same_building_includes_husk_next_to_unit(self, app):
+        """Apt 1 should offer the bare building record, not Apt 2."""
+        from app.services.lead_dedup_service import (
+            find_same_building_leads,
+            refresh_lead_dedup_fields,
+        )
+
+        with app.app_context():
+            unit = Lead(
+                property_street='4451 N Albany Ave Apt 1',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            husk = Lead(
+                property_street='4451 N Albany Ave',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            other_unit = Lead(
+                property_street='4451 N Albany Ave Apt 2',
+                owner_first_name='Other',
+                owner_last_name='Tenant',
+            )
+            db.session.add_all([unit, husk, other_unit])
+            for item in (unit, husk, other_unit):
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+
+            from_unit = {item.id for item in find_same_building_leads(unit)}
+            assert husk.id in from_unit
+            assert other_unit.id not in from_unit
+
+            from_husk = {item.id for item in find_same_building_leads(husk)}
+            assert unit.id in from_husk
+            assert other_unit.id in from_husk
+
     def test_same_address_summaries_default_to_current_lead_owner_scope(self, app):
         from app.services.lead_dedup_service import (
             refresh_lead_dedup_fields,

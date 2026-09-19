@@ -242,6 +242,58 @@ describe('SameAddressMergeBanner', () => {
     expect(onMerged).toHaveBeenCalledWith({ winnerId: 100, loserId: 2497 })
   })
 
+  it('shows this lead before another record is chosen', async () => {
+    const user = userEvent.setup()
+    vi.mocked(commandCenterService.getMergeContext).mockResolvedValue({
+      leads: [
+        {
+          id: 100,
+          property_street: '4451 N Albany Ave Apt 1',
+          property_city: 'Chicago',
+          property_state: 'IL',
+          property_zip: '60625',
+          owner_display_name: 'Samuel Marconi',
+          people_names: ['Samuel Marconi'],
+          county_assessor_pin: '13-13-127-002-0000',
+          phones: ['3125550100'],
+          emails: ['sam@example.com'],
+          source: 'Cityscape',
+          activity: {
+            total: 2,
+            calls: 1,
+            notes: 1,
+            emails: 0,
+            mail: 0,
+            last_summary: 'Called',
+          },
+        },
+      ],
+    })
+    render(
+      <MemoryRouter>
+        <ManualMergeHarness
+          leadId={100}
+          currentOwnerLabel="Samuel Marconi"
+          currentPeopleNames={['Samuel Marconi']}
+          onMerged={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    const facts = await screen.findByTestId('same-address-merge-current-facts')
+    expect(facts).toHaveTextContent('Samuel Marconi (#100)')
+    await waitFor(() => {
+      expect(screen.getByTestId('same-address-merge-current-property')).toHaveTextContent(
+        '4451 N Albany Ave Apt 1',
+      )
+    })
+    expect(screen.getByTestId('same-address-merge-current-pin')).toHaveTextContent('13-13-127-002-0000')
+    expect(screen.getByTestId('same-address-merge-current-contact')).toHaveTextContent('(312) 555-0100')
+    expect(screen.getByTestId('same-address-merge-current-contact')).toHaveTextContent('sam@example.com')
+    expect(screen.getByTestId('same-address-merge-current-source')).toHaveTextContent('Cityscape')
+    expect(screen.getByTestId('same-address-merge-incoming-empty')).toBeInTheDocument()
+  })
+
   it('when winner differs from current lead, onMerged still runs (navigate owned by helper)', async () => {
     const user = userEvent.setup()
     const navigate = vi.fn()

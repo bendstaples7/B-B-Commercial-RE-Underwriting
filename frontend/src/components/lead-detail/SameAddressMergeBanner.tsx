@@ -679,6 +679,49 @@ function searchHitLabel(item: SearchResultItem): string {
   return street ? `${owner} — ${street} (#${item.id})` : `${owner} (#${item.id})`
 }
 
+function LeadFactGrid({
+  row,
+  ready,
+  loading,
+  idPrefix,
+}: {
+  row: SameAddressLeadSummary
+  ready: boolean
+  loading: boolean
+  idPrefix: string
+}) {
+  return (
+    <Box
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: '112px minmax(0, 1fr)',
+        columnGap: 1,
+        rowGap: 0.5,
+        mt: 1,
+      }}
+    >
+      {MERGE_ROWS.map((item) => {
+        const value = fieldValue(row, item.key, ready)
+        const text = value || (loading ? 'Loading…' : '—')
+        return (
+          <Box key={item.key} sx={{ display: 'contents' }}>
+            <Typography variant="caption" color="text.secondary" sx={{ py: 0.25 }}>
+              {item.label}
+            </Typography>
+            <Typography
+              variant="body2"
+              data-testid={`${idPrefix}-${item.key}`}
+              sx={{ py: 0.25, minWidth: 0, overflowWrap: 'anywhere' }}
+            >
+              {text}
+            </Typography>
+          </Box>
+        )
+      })}
+    </Box>
+  )
+}
+
 export function SameAddressMergeBanner({
   leadId,
   twins,
@@ -910,10 +953,10 @@ export function SameAddressMergeBanner({
     }
     const requestId = searchRequestId.current + 1
     searchRequestId.current = requestId
+    setSearchLoading(true)
+    setSearchError(null)
     const controller = new AbortController()
     const timeoutId = window.setTimeout(() => {
-      setSearchLoading(true)
-      setSearchError(null)
       void searchService
         .search({ q: trimmed, page: 1, per_page: 10, signal: controller.signal })
         .then((response) => {
@@ -1099,6 +1142,17 @@ export function SameAddressMergeBanner({
       ?? (hasTwins
         ? 'Optional — search name, address, or lead # to merge a different twin.'
         : 'Search by name, address, or lead number.'))
+  const trimmedSearch = searchInput.trim()
+  const searchQueryActive = trimmedSearch.length >= 2 && !/^\d+$/.test(trimmedSearch)
+  const showInlineHits = searchHits.length > 0 && selectedHit == null && validatedOtherId == null
+  const showSearchEmpty = searchQueryActive
+    && !searchLoading
+    && !searchError
+    && searchHits.length === 0
+    && selectedHit == null
+    && validatedOtherId == null
+    && pastePreview == null
+  const currentReady = Boolean(primaryView?.activity)
 
   return (
     <>
@@ -1157,6 +1211,10 @@ export function SameAddressMergeBanner({
 
           <Autocomplete
             freeSolo
+            open={false}
+            onOpen={() => undefined}
+            onClose={() => undefined}
+            forcePopupIcon={false}
             options={searchHits}
             loading={searchLoading}
             value={selectedHit}
@@ -1194,22 +1252,6 @@ export function SameAddressMergeBanner({
                 void validateOtherLeadId(raw)
               }
             }}
-            renderOption={(props, option) => (
-              <li
-                {...props}
-                key={option.id}
-                data-testid={`same-address-merge-search-hit-${option.id}`}
-              >
-                <Box sx={{ py: 0.25 }}>
-                  <Typography variant="body2" fontWeight={600}>
-                    {option.owner_display_name || option.label} (#{option.id})
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {option.property_street || 'No street on file'}
-                  </Typography>
-                </Box>
-              </li>
-            )}
             renderInput={(params) => (
               <TextField
                 {...params}
@@ -1241,6 +1283,74 @@ export function SameAddressMergeBanner({
             sx={{ mt: 0.5 }}
           />
 
+          {showInlineHits ? (
+            <Box
+              component="ul"
+              data-testid="same-address-merge-search-results"
+              sx={{
+                listStyle: 'none',
+                m: 0,
+                mt: 1,
+                p: 0,
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: 1,
+                maxHeight: 240,
+                overflow: 'auto',
+                cursor: 'auto',
+              }}
+            >
+              {searchHits.map((option) => (
+                <Box
+                  component="li"
+                  key={option.id}
+                  sx={{
+                    borderBottom: '1px solid',
+                    borderColor: 'divider',
+                    '&:last-child': { borderBottom: 0 },
+                  }}
+                >
+                  <Box
+                    component="button"
+                    type="button"
+                    data-testid={`same-address-merge-search-hit-${option.id}`}
+                    onClick={() => {
+                      void handleSelectSearchHit(option)
+                    }}
+                    sx={{
+                      display: 'block',
+                      width: '100%',
+                      textAlign: 'left',
+                      border: 0,
+                      bgcolor: 'transparent',
+                      cursor: 'pointer',
+                      px: 1.25,
+                      py: 0.75,
+                      '&:hover': { bgcolor: 'action.hover' },
+                    }}
+                  >
+                    <Typography variant="body2" fontWeight={600}>
+                      {option.owner_display_name || option.label} (#{option.id})
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {option.property_street || 'No street on file'}
+                    </Typography>
+                  </Box>
+                </Box>
+              ))}
+            </Box>
+          ) : null}
+          {showSearchEmpty ? (
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ mt: 1 }}
+              data-testid="same-address-merge-search-empty"
+            >
+              No matching leads. Try a street, owner name, or lead number.
+            </Typography>
+          ) : null}
+
           {pastePreview ? (
             <Typography
               variant="body2"
@@ -1268,21 +1378,58 @@ export function SameAddressMergeBanner({
               <Box data-testid="same-address-merge-compare" sx={{ cursor: 'auto' }}>
                 {!compareIncoming || !primaryView ? (
                   <Box
-                    data-testid="same-address-merge-incoming-empty"
                     sx={{
-                      p: 1.25,
-                      borderRadius: 1,
-                      border: '1px dashed',
-                      borderColor: 'divider',
-                      cursor: 'auto',
+                      display: 'grid',
+                      gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1fr) minmax(0, 1fr)' },
+                      gap: 1.5,
                     }}
                   >
-                    <Typography variant="overline" color="text.secondary">
-                      Merges in
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                      Search for the other lead. Its property, source, and activities will show here.
-                    </Typography>
+                    {primaryView ? (
+                      <Box
+                        data-testid="same-address-merge-current-facts"
+                        sx={{
+                          p: 1.25,
+                          borderRadius: 1,
+                          bgcolor: 'action.hover',
+                          cursor: 'auto',
+                        }}
+                      >
+                        <Typography variant="overline" color="primary.main" display="block">
+                          This lead
+                        </Typography>
+                        <Typography variant="body2" fontWeight={700}>
+                          {primaryView.owner_display_name} (#{primaryView.id})
+                        </Typography>
+                        {contextError ? (
+                          <Typography variant="body2" color="error" sx={{ mt: 0.5 }}>
+                            {contextError}
+                          </Typography>
+                        ) : null}
+                        <LeadFactGrid
+                          row={primaryView}
+                          ready={currentReady}
+                          loading={contextLoading}
+                          idPrefix="same-address-merge-current"
+                        />
+                      </Box>
+                    ) : null}
+                    <Box
+                      data-testid="same-address-merge-incoming-empty"
+                      sx={{
+                        p: 1.25,
+                        borderRadius: 1,
+                        border: '1px dashed',
+                        borderColor: 'divider',
+                        cursor: 'auto',
+                      }}
+                    >
+                      <Typography variant="overline" color="text.secondary">
+                        Merges in
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                        Search for the other lead. Its property, source, and activities will show here.
+                      </Typography>
+                    </Box>
                   </Box>
                 ) : (
                   <>

@@ -1026,9 +1026,11 @@ def find_same_building_leads(
 ) -> list[Lead]:
     """Same building-level street, regardless of owner name.
 
-    Used by the lead-page merge banner so Yoko vs Yoko+Edwin still surface.
-    Do not use the house-number ``1%`` prefilter — that scan is capped and
-    drops real twins when many streets start with the same number.
+    Used by the lead-page merge banner so Yoko vs Yoko+Edwin still surface,
+    and so a bare building husk (``4451 N Albany Ave``) shows next to a unit
+    (``4451 N Albany Ave Apt 1``). Distinct units in the same building stay
+    out. Do not use the house-number ``1%`` prefilter — that scan is capped
+    and drops real twins when many streets start with the same number.
     """
     street = (lead.property_street or '').strip()
     lead_id = getattr(lead, 'id', None)
@@ -1080,7 +1082,7 @@ def find_same_building_leads(
             .all()
         )
         for other in indexed_matches:
-            if streets_match_same_situs(street, other.property_street):
+            if streets_match_duplicate_merge(street, other.property_street):
                 found[other.id] = other
             if len(found) >= limit:
                 break
@@ -1098,7 +1100,7 @@ def find_same_building_leads(
                 .all()
             )
             for other in missing_normalized:
-                if streets_match_same_situs(street, other.property_street):
+                if streets_match_duplicate_merge(street, other.property_street):
                     found[other.id] = other
         return list(found.values())[:limit]
 
@@ -1107,7 +1109,7 @@ def find_same_building_leads(
         func.lower(func.trim(Lead.property_street)) == street.lower(),
     )
     for other in q.order_by(Lead.id.asc()).limit(limit).all():
-        if streets_match_same_situs(street, other.property_street):
+        if streets_match_duplicate_merge(street, other.property_street):
             siblings.append(other)
         if len(siblings) >= limit:
             break
