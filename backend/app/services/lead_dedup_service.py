@@ -497,14 +497,14 @@ def _write_contact_slots(winner: Lead, values: list[Any], prefix: str, count: in
 
 
 def _contact_name_key(contact: Any) -> str:
-    return ' '.join(
+    return _person_name_key(' '.join(
         part
         for part in [
             str(getattr(contact, 'first_name', '') or '').strip(),
             str(getattr(contact, 'last_name', '') or '').strip(),
         ]
         if part
-    ).lower()
+    ))
 
 
 def _person_name_key(name: Any) -> str:
@@ -556,15 +556,53 @@ def _filter_owner_contact_methods(
     """Apply dialog contact-method selections to relational owner contacts."""
     if phones is None and emails is None:
         return
+    from app.models.contact import Contact
     from app.models.contact_email import ContactEmail
     from app.models.contact_phone import ContactPhone
     from app.models.property_contact import PropertyContact
     from app.services.phone_confidence_service import PhoneConfidenceService
 
-    owner_contact_ids = [
-        link.contact_id
-        for link in PropertyContact.query.filter_by(property_id=lead_id, role='owner').all()
-    ]
+    owner_links = PropertyContact.query.filter_by(property_id=lead_id, role='owner').all()
+    owner_contact_ids: list[int] = []
+    for link in owner_links:
+        shared_elsewhere = PropertyContact.query.filter(
+            PropertyContact.contact_id == link.contact_id,
+            PropertyContact.property_id != lead_id,
+        ).first()
+        if shared_elsewhere is not None:
+            original = link.contact
+            clone = Contact(
+                first_name=original.first_name,
+                last_name=original.last_name,
+                role=original.role,
+                role_description=original.role_description,
+                notes=original.notes,
+                name_locked=original.name_locked,
+                keep_on_gis=original.keep_on_gis,
+            )
+            db.session.add(clone)
+            db.session.flush()
+            for phone in original.phones or []:
+                db.session.add(ContactPhone(
+                    contact_id=clone.id,
+                    value=phone.value,
+                    label=phone.label,
+                    notes=phone.notes,
+                    confidence_score=phone.confidence_score,
+                    last_outcome=phone.last_outcome,
+                    last_called_at=phone.last_called_at,
+                    source=phone.source,
+                ))
+            for email in original.emails or []:
+                db.session.add(ContactEmail(
+                    contact_id=clone.id,
+                    value=email.value,
+                    label=email.label,
+                ))
+            link.contact_id = clone.id
+            owner_contact_ids.append(clone.id)
+        else:
+            owner_contact_ids.append(link.contact_id)
     if not owner_contact_ids:
         return
     if phones is not None:
@@ -786,19 +824,24 @@ def merge_lead_into_winner(
         pass
     try:
         from app.services.lead_timeline_service import LeadTimelineService
+        if explicit_choices:
+            summary = f'Combined record #{loser_id} into this one with selected merge choices.'
+        else:
+            summary = (
+                f'Combined record #{loser_id} into this one. '
+                'People from both were kept; the same person got all phone numbers.'
+            )
         LeadTimelineService().append(
             winner_id,
             'leads_merged',
             changed_by,
-            (
-                f'Combined record #{loser_id} into this one. '
-                'People from both were kept; the same person got all phone numbers.'
-            ),
+            summary,
             metadata={
                 'loser_id': loser_id,
                 'winner_id': winner_id,
                 'people_kept': people_after,
                 'contacts_combined': int(contacts_combined or 0),
+                'selected_merge_choices': explicit_choices,
             },
             source='system',
             commit=False,

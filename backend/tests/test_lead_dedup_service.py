@@ -1211,7 +1211,7 @@ class TestSameBuildingBannerAndAdditivePeople:
                         'people_names': [],
                         'phones': [],
                         'emails': [],
-                        'keep_primary_people': False,
+                        'keep_primary_people': True,
                         'keep_incoming_people': False,
                     },
                 )
@@ -1221,6 +1221,126 @@ class TestSameBuildingBannerAndAdditivePeople:
             assert winner.owner_first_name is None
             assert winner.owner_last_name is None
             assert PropertyContact.query.filter_by(property_id=winner.id, role='owner').count() == 0
+
+    def test_merge_choices_preserve_selected_contact_with_extra_whitespace(self, app):
+        from app.models.property_contact import PropertyContact
+        from app.services.contact_service import ContactService
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='1112 Whitespace Choice Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+            )
+            loser = Lead(
+                property_street='1112 Whitespace Choice Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+            )
+            db.session.add_all([winner, loser])
+            db.session.commit()
+            service = ContactService()
+            yoko = service.create_contact({
+                'first_name': 'Yoko   Marie',
+                'last_name': 'Miller',
+            })
+            service.link_contact_to_property(winner.id, yoko.id, role='owner', is_primary=True)
+            db.session.commit()
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ):
+                merge_lead_into_winner(
+                    winner,
+                    loser,
+                    changed_by='test',
+                    choices={
+                        'people_names': ['Yoko Marie Miller'],
+                        'keep_primary_people': True,
+                        'keep_incoming_people': False,
+                    },
+                )
+                db.session.commit()
+
+            owner_links = PropertyContact.query.filter_by(property_id=winner.id, role='owner').all()
+            assert any(link.contact_id == yoko.id for link in owner_links)
+
+    def test_merge_choices_clone_shared_contact_before_method_pruning(self, app):
+        from app.models.contact_phone import ContactPhone
+        from app.models.property_contact import PropertyContact
+        from app.services.contact_service import ContactService
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='1113 Shared Contact Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+                phone_1='7735551111',
+            )
+            loser = Lead(
+                property_street='1113 Shared Contact Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+            )
+            other_property = Lead(
+                property_street='999 Other Shared Contact Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+            )
+            db.session.add_all([winner, loser, other_property])
+            db.session.commit()
+            service = ContactService()
+            shared = service.create_contact({
+                'first_name': 'Yoko',
+                'last_name': 'Miller',
+                'phones': [
+                    {'value': '7735551111', 'label': 'mobile'},
+                    {'value': '9995559999', 'label': 'home'},
+                ],
+            })
+            service.link_contact_to_property(winner.id, shared.id, role='owner', is_primary=True)
+            service.link_contact_to_property(other_property.id, shared.id, role='owner', is_primary=True)
+            db.session.commit()
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ):
+                merge_lead_into_winner(
+                    winner,
+                    loser,
+                    changed_by='test',
+                    choices={
+                        'people_names': ['Yoko Miller'],
+                        'phones': ['7735551111'],
+                        'emails': [],
+                        'keep_primary_people': True,
+                        'keep_incoming_people': False,
+                    },
+                )
+                db.session.commit()
+
+            winner_link = PropertyContact.query.filter_by(
+                property_id=winner.id,
+                role='owner',
+            ).one()
+            other_link = PropertyContact.query.filter_by(
+                property_id=other_property.id,
+                role='owner',
+            ).one()
+            assert winner_link.contact_id != shared.id
+            assert other_link.contact_id == shared.id
+            winner_phones = {
+                phone.value
+                for phone in ContactPhone.query.filter_by(contact_id=winner_link.contact_id).all()
+            }
+            shared_phones = {
+                phone.value
+                for phone in ContactPhone.query.filter_by(contact_id=shared.id).all()
+            }
+            assert winner_phones == {'7735551111'}
+            assert shared_phones == {'7735551111', '9995559999'}
 
     def test_merge_choice_street_collision_is_skipped(self, app):
         from app.services.lead_dedup_service import merge_lead_into_winner

@@ -1628,6 +1628,13 @@ class TestMergePreviewAndUnitGuard:
             assert winner.owner_first_name == 'Pat'
             assert winner.owner_last_name == 'Malone'
             assert LeadTask.query.filter_by(lead_id=winner.id, title='Do not keep').count() == 0
+            timeline = LeadTimelineEntry.query.filter_by(
+                lead_id=winner.id,
+                event_type='leads_merged',
+            ).order_by(LeadTimelineEntry.id.desc()).first()
+            assert timeline is not None
+            assert 'selected merge choices' in timeline.summary
+            assert 'all phone numbers' not in timeline.summary
 
     def test_merge_into_keeps_incoming_activities_when_selected(self, client, app):
         from app.services.lead_dedup_service import refresh_lead_dedup_fields
