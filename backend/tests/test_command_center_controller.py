@@ -1511,6 +1511,73 @@ class TestMergePreviewAndUnitGuard:
             assert body['winner_id'] == unit.id
             assert body['loser_id'] == husk.id
 
+    def test_merge_into_applies_field_choices(self, client, app):
+        from app.models.lead_task import LeadTask
+        from app.services.lead_dedup_service import refresh_lead_dedup_fields
+
+        with app.app_context():
+            winner = _make_lead(
+                app,
+                '10 Choice St',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                source='Cityscape',
+                lead_status='skip_trace',
+                county_assessor_pin='14-1',
+            )
+            loser = _make_lead(
+                app,
+                '10 Choice St',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                source='Assessor',
+                lead_status='mailing_no_contact_made',
+            )
+            for item in (winner, loser):
+                refresh_lead_dedup_fields(item)
+            db.session.add(LeadTask(
+                lead_id=loser.id,
+                task_type='custom',
+                title='Do not keep',
+                status='open',
+                created_by='test',
+            ))
+            db.session.commit()
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ), patch(
+                'app.services.lead_refresh.refresh_lead_scoring',
+            ):
+                response = client.post(
+                    f'/api/leads/{loser.id}/merge-into/{winner.id}',
+                    headers=_AUTH_HEADERS,
+                    json={'choices': {
+                        'property_street': '10 Choice Street',
+                        'property_city': 'Chicago',
+                        'property_state': 'IL',
+                        'property_zip': '60614',
+                        'county_assessor_pin': '99-00',
+                        'source': 'Picked source',
+                        'deal_source': None,
+                        'data_source': None,
+                        'lead_status': 'negotiating_remote',
+                        'people_names': ['Pat Malone'],
+                        'keep_incoming_activities': False,
+                        'units': 6,
+                    }},
+                )
+            assert response.status_code == 200, response.get_json()
+            db.session.refresh(winner)
+            assert winner.property_street == '10 Choice Street'
+            assert winner.property_city == 'Chicago'
+            assert winner.county_assessor_pin == '99-00'
+            assert winner.source == 'Picked source'
+            assert winner.lead_status == 'negotiating_remote'
+            assert winner.units == 6
+            assert winner.owner_first_name == 'Pat'
+            assert winner.owner_last_name == 'Malone'
+            assert LeadTask.query.filter_by(lead_id=winner.id, title='Do not keep').count() == 0
+
 
 class TestMoveToSkipTrace:
     @patch(

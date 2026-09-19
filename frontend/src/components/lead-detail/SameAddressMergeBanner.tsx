@@ -13,6 +13,7 @@ import {
   Autocomplete,
   Box,
   Button,
+  Checkbox,
   CircularProgress,
   Dialog,
   DialogActions,
@@ -29,6 +30,7 @@ import {
 import { alpha } from '@mui/material/styles'
 import { LEAD_STATUS_LABELS } from '@/components/LeadStatusChip'
 import { commandCenterService, searchService } from '@/services/api'
+import type { MergeFieldChoices } from '@/services/api'
 import type {
   LeadStatus,
   MergeActivitySummary,
@@ -106,24 +108,6 @@ function sourceLine(row: SameAddressLeadSummary): string {
   return bits.length ? bits.join(' · ') : 'No source on file'
 }
 
-function propertyFactsLine(row: SameAddressLeadSummary): string {
-  const bits: string[] = []
-  const pin = (row.county_assessor_pin || '').trim()
-  if (pin) bits.push(`PIN ${pin}`)
-  const type = formatPropertyTypeLabel(row.property_type)
-  if (type) bits.push(type)
-  if (row.units != null && Number(row.units) > 0) {
-    const units = Number(row.units)
-    bits.push(`${units} unit${units === 1 ? '' : 's'}`)
-  }
-  const status = statusLabel(row.lead_status)
-  if (status) bits.push(status)
-  if (row.lead_score != null && !Number.isNaN(Number(row.lead_score))) {
-    bits.push(`Score ${Math.round(Number(row.lead_score))}`)
-  }
-  return bits.join(' · ')
-}
-
 function activityLine(row: SameAddressLeadSummary): string {
   const activity = row.activity
   if (!activity) return ''
@@ -154,18 +138,6 @@ function datesLine(row: SameAddressLeadSummary): string {
   return bits.join(' · ')
 }
 
-const COMPARE_FIELDS: Array<{ key: string; label: string }> = [
-  { key: 'people', label: 'People' },
-  { key: 'property', label: 'This property' },
-  { key: 'details', label: 'Property' },
-  { key: 'source', label: 'Source' },
-  { key: 'dates', label: 'Dates' },
-  { key: 'companies', label: 'Companies' },
-  { key: 'related', label: 'Other properties' },
-  { key: 'activities', label: 'Activities' },
-  { key: 'contact', label: 'Contact' },
-]
-
 function relatedValue(row: SameAddressLeadSummary): string {
   const related = row.related_properties
   if (!related?.length) return 'None'
@@ -180,28 +152,6 @@ function activityValue(row: SameAddressLeadSummary): string {
   const line = activityLine(row)
   if (!line || line === 'Activities: none') return 'None'
   return line.replace(/^Activities: /, '')
-}
-
-function compareValue(row: SameAddressLeadSummary, key: string, ready: boolean): string {
-  if (key === 'people') return peopleLine(row.people_names)
-  if (key === 'property') return addressLine(row)
-  if (!ready) return '…'
-  if (key === 'details') return propertyFactsLine(row) || '—'
-  if (key === 'source') return sourceLine(row)
-  if (key === 'dates') return datesLine(row) || '—'
-  if (key === 'companies') {
-    const names = (row.organizations ?? []).map((name) => name.trim()).filter(Boolean)
-    return names.length ? names.join(', ') : 'None'
-  }
-  if (key === 'related') return relatedValue(row)
-  if (key === 'activities') return activityValue(row)
-  if (key === 'contact') {
-    const bits: string[] = []
-    if (row.has_phone) bits.push('phone')
-    if (row.has_email) bits.push('email')
-    return bits.length ? bits.join(' · ') : 'None'
-  }
-  return '—'
 }
 
 function filledText(
@@ -337,6 +287,286 @@ function afterCombinePreview(
   }
 }
 
+type FieldPick = { incoming: boolean; primary: boolean }
+
+const MERGE_ROWS: Array<{ key: string; label: string; editable: boolean }> = [
+  { key: 'people', label: 'People', editable: true },
+  { key: 'property', label: 'This property', editable: true },
+  { key: 'pin', label: 'PIN', editable: true },
+  { key: 'type', label: 'Type', editable: true },
+  { key: 'units', label: 'Units', editable: true },
+  { key: 'status', label: 'Status', editable: true },
+  { key: 'score', label: 'Score', editable: false },
+  { key: 'source', label: 'Source', editable: true },
+  { key: 'dates', label: 'Dates', editable: true },
+  { key: 'companies', label: 'Companies', editable: true },
+  { key: 'related', label: 'Other properties', editable: true },
+  { key: 'activities', label: 'Activities', editable: true },
+  { key: 'contact', label: 'Contact', editable: true },
+]
+
+const CONSOLIDATE_KEYS = new Set(['people', 'companies', 'related', 'activities', 'contact'])
+const EMPTY_FIELD_VALUES = new Set([
+  '',
+  'None',
+  'No people listed',
+  'No address on file',
+  'No source on file',
+  '—',
+  '…',
+])
+
+const MERGE_ROW_GRID = {
+  display: 'grid',
+  gridTemplateColumns: '112px minmax(0, 1fr) minmax(0, 1fr) minmax(220px, 1.15fr)',
+  columnGap: 1,
+  alignItems: 'stretch',
+  width: '100%',
+} as const
+
+function hasFieldValue(value: string): boolean {
+  return !EMPTY_FIELD_VALUES.has(value.trim())
+}
+
+function fieldValue(row: SameAddressLeadSummary, key: string, ready: boolean): string {
+  if (key === 'people') return peopleLine(row.people_names)
+  if (key === 'property') return addressLine(row)
+  if (key === 'pin') return (row.county_assessor_pin || '').trim() || 'None'
+  if (key === 'type') return formatPropertyTypeLabel(row.property_type) || 'None'
+  if (key === 'units') {
+    if (row.units == null || Number.isNaN(Number(row.units))) return 'None'
+    return String(Number(row.units))
+  }
+  if (key === 'status') return statusLabel(row.lead_status) || 'None'
+  if (key === 'score') {
+    if (row.lead_score == null || Number.isNaN(Number(row.lead_score))) return 'None'
+    return String(Math.round(Number(row.lead_score)))
+  }
+  if (!ready) return ''
+  if (key === 'source') return sourceLine(row)
+  if (key === 'dates') return datesLine(row) || 'None'
+  if (key === 'companies') {
+    const names = (row.organizations ?? []).map((name) => name.trim()).filter(Boolean)
+    return names.length ? names.join(', ') : 'None'
+  }
+  if (key === 'related') return relatedValue(row)
+  if (key === 'activities') return activityValue(row)
+  if (key === 'contact') {
+    const bits: string[] = []
+    if (row.has_phone) bits.push('phone')
+    if (row.has_email) bits.push('email')
+    return bits.length ? bits.join(' · ') : 'None'
+  }
+  return ''
+}
+
+function defaultFieldPick(
+  key: string,
+  primary: SameAddressLeadSummary,
+  incoming: SameAddressLeadSummary,
+  ready: boolean,
+): FieldPick {
+  const primaryValue = fieldValue(primary, key, ready)
+  const incomingValue = fieldValue(incoming, key, ready)
+  if (!ready && key !== 'people' && key !== 'property') {
+    return { incoming: false, primary: false }
+  }
+  if (CONSOLIDATE_KEYS.has(key)) {
+    return {
+      primary: hasFieldValue(primaryValue),
+      incoming: hasFieldValue(incomingValue),
+    }
+  }
+  const previewValue = fieldValue(afterCombinePreview(primary, incoming), key, ready)
+  if (
+    hasFieldValue(previewValue)
+    && previewValue === incomingValue
+    && previewValue !== primaryValue
+  ) {
+    return { incoming: true, primary: false }
+  }
+  if (hasFieldValue(primaryValue)) return { incoming: false, primary: true }
+  if (hasFieldValue(incomingValue)) return { incoming: true, primary: false }
+  return { incoming: false, primary: false }
+}
+
+function composeField(
+  key: string,
+  primary: SameAddressLeadSummary,
+  incoming: SameAddressLeadSummary,
+  pick: FieldPick,
+  ready: boolean,
+): string {
+  const primaryValue = fieldValue(primary, key, ready)
+  const incomingValue = fieldValue(incoming, key, ready)
+  if (pick.primary && pick.incoming) {
+    if (CONSOLIDATE_KEYS.has(key)) {
+      return fieldValue(afterCombinePreview(primary, incoming), key, ready)
+    }
+    if (!hasFieldValue(primaryValue)) return hasFieldValue(incomingValue) ? incomingValue : ''
+    if (!hasFieldValue(incomingValue) || primaryValue === incomingValue) return primaryValue
+    return `${primaryValue} · ${incomingValue}`
+  }
+  if (pick.primary) return primaryValue
+  if (pick.incoming) return incomingValue
+  return ''
+}
+
+function parseAddress(line: string): {
+  street: string | null
+  city: string | null
+  state: string | null
+  zip: string | null
+} {
+  const raw = line.trim()
+  if (!hasFieldValue(raw) || raw.includes(' · ')) {
+    return { street: hasFieldValue(raw) ? raw : null, city: null, state: null, zip: null }
+  }
+  const comma = raw.indexOf(',')
+  if (comma === -1) return { street: raw, city: null, state: null, zip: null }
+  const street = raw.slice(0, comma).trim()
+  const parts = raw.slice(comma + 1).trim().split(/\s+/).filter(Boolean)
+  let zip: string | null = null
+  let state: string | null = null
+  if (parts.length && /^\d{5}(?:-\d{4})?$/.test(parts[parts.length - 1])) {
+    zip = parts.pop() || null
+  }
+  if (parts.length && /^[A-Za-z]{2}$/.test(parts[parts.length - 1])) {
+    state = (parts.pop() || '').toUpperCase() || null
+  }
+  const city = parts.join(' ')
+  return {
+    street: street || null,
+    city: city || null,
+    state,
+    zip,
+  }
+}
+
+function statusCodeFromLabel(label: string): string | null {
+  const trimmed = label.trim()
+  if (!hasFieldValue(trimmed)) return null
+  for (const [code, text] of Object.entries(LEAD_STATUS_LABELS)) {
+    if (text.toLowerCase() === trimmed.toLowerCase()) return code
+  }
+  return Object.hasOwn(LEAD_STATUS_LABELS, trimmed) ? trimmed : null
+}
+
+function typeCodeFromLabel(label: string): string | null {
+  const trimmed = label.trim()
+  if (!hasFieldValue(trimmed)) return null
+  return trimmed.toLowerCase().replace(/\s+/g, '_')
+}
+
+function parseUnits(text: string): number | null {
+  if (!hasFieldValue(text)) return null
+  const match = text.match(/\d+/)
+  return match ? Number(match[0]) : null
+}
+
+function namesFromDraft(text: string): string[] {
+  if (!hasFieldValue(text)) return []
+  return text.split(',').map((name) => name.trim()).filter((name) => hasFieldValue(name))
+}
+
+function blankToNull(text: string | null | undefined): string | null {
+  const value = (text || '').trim()
+  return hasFieldValue(value) ? value : null
+}
+
+function buildMergeChoices(
+  primary: SameAddressLeadSummary,
+  incoming: SameAddressLeadSummary,
+  picks: Record<string, FieldPick>,
+  drafts: Record<string, string>,
+  ready: boolean,
+): MergeFieldChoices {
+  const address = parseAddress(drafts.property || '')
+  const sourceDraft = drafts.source || ''
+  const primarySource = fieldValue(primary, 'source', ready)
+  const incomingSource = fieldValue(incoming, 'source', ready)
+  const sourcePick = picks.source || { incoming: false, primary: false }
+  let source: string | null
+  let dealSource: string | null
+  let dataSource: string | null
+  if (sourcePick.primary && !sourcePick.incoming && sourceDraft === primarySource) {
+    source = blankToNull(primary.source)
+    dealSource = blankToNull(primary.deal_source)
+    dataSource = blankToNull(primary.data_source)
+  } else if (sourcePick.incoming && !sourcePick.primary && sourceDraft === incomingSource) {
+    source = blankToNull(incoming.source)
+    dealSource = blankToNull(incoming.deal_source)
+    dataSource = blankToNull(incoming.data_source)
+  } else {
+    source = blankToNull(sourceDraft)
+    dealSource = null
+    dataSource = null
+  }
+  const statusDraft = drafts.status || ''
+  const statusFromPrimary = statusLabel(primary.lead_status)
+  const statusFromIncoming = statusLabel(incoming.lead_status)
+  const statusPick = picks.status || { incoming: false, primary: false }
+  let leadStatus: string | null = statusCodeFromLabel(statusDraft)
+  if (statusPick.primary && !statusPick.incoming && statusDraft === statusFromPrimary) {
+    leadStatus = primary.lead_status || null
+  } else if (statusPick.incoming && !statusPick.primary && statusDraft === statusFromIncoming) {
+    leadStatus = incoming.lead_status || null
+  }
+  const typeDraft = drafts.type || ''
+  const typePick = picks.type || { incoming: false, primary: false }
+  let propertyType = typeCodeFromLabel(typeDraft)
+  if (
+    typePick.primary
+    && !typePick.incoming
+    && typeDraft === (formatPropertyTypeLabel(primary.property_type) || 'None')
+  ) {
+    propertyType = blankToNull(primary.property_type)
+  } else if (
+    typePick.incoming
+    && !typePick.primary
+    && typeDraft === (formatPropertyTypeLabel(incoming.property_type) || 'None')
+  ) {
+    propertyType = blankToNull(incoming.property_type)
+  }
+  const peoplePick = picks.people || { incoming: false, primary: false }
+  const activityPick = picks.activities || { incoming: false, primary: false }
+  const companyPick = picks.companies || { incoming: false, primary: false }
+  return {
+    property_street: address.street,
+    property_city: address.city,
+    property_state: address.state,
+    property_zip: address.zip,
+    county_assessor_pin: blankToNull((drafts.pin || '').replace(/^PIN\s+/i, '')),
+    property_type: propertyType,
+    units: parseUnits(drafts.units || ''),
+    lead_status: leadStatus,
+    source,
+    deal_source: dealSource,
+    data_source: dataSource,
+    people_names: namesFromDraft(drafts.people || ''),
+    keep_incoming_people: peoplePick.incoming,
+    keep_primary_people: peoplePick.primary,
+    keep_incoming_activities: activityPick.incoming,
+    keep_primary_activities: activityPick.primary,
+    keep_incoming_companies: companyPick.incoming,
+    keep_primary_companies: companyPick.primary,
+  }
+}
+
+function withDecision(
+  row: SameAddressLeadSummary,
+  detail: SameAddressLeadSummary | undefined,
+): SameAddressLeadSummary {
+  if (!detail) return row
+  return {
+    ...row,
+    ...detail,
+    owner_display_name: detail.owner_display_name || row.owner_display_name,
+    people_names: detail.people_names?.length ? detail.people_names : row.people_names,
+    property_street: detail.property_street || row.property_street,
+  }
+}
+
 function searchHitLabel(item: SearchResultItem): string {
   const owner = (item.owner_display_name || item.label || `Lead #${item.id}`).trim()
   const street = (item.property_street || '').trim()
@@ -377,6 +607,8 @@ export function SameAddressMergeBanner({
   const [decisionById, setDecisionById] = useState<Record<number, SameAddressLeadSummary>>({})
   const [contextLoading, setContextLoading] = useState(false)
   const [contextError, setContextError] = useState<string | null>(null)
+  const [pickOverride, setPickOverride] = useState<Record<string, FieldPick>>({})
+  const [draftOverride, setDraftOverride] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const removeIdRef = useRef<number | null>(null)
@@ -407,6 +639,8 @@ export function SameAddressMergeBanner({
   const selectRemoveId = useCallback((nextRemoveId: number | null) => {
     removeIdRef.current = nextRemoveId
     setRemoveId(nextRemoveId)
+    setPickOverride({})
+    setDraftOverride({})
   }, [])
 
   const first = twins[0]
@@ -443,6 +677,33 @@ export function SameAddressMergeBanner({
     [options, winnerId],
   )
 
+  const decisionViews = useMemo(
+    () => options.map((row) => withDecision(row, decisionById[row.id])),
+    [decisionById, options],
+  )
+  const primaryView = decisionViews.find((row) => row.id === winnerId) ?? decisionViews[0] ?? null
+  const incomingView = decisionViews.find((row) => row.id === removeId)
+    ?? decisionViews.find((row) => primaryView != null && row.id !== primaryView.id)
+    ?? null
+  const compareIncoming = incomingView && primaryView && incomingView.id !== primaryView.id
+    ? incomingView
+    : null
+  const compareReady = Boolean(primaryView?.activity && compareIncoming?.activity)
+
+  const resolvedRows = useMemo(() => {
+    if (!primaryView || !compareIncoming) return []
+    return MERGE_ROWS.map((row) => {
+      const pick = {
+        ...defaultFieldPick(row.key, primaryView, compareIncoming, compareReady),
+        ...pickOverride[row.key],
+      }
+      const draft = Object.prototype.hasOwnProperty.call(draftOverride, row.key)
+        ? draftOverride[row.key]
+        : composeField(row.key, primaryView, compareIncoming, pick, compareReady)
+      return { ...row, pick, draft }
+    })
+  }, [compareIncoming, compareReady, draftOverride, pickOverride, primaryView])
+
   const contextKey = useMemo(() => {
     const ids = new Set<number>([leadId])
     for (const twin of twins) ids.add(twin.id)
@@ -470,6 +731,8 @@ export function SameAddressMergeBanner({
     setDecisionById({})
     setContextLoading(false)
     setContextError(null)
+    setPickOverride({})
+    setDraftOverride({})
     contextRequestId.current += 1
     selectRemoveId(first?.id ?? null)
   }, [first?.id, invalidatePasteLookup, leadId, selectRemoveId])
@@ -648,6 +911,8 @@ export function SameAddressMergeBanner({
 
   const handleWinnerChange = (nextWinnerId: number) => {
     setWinnerId(nextWinnerId)
+    setPickOverride({})
+    setDraftOverride({})
     if (removeId === nextWinnerId) {
       selectRemoveId(options.find((row) => row.id !== nextWinnerId)?.id ?? null)
     }
@@ -683,7 +948,18 @@ export function SameAddressMergeBanner({
     setSaving(true)
     setError(null)
     try {
-      const result = await commandCenterService.mergeInto(otherId, stayId)
+      const choices = primaryView && compareIncoming && compareReady
+        ? buildMergeChoices(
+          primaryView,
+          compareIncoming,
+          Object.fromEntries(resolvedRows.map((row) => [row.key, row.pick])),
+          Object.fromEntries(resolvedRows.map((row) => [row.key, row.draft])),
+          compareReady,
+        )
+        : undefined
+      const result = choices
+        ? await commandCenterService.mergeInto(otherId, stayId, choices)
+        : await commandCenterService.mergeInto(otherId, stayId)
       const mergedLoserId =
         typeof result.loser_id === 'number' && result.loser_id > 0
           ? result.loser_id
@@ -878,226 +1154,200 @@ export function SameAddressMergeBanner({
               Choose primary
             </FormLabel>
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-              Left merges into the primary. After combine is the record that remains. Pick a column to change which stays.
+              Each field is one row so you can read across. Check a lead to bring that value in — both can be checked. Edit After combine to set the address, PIN, type, units, status, source, or people. Activity and company checks decide which records move. Score is recalculated. Other properties stay their own leads.
             </Typography>
             <RadioGroup
               aria-labelledby="same-address-merge-stay-label"
               value={String(winnerId)}
               onChange={(event) => handleWinnerChange(Number(event.target.value))}
             >
-              {(() => {
-                const views = options.map((row) => {
-                  const detail = decisionById[row.id]
-                  const view: SameAddressLeadSummary = detail
-                    ? {
-                        ...row,
-                        ...detail,
-                        owner_display_name: detail.owner_display_name || row.owner_display_name,
-                        people_names: detail.people_names?.length
-                          ? detail.people_names
-                          : row.people_names,
-                        property_street: detail.property_street || row.property_street,
-                      }
-                    : row
-                  return view
-                })
-                const primary = views.find((row) => row.id === winnerId) ?? views[0]
-                const incoming = views.find((row) => row.id === removeId)
-                  ?? views.find((row) => row.id !== primary?.id)
-                  ?? null
-                const column = (view: SameAddressLeadSummary | null, role: 'in' | 'primary') => {
-                  if (!view) {
-                    return (
+              <Box data-testid="same-address-merge-compare" sx={{ cursor: 'auto' }}>
+                {!compareIncoming || !primaryView ? (
+                  <Box
+                    data-testid="same-address-merge-incoming-empty"
+                    sx={{
+                      p: 1.25,
+                      borderRadius: 1,
+                      border: '1px dashed',
+                      borderColor: 'divider',
+                      cursor: 'auto',
+                    }}
+                  >
+                    <Typography variant="overline" color="text.secondary">
+                      Merges in
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                      Search for the other lead. Its property, source, and activities will show here.
+                    </Typography>
+                  </Box>
+                ) : (
+                  <>
+                    <Box sx={MERGE_ROW_GRID}>
+                      <Box sx={{ cursor: 'auto' }} />
                       <Box
-                        data-testid="same-address-merge-incoming-empty"
+                        component="label"
+                        data-testid={`same-address-merge-facts-${compareIncoming.id}`}
+                        sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, p: 1, cursor: 'pointer' }}
+                      >
+                        <Radio
+                          value={String(compareIncoming.id)}
+                          data-testid={`same-address-merge-stay-${compareIncoming.id}`}
+                          inputProps={{ 'aria-label': `Choose #${compareIncoming.id} as primary` }}
+                          sx={{ p: 0.25, cursor: 'pointer' }}
+                        />
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="overline" color="text.secondary" display="block">
+                            Merges in
+                          </Typography>
+                          <Typography variant="body2" fontWeight={700}>
+                            {compareIncoming.owner_display_name} (#{compareIncoming.id})
+                            {compareIncoming.id === leadId ? ' · this lead' : ''}
+                          </Typography>
+                        </Box>
+                      </Box>
+                      <Box
+                        component="label"
+                        data-testid={`same-address-merge-facts-${primaryView.id}`}
+                        sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, p: 1, cursor: 'pointer', borderRadius: 1, bgcolor: 'action.hover' }}
+                      >
+                        <Radio
+                          value={String(primaryView.id)}
+                          data-testid={`same-address-merge-stay-${primaryView.id}`}
+                          inputProps={{ 'aria-label': `Choose #${primaryView.id} as primary` }}
+                          sx={{ p: 0.25, cursor: 'pointer' }}
+                        />
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="overline" color="primary.main" display="block">
+                            Primary
+                          </Typography>
+                          <Typography variant="body2" fontWeight={700}>
+                            {primaryView.owner_display_name} (#{primaryView.id})
+                            {primaryView.id === leadId ? ' · this lead' : ''}
+                          </Typography>
+                        </Box>
+                      </Box>
+                      <Box
+                        data-testid="same-address-merge-after"
                         sx={{
-                          flex: 1,
-                          minWidth: 220,
-                          p: 1.25,
+                          p: 1,
                           borderRadius: 1,
-                          border: '1px dashed',
-                          borderColor: 'divider',
+                          border: '1px solid',
+                          borderColor: 'success.main',
+                          bgcolor: (theme) => alpha(theme.palette.success.main, 0.08),
                           cursor: 'auto',
                         }}
                       >
-                        <Typography variant="overline" color="text.secondary">
-                          Merges in
+                        <Typography variant="overline" color="success.dark" display="block">
+                          After combine
                         </Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                          Search for the other lead. Its property, source, and activities will show here.
+                        <Typography variant="body2" fontWeight={700}>
+                          {primaryView.owner_display_name} (#{primaryView.id})
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
+                          Lead #{compareIncoming.id} is removed. Checked rows come in. Edit a line to override it.
                         </Typography>
                       </Box>
-                    )
-                  }
-                  const ready = view.activity != null
-                  const isPrimary = role === 'primary'
-                  const other = isPrimary ? incoming : primary
-                  return (
-                    <Box
-                      data-testid={`same-address-merge-facts-${view.id}`}
-                      sx={{
-                        flex: 1,
-                        minWidth: 220,
-                        p: 1.25,
-                        borderRadius: 1,
-                        border: '1px solid',
-                        borderColor: isPrimary ? 'primary.main' : 'divider',
-                        bgcolor: isPrimary ? 'action.hover' : 'background.paper',
-                        cursor: 'auto',
-                      }}
-                    >
-                      <Box
-                        component="label"
-                        sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, mb: 0.5, cursor: 'pointer' }}
-                      >
-                        <Radio
-                          value={String(view.id)}
-                          data-testid={`same-address-merge-stay-${view.id}`}
-                          inputProps={{ 'aria-label': `Choose #${view.id} as primary` }}
-                          sx={{ p: 0.25, mt: 0.25, cursor: 'pointer' }}
-                        />
-                        <Box sx={{ minWidth: 0 }}>
-                          <Typography variant="overline" color={isPrimary ? 'primary.main' : 'text.secondary'} display="block">
-                            {isPrimary ? 'Primary' : 'Merges in'}
-                          </Typography>
-                          <Typography variant="body2" fontWeight={700}>
-                            {view.owner_display_name} (#{view.id})
-                            {view.id === leadId ? ' · this lead' : ''}
-                          </Typography>
-                        </Box>
-                      </Box>
-                      {COMPARE_FIELDS.map((field) => {
-                        const value = compareValue(view, field.key, ready)
-                        const otherValue = other ? compareValue(other, field.key, other.activity != null) : value
-                        const differ = Boolean(other) && value !== otherValue
-                        return (
-                          <Box
-                            key={field.key}
-                            sx={{
-                              py: 0.6,
-                              borderTop: '1px solid',
-                              borderColor: 'divider',
-                            }}
-                          >
-                            <Typography variant="caption" color="text.secondary" display="block">
-                              {field.label}
-                            </Typography>
-                            <Typography
-                              variant="body2"
-                              fontWeight={differ ? 700 : 400}
-                              sx={{ overflowWrap: 'anywhere' }}
-                            >
-                              {ready || field.key === 'people' || field.key === 'property'
-                                ? value
-                                : (contextLoading
-                                  ? 'Loading…'
-                                  : (contextError || 'Details unavailable.'))}
+                    </Box>
+                    {resolvedRows.map((row) => {
+                      const incomingText = fieldValue(compareIncoming, row.key, compareReady)
+                      const primaryText = fieldValue(primaryView, row.key, compareReady)
+                      const sideText = (value: string) => {
+                        if (value) return value
+                        if (!compareReady && contextLoading) return 'Loading…'
+                        if (!compareReady && contextError) return contextError
+                        return '—'
+                      }
+                      return (
+                        <Box
+                          key={row.key}
+                          data-testid={`same-address-merge-row-${row.key}`}
+                          sx={MERGE_ROW_GRID}
+                        >
+                          <Box sx={{ px: 0.5, py: 0.75, borderTop: '1px solid', borderColor: 'divider', cursor: 'auto' }}>
+                            <Typography variant="caption" color="text.secondary">
+                              {row.label}
                             </Typography>
                           </Box>
-                        )
-                      })}
-                    </Box>
-                  )
-                }
-                const showAfter = Boolean(primary && incoming && incoming.id !== primary.id)
-                const afterView = showAfter && primary && incoming
-                  ? afterCombinePreview(primary, incoming)
-                  : null
-                const afterReady = Boolean(primary?.activity && incoming?.activity)
-                const flowArrow = (
-                  <Box
-                    aria-hidden
-                    sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      flexShrink: 0,
-                      px: 0.25,
-                      color: 'text.secondary',
-                      cursor: 'auto',
-                    }}
-                  >
-                    <Typography variant="body2" component="span">
-                      →
-                    </Typography>
-                  </Box>
-                )
-                return (
-                  <Box
-                    data-testid="same-address-merge-compare"
-                    sx={{
-                      display: 'flex',
-                      flexDirection: 'row',
-                      alignItems: 'stretch',
-                      gap: 1,
-                      overflowX: 'auto',
-                      cursor: 'auto',
-                    }}
-                  >
-                    {column(incoming, 'in')}
-                    {flowArrow}
-                    {primary ? column(primary, 'primary') : null}
-                    {afterView && primary && incoming ? (
-                      <>
-                        {flowArrow}
-                        <Box
-                          data-testid="same-address-merge-after"
-                          sx={{
-                            flex: 1,
-                            minWidth: 220,
-                            p: 1.25,
-                            borderRadius: 1,
-                            border: '1px solid',
-                            borderColor: 'success.main',
-                            bgcolor: (theme) => alpha(theme.palette.success.main, 0.08),
-                            cursor: 'auto',
-                          }}
-                        >
-                          <Typography variant="overline" color="success.dark" display="block">
-                            After combine
-                          </Typography>
-                          <Typography variant="body2" fontWeight={700}>
-                            {afterView.owner_display_name} (#{afterView.id})
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
-                            Lead #{incoming.id} is removed. People, activities, tasks, and companies combine. Empty details fill in. Status stays; score is recalculated.
-                          </Typography>
-                          {COMPARE_FIELDS.map((field) => {
-                            const value = compareValue(afterView, field.key, afterReady)
-                            const primaryValue = compareValue(primary, field.key, primary.activity != null)
-                            const shown = afterReady || field.key === 'people' || field.key === 'property'
-                            const changed = shown && value !== primaryValue
-                            return (
-                              <Box
-                                key={field.key}
-                                sx={{
-                                  py: 0.6,
-                                  borderTop: '1px solid',
-                                  borderColor: 'divider',
-                                }}
-                              >
-                                <Typography variant="caption" color="text.secondary" display="block">
-                                  {field.label}
-                                </Typography>
-                                <Typography
-                                  variant="body2"
-                                  fontWeight={changed ? 700 : 400}
-                                  sx={{ overflowWrap: 'anywhere' }}
-                                >
-                                  {shown
-                                    ? value
-                                    : (contextLoading
-                                      ? 'Loading…'
-                                      : (contextError || 'Details unavailable.'))}
-                                </Typography>
-                              </Box>
-                            )
-                          })}
+                          <Box sx={{ minWidth: 0, px: 0.5, py: 0.5, borderTop: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'flex-start', gap: 0.5, cursor: 'auto' }}>
+                            <Checkbox
+                              size="small"
+                              checked={row.pick.incoming}
+                              onChange={(event) => {
+                                const incoming = event.target.checked
+                                setPickOverride((prev) => ({
+                                  ...prev,
+                                  [row.key]: { ...row.pick, incoming },
+                                }))
+                                setDraftOverride((prev) => {
+                                  const next = { ...prev }
+                                  delete next[row.key]
+                                  return next
+                                })
+                              }}
+                              inputProps={{
+                                'aria-label': `Bring ${row.label} from lead #${compareIncoming.id}`,
+                                'data-testid': `same-address-merge-pick-${compareIncoming.id}-${row.key}`,
+                              }}
+                              sx={{ p: 0.25, mt: 0.25, cursor: 'pointer' }}
+                            />
+                            <Typography variant="body2" sx={{ overflowWrap: 'anywhere', flex: 1, pt: 0.35 }}>
+                              {sideText(incomingText)}
+                            </Typography>
+                          </Box>
+                          <Box sx={{ minWidth: 0, px: 0.5, py: 0.5, borderTop: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'flex-start', gap: 0.5, bgcolor: 'action.hover', cursor: 'auto' }}>
+                            <Checkbox
+                              size="small"
+                              checked={row.pick.primary}
+                              onChange={(event) => {
+                                const primary = event.target.checked
+                                setPickOverride((prev) => ({
+                                  ...prev,
+                                  [row.key]: { ...row.pick, primary },
+                                }))
+                                setDraftOverride((prev) => {
+                                  const next = { ...prev }
+                                  delete next[row.key]
+                                  return next
+                                })
+                              }}
+                              inputProps={{
+                                'aria-label': `Bring ${row.label} from lead #${primaryView.id}`,
+                                'data-testid': `same-address-merge-pick-${primaryView.id}-${row.key}`,
+                              }}
+                              sx={{ p: 0.25, mt: 0.25, cursor: 'pointer' }}
+                            />
+                            <Typography variant="body2" sx={{ overflowWrap: 'anywhere', flex: 1, pt: 0.35 }}>
+                              {sideText(primaryText)}
+                            </Typography>
+                          </Box>
+                          <Box sx={{ minWidth: 0, px: 0.5, py: 0.5, borderTop: '1px solid', borderColor: 'divider', bgcolor: (theme) => alpha(theme.palette.success.main, 0.08), cursor: 'auto' }}>
+                            <TextField
+                              size="small"
+                              fullWidth
+                              multiline
+                              minRows={1}
+                              maxRows={4}
+                              disabled={!row.editable}
+                              value={row.draft}
+                              onChange={(event) => {
+                                const value = event.target.value
+                                setDraftOverride((prev) => ({ ...prev, [row.key]: value }))
+                              }}
+                              helperText={row.key === 'score' ? 'Recalculated when you combine' : undefined}
+                              inputProps={{
+                                'data-testid': `same-address-merge-after-${row.key}`,
+                                'aria-label': `After combine ${row.label}`,
+                                style: { cursor: row.editable ? 'text' : 'auto' },
+                              }}
+                              sx={{ caretColor: 'text.primary' }}
+                            />
+                          </Box>
                         </Box>
-                      </>
-                    ) : null}
-                  </Box>
-                )
-              })()}
+                      )
+                    })}
+                  </>
+                )}
+              </Box>
             </RadioGroup>
           </FormControl>
           {removable.length > 1 ? (

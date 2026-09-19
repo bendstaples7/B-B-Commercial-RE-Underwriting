@@ -868,33 +868,60 @@ describe('SameAddressMergeBanner', () => {
     expect(screen.getByTestId('same-address-merge-compare')).toBeInTheDocument()
     const current = await screen.findByTestId('same-address-merge-facts-100')
     expect(current).toHaveTextContent('Primary')
-    expect(current).toHaveTextContent('1110 Yoko Ave, Chicago IL')
-    expect(current).toHaveTextContent('PIN 14-28-100')
-    expect(current).toHaveTextContent('Multi Family')
-    expect(current).toHaveTextContent('4 units')
-    expect(current).toHaveTextContent('Cityscape')
-    expect(current).toHaveTextContent('HubSpot')
-    expect(current).toHaveTextContent('Yoko Holdings LLC')
-    expect(current).toHaveTextContent('200 Oak St')
-    expect(current).toHaveTextContent('3 total')
-    expect(current).toHaveTextContent('2 calls')
-    expect(current).toHaveTextContent('Left voicemail')
+    const sourceRow = await screen.findByTestId('same-address-merge-row-source')
+    expect(sourceRow).toHaveTextContent('Cityscape')
+    expect(sourceRow).toHaveTextContent('HubSpot')
+    expect(sourceRow).toHaveTextContent('Cook County Assessor')
+    expect(screen.getByTestId('same-address-merge-row-pin')).toHaveTextContent('14-28-100')
+    expect(screen.getByTestId('same-address-merge-row-type')).toHaveTextContent('Multi Family')
+    expect(screen.getByTestId('same-address-merge-row-units')).toHaveTextContent('4')
+    expect(screen.getByTestId('same-address-merge-row-companies')).toHaveTextContent('Yoko Holdings LLC')
+    expect(screen.getByTestId('same-address-merge-row-related')).toHaveTextContent('200 Oak St')
+    expect(screen.getByTestId('same-address-merge-row-activities')).toHaveTextContent('3 total')
+    expect(screen.getByTestId('same-address-merge-row-activities')).toHaveTextContent('2 calls')
+    expect(screen.getByTestId('same-address-merge-row-activities')).toHaveTextContent('Left voicemail')
     const other = screen.getByTestId('same-address-merge-facts-200')
     expect(other).toHaveTextContent('Merges in')
-    expect(other).toHaveTextContent('Cook County Assessor')
-    expect(other).toHaveTextContent('None')
     const after = await screen.findByTestId('same-address-merge-after')
     expect(after).toHaveTextContent('After combine')
     expect(after).toHaveTextContent('Yoko Miller (#100)')
     expect(after).toHaveTextContent('Lead #200 is removed')
-    expect(after).toHaveTextContent('Edwin Chen')
-    expect(after).toHaveTextContent('Cityscape')
-    expect(after).toHaveTextContent('HubSpot')
-    expect(after).not.toHaveTextContent('Cook County Assessor')
-    expect(after).toHaveTextContent('Yoko Holdings LLC')
-    expect(after).toHaveTextContent('200 Oak St')
-    expect(after).toHaveTextContent('3 total')
-    expect(after).toHaveTextContent('1 open task')
+    await waitFor(() => {
+      expect((screen.getByTestId('same-address-merge-after-people') as HTMLInputElement).value).toContain(
+        'Edwin Chen',
+      )
+    })
+    expect((screen.getByTestId('same-address-merge-after-source') as HTMLInputElement).value).toContain(
+      'Cityscape',
+    )
+    expect((screen.getByTestId('same-address-merge-after-source') as HTMLInputElement).value).not.toContain(
+      'Cook County Assessor',
+    )
+    expect((screen.getByTestId('same-address-merge-after-companies') as HTMLInputElement).value).toContain(
+      'Yoko Holdings LLC',
+    )
+    expect((screen.getByTestId('same-address-merge-after-related') as HTMLInputElement).value).toContain(
+      '200 Oak St',
+    )
+    expect((screen.getByTestId('same-address-merge-after-activities') as HTMLInputElement).value).toContain(
+      '3 total',
+    )
+    expect((screen.getByTestId('same-address-merge-after-activities') as HTMLInputElement).value).toContain(
+      '1 open task',
+    )
+    expect(screen.getByTestId('same-address-merge-pick-100-source')).toBeChecked()
+    expect(screen.getByTestId('same-address-merge-pick-200-source')).not.toBeChecked()
+
+    await user.click(screen.getByTestId('same-address-merge-pick-200-source'))
+    await waitFor(() => {
+      expect((screen.getByTestId('same-address-merge-after-source') as HTMLInputElement).value).toContain(
+        'Cook County Assessor',
+      )
+    })
+    const pin = screen.getByTestId('same-address-merge-after-pin')
+    await user.clear(pin)
+    await user.type(pin, '99-00')
+    expect(pin).toHaveValue('99-00')
   })
 
   it('after combine fills blank primary fields and keeps status and score', async () => {
@@ -967,24 +994,42 @@ describe('SameAddressMergeBanner', () => {
       </MemoryRouter>,
     )
     await user.click(screen.getByTestId('same-address-merge-open'))
-    const after = await screen.findByTestId('same-address-merge-after')
+    await screen.findByTestId('same-address-merge-after')
     await waitFor(() => {
-      expect(after).toHaveTextContent('PIN 17-01-200')
+      expect(screen.getByTestId('same-address-merge-after-pin')).toHaveValue('17-01-200')
     })
-    expect(after).toHaveTextContent('1867 N Howe St, Chicago IL')
-    expect(after).not.toHaveTextContent('60614')
-    expect(after).toHaveTextContent('Pat Malone')
-    expect(after).toHaveTextContent('Cook County')
-    expect(after).not.toHaveTextContent('Cook County Assessor')
-    expect(after).toHaveTextContent('Skip Trace')
-    expect(after).not.toHaveTextContent('Mailing, No Contact Made')
-    expect(after).toHaveTextContent('Score 72')
-    expect(after).not.toHaveTextContent('Score 10')
-    expect(after).toHaveTextContent('Malone LLC')
-    expect(after).toHaveTextContent('9 Walton St')
-    expect(after).toHaveTextContent('2 total')
-    expect(after).toHaveTextContent('Note added')
-    expect(after).toHaveTextContent('2 open tasks')
-    expect(after).toHaveTextContent('phone')
+    expect(screen.getByTestId('same-address-merge-after-property')).toHaveValue('1867 N Howe St, Chicago IL')
+    expect((screen.getByTestId('same-address-merge-after-property') as HTMLInputElement).value).not.toContain(
+      '60614',
+    )
+    expect((screen.getByTestId('same-address-merge-after-people') as HTMLInputElement).value).toContain(
+      'Pat Malone',
+    )
+    expect((screen.getByTestId('same-address-merge-after-source') as HTMLInputElement).value).toContain(
+      'Cook County',
+    )
+    expect(screen.getByTestId('same-address-merge-after-status')).toHaveValue('Skip Trace')
+    expect((screen.getByTestId('same-address-merge-after-status') as HTMLInputElement).value).not.toContain(
+      'Mailing',
+    )
+    expect(screen.getByTestId('same-address-merge-after-score')).toHaveValue('72')
+    expect((screen.getByTestId('same-address-merge-after-companies') as HTMLInputElement).value).toContain(
+      'Malone LLC',
+    )
+    expect((screen.getByTestId('same-address-merge-after-related') as HTMLInputElement).value).toContain(
+      '9 Walton St',
+    )
+    expect((screen.getByTestId('same-address-merge-after-activities') as HTMLInputElement).value).toContain(
+      '2 total',
+    )
+    expect((screen.getByTestId('same-address-merge-after-activities') as HTMLInputElement).value).toContain(
+      'Note added',
+    )
+    expect((screen.getByTestId('same-address-merge-after-activities') as HTMLInputElement).value).toContain(
+      '2 open tasks',
+    )
+    expect((screen.getByTestId('same-address-merge-after-contact') as HTMLInputElement).value).toContain(
+      'phone',
+    )
   })
 })

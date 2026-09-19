@@ -393,10 +393,149 @@ def _prefer_cleaner_property_street(winner: Lead, loser: Lead) -> None:
         # Address completion runs once at merge level — avoid double GIS here.
 
 
-def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedup_sentinel') -> None:
+_MERGE_STATUS_VALUES = frozenset({
+    'skip_trace',
+    'awaiting_skip_trace',
+    'mailing_no_contact_made',
+    'mailing_contacted_no_interest',
+    'mailing_contacted_interested',
+    'negotiating_remote',
+    'in_person_appointment',
+    'offer_delivered',
+    'deprioritize',
+    'deal_won',
+    'deal_lost',
+    'suppressed',
+    'do_not_contact',
+})
+
+_MERGE_TEXT_LIMITS = {
+    'property_street': 500,
+    'property_city': 100,
+    'property_state': 50,
+    'property_zip': 20,
+    'county_assessor_pin': 50,
+    'property_type': 50,
+    'source': 100,
+    'deal_source': 255,
+    'data_source': 100,
+}
+
+
+def _clip_choice(value: Any, limit: int) -> str | None:
+    text = '' if value is None else str(value).strip()
+    if not text:
+        return None
+    return text[:limit]
+
+
+def _split_person_name(name: str) -> tuple[str, str]:
+    parts = [part for part in str(name or '').replace(',', ' ').split() if part]
+    if not parts:
+        return '', ''
+    if len(parts) == 1:
+        return parts[0][:128], ''
+    return parts[0][:128], ' '.join(parts[1:])[:128]
+
+
+def _delete_lead_rows(table_name: str, column: str, lead_id: int) -> None:
+    table = db.metadata.tables.get(table_name)
+    if table is None or column not in table.c:
+        return
+    db.session.execute(table.delete().where(table.c[column] == lead_id))
+
+
+def _drop_unchecked_merge_rows(
+    lead_id: int,
+    *,
+    drop_timeline: bool,
+    drop_tasks: bool,
+    drop_contacts: bool,
+    drop_orgs: bool,
+) -> None:
+    if drop_timeline:
+        _delete_lead_rows('lead_timeline_entries', 'lead_id', lead_id)
+    if drop_tasks:
+        _delete_lead_rows('lead_tasks', 'lead_id', lead_id)
+        _delete_lead_rows('tasks', 'lead_id', lead_id)
+    if drop_contacts:
+        _delete_lead_rows('property_contacts', 'property_id', lead_id)
+    if drop_orgs:
+        _delete_lead_rows('property_organization_links', 'property_id', lead_id)
+
+
+def _choice_flag(choices: dict[str, Any] | None, key: str, default: bool = True) -> bool:
+    if not isinstance(choices, dict) or key not in choices:
+        return default
+    return bool(choices.get(key))
+
+
+def apply_merge_field_choices(winner: Lead, choices: dict[str, Any] | None) -> None:
+    """Write the dialog's After combine edits onto the surviving lead.
+
+    Score is not written here — the caller rescores. Missing keys keep whatever
+    the structural merge already copied.
+    """
+    if not isinstance(choices, dict):
+        return
+    for field, limit in _MERGE_TEXT_LIMITS.items():
+        if field not in choices:
+            continue
+        if field == 'property_type' and bool(getattr(winner, 'lead_category_locked', False)):
+            continue
+        setattr(winner, field, _clip_choice(choices.get(field), limit))
+    if 'units' in choices:
+        raw = choices.get('units')
+        if raw in (None, ''):
+            winner.units = None
+        else:
+            try:
+                winner.units = int(raw)
+            except (TypeError, ValueError):
+                pass
+    status = choices.get('lead_status')
+    if isinstance(status, str) and status in _MERGE_STATUS_VALUES:
+        winner.lead_status = status
+    names = choices.get('people_names')
+    if isinstance(names, list):
+        cleaned = [str(name).strip() for name in names if str(name).strip()]
+        if cleaned:
+            first, last = _split_person_name(cleaned[0])
+            winner.owner_first_name = first or None
+            winner.owner_last_name = last or None
+            if len(cleaned) > 1:
+                second_first, second_last = _split_person_name(cleaned[1])
+                winner.owner_2_first_name = second_first or None
+                winner.owner_2_last_name = second_last or None
+    if getattr(winner, 'property_street', None):
+        refresh_lead_dedup_fields(winner)
+
+
+def merge_lead_into_winner(
+    winner: Lead,
+    loser: Lead,
+    *,
+    changed_by: str = 'dedup_sentinel',
+    choices: dict[str, Any] | None = None,
+) -> None:
     """Merge loser into winner (ORM). Caller must commit."""
     winner_id = winner.id
     loser_id = loser.id
+    if isinstance(choices, dict):
+        _drop_unchecked_merge_rows(
+            loser_id,
+            drop_timeline=not _choice_flag(choices, 'keep_incoming_activities'),
+            drop_tasks=not _choice_flag(choices, 'keep_incoming_activities'),
+            drop_contacts=not _choice_flag(choices, 'keep_incoming_people'),
+            drop_orgs=not _choice_flag(choices, 'keep_incoming_companies'),
+        )
+        _drop_unchecked_merge_rows(
+            winner_id,
+            drop_timeline=not _choice_flag(choices, 'keep_primary_activities'),
+            drop_tasks=not _choice_flag(choices, 'keep_primary_activities'),
+            drop_contacts=not _choice_flag(choices, 'keep_primary_people'),
+            drop_orgs=not _choice_flag(choices, 'keep_primary_companies'),
+        )
 
     for table_name, col_name in FK_REPOINTS:
         table = db.metadata.tables[table_name]
@@ -541,6 +680,7 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
         new_value=f"merged from lead {loser_id} ({loser.property_street})",
         changed_by=changed_by,
     ))
+    apply_merge_field_choices(winner, choices)
     db.session.delete(loser)
     logger.info("Merged lead %s into %s", loser_id, winner_id)
 
@@ -1125,6 +1265,7 @@ def merge_loser_into_winner(
     *,
     changed_by: str = 'manual_soft_merge',
     commit: bool = True,
+    choices: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Merge *loser_id* into *winner_id*; clear duplicate review flags on winner."""
     if winner_id == loser_id:
@@ -1137,7 +1278,7 @@ def merge_loser_into_winner(
         raise ValueError('leads do not share the same address / unit')
 
     with db.session.begin_nested():
-        merge_lead_into_winner(winner, loser, changed_by=changed_by)
+        merge_lead_into_winner(winner, loser, changed_by=changed_by, choices=choices)
         winner.review_required = False
         if winner.review_reason == 'duplicate_lead_cluster':
             winner.review_reason = None

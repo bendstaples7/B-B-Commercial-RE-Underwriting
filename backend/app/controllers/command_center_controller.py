@@ -2559,12 +2559,17 @@ def merge_lead_into(lead_id: int, winner_id: int):
         if denied is not None:
             return denied
     actor = getattr(g, 'user_id', 'anonymous')
+    payload = request.get_json(silent=True) or {}
+    choices = payload.get('choices') if isinstance(payload, dict) else None
+    if choices is not None and not isinstance(choices, dict):
+        return jsonify({'error': 'choices must be an object'}), 400
     try:
         result = merge_loser_into_winner(
             winner_id,
             lead_id,
             changed_by=str(actor),
             commit=True,
+            choices=choices,
         )
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
