@@ -12,8 +12,6 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import and_, or_
-
 from app import db
 from app.models.interaction import Interaction
 from app.models.interaction_association import InteractionAssociation
@@ -233,7 +231,6 @@ class InteractionService:
         page: int = 1,
         per_page: int = 20,
         lead_id_scope=None,
-        association_access_checker=None,
         association_access_scope=None,
     ) -> tuple:
         """Return a paginated list of Interactions with optional filters.
@@ -242,9 +239,6 @@ class InteractionService:
             ``None`` — no owner filter (admin).
             empty set — return no rows.
             otherwise — only interactions associated with those lead ids.
-        ``association_access_checker``:
-            optional callable used to retain only interactions whose complete
-            association set is authorized for the caller.
         ``association_access_scope``:
             optional mapping of accessible target ids by association type.
             Applied in SQL before pagination for scoped callers.
@@ -286,45 +280,19 @@ class InteractionService:
             query = query.filter(Interaction.id.in_(scoped))
 
         if association_access_scope is not None:
-            lead_ids = association_access_scope.get('lead', set())
-            organization_ids = association_access_scope.get('organization', set())
-            contact_ids = association_access_scope.get('contact', set())
-            inaccessible_assoc = db.session.query(InteractionAssociation.id).filter(
-                InteractionAssociation.interaction_id == Interaction.id,
-                or_(
-                    and_(
-                        InteractionAssociation.target_type == 'lead',
-                        ~InteractionAssociation.target_id.in_(lead_ids),
-                    ),
-                    and_(
-                        InteractionAssociation.target_type == 'organization',
-                        ~InteractionAssociation.target_id.in_(organization_ids),
-                    ),
-                    and_(
-                        InteractionAssociation.target_type == 'contact',
-                        ~InteractionAssociation.target_id.in_(contact_ids),
-                    ),
-                    ~InteractionAssociation.target_type.in_(('lead', 'organization', 'contact')),
-                ),
-            ).correlate(Interaction).exists()
-            any_assoc = db.session.query(InteractionAssociation.id).filter(
-                InteractionAssociation.interaction_id == Interaction.id,
-            ).correlate(Interaction).exists()
-            query = query.filter(any_assoc, ~inaccessible_assoc)
+            from app.api_utils import apply_association_access_scope_filter
+            query = apply_association_access_scope_filter(
+                query,
+                parent_model=Interaction,
+                association_model=InteractionAssociation,
+                parent_fk_column=InteractionAssociation.interaction_id,
+                association_access_scope=association_access_scope,
+            )
 
         query = query.order_by(Interaction.occurred_at.desc())
 
-        if association_access_checker is not None:
-            accessible = [
-                interaction for interaction in query.all()
-                if association_access_checker(interaction)
-            ]
-            total = len(accessible)
-            start = (page - 1) * per_page
-            records = accessible[start:start + per_page]
-        else:
-            total = query.count()
-            records = query.offset((page - 1) * per_page).limit(per_page).all()
+        total = query.count()
+        records = query.offset((page - 1) * per_page).limit(per_page).all()
 
         return records, total
 

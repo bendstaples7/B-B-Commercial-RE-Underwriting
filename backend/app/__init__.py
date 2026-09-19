@@ -528,8 +528,11 @@ def create_app(config_name='development'):
         """Populate g.user_id from Bearer JWT (required) or X-User-Id header (testing only)."""
         auth_header = _request.headers.get('Authorization', '')
         if auth_header.lower().startswith('bearer '):
-            from app.api_utils import bind_request_jwt_identity
-            bind_request_jwt_identity(auth_header[7:])
+            from app.api_utils import bind_request_jwt_identity, is_public_api_request
+            if _request.path.startswith('/api') and is_public_api_request():
+                g.user_id = 'anonymous'
+            else:
+                bind_request_jwt_identity(auth_header[7:])
             return
 
         if _is_testing:

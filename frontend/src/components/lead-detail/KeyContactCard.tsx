@@ -329,9 +329,16 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
   const editablePersonFromData = primaryEditablePersonContact(commandCenterData.contacts)
   const [savedContact, setSavedContact] = useState<Partial<PropertyContactSummary> | null>(null)
   const [methodSaveInFlight, setMethodSaveInFlight] = useState(false)
+  const refetchedContactSignature = JSON.stringify({
+    id: editablePersonFromData?.id ?? null,
+    first_name: editablePersonFromData?.first_name ?? null,
+    last_name: editablePersonFromData?.last_name ?? null,
+    phones: editablePersonFromData?.phones ?? [],
+    emails: editablePersonFromData?.emails ?? [],
+  })
   useEffect(() => {
     setSavedContact(null)
-  }, [editablePersonFromData?.id])
+  }, [refetchedContactSignature])
   const editablePerson = editablePersonFromData && savedContact?.id === editablePersonFromData.id
     ? {
         ...editablePersonFromData,
@@ -431,6 +438,10 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
 
   const saveEmailValue = (previous: string, next: string) => {
     const trimmed = next.trim()
+    if (trimmed && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      setSnackbar({ open: true, message: 'Enter a valid email address.', severity: 'error' })
+      return Promise.reject(new Error('Enter a valid email address.'))
+    }
     const current = (editablePerson?.emails || [])
       .filter((e) => (e.value || '').trim())
       .map((e) => ({ value: e.value, label: toFormEmailLabel(e.label) }))

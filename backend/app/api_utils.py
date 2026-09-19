@@ -514,6 +514,52 @@ def accessible_association_target_ids_for_current_user() -> dict[str, set[int]] 
     }
 
 
+def apply_association_access_scope_filter(
+    query,
+    *,
+    parent_model,
+    association_model,
+    parent_fk_column,
+    association_access_scope: dict[str, set[int]],
+    direct_lead_column=None,
+):
+    """Restrict a query to rows whose complete association set is accessible."""
+    from sqlalchemy import and_, or_
+    from app import db
+
+    lead_ids = association_access_scope.get('lead', set())
+    organization_ids = association_access_scope.get('organization', set())
+    contact_ids = association_access_scope.get('contact', set())
+    inaccessible_assoc = db.session.query(association_model.id).filter(
+        parent_fk_column == parent_model.id,
+        or_(
+            and_(
+                association_model.target_type == 'lead',
+                ~association_model.target_id.in_(lead_ids),
+            ),
+            and_(
+                association_model.target_type == 'organization',
+                ~association_model.target_id.in_(organization_ids),
+            ),
+            and_(
+                association_model.target_type == 'contact',
+                ~association_model.target_id.in_(contact_ids),
+            ),
+            ~association_model.target_type.in_(('lead', 'organization', 'contact')),
+        ),
+    ).correlate(parent_model).exists()
+    any_assoc = db.session.query(association_model.id).filter(
+        parent_fk_column == parent_model.id,
+    ).correlate(parent_model).exists()
+    query = query.filter(~inaccessible_assoc)
+    if direct_lead_column is None:
+        return query.filter(any_assoc)
+    return query.filter(
+        or_(direct_lead_column.is_(None), direct_lead_column.in_(lead_ids)),
+        or_(direct_lead_column.in_(lead_ids), any_assoc),
+    )
+
+
 def _association_pairs(associations):
     """Normalize association dicts or ORM rows to ``(target_type, target_id)``.
 

@@ -251,8 +251,18 @@ describe('KeyContactCard', () => {
         mailing_state: 'IL',
         mailing_zip: '60614',
         contacts_likely_prior_owner: true,
+        contacts: [{
+          id: 1,
+          first_name: 'Prior',
+          last_name: 'Owner',
+          role: 'owner',
+          is_primary: true,
+          phones: [{ value: '(312) 555-0199', label: 'mobile' }],
+          emails: [{ id: 11, value: 'old@example.com', label: 'personal' }],
+        }],
       }),
     )
+    expect(screen.getByTestId('key-contact-email')).toHaveTextContent('old@example.com')
     expect(screen.queryByTestId('key-contact-email-copy')).not.toBeInTheDocument()
     expect(screen.getByTestId('key-contact-mailing-copy')).toBeInTheDocument()
   })
@@ -480,6 +490,33 @@ describe('KeyContactCard', () => {
     await user.click(screen.getByLabelText('Save phone'))
 
     expect(await screen.findByText('Enter a valid phone number.')).toBeInTheDocument()
+    expect(contactService.updateContact).not.toHaveBeenCalled()
+  })
+
+  it('rejects invalid inline email values before saving', async () => {
+    const user = userEvent.setup()
+
+    renderCard(
+      basePayload({
+        contacts: [{
+          id: 88,
+          first_name: 'Jane',
+          last_name: 'Doe',
+          role: 'owner',
+          is_primary: true,
+          phones: [],
+          emails: [{ id: 1, value: 'jane@example.com', label: 'personal' }],
+        }],
+      }),
+      'Jane Doe',
+    )
+
+    await user.click(screen.getByTestId('key-contact-email-edit'))
+    await user.clear(screen.getByTestId('key-contact-email-edit-input'))
+    await user.type(screen.getByTestId('key-contact-email-edit-input'), 'not an email')
+    await user.click(screen.getByLabelText('Save email'))
+
+    expect(await screen.findByText('Enter a valid email address.')).toBeInTheDocument()
     expect(contactService.updateContact).not.toHaveBeenCalled()
   })
 

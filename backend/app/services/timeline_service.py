@@ -4,7 +4,6 @@ from app.models.interaction import Interaction
 from app.models.interaction_association import InteractionAssociation
 from app.models.task import Task
 from app.models.task_association import TaskAssociation
-from sqlalchemy import and_, or_
 
 
 class TimelineService:
@@ -82,30 +81,14 @@ class TimelineService:
                     Interaction.occurred_at <= date_to
                 )
             if association_access_scope is not None:
-                lead_ids = association_access_scope.get('lead', set())
-                organization_ids = association_access_scope.get('organization', set())
-                contact_ids = association_access_scope.get('contact', set())
-                inaccessible = db.session.query(InteractionAssociation.id).filter(
-                    InteractionAssociation.interaction_id == Interaction.id,
-                    or_(
-                        and_(
-                            InteractionAssociation.target_type == 'lead',
-                            ~InteractionAssociation.target_id.in_(lead_ids),
-                        ),
-                        and_(
-                            InteractionAssociation.target_type == 'organization',
-                            ~InteractionAssociation.target_id.in_(organization_ids),
-                        ),
-                        and_(
-                            InteractionAssociation.target_type == 'contact',
-                            ~InteractionAssociation.target_id.in_(contact_ids),
-                        ),
-                        ~InteractionAssociation.target_type.in_(
-                            ('lead', 'organization', 'contact'),
-                        ),
-                    ),
-                ).correlate(Interaction).exists()
-                interactions = interactions.filter(~inaccessible)
+                from app.api_utils import apply_association_access_scope_filter
+                interactions = apply_association_access_scope_filter(
+                    interactions,
+                    parent_model=Interaction,
+                    association_model=InteractionAssociation,
+                    parent_fk_column=InteractionAssociation.interaction_id,
+                    association_access_scope=association_access_scope,
+                )
 
             for interaction in interactions.all():
                 entries.append({
@@ -136,32 +119,14 @@ class TimelineService:
             if subtype is not None:
                 tasks = tasks.filter(Task.status == subtype)
             if association_access_scope is not None:
-                lead_ids = association_access_scope.get('lead', set())
-                organization_ids = association_access_scope.get('organization', set())
-                contact_ids = association_access_scope.get('contact', set())
-                inaccessible = db.session.query(TaskAssociation.id).filter(
-                    TaskAssociation.task_id == Task.id,
-                    or_(
-                        and_(
-                            TaskAssociation.target_type == 'lead',
-                            ~TaskAssociation.target_id.in_(lead_ids),
-                        ),
-                        and_(
-                            TaskAssociation.target_type == 'organization',
-                            ~TaskAssociation.target_id.in_(organization_ids),
-                        ),
-                        and_(
-                            TaskAssociation.target_type == 'contact',
-                            ~TaskAssociation.target_id.in_(contact_ids),
-                        ),
-                        ~TaskAssociation.target_type.in_(
-                            ('lead', 'organization', 'contact'),
-                        ),
-                    ),
-                ).correlate(Task).exists()
-                tasks = tasks.filter(
-                    or_(Task.lead_id.is_(None), Task.lead_id.in_(lead_ids)),
-                    ~inaccessible,
+                from app.api_utils import apply_association_access_scope_filter
+                tasks = apply_association_access_scope_filter(
+                    tasks,
+                    parent_model=Task,
+                    association_model=TaskAssociation,
+                    parent_fk_column=TaskAssociation.task_id,
+                    association_access_scope=association_access_scope,
+                    direct_lead_column=Task.lead_id,
                 )
 
             for task in tasks.all():

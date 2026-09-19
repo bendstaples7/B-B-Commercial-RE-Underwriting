@@ -4,7 +4,7 @@ Implements Requirements 3.1, 3.2, 3.3, 3.5, 3.6.
 """
 from datetime import datetime
 
-from sqlalchemy import and_, or_
+from sqlalchemy import or_
 
 from app import db
 from app.models.task import Task
@@ -47,8 +47,14 @@ class TaskService:
             TaskValidationError: if title is absent or whitespace-only.
         """
         title = data.get('title', '')
+        if not title:
+            raise TaskValidationError(
+                "Task title is required and cannot be empty.",
+                field='title',
+                value=title,
+            )
         cleaned_title = _strip_title(title)
-        if not title or not cleaned_title:
+        if not cleaned_title:
             raise TaskValidationError(
                 "Task title is required and cannot be empty.",
                 field='title',
@@ -102,8 +108,14 @@ class TaskService:
 
         if 'title' in data:
             title = data['title']
+            if not title:
+                raise TaskValidationError(
+                    "Task title cannot be set to an empty value.",
+                    field='title',
+                    value=title,
+                )
             cleaned_title = _strip_title(title)
-            if not title or not cleaned_title:
+            if not cleaned_title:
                 raise TaskValidationError(
                     "Task title cannot be set to an empty value.",
                     field='title',
@@ -198,7 +210,6 @@ class TaskService:
         page: int = 1,
         per_page: int = 20,
         lead_id_scope=None,
-        association_access_checker=None,
         association_access_scope=None,
     ):
         """Return a paginated, filtered list of Tasks.
@@ -215,9 +226,6 @@ class TaskService:
             ``None`` — no owner filter (admin).
             empty set — return no rows.
             otherwise — only tasks attached to those lead ids.
-        ``association_access_checker``:
-            optional callable that must return True for every task retained.
-            Used by scoped callers so list semantics match single-task access.
         ``association_access_scope``:
             optional mapping of accessible target ids by association type.
             Applied in SQL before pagination for scoped callers.
@@ -261,48 +269,19 @@ class TaskService:
             )
 
         if association_access_scope is not None:
-            lead_ids = association_access_scope.get('lead', set())
-            organization_ids = association_access_scope.get('organization', set())
-            contact_ids = association_access_scope.get('contact', set())
-            inaccessible_assoc = db.session.query(TaskAssociation.id).filter(
-                TaskAssociation.task_id == Task.id,
-                or_(
-                    and_(
-                        TaskAssociation.target_type == 'lead',
-                        ~TaskAssociation.target_id.in_(lead_ids),
-                    ),
-                    and_(
-                        TaskAssociation.target_type == 'organization',
-                        ~TaskAssociation.target_id.in_(organization_ids),
-                    ),
-                    and_(
-                        TaskAssociation.target_type == 'contact',
-                        ~TaskAssociation.target_id.in_(contact_ids),
-                    ),
-                    ~TaskAssociation.target_type.in_(('lead', 'organization', 'contact')),
-                ),
-            ).correlate(Task).exists()
-            any_assoc = db.session.query(TaskAssociation.id).filter(
-                TaskAssociation.task_id == Task.id,
-            ).correlate(Task).exists()
-            query = query.filter(
-                or_(Task.lead_id.is_(None), Task.lead_id.in_(lead_ids)),
-                ~inaccessible_assoc,
-                or_(Task.lead_id.in_(lead_ids), any_assoc),
+            from app.api_utils import apply_association_access_scope_filter
+            query = apply_association_access_scope_filter(
+                query,
+                parent_model=Task,
+                association_model=TaskAssociation,
+                parent_fk_column=TaskAssociation.task_id,
+                association_access_scope=association_access_scope,
+                direct_lead_column=Task.lead_id,
             )
 
         query = query.order_by(Task.created_at.desc())
-        if association_access_checker is not None:
-            accessible = [
-                task for task in query.all()
-                if association_access_checker(task)
-            ]
-            total = len(accessible)
-            start = (page - 1) * per_page
-            tasks = accessible[start:start + per_page]
-        else:
-            total = query.count()
-            tasks = query.offset((page - 1) * per_page).limit(per_page).all()
+        total = query.count()
+        tasks = query.offset((page - 1) * per_page).limit(per_page).all()
 
         # Apply overdue check on every returned task (Requirement 3.6)
         for task in tasks:

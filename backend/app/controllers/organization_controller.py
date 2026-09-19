@@ -201,6 +201,12 @@ def _load_authorized_org(org_id: int, *, allow_unlinked: bool = False):
             organization_id=org.id,
         ).first()
         if property_link is None and owner_link is None:
+            created = OrganizationAuditLog.query.filter_by(
+                organization_id=org.id,
+                field_name='__created__',
+            ).order_by(OrganizationAuditLog.id.asc()).first()
+            if created is None or created.changed_by != get_current_user_id():
+                _org_not_found(org.id)
             return org
     _require_org_access(org)
     return org
