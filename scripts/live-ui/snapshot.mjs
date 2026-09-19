@@ -135,7 +135,9 @@ async function main() {
       channel = `auth-playwright:${session.source}`
     }
 
-    await page.waitForTimeout(800)
+    // window 'load' waits for fonts/images without hanging on HMR/capture sockets
+    // the way networkidle did. Resolves immediately if load already fired.
+    await page.waitForLoadState('load', { timeout: 30000 })
     assertNotLoginWall(page.url(), { loginWall: /\/login/i.test(page.url()) })
 
     const selector = await pickSelector(page, args.selector)

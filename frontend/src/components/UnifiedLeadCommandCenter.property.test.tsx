@@ -206,6 +206,30 @@ vi.mock('@/components/LogActivityForm', () => ({
         </button>
       )
     }
+    if (mode === 'meeting') {
+      return (
+        <button
+          data-testid="mock-log-meeting-btn"
+          onClick={() =>
+            onSaved({
+              id: 999997,
+              lead_id: leadId,
+              event_type: 'meeting_logged',
+              occurred_at: new Date().toISOString(),
+              source: 'manual',
+              actor: 'Test User',
+              summary: 'Property 14 test meeting',
+              metadata: null,
+              hubspot_activity_id: null,
+              is_deleted: false,
+              created_at: new Date().toISOString(),
+            })
+          }
+        >
+          Log Meeting
+        </button>
+      )
+    }
     return (
       <button
         data-testid="mock-log-note-btn"

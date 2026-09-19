@@ -325,7 +325,12 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
           ;(first as HTMLButtonElement | null | undefined)?.focus()
           return
         }
-        const testid = mode === 'note' ? 'note-body-input' : 'email-subject-input'
+        const testid =
+          mode === 'note'
+            ? 'note-body-input'
+            : mode === 'meeting'
+              ? 'meeting-notes-input'
+              : 'email-subject-input'
         const input = formRef.current?.querySelector(`[data-testid="${testid}"]`) as HTMLElement | null
         input?.focus()
       },

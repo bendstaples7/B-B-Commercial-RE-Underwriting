@@ -422,6 +422,40 @@ def test_interaction_to_activity_maps_note_and_call(app):
         assert call_act['disposition'] == 'CONNECTED'
 
 
+def test_interaction_to_activity_meeting_status_is_not_call_disposition(app):
+    """HubSpot meeting status stays off call outcome/disposition fields."""
+    with app.app_context():
+        lead = _make_lead(app, '11b Meeting Status St')
+        from app import db
+        from app.models import Interaction, InteractionAssociation
+
+        interaction = Interaction(
+            interaction_type='meeting',
+            body='Walkthrough downtown',
+            occurred_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            source='hubspot_import',
+            hubspot_engagement_id='eng-mtg-status',
+            raw_payload={'metadata': {'status': 'SCHEDULED', 'title': 'Site walk'}},
+            is_orphaned=False,
+        )
+        db.session.add(interaction)
+        db.session.flush()
+        db.session.add(InteractionAssociation(
+            interaction_id=interaction.id,
+            target_type='lead',
+            target_id=lead.id,
+        ))
+        db.session.commit()
+
+        act = HubSpotTimelineImportService.interaction_to_activity(interaction)
+        assert act is not None
+        assert act['type'] == 'MEETING'
+        assert 'disposition' not in act
+        assert 'outcome' not in act
+        assert act['meeting_status'] == 'SCHEDULED'
+        assert act['title'] == 'Site walk'
+
+
 def test_sync_lead_from_interactions_creates_timeline_entries(app):
     """sync_lead_from_interactions bridges HubSpot Interactions into timeline."""
     from app.models import LeadTimelineEntry

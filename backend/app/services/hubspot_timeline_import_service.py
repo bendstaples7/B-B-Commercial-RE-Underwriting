@@ -128,6 +128,16 @@ class HubSpotTimelineImportService:
                 if dialed and not isinstance(dialed, (dict, list)):
                     activity['phone_number'] = str(dialed).strip()
                     break
+        elif activity_type == 'MEETING':
+            # HubSpot meeting metadata.status is SCHEDULED/COMPLETED/CANCELED —
+            # not a call disposition. Keep it off outcome/disposition so
+            # consumers do not render meetings as call results.
+            meeting_status = metadata.get('status') or metadata.get('meetingOutcome')
+            if meeting_status is not None and not isinstance(meeting_status, (dict, list)):
+                activity['meeting_status'] = str(meeting_status)
+            title = metadata.get('title')
+            if title and not isinstance(title, (dict, list)):
+                activity['title'] = str(title)
         elif isinstance(metadata, dict) and metadata:
             disposition = (
                 metadata.get('disposition')

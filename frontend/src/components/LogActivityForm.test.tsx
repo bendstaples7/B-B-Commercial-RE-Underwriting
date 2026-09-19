@@ -12,9 +12,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
-import { LogActivityForm } from './LogActivityForm'
+import { createRef } from 'react'
+import { LogActivityForm, type LogActivityFormHandle } from './LogActivityForm'
 import { SENT_FROM_ADDRESSES_STORAGE_KEY } from '@/utils/emailSentFromAddresses'
-import type { LeadTask, LeadTimelineEntry } from '@/types'
+import type { LeadTask, LeadTimelineEntry, PropertyContact } from '@/types'
 
 vi.mock('@/services/api', () => ({
   callLogService: {
@@ -455,6 +456,50 @@ describe('LogActivityForm — mode="meeting"', () => {
       expect.objectContaining({ event_type: 'meeting_logged' }),
       undefined,
     )
+  })
+
+  it('includes contact_id in the logNote payload when a contact is selected', async () => {
+    mockLogNote.mockResolvedValue(makeTimelineEntry({ event_type: 'meeting_logged', summary: 'Meeting: Coffee' }))
+    const contacts: PropertyContact[] = [
+      {
+        id: 42,
+        first_name: 'Alice',
+        last_name: 'Owner',
+        role: 'owner',
+        role_description: null,
+        notes: null,
+        phones: [],
+        emails: [],
+        created_at: null,
+        updated_at: null,
+        property_contact_role: 'owner',
+        is_primary: true,
+      },
+    ]
+    render(<LogActivityForm mode="meeting" leadId={1} contacts={contacts} onSaved={vi.fn()} />)
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: /contact/i }))
+    fireEvent.click(await screen.findByRole('option', { name: /Alice Owner/ }))
+    await user.type(screen.getByTestId('meeting-notes-input'), 'Had coffee downtown')
+    await user.click(screen.getByTestId('meeting-save-btn'))
+
+    await waitFor(() => {
+      expect(mockLogNote).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({
+          body: 'Had coffee downtown',
+          activity_kind: 'meeting',
+          contact_id: 42,
+        }),
+      )
+    })
+  })
+
+  it('focuses the meeting notes input from the imperative handle', () => {
+    const ref = createRef<LogActivityFormHandle>()
+    render(<LogActivityForm ref={ref} mode="meeting" leadId={1} onSaved={vi.fn()} />)
+    ref.current?.focus()
+    expect(screen.getByTestId('meeting-notes-input')).toHaveFocus()
   })
 })
 

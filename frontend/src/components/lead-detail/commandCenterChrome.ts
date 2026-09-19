@@ -101,6 +101,8 @@ export const ccActionTileSx: SxProps<Theme> = {
   flex: '1 1 0',
   minWidth: 0,
   maxWidth: 'none',
+  overflowWrap: 'break-word',
+  wordBreak: 'break-word',
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',

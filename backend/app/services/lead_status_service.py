@@ -71,7 +71,7 @@ def lead_has_active_outreach_work(lead_id: int) -> bool:
 
 
 def mailing_status_for_unpark(lead_id: int) -> str:
-    """Mailing stage after unparking: contacted if a call/email already happened."""
+    """Mailing stage after unparking: contacted if a call/email/meeting already happened."""
     contact_row = (
         LeadTimelineEntry.query.filter(
             LeadTimelineEntry.lead_id == lead_id,

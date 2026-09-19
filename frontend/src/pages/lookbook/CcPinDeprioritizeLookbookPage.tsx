@@ -510,8 +510,6 @@ function FakeTile({
       sx={{
         ...ccActionTileSx,
         cursor: 'default',
-        minWidth: 0,
-        py: 1.1,
         ...(filled
           ? {
               bgcolor: 'primary.main',

@@ -162,7 +162,10 @@ export function isMeetingCompletableTask(
 ): boolean {
   const ttype = (taskType || 'custom').trim()
   if (NEVER_NOTE_EMAIL_COMPLETE.has(ttype as LeadTaskType)) return false
-  if (MEETING_TITLE_RE.test(title || '')) return true
+  if (
+    !isMailOrEmailOutreachTask(taskType, title)
+    && MEETING_TITLE_RE.test(title || '')
+  ) return true
   return isCallCompletableTask(taskType, title)
 }
 

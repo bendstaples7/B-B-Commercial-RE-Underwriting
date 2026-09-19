@@ -17,8 +17,10 @@ const HUMAN_ACTIVITY_TYPES = new Set<TimelineEventType>([
   'note_added',
   'call_logged',
   'email_logged',
+  'meeting_logged',
   'hubspot_call',
   'hubspot_note',
+  'hubspot_meeting',
 ])
 
 export function isHumanActivityEntry(
@@ -28,7 +30,7 @@ export function isHumanActivityEntry(
 }
 
 /**
- * Collapsed Activity preview: keep notes/calls/emails visible even when later
+ * Collapsed Activity preview: keep notes/calls/emails/meetings visible even when later
  * system rows (status, GIS, skip-trace tasks) would otherwise push them out of
  * the first N chronological items.
  */

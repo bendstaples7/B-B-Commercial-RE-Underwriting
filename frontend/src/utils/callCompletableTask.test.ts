@@ -6,6 +6,7 @@ import {
   findEmailCompletableTask,
   isCallCompletableTask,
   isEmailCompletableTask,
+  isMeetingCompletableTask,
   parseHubSpotTaskId,
 } from './callCompletableTask'
 import type { LeadTask } from '@/types'
@@ -133,6 +134,17 @@ describe('findCompletableTaskForMode', () => {
       makeTask({ id: 3, title: 'In-person meeting downtown', task_type: 'custom' }),
     ]
     expect(findCompletableTaskForMode('meeting', tasks)?.id).toBe(3)
+  })
+
+  it('meeting mode does not complete mail/email tasks whose title mentions meeting', () => {
+    expect(isMeetingCompletableTask('add_to_mail_batch', 'Add to mail for meeting')).toBe(false)
+    expect(isMeetingCompletableTask('custom', 'Email meeting recap')).toBe(false)
+    expect(isMeetingCompletableTask('custom', 'Mail follow-up about meeting')).toBe(false)
+    const tasks = [
+      makeTask({ id: 1, title: 'Send mail about the meeting', task_type: 'add_to_mail_batch' }),
+      makeTask({ id: 2, title: 'Call owner', task_type: 'call_owner_today' }),
+    ]
+    expect(findCompletableTaskForMode('meeting', tasks)?.id).toBe(2)
   })
 
   it('never auto-completes skip_trace_owner or mail batch from note', () => {

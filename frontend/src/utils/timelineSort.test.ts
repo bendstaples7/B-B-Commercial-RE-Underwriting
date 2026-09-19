@@ -64,4 +64,28 @@ describe('previewTimelineEntries', () => {
       'status_changed',
     ])
   })
+
+  it('keeps meeting rows in the collapsed preview ahead of later system events', () => {
+    const later = '2026-09-03T23:51:24.000Z'
+    const meetingAt = '2026-09-03T23:49:48.000Z'
+    const preview = previewTimelineEntries(
+      sortTimelineEntriesDesc([
+        makeEntry(11, 'status_changed', later),
+        makeEntry(10, 'status_changed', later),
+        makeEntry(9, 'category_changed', later),
+        makeEntry(8, 'status_changed', later),
+        makeEntry(7, 'task_created', meetingAt),
+        makeEntry(6, 'meeting_logged', meetingAt),
+        makeEntry(5, 'hubspot_meeting', meetingAt),
+      ]),
+      5,
+    )
+    expect(preview.map((e) => e.event_type)).toEqual([
+      'meeting_logged',
+      'hubspot_meeting',
+      'status_changed',
+      'status_changed',
+      'category_changed',
+    ])
+  })
 })

@@ -250,7 +250,14 @@ export function buildTimelineDetailRows(entry: LeadTimelineEntry): TimelineDetai
       rows.push({ label: 'Contact', value: String(metadata.contact_name) })
     }
     const body = getFullNoteBody(entry)
-    if (body && (body.length > NOTE_INLINE_THRESHOLD || metadata.contact_name)) {
+    if (
+      body
+      && (
+        body.length > NOTE_INLINE_THRESHOLD
+        || metadata.contact_name
+        || getEntryDisplayText(entry).length > SUMMARY_COLLAPSE_THRESHOLD
+      )
+    ) {
       rows.push({ label: 'Notes', value: body })
     }
     return rows
@@ -285,10 +292,7 @@ export function buildTimelineDetailRows(entry: LeadTimelineEntry): TimelineDetai
 }
 
 export function entryHasExpandableDetails(entry: LeadTimelineEntry): boolean {
-  if (
-    (entry.event_type === 'note_added' || entry.event_type === 'meeting_logged')
-    && !isEmailEntry(entry)
-  ) {
+  if (entry.event_type === 'note_added' && !isEmailEntry(entry)) {
     const body = getFullNoteBody(entry)
     return body.length > NOTE_INLINE_THRESHOLD
   }

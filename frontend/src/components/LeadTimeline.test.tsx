@@ -13,7 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
-import { LeadTimeline, buildTimelineDetailRows, getTimelineEventLabel } from './LeadTimeline'
+import { LeadTimeline, buildTimelineDetailRows, entryHasExpandableDetails, getTimelineEventLabel } from './LeadTimeline'
 import type { LeadTimelineEntry } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -1032,6 +1032,20 @@ describe('LeadTimeline', () => {
 
       expect(rows.find((r) => r.label === 'Subject')?.value).toBe('Parsed subject')
       expect(rows.find((r) => r.label === 'Message')?.value).toBe('Message text')
+    })
+
+    it('includes Notes for a mid-length native meeting with no contact so expand is not blank', () => {
+      const body = 'Walked the building with the owner and talked through rents, rehab, and timing. '.repeat(3).trim()
+      expect(body.length).toBeGreaterThan(120)
+      expect(body.length).toBeLessThanOrEqual(500)
+      const entry = makeEntry(1, {
+        event_type: 'meeting_logged',
+        summary: body,
+        metadata: { body },
+      })
+      const rows = buildTimelineDetailRows(entry)
+      expect(rows).toEqual([{ label: 'Notes', value: body }])
+      expect(entryHasExpandableDetails(entry)).toBe(true)
     })
   })
 
