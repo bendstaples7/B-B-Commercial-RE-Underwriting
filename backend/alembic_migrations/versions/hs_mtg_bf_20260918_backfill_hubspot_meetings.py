@@ -157,7 +157,7 @@ def upgrade():
         INSERT INTO interaction_associations (interaction_id, target_type, target_id)
         SELECT DISTINCT
             i.id,
-            hm.internal_record_type,
+            hm.internal_record_type::interaction_target_type_enum,
             hm.internal_record_id
         FROM interactions i
         JOIN hubspot_engagements he ON he.hubspot_id = i.hubspot_engagement_id
@@ -181,7 +181,7 @@ def upgrade():
               SELECT 1
               FROM interaction_associations ia
               WHERE ia.interaction_id = i.id
-                AND ia.target_type = hm.internal_record_type
+                AND ia.target_type = hm.internal_record_type::interaction_target_type_enum
                 AND ia.target_id = hm.internal_record_id
           )
         """
