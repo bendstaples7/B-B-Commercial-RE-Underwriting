@@ -7,7 +7,7 @@
  * Dialog search supports name / address / lead #. Opening the dialog loads
  * property, source, portfolio, and activity context for each candidate.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from 'react'
 import {
   Alert,
   Autocomplete,
@@ -652,6 +652,16 @@ function parseContactDraft(text: string): { phones: string[]; emails: string[] }
   return { phones: unionPhones(phones, []), emails: unionEmails(emails, []) }
 }
 
+function checkboxInputProps(
+  ariaLabel: string,
+  testId: string,
+): InputHTMLAttributes<HTMLInputElement> {
+  return {
+    'aria-label': ariaLabel,
+    'data-testid': testId,
+  } as InputHTMLAttributes<HTMLInputElement>
+}
+
 function searchHitLabel(item: SearchResultItem): string {
   const owner = (item.owner_display_name || item.label || `Lead #${item.id}`).trim()
   const street = (item.property_street || '').trim()
@@ -739,13 +749,10 @@ export function SameAddressMergeBanner({
   }, [])
 
   const options = useMemo(() => {
-    const rows: Array<{
-      id: number
-      owner_display_name: string
-      people_names: string[]
-    }> = [
+    const rows: SameAddressLeadSummary[] = [
       {
         id: leadId,
+        property_street: null,
         owner_display_name: currentOwnerLabel || `Lead #${leadId}`,
         people_names: currentPeopleNames,
       },
@@ -1369,10 +1376,10 @@ export function SameAddressMergeBanner({
                                   return next
                                 })
                               }}
-                              inputProps={{
-                                'aria-label': `Bring ${row.label} from lead #${compareIncoming.id}`,
-                                'data-testid': `same-address-merge-pick-${compareIncoming.id}-${row.key}`,
-                              }}
+                              inputProps={checkboxInputProps(
+                                `Bring ${row.label} from lead #${compareIncoming.id}`,
+                                `same-address-merge-pick-${compareIncoming.id}-${row.key}`,
+                              )}
                               sx={{ p: 0.25, mt: 0.25, cursor: 'pointer' }}
                             />
                             <Typography variant="body2" sx={{ overflowWrap: 'anywhere', flex: 1, pt: 0.35 }}>
@@ -1395,10 +1402,10 @@ export function SameAddressMergeBanner({
                                   return next
                                 })
                               }}
-                              inputProps={{
-                                'aria-label': `Bring ${row.label} from lead #${primaryView.id}`,
-                                'data-testid': `same-address-merge-pick-${primaryView.id}-${row.key}`,
-                              }}
+                              inputProps={checkboxInputProps(
+                                `Bring ${row.label} from lead #${primaryView.id}`,
+                                `same-address-merge-pick-${primaryView.id}-${row.key}`,
+                              )}
                               sx={{ p: 0.25, mt: 0.25, cursor: 'pointer' }}
                             />
                             <Typography variant="body2" sx={{ overflowWrap: 'anywhere', flex: 1, pt: 0.35 }}>
