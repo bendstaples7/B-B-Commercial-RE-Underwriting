@@ -71,19 +71,35 @@ def lead_has_active_outreach_work(lead_id: int) -> bool:
 
 
 def mailing_status_for_unpark(lead_id: int) -> str:
-    """Mailing stage after unparking: contacted if a call/email/meeting already happened."""
-    contact_row = (
+    """Mailing stage after unparking when real contact already happened."""
+    contact_rows = (
         LeadTimelineEntry.query.filter(
             LeadTimelineEntry.lead_id == lead_id,
             LeadTimelineEntry.event_type.in_(
-                ('call_logged', 'hubspot_call', 'email_logged', 'meeting_logged', 'hubspot_meeting'),
+                (
+                    'call_logged',
+                    'hubspot_call',
+                    'email_logged',
+                    'meeting_logged',
+                    'hubspot_meeting',
+                ),
             ),
             LeadTimelineEntry.is_deleted.is_(False),
         )
-        .first()
+        .order_by(LeadTimelineEntry.occurred_at.desc())
+        .all()
     )
-    if contact_row is not None:
-        return 'mailing_contacted_no_interest'
+    for row in contact_rows:
+        if row.event_type != 'hubspot_meeting':
+            return 'mailing_contacted_no_interest'
+        metadata = row.event_metadata if isinstance(row.event_metadata, dict) else {}
+        status = str(
+            metadata.get('meeting_status')
+            or metadata.get('status')
+            or ''
+        ).strip().lower()
+        if status in {'completed', 'occurred'}:
+            return 'mailing_contacted_no_interest'
     return 'mailing_no_contact_made'
 
 

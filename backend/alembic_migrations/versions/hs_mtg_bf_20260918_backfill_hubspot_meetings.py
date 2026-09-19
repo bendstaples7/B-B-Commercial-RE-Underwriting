@@ -222,6 +222,10 @@ def upgrade():
                 'id', i.hubspot_engagement_id,
                 'type', 'MEETING',
                 'body', i.body,
+                'meeting_status', COALESCE(
+                    he.raw_payload #>> '{metadata,status}',
+                    he.raw_payload #>> '{metadata,meetingOutcome}'
+                ),
                 'occurred_at', to_char(
                     i.occurred_at AT TIME ZONE 'UTC',
                     'YYYY-MM-DD"T"HH24:MI:SS"+00:00"'

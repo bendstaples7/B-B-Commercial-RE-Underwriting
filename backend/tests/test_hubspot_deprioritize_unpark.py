@@ -13,6 +13,7 @@ from app.services.lead_status_service import (
     count_working_deprioritize_heal_candidates,
     heal_working_deprioritize_leads,
     lead_has_active_outreach_work,
+    mailing_status_for_unpark,
     working_deprioritize_heal_candidates,
 )
 from app.services.mail_queue_service import MailQueueService
@@ -93,6 +94,74 @@ class TestHubSpotDeprioritizeCopy:
 
 
 class TestUnparkDeprioritizeHeal:
+    def test_mailing_status_for_unpark_counts_native_meeting(self, app):
+        with app.app_context():
+            lead = Lead(
+                property_street='Meeting Contacted St',
+                lead_status='deprioritize',
+            )
+            db.session.add(lead)
+            db.session.flush()
+            db.session.add(LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type='meeting_logged',
+                occurred_at=datetime.now(timezone.utc),
+                source='manual',
+                actor='ben',
+                summary='Meeting: Coffee',
+            ))
+            db.session.commit()
+
+            assert (
+                mailing_status_for_unpark(lead.id)
+                == 'mailing_contacted_no_interest'
+            )
+
+    def test_mailing_status_for_unpark_ignores_scheduled_hubspot_meeting(self, app):
+        with app.app_context():
+            lead = Lead(
+                property_street='Imported Meeting Scheduled St',
+                lead_status='deprioritize',
+            )
+            db.session.add(lead)
+            db.session.flush()
+            db.session.add(LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type='hubspot_meeting',
+                occurred_at=datetime.now(timezone.utc),
+                source='hubspot',
+                actor='HubSpot',
+                summary='HubSpot scheduled meeting',
+                event_metadata={'meeting_status': 'SCHEDULED'},
+            ))
+            db.session.commit()
+
+            assert mailing_status_for_unpark(lead.id) == 'mailing_no_contact_made'
+
+    def test_mailing_status_for_unpark_counts_completed_hubspot_meeting(self, app):
+        with app.app_context():
+            lead = Lead(
+                property_street='Imported Meeting Completed St',
+                lead_status='deprioritize',
+            )
+            db.session.add(lead)
+            db.session.flush()
+            db.session.add(LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type='hubspot_meeting',
+                occurred_at=datetime.now(timezone.utc),
+                source='hubspot',
+                actor='HubSpot',
+                summary='HubSpot completed meeting',
+                event_metadata={'meeting_status': 'COMPLETED'},
+            ))
+            db.session.commit()
+
+            assert (
+                mailing_status_for_unpark(lead.id)
+                == 'mailing_contacted_no_interest'
+            )
+
     def test_heal_unparks_overdue_follow_up_shaped_like_10664(self, app):
         with app.app_context():
             lead = Lead(
