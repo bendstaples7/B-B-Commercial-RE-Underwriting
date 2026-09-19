@@ -4,13 +4,17 @@ from __future__ import annotations
 import copy
 import logging
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
+
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.attributes import flag_modified
 
 from app import db
 from app.exceptions import MailQueueError
 from app.models import Lead, MailCampaign, MailQueueItem, MarketingListMember
+from app.models.mail_campaign_lead_attribution import MailCampaignLeadAttribution
 from app.services.lead_timeline_service import LeadTimelineService
 from app.services.mail_creative import (
     apply_template_style_to_preset,
@@ -59,6 +63,178 @@ _OMIT_CANDIDATE_STATUSES = ('submitted', 'sent', 'failed')
 _ATTACHED_REQUEUE_STATUSES = (
     'queued', 'submitted', 'sent', 'failed', 'invalid_address',
 )
+
+# Pieces still on a live batch count as mailed for ROI even before OLC
+# analytics promotes the queue row from ``submitted`` to ``sent``.
+ATTRIBUTABLE_QUEUE_STATUSES = ('sent', 'submitted')
+ATTRIBUTABLE_CAMPAIGN_STATUSES = ('submitted', 'processing', 'mailed')
+_MAIL_RESPONSE_WINDOW = timedelta(days=90)
+
+
+def _utc_naive(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def mail_response_eligible(lead_id: int, mail_campaign_id: int, actor_user_id: str) -> bool:
+    """True when this actor may count a response against this lead's mailer batch."""
+    campaign = MailCampaign.query.get(mail_campaign_id)
+    if campaign is None or campaign.status not in ATTRIBUTABLE_CAMPAIGN_STATUSES:
+        return False
+    item = (
+        MailQueueItem.query.filter(
+            MailQueueItem.campaign_id == mail_campaign_id,
+            MailQueueItem.lead_id == lead_id,
+            MailQueueItem.status.in_(ATTRIBUTABLE_QUEUE_STATUSES),
+        )
+        .first()
+    )
+    if item is None:
+        return False
+    if campaign.created_by == actor_user_id or item.user_id == actor_user_id:
+        return True
+    lead = Lead.query.get(lead_id)
+    return lead is not None and lead.owner_user_id == actor_user_id
+
+
+def _campaign_id_from_metadata(meta: dict | None) -> int | None:
+    if not meta:
+        return None
+    raw = meta.get('mail_campaign_id')
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _add_mail_response_ledger(session, lead_id: int, campaign_id: int) -> bool:
+    """Insert the once-per-lead ledger row. Caller owns commit/flush."""
+    existing = (
+        session.query(MailCampaignLeadAttribution)
+        .filter_by(lead_id=lead_id, mail_campaign_id=campaign_id)
+        .first()
+    )
+    if existing is not None:
+        return False
+    session.add(MailCampaignLeadAttribution(
+        lead_id=lead_id,
+        mail_campaign_id=campaign_id,
+    ))
+    return True
+
+
+def _is_inbound_mail_response(entry) -> bool:
+    """Inbound call or inbound text that is not already tied to a mailer."""
+    if entry.is_deleted:
+        return False
+    meta = entry.event_metadata or {}
+    if meta.get('attributed_to_mail'):
+        return False
+    if entry.event_type == 'call_logged':
+        return meta.get('direction') == 'inbound'
+    if entry.event_type == 'note_added' and meta.get('activity_kind') == 'text':
+        return True
+    return False
+
+
+def _best_prior_campaign(campaigns: list[MailCampaign], occurred_at: datetime | None) -> MailCampaign | None:
+    occurred = _utc_naive(occurred_at)
+    if occurred is None:
+        return None
+    window_start = occurred - _MAIL_RESPONSE_WINDOW
+    best: MailCampaign | None = None
+    best_at: datetime | None = None
+    for camp in campaigns:
+        if camp.status not in ATTRIBUTABLE_CAMPAIGN_STATUSES:
+            continue
+        sent_at = _utc_naive(camp.submitted_at or camp.created_at)
+        if sent_at is None or sent_at > occurred or sent_at < window_start:
+            continue
+        if best_at is None or sent_at > best_at or (sent_at == best_at and best is not None and camp.id > best.id):
+            best = camp
+            best_at = sent_at
+    return best
+
+
+def backfill_inbound_mail_responses(session=None) -> dict[str, int]:
+    """Attribute inbound calls/texts after a mailer and sync response_count.
+
+    Idempotent. Does not decrease an existing ``response_count``. Used by the
+    Alembic data migration so already-logged inbound calls on mailed leads
+    show up on Channel ROI without a manual backfill.
+    """
+    from app.models.lead_timeline_entry import LeadTimelineEntry
+
+    sess = session if session is not None else db.session
+    stamped = 0
+    seeded = 0
+
+    queue_rows = (
+        sess.query(MailQueueItem, MailCampaign)
+        .join(MailCampaign, MailCampaign.id == MailQueueItem.campaign_id)
+        .filter(
+            MailQueueItem.status.in_(ATTRIBUTABLE_QUEUE_STATUSES),
+            MailCampaign.status.in_(ATTRIBUTABLE_CAMPAIGN_STATUSES),
+        )
+        .all()
+    )
+    by_lead: dict[int, list[MailCampaign]] = {}
+    seen_pair: set[tuple[int, int]] = set()
+    for item, camp in queue_rows:
+        key = (item.lead_id, camp.id)
+        if key in seen_pair:
+            continue
+        seen_pair.add(key)
+        by_lead.setdefault(item.lead_id, []).append(camp)
+
+    entries = (
+        sess.query(LeadTimelineEntry)
+        .filter(
+            LeadTimelineEntry.is_deleted.is_(False),
+            LeadTimelineEntry.event_type.in_(('call_logged', 'note_added')),
+        )
+        .all()
+    )
+    for entry in entries:
+        meta = dict(entry.event_metadata or {})
+        campaign_id = None
+        if meta.get('attributed_to_mail'):
+            campaign_id = _campaign_id_from_metadata(meta)
+        elif _is_inbound_mail_response(entry):
+            best = _best_prior_campaign(by_lead.get(entry.lead_id, []), entry.occurred_at)
+            if best is None:
+                continue
+            campaign_id = best.id
+            meta['mail_campaign_id'] = campaign_id
+            meta['attributed_to_mail'] = True
+            meta['mail_attribution_source'] = 'inbound_after_mailer'
+            entry.event_metadata = meta
+            flag_modified(entry, 'event_metadata')
+            stamped += 1
+        if campaign_id is None:
+            continue
+        if _add_mail_response_ledger(sess, entry.lead_id, campaign_id):
+            seeded += 1
+
+    from sqlalchemy import func
+
+    counts = dict(
+        sess.query(
+            MailCampaignLeadAttribution.mail_campaign_id,
+            func.count(MailCampaignLeadAttribution.lead_id),
+        )
+        .group_by(MailCampaignLeadAttribution.mail_campaign_id)
+        .all()
+    )
+    for campaign in sess.query(MailCampaign).all():
+        ledger_n = int(counts.get(campaign.id, 0))
+        if ledger_n > (campaign.response_count or 0):
+            campaign.response_count = ledger_n
+    sess.flush()
+    return {'stamped': stamped, 'ledger_rows': seeded}
 
 
 def _lead_id_from_olc_recipient(recip: dict[str, Any]) -> int | None:
@@ -2344,49 +2520,58 @@ class MailCampaignService:
         return payload
 
     def get_recent_for_lead(self, lead_id: int, user_id: str, days: int = 90) -> list[MailCampaign]:
-        from datetime import timedelta
+        from sqlalchemy import or_
 
         lead = Lead.query.get(lead_id)
-        if lead is None or lead.owner_user_id != user_id:
+        if lead is None or (lead.owner_user_id and lead.owner_user_id != user_id):
             raise MailQueueError('Lead not found', status_code=404)
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        return (
+        sent_at = db.func.coalesce(MailCampaign.submitted_at, MailCampaign.created_at)
+        query = (
             MailCampaign.query
             .join(MailQueueItem, MailQueueItem.campaign_id == MailCampaign.id)
             .filter(
                 MailQueueItem.lead_id == lead_id,
-                MailQueueItem.status == 'sent',
-                MailCampaign.created_by == user_id,
-                MailCampaign.submitted_at >= cutoff,
+                MailQueueItem.status.in_(ATTRIBUTABLE_QUEUE_STATUSES),
+                MailCampaign.status.in_(ATTRIBUTABLE_CAMPAIGN_STATUSES),
+                sent_at >= cutoff,
             )
-            .order_by(MailCampaign.submitted_at.desc())
-            .distinct()
-            .all()
         )
+        # Owned leads: any live batch on the lead. Unowned: only this user's batches.
+        if lead.owner_user_id != user_id:
+            query = query.filter(or_(
+                MailCampaign.created_by == user_id,
+                MailQueueItem.user_id == user_id,
+            ))
+        rows = query.order_by(sent_at.desc(), MailCampaign.id.desc()).all()
+        seen: set[int] = set()
+        campaigns: list[MailCampaign] = []
+        for campaign in rows:
+            if campaign.id in seen:
+                continue
+            seen.add(campaign.id)
+            campaigns.append(campaign)
+        return campaigns
 
     def record_call_attribution(self, campaign_id: int, lead_id: int, user_id: str) -> None:
+        """Bump response_count once per lead for a confirmed mailer response.
+
+        Calls and inbound texts share this writer. The ledger ignores later
+        soft-deletes so a second log cannot double-count.
+        """
+        if not mail_response_eligible(lead_id, campaign_id, user_id):
+            return
         campaign = MailCampaign.query.get(campaign_id)
-        if campaign is None or campaign.created_by != user_id:
+        if campaign is None:
             return
-        sent = MailQueueItem.query.filter_by(
-            campaign_id=campaign_id, lead_id=lead_id, status='sent',
-        ).first()
-        if sent is None:
-            return
-        from app.models.lead_timeline_entry import LeadTimelineEntry
-        prior_calls = LeadTimelineEntry.query.filter_by(
-            lead_id=lead_id, event_type='call_logged', is_deleted=False,
-        ).all()
-        attributed = sum(
-            1 for e in prior_calls
-            if (e.event_metadata or {}).get('mail_campaign_id') == campaign_id
-            and (e.event_metadata or {}).get('attributed_to_mail')
-        )
-        if attributed != 1:
+        if not _add_mail_response_ledger(db.session, lead_id, campaign_id):
             return
         campaign.response_count = (campaign.response_count or 0) + 1
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
 
     @staticmethod
     def serialize_campaign(campaign: MailCampaign) -> dict:

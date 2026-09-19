@@ -2584,9 +2584,11 @@ export interface LogNotePayload {
   email_label?: string | null;
   subject?: string | null;
   sent_from_email?: string | null;
-  activity_kind?: 'note' | 'email' | 'meeting' | null;
+  activity_kind?: 'note' | 'email' | 'meeting' | 'text' | null;
   complete_task_id?: number | null;
   follow_up?: LogCallFollowUpPayload | null;
+  /** Confirmed direct-mail batch this note/text is a response to. */
+  mail_campaign_id?: number | null;
 }
 
 export interface BulkActionResult {

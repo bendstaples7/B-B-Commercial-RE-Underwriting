@@ -179,16 +179,40 @@ def _build_meeting_summary(body: str, contact_name: str | None) -> str:
 
 
 def _mail_attribution_eligible(lead_id: int, mail_campaign_id: int, actor_user_id: str) -> bool:
-    from app.models import MailCampaign, MailQueueItem
+    from app.services.mail_campaign_service import mail_response_eligible
 
-    campaign = MailCampaign.query.get(mail_campaign_id)
-    if campaign is None or campaign.created_by != actor_user_id:
+    return mail_response_eligible(lead_id, mail_campaign_id, actor_user_id)
+
+
+def _stamp_mail_attribution(
+    metadata: dict,
+    lead_id: int,
+    mail_campaign_id: int | None,
+    actor: str,
+) -> bool:
+    if mail_campaign_id is None or not _mail_attribution_eligible(lead_id, mail_campaign_id, actor):
         return False
-    return MailQueueItem.query.filter_by(
-        campaign_id=mail_campaign_id,
-        lead_id=lead_id,
-        status='sent',
-    ).first() is not None
+    metadata['mail_campaign_id'] = mail_campaign_id
+    metadata['attributed_to_mail'] = True
+    return True
+
+
+def _commit_mail_attribution(
+    attributed: bool,
+    mail_campaign_id: int | None,
+    lead_id: int,
+    actor: str,
+) -> None:
+    if not attributed or mail_campaign_id is None:
+        return
+    try:
+        from app.services.mail_campaign_service import MailCampaignService
+        MailCampaignService().record_call_attribution(mail_campaign_id, lead_id, actor)
+    except Exception as exc:
+        logger.warning(
+            'Mail response attribution failed for lead %s campaign %s: %s',
+            lead_id, mail_campaign_id, exc,
+        )
 
 
 def _facebook_attribution_eligible(facebook_campaign_id: int) -> bool:
@@ -334,13 +358,9 @@ class CallLogService:
             metadata['phone_number'] = phone_number
         if phone_label:
             metadata['phone_label'] = phone_label
-        attributed_to_mail = (
-            mail_campaign_id is not None
-            and _mail_attribution_eligible(lead_id, mail_campaign_id, actor)
+        attributed_to_mail = _stamp_mail_attribution(
+            metadata, lead_id, mail_campaign_id, actor,
         )
-        if attributed_to_mail:
-            metadata['mail_campaign_id'] = mail_campaign_id
-            metadata['attributed_to_mail'] = True
 
         attributed_to_facebook = (
             facebook_campaign_id is not None
@@ -420,14 +440,7 @@ class CallLogService:
             )
 
         if attributed_to_mail:
-            try:
-                from app.services.mail_campaign_service import MailCampaignService
-                MailCampaignService().record_call_attribution(mail_campaign_id, lead_id, actor)
-            except Exception as exc:
-                logger.warning(
-                    'Mail call attribution failed for lead %s campaign %s: %s',
-                    lead_id, mail_campaign_id, exc,
-                )
+            _commit_mail_attribution(True, mail_campaign_id, lead_id, actor)
 
         if attributed_to_facebook:
             try:
@@ -457,6 +470,7 @@ class CallLogService:
         complete_task_id: int | None = None,
         follow_up: dict | None = None,
         activity_kind: str | None = None,
+        mail_campaign_id: int | None = None,
     ) -> LeadTimelineEntry:
         """Log a note, email, or meeting on a lead.
 
@@ -513,27 +527,33 @@ class CallLogService:
 
         kind = (activity_kind or '').strip().lower()
         is_meeting = kind == 'meeting'
-        has_email_context = (not is_meeting) and any([
+        is_text = kind == 'text'
+        has_email_context = (not is_meeting and not is_text) and any([
             contact_email_id, email_address, email_label, subject, sent_from_email,
         ])
-        is_email = (not is_meeting) and (
+        is_email = (not is_meeting and not is_text) and (
             kind == 'email' or has_email_context or body.strip().startswith('[Email]')
         )
         if is_meeting:
             summary = _build_meeting_summary(body, contact_name)
         elif is_email:
             summary = _build_email_summary(body, subject, contact_name, email_address, email_label)
+        elif is_text:
+            summary = f'Inbound text: {body}'[:500]
         else:
             summary = body[:500]
 
         metadata: dict = {'body': body}
-        if subject and not is_meeting:
+        if is_text:
+            metadata['activity_kind'] = 'text'
+            metadata['direction'] = 'inbound'
+        if subject and not is_meeting and not is_text:
             metadata['subject'] = subject
         if contact_id is not None:
             metadata['contact_id'] = contact_id
         if contact_name:
             metadata['contact_name'] = contact_name
-        if not is_meeting:
+        if not is_meeting and not is_text:
             if contact_email_id is not None:
                 metadata['contact_email_id'] = contact_email_id
             if email_address:
@@ -542,6 +562,10 @@ class CallLogService:
                 metadata['email_label'] = email_label
             if sent_from_email:
                 metadata['sent_from_email'] = sent_from_email
+
+        attributed_to_mail = _stamp_mail_attribution(
+            metadata, lead_id, mail_campaign_id, actor,
+        )
 
         if is_meeting:
             event_type = 'meeting_logged'
@@ -552,6 +576,15 @@ class CallLogService:
             db.session.add(lead)
             from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
             cancel_mail_rematch_tasks(lead_id, actor=actor, reason='logged_meeting')
+        elif is_text:
+            event_type = 'note_added'
+            lead.last_contact_date = date.today()
+            lead.prefer_direct_mail = False
+            lead.unanswered_call_count = 0
+            lead.unanswered_mail_nudge_dismissed_count = None
+            db.session.add(lead)
+            from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
+            cancel_mail_rematch_tasks(lead_id, actor=actor, reason='inbound_text')
         elif is_email:
             event_type = 'email_logged'
         else:
@@ -609,5 +642,7 @@ class CallLogService:
                 "refresh_lead_scoring failed for lead %s after note log: %s",
                 lead_id, exc, exc_info=True,
             )
+
+        _commit_mail_attribution(attributed_to_mail, mail_campaign_id, lead_id, actor)
 
         return entry
