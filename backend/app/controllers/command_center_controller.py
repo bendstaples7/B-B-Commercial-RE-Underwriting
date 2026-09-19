@@ -1915,6 +1915,51 @@ def merge_preview(lead_id: int, other_id: int):
     return jsonify(preview), 200
 
 
+@command_center_bp.route('/<int:lead_id>/merge-context', methods=['GET'])
+@require_auth
+@handle_errors
+def merge_context(lead_id: int):
+    """GET /api/leads/<lead_id>/merge-context?ids= — property/source/activity for review."""
+    from app.services.lead_dedup_service import merge_decision_summaries
+
+    _lead, denied = _load_authorized_lead(lead_id)
+    if denied is not None:
+        return denied
+
+    raw = (request.args.get('ids') or '').strip()
+    extra_ids: list[int] = []
+    if raw:
+        for part in raw.split(','):
+            piece = part.strip()
+            if not piece:
+                continue
+            try:
+                extra_ids.append(int(piece))
+            except (TypeError, ValueError):
+                return jsonify({'error': 'ids must be comma-separated integers'}), 400
+
+    ordered: list[int] = []
+    for item_id in [lead_id, *extra_ids]:
+        if item_id not in ordered:
+            ordered.append(item_id)
+    if len(ordered) > 12:
+        return jsonify({'error': 'At most 12 leads can be compared'}), 400
+
+    found = {
+        row.id: row
+        for row in Lead.query.filter(Lead.id.in_(ordered)).all()
+    }
+    readable = []
+    for item_id in ordered:
+        item = found.get(item_id)
+        if item is None:
+            continue
+        if _require_lead_read_access(item) is not None:
+            continue
+        readable.append(item)
+    return jsonify({'leads': merge_decision_summaries(readable)}), 200
+
+
 @command_center_bp.route('/<int:lead_id>/move-to-skip-trace', methods=['POST'])
 @handle_errors
 @require_auth

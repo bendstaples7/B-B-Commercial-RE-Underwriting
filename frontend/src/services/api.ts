@@ -1338,6 +1338,15 @@ export const commandCenterService = {
     other: SameAddressLeadSummary
   }> =>
     api.get(`/leads/${leadId}/merge-preview/${otherId}`).then(r => r.data),
+  getMergeContext: (
+    leadId: number,
+    otherIds: number[],
+  ): Promise<{ leads: SameAddressLeadSummary[] }> =>
+    api.get(`/leads/${leadId}/merge-context`, {
+      params: {
+        ids: otherIds.filter((id) => id !== leadId).join(','),
+      },
+    }).then(r => r.data),
   updateCategory: (
     leadId: number,
     leadCategory: 'residential' | 'commercial',

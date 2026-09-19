@@ -16,6 +16,7 @@ vi.mock('@/services/api', () => ({
   commandCenterService: {
     mergeInto: vi.fn(),
     getMergePreview: vi.fn(),
+    getMergeContext: vi.fn(),
   },
   searchService: {
     search: vi.fn(),
@@ -74,8 +75,10 @@ function ManualMergeHarness(
 describe('SameAddressMergeBanner', () => {
   beforeEach(() => {
     vi.mocked(commandCenterService.getMergePreview).mockReset()
+    vi.mocked(commandCenterService.getMergeContext).mockReset()
     vi.mocked(commandCenterService.mergeInto).mockReset()
     vi.mocked(searchService.search).mockReset()
+    vi.mocked(commandCenterService.getMergeContext).mockResolvedValue({ leads: [] })
     vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
       winner_id: 200,
       loser_id: 100,
@@ -109,6 +112,7 @@ describe('SameAddressMergeBanner', () => {
     expect(screen.getByTestId('same-address-merge-banner')).toHaveTextContent(
       'Another record for this address',
     )
+    expect(screen.getByTestId('same-address-merge-open')).toHaveTextContent('Review merge')
     await user.click(screen.getByTestId('same-address-merge-open'))
     expect(screen.getByTestId('same-address-merge-dialog')).toBeInTheDocument()
     await user.click(screen.getByTestId('same-address-merge-stay-200'))
@@ -788,5 +792,92 @@ describe('SameAddressMergeBanner', () => {
       expect(screen.getAllByText('Fresh manual (#400)').length).toBeGreaterThan(0)
     })
     expect(screen.queryAllByText('Stale manual (#300)')).toHaveLength(0)
+  })
+
+  it('shows property, source, other properties, and activities when choosing primary', async () => {
+    const user = userEvent.setup()
+    vi.mocked(commandCenterService.getMergeContext).mockResolvedValue({
+      leads: [
+        {
+          id: 100,
+          property_street: '1110 Yoko Ave',
+          property_city: 'Chicago',
+          property_state: 'IL',
+          owner_display_name: 'Yoko Miller',
+          people_names: ['Yoko Miller'],
+          county_assessor_pin: '14-28-100',
+          property_type: 'multi_family',
+          units: 4,
+          lead_status: 'skip_trace',
+          source: 'Cityscape',
+          data_source: 'hubspot',
+          hubspot_confirmed: true,
+          organizations: ['Yoko Holdings LLC'],
+          related_properties: [
+            {
+              id: 501,
+              property_street: '200 Oak St',
+              lead_status: 'mailing_no_contact_made',
+            },
+          ],
+          activity: {
+            total: 3,
+            calls: 2,
+            notes: 1,
+            emails: 0,
+            mail: 0,
+            last_occurred_at: '2026-03-04T15:00:00Z',
+            last_summary: 'Left voicemail',
+            last_event_type: 'call_logged',
+          },
+          open_task_count: 1,
+        },
+        {
+          id: 200,
+          property_street: '1110 Yoko Ave',
+          owner_display_name: 'Yoko + Edwin',
+          people_names: ['Yoko Miller', 'Edwin Chen'],
+          source: null,
+          data_source: 'cook_county_assessor',
+          related_properties: [],
+          activity: {
+            total: 0,
+            calls: 0,
+            notes: 0,
+            emails: 0,
+            mail: 0,
+            last_summary: null,
+          },
+          open_task_count: 0,
+        },
+      ],
+    })
+    render(
+      <MemoryRouter>
+        <SameAddressMergeBanner
+          leadId={100}
+          currentOwnerLabel="Yoko Miller"
+          currentPeopleNames={['Yoko Miller']}
+          twins={[twin200]}
+          onMerged={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    expect(screen.getByText('Choose primary')).toBeInTheDocument()
+    const current = await screen.findByTestId('same-address-merge-facts-100')
+    expect(current).toHaveTextContent('1110 Yoko Ave, Chicago IL')
+    expect(current).toHaveTextContent('PIN 14-28-100')
+    expect(current).toHaveTextContent('Multi Family')
+    expect(current).toHaveTextContent('4 units')
+    expect(current).toHaveTextContent('Source: Cityscape · HubSpot')
+    expect(current).toHaveTextContent('Companies: Yoko Holdings LLC')
+    expect(current).toHaveTextContent('Other properties (1): 200 Oak St')
+    expect(current).toHaveTextContent('Activities: 3 total · 2 calls · 1 note · 1 open task')
+    expect(current).toHaveTextContent('Left voicemail')
+    const other = screen.getByTestId('same-address-merge-facts-200')
+    expect(other).toHaveTextContent('Source: Cook County Assessor')
+    expect(other).toHaveTextContent('Other properties: none')
+    expect(other).toHaveTextContent('Activities: none')
   })
 })

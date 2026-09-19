@@ -13,6 +13,7 @@ vi.mock('@/services/api', () => ({
   commandCenterService: {
     mergeInto: vi.fn(),
     getMergePreview: vi.fn(),
+    getMergeContext: vi.fn().mockResolvedValue({ leads: [] }),
   },
 }))
 

@@ -1382,6 +1382,96 @@ class TestMergePreviewAndUnitGuard:
             assert body['same_building'] is False
             assert body.get('mergeable') is False
 
+    def test_merge_context_includes_source_properties_and_activities(self, client, app):
+        from datetime import datetime as dt
+
+        with app.app_context():
+            current = _make_lead(
+                app,
+                '100 Merge Review Ave',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                source='Cityscape',
+                deal_source='Referral',
+                data_source='hubspot',
+                property_city='Chicago',
+                property_state='IL',
+                county_assessor_pin='14-28-100',
+                property_type='multi_family',
+                units=4,
+                lead_status='skip_trace',
+            )
+            twin = _make_lead(
+                app,
+                '100 Merge Review Ave',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                data_source='cook_county_assessor',
+                lead_status='mailing_no_contact_made',
+            )
+            portfolio = _make_lead(
+                app,
+                '200 Other Portfolio St',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                lead_status='negotiating_remote',
+            )
+            from app.services.lead_dedup_service import refresh_lead_dedup_fields
+            for item in (current, twin, portfolio):
+                refresh_lead_dedup_fields(item)
+            db.session.add(LeadTimelineEntry(
+                lead_id=current.id,
+                event_type='call_logged',
+                occurred_at=dt(2026, 3, 4, 15, 0, 0),
+                source='manual',
+                actor='test',
+                summary='Left voicemail',
+            ))
+            db.session.add(LeadTask(
+                lead_id=twin.id,
+                task_type='custom',
+                title='Call back',
+                status='open',
+                created_by='test',
+            ))
+            db.session.commit()
+
+            response = client.get(
+                f'/api/leads/{current.id}/merge-context?ids={twin.id}',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            by_id = {row['id']: row for row in body['leads']}
+            assert set(by_id) == {current.id, twin.id}
+            assert portfolio.id not in by_id
+
+            current_row = by_id[current.id]
+            assert current_row['source'] == 'Cityscape'
+            assert current_row['deal_source'] == 'Referral'
+            assert current_row['data_source'] == 'hubspot'
+            assert current_row['county_assessor_pin'] == '14-28-100'
+            assert current_row['units'] == 4
+            assert current_row['activity']['calls'] == 1
+            assert current_row['activity']['total'] == 1
+            assert current_row['activity']['last_summary'] == 'Left voicemail'
+            related_ids = {row['id'] for row in current_row['related_properties']}
+            assert portfolio.id in related_ids
+
+            twin_row = by_id[twin.id]
+            assert twin_row['data_source'] == 'cook_county_assessor'
+            assert twin_row['open_task_count'] == 1
+            assert twin_row['activity']['total'] == 0
+
+    def test_merge_context_rejects_non_integer_ids(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '100 Merge Review Ave')
+            response = client.get(
+                f'/api/leads/{lead.id}/merge-context?ids=nope',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 400
+
     def test_merge_into_rejects_other_unit(self, client, app):
         from app.services.lead_dedup_service import refresh_lead_dedup_fields
 

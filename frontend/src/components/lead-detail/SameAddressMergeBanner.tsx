@@ -1,10 +1,11 @@
 /**
- * Same-address duplicate banner + pick-who-stays merge dialog.
+ * Same-address duplicate banner + choose-primary merge dialog.
  *
  * Auto-detects same-building twins when the API returns them (blue banner).
  * Manual entry lives on Command Center header overflow (⋯ → Merge duplicate…);
  * open the dialog via controlled `open` / `onOpenChange` from that menu.
- * Dialog search supports name / address / lead #.
+ * Dialog search supports name / address / lead #. Opening the dialog loads
+ * property, source, portfolio, and activity context for each candidate.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -25,8 +26,10 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+import { LEAD_STATUS_LABELS } from '@/components/LeadStatusChip'
 import { commandCenterService, searchService } from '@/services/api'
-import type { SameAddressLeadSummary, SearchResultItem } from '@/types'
+import type { LeadStatus, SameAddressLeadSummary, SearchResultItem } from '@/types'
+import { formatDate, formatPropertyTypeLabel, humanize } from '@/utils/formatters'
 
 const SEARCH_DEBOUNCE_MS = 300
 
@@ -55,6 +58,127 @@ export interface SameAddressMergeBannerProps {
 function peopleLine(names: string[]): string {
   if (!names.length) return 'No people listed'
   return names.join(', ')
+}
+
+function statusLabel(status: string | null | undefined): string {
+  if (!status) return ''
+  if (Object.hasOwn(LEAD_STATUS_LABELS, status)) {
+    return LEAD_STATUS_LABELS[status as LeadStatus]
+  }
+  return humanize(status)
+}
+
+function addressLine(row: SameAddressLeadSummary): string {
+  const street = (row.property_street || '').trim()
+  const locality = [row.property_city, row.property_state, row.property_zip]
+    .map((part) => (part || '').trim())
+    .filter(Boolean)
+    .join(' ')
+  if (street && locality) return `${street}, ${locality}`
+  return street || locality || 'No address on file'
+}
+
+function sourceToken(raw: string): string {
+  const key = raw.trim().toLowerCase()
+  if (key === 'hubspot') return 'HubSpot'
+  return humanize(raw)
+}
+
+function sourceLine(row: SameAddressLeadSummary): string {
+  const bits: string[] = []
+  const source = (row.source || '').trim()
+  const deal = (row.deal_source || '').trim()
+  const channel = (row.data_source || '').trim()
+  const kind = (row.source_type || '').trim()
+  if (source) bits.push(sourceToken(source))
+  if (deal && deal.toLowerCase() !== source.toLowerCase()) bits.push(sourceToken(deal))
+  if (channel) bits.push(sourceToken(channel))
+  if (kind && kind.toLowerCase() !== channel.toLowerCase()) bits.push(sourceToken(kind))
+  if (row.hubspot_confirmed) bits.push('HubSpot linked')
+  else if (row.date_added_to_hubspot) bits.push('In HubSpot')
+  return bits.length ? bits.join(' · ') : 'No source on file'
+}
+
+function propertyFactsLine(row: SameAddressLeadSummary): string {
+  const bits: string[] = []
+  const pin = (row.county_assessor_pin || '').trim()
+  if (pin) bits.push(`PIN ${pin}`)
+  const type = formatPropertyTypeLabel(row.property_type)
+  if (type) bits.push(type)
+  if (row.units != null && Number(row.units) > 0) {
+    const units = Number(row.units)
+    bits.push(`${units} unit${units === 1 ? '' : 's'}`)
+  }
+  const status = statusLabel(row.lead_status)
+  if (status) bits.push(status)
+  if (row.lead_score != null && !Number.isNaN(Number(row.lead_score))) {
+    bits.push(`Score ${Math.round(Number(row.lead_score))}`)
+  }
+  return bits.join(' · ')
+}
+
+function activityLine(row: SameAddressLeadSummary): string {
+  const activity = row.activity
+  if (!activity) return ''
+  const parts: string[] = []
+  if (activity.total > 0) {
+    parts.push(`${activity.total} total`)
+    if (activity.calls) parts.push(`${activity.calls} call${activity.calls === 1 ? '' : 's'}`)
+    if (activity.notes) parts.push(`${activity.notes} note${activity.notes === 1 ? '' : 's'}`)
+    if (activity.emails) parts.push(`${activity.emails} email${activity.emails === 1 ? '' : 's'}`)
+    if (activity.mail) parts.push(`${activity.mail} mail`)
+  }
+  const openTasks = row.open_task_count ?? 0
+  if (openTasks) parts.push(`${openTasks} open task${openTasks === 1 ? '' : 's'}`)
+  if (!parts.length) return 'Activities: none'
+  let line = `Activities: ${parts.join(' · ')}`
+  const last = (activity.last_summary || '').trim()
+  if (last) {
+    const when = activity.last_occurred_at ? formatDate(activity.last_occurred_at) : ''
+    line += when && when !== '—' ? `. Last ${when}: ${last}` : `. Last: ${last}`
+  }
+  return line
+}
+
+function relatedLine(row: SameAddressLeadSummary): string {
+  const related = row.related_properties
+  if (!related) return ''
+  if (!related.length) return 'Other properties: none'
+  const labels = related.map((prop) => {
+    const street = (prop.property_street || `Lead #${prop.id}`).trim()
+    const status = statusLabel(prop.lead_status)
+    return status ? `${street} (${status})` : street
+  })
+  return `Other properties (${related.length}): ${labels.join('; ')}`
+}
+
+function companiesLine(row: SameAddressLeadSummary): string {
+  const names = (row.organizations ?? []).map((name) => name.trim()).filter(Boolean)
+  if (!names.length) return ''
+  return `Companies: ${names.join(', ')}`
+}
+
+function datesLine(row: SameAddressLeadSummary): string {
+  const bits: string[] = []
+  if (row.created_at) bits.push(`Added ${formatDate(row.created_at)}`)
+  if (row.last_contact_date) bits.push(`Last contact ${formatDate(row.last_contact_date)}`)
+  return bits.join(' · ')
+}
+
+function contactBits(row: SameAddressLeadSummary): string {
+  const bits: string[] = []
+  if (row.has_phone) bits.push('phone')
+  if (row.has_email) bits.push('email')
+  return bits.length ? `Contact on file: ${bits.join(' · ')}` : ''
+}
+
+function FactLine({ children }: { children: string }) {
+  if (!children) return null
+  return (
+    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
+      {children}
+    </Typography>
+  )
 }
 
 function searchHitLabel(item: SearchResultItem): string {
@@ -94,6 +218,9 @@ export function SameAddressMergeBanner({
   const [pasteError, setPasteError] = useState<string | null>(null)
   const [pasteLookupPending, setPasteLookupPending] = useState(false)
   const [validatedOtherId, setValidatedOtherId] = useState<number | null>(null)
+  const [decisionById, setDecisionById] = useState<Record<number, SameAddressLeadSummary>>({})
+  const [contextLoading, setContextLoading] = useState(false)
+  const [contextError, setContextError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const removeIdRef = useRef<number | null>(null)
@@ -101,6 +228,25 @@ export function SameAddressMergeBanner({
   const pasteLookupPromise = useRef<Promise<boolean> | null>(null)
   const pasteLookupRequestId = useRef(0)
   const searchRequestId = useRef(0)
+  const contextRequestId = useRef(0)
+
+  const rememberDecision = useCallback((rows: SameAddressLeadSummary[]) => {
+    setDecisionById((prev) => {
+      const next = { ...prev }
+      for (const row of rows) {
+        if (!row?.id) continue
+        const prior = next[row.id]
+        next[row.id] = {
+          ...prior,
+          ...row,
+          owner_display_name: row.owner_display_name || prior?.owner_display_name || `Lead #${row.id}`,
+          people_names: row.people_names?.length ? row.people_names : (prior?.people_names ?? []),
+          property_street: row.property_street || prior?.property_street || null,
+        }
+      }
+      return next
+    })
+  }, [])
 
   const selectRemoveId = useCallback((nextRemoveId: number | null) => {
     removeIdRef.current = nextRemoveId
@@ -141,6 +287,17 @@ export function SameAddressMergeBanner({
     [options, winnerId],
   )
 
+  const contextKey = useMemo(() => {
+    const ids = new Set<number>([leadId])
+    for (const twin of twins) ids.add(twin.id)
+    if (validatedOtherId != null) ids.add(validatedOtherId)
+    if (pastePreview?.id) ids.add(pastePreview.id)
+    return [...ids]
+      .filter((id) => Number.isInteger(id) && id > 0)
+      .sort((a, b) => a - b)
+      .join(',')
+  }, [leadId, pastePreview?.id, twins, validatedOtherId])
+
   const resetDialogState = useCallback(() => {
     setWinnerId(leadId)
     setError(null)
@@ -154,6 +311,10 @@ export function SameAddressMergeBanner({
     setPastePreview(null)
     setPasteError(null)
     setValidatedOtherId(null)
+    setDecisionById({})
+    setContextLoading(false)
+    setContextError(null)
+    contextRequestId.current += 1
     selectRemoveId(first?.id ?? null)
   }, [first?.id, invalidatePasteLookup, leadId, selectRemoveId])
 
@@ -161,6 +322,38 @@ export function SameAddressMergeBanner({
     if (!open) return
     resetDialogState()
   }, [open, resetDialogState])
+
+  useEffect(() => {
+    if (!open) return
+    const requestId = contextRequestId.current + 1
+    contextRequestId.current = requestId
+    const ids = contextKey
+      .split(',')
+      .map((part) => Number(part))
+      .filter((id) => Number.isInteger(id) && id > 0)
+    setContextLoading(true)
+    setContextError(null)
+    let pending: Promise<{ leads: SameAddressLeadSummary[] }>
+    try {
+      pending = Promise.resolve(commandCenterService.getMergeContext(leadId, ids))
+    } catch {
+      if (contextRequestId.current !== requestId) return
+      setContextError('Could not load properties, source, and activities.')
+      setContextLoading(false)
+      return
+    }
+    void pending
+      .then((res) => {
+        if (contextRequestId.current !== requestId) return
+        rememberDecision(res?.leads ?? [])
+        setContextLoading(false)
+      })
+      .catch(() => {
+        if (contextRequestId.current !== requestId) return
+        setContextError('Could not load properties, source, and activities.')
+        setContextLoading(false)
+      })
+  }, [contextKey, leadId, open, rememberDecision])
 
   const closeDialog = useCallback(() => {
     if (saving) return
@@ -260,6 +453,7 @@ export function SameAddressMergeBanner({
         }
         setPasteError(null)
         setPastePreview(preview.other)
+        rememberDecision([preview.current, preview.other].filter(Boolean))
         setValidatedOtherId(parsed)
         selectRemoveId(preview.other.id)
         return true
@@ -327,7 +521,7 @@ export function SameAddressMergeBanner({
     const stayId = winnerId
     const otherId = removeIdRef.current
     if (!otherId || otherId === stayId) {
-      setError('Pick which record stays, and which one to remove.')
+      setError('Choose a primary record, and which one to remove.')
       return
     }
     setSaving(true)
@@ -402,7 +596,7 @@ export function SameAddressMergeBanner({
               onClick={() => setOpen(true)}
               sx={{ cursor: 'pointer', flexShrink: 0 }}
             >
-              Merge
+              Review merge
             </Button>
           </Box>
         </Alert>
@@ -413,7 +607,7 @@ export function SameAddressMergeBanner({
         onClose={closeDialog}
         aria-labelledby="same-address-merge-title"
         fullWidth
-        maxWidth="sm"
+        maxWidth="md"
         data-testid="same-address-merge-dialog"
         PaperProps={{ sx: { cursor: 'auto' } }}
       >
@@ -421,8 +615,8 @@ export function SameAddressMergeBanner({
         <DialogContent sx={{ cursor: 'auto' }}>
           <Typography variant="body2" sx={{ mb: 1.5 }}>
             {hasTwins
-              ? 'Pick which lead stays. The other one is removed. Every person is kept; if two rows are the same person they become one person with all phone numbers.'
-              : 'Find the other lead for this same building (search or lead number). Pick which lead stays; the other is removed. Every person is kept; if two rows are the same person they become one person with all phone numbers.'}
+              ? 'Choose which record is primary. The other one is removed. People, phones, activities, and tasks move onto the primary. If two rows are the same person they become one person with all phone numbers.'
+              : 'Find the other lead for this same building (search or lead number). Choose which record is primary; the other is removed. People, phones, activities, and tasks move onto the primary. If two rows are the same person they become one person with all phone numbers.'}
           </Typography>
 
           <Autocomplete
@@ -525,30 +719,65 @@ export function SameAddressMergeBanner({
 
           <FormControl component="fieldset" sx={{ mt: 1.5, display: 'block' }}>
             <FormLabel id="same-address-merge-stay-label" sx={{ mb: 0.5 }}>
-              Stay
+              Choose primary
             </FormLabel>
             <RadioGroup
               aria-labelledby="same-address-merge-stay-label"
               value={String(winnerId)}
               onChange={(event) => handleWinnerChange(Number(event.target.value))}
             >
-              {options.map((row) => (
-                <FormControlLabel
-                  key={row.id}
-                  value={String(row.id)}
-                  control={<Radio data-testid={`same-address-merge-stay-${row.id}`} />}
-                  label={
-                    <Box>
-                      <Typography variant="body2" fontWeight={600}>
-                        {row.owner_display_name} (#{row.id})
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {peopleLine(row.people_names)}
-                      </Typography>
-                    </Box>
-                  }
-                />
-              ))}
+              {options.map((row) => {
+                const detail = decisionById[row.id]
+                const view: SameAddressLeadSummary = detail
+                  ? {
+                      ...row,
+                      ...detail,
+                      owner_display_name: detail.owner_display_name || row.owner_display_name,
+                      people_names: detail.people_names?.length
+                        ? detail.people_names
+                        : row.people_names,
+                      property_street: detail.property_street || row.property_street,
+                    }
+                  : row
+                const ready = view.activity != null
+                return (
+                  <FormControlLabel
+                    key={row.id}
+                    value={String(row.id)}
+                    sx={{ alignItems: 'flex-start', mr: 0, mb: 1 }}
+                    control={<Radio data-testid={`same-address-merge-stay-${row.id}`} sx={{ pt: 0.25 }} />}
+                    label={
+                      <Box data-testid={`same-address-merge-facts-${row.id}`} sx={{ py: 0.25 }}>
+                        <Typography variant="body2" fontWeight={600}>
+                          {view.owner_display_name} (#{view.id})
+                          {view.id === leadId ? ' · this lead' : ''}
+                        </Typography>
+                        <FactLine>{`This property: ${addressLine(view)}`}</FactLine>
+                        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
+                          {peopleLine(view.people_names)}
+                        </Typography>
+                        {ready ? (
+                          <>
+                            <FactLine>{propertyFactsLine(view)}</FactLine>
+                            <FactLine>{`Source: ${sourceLine(view)}`}</FactLine>
+                            <FactLine>{datesLine(view)}</FactLine>
+                            <FactLine>{companiesLine(view)}</FactLine>
+                            <FactLine>{relatedLine(view)}</FactLine>
+                            <FactLine>{activityLine(view)}</FactLine>
+                            <FactLine>{contactBits(view)}</FactLine>
+                          </>
+                        ) : (
+                          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
+                            {contextLoading
+                              ? 'Loading properties, source, and activities…'
+                              : (contextError || 'Details unavailable.')}
+                          </Typography>
+                        )}
+                      </Box>
+                    }
+                  />
+                )
+              })}
             </RadioGroup>
           </FormControl>
           {removable.length > 1 ? (

@@ -795,8 +795,271 @@ def same_address_lead_summaries(
     return summaries
 
 
+_CALL_EVENTS = frozenset({'call_logged', 'hubspot_call'})
+_NOTE_EVENTS = frozenset({'note_added', 'hubspot_note'})
+_EMAIL_EVENTS = frozenset({'email_logged'})
+_MAIL_EVENTS = frozenset({'mail_queued', 'mail_sent', 'mail_delivered'})
+_MERGE_CONTEXT_RELATED_CAP = 6
+
+
+def _iso_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, 'isoformat'):
+        return value.isoformat()
+    text = str(value).strip()
+    return text or None
+
+
+def _event_type_name(value: Any) -> str:
+    raw = getattr(value, 'value', None)
+    if isinstance(raw, str) and raw:
+        return raw
+    text = str(value or '')
+    if '.' in text:
+        return text.rsplit('.', 1)[-1]
+    return text
+
+
+def _empty_activity_summary() -> dict[str, Any]:
+    return {
+        'total': 0,
+        'calls': 0,
+        'notes': 0,
+        'emails': 0,
+        'mail': 0,
+        'last_occurred_at': None,
+        'last_summary': None,
+        'last_event_type': None,
+    }
+
+
+def _activity_summaries_for_lead_ids(lead_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Timeline counts plus the latest non-deleted activity per lead."""
+    from app.models.lead_timeline_entry import LeadTimelineEntry
+
+    out = {lid: _empty_activity_summary() for lid in lead_ids}
+    if not lead_ids:
+        return out
+    counts = (
+        db.session.query(
+            LeadTimelineEntry.lead_id,
+            LeadTimelineEntry.event_type,
+            func.count(LeadTimelineEntry.id),
+        )
+        .filter(
+            LeadTimelineEntry.lead_id.in_(lead_ids),
+            LeadTimelineEntry.is_deleted.is_(False),
+        )
+        .group_by(LeadTimelineEntry.lead_id, LeadTimelineEntry.event_type)
+        .all()
+    )
+    for lead_id, event_type, count in counts:
+        row = out.get(lead_id)
+        if row is None:
+            continue
+        n = int(count or 0)
+        row['total'] += n
+        name = _event_type_name(event_type)
+        if name in _CALL_EVENTS:
+            row['calls'] += n
+        elif name in _NOTE_EVENTS:
+            row['notes'] += n
+        elif name in _EMAIL_EVENTS:
+            row['emails'] += n
+        elif name in _MAIL_EVENTS:
+            row['mail'] += n
+
+    latest_at = (
+        db.session.query(
+            LeadTimelineEntry.lead_id.label('lead_id'),
+            func.max(LeadTimelineEntry.occurred_at).label('occurred_at'),
+        )
+        .filter(
+            LeadTimelineEntry.lead_id.in_(lead_ids),
+            LeadTimelineEntry.is_deleted.is_(False),
+        )
+        .group_by(LeadTimelineEntry.lead_id)
+        .subquery()
+    )
+    latest_rows = (
+        db.session.query(LeadTimelineEntry)
+        .join(
+            latest_at,
+            and_(
+                LeadTimelineEntry.lead_id == latest_at.c.lead_id,
+                LeadTimelineEntry.occurred_at == latest_at.c.occurred_at,
+            ),
+        )
+        .filter(LeadTimelineEntry.is_deleted.is_(False))
+        .all()
+    )
+    best: dict[int, LeadTimelineEntry] = {}
+    for entry in latest_rows:
+        current = best.get(entry.lead_id)
+        if current is None or entry.id > current.id:
+            best[entry.lead_id] = entry
+    for lead_id, entry in best.items():
+        row = out.get(lead_id)
+        if row is None:
+            continue
+        summary = (entry.summary or '').strip()
+        row['last_occurred_at'] = _iso_or_none(entry.occurred_at)
+        row['last_summary'] = summary[:180] if summary else None
+        row['last_event_type'] = _event_type_name(entry.event_type) or None
+    return out
+
+
+def _open_task_counts_for_lead_ids(lead_ids: list[int]) -> dict[int, int]:
+    from app.models.lead_task import LeadTask
+
+    if not lead_ids:
+        return {}
+    rows = (
+        db.session.query(LeadTask.lead_id, func.count(LeadTask.id))
+        .filter(
+            LeadTask.lead_id.in_(lead_ids),
+            LeadTask.status == 'open',
+        )
+        .group_by(LeadTask.lead_id)
+        .all()
+    )
+    return {int(lead_id): int(count or 0) for lead_id, count in rows}
+
+
+def _organization_names_for_lead_ids(lead_ids: list[int]) -> dict[int, list[str]]:
+    from app.models.organization import Organization
+    from app.models.property_organization_link import PropertyOrganizationLink
+
+    out: dict[int, list[str]] = {lid: [] for lid in lead_ids}
+    if not lead_ids:
+        return out
+    rows = (
+        db.session.query(PropertyOrganizationLink.property_id, Organization.name)
+        .join(Organization, Organization.id == PropertyOrganizationLink.organization_id)
+        .filter(PropertyOrganizationLink.property_id.in_(lead_ids))
+        .order_by(PropertyOrganizationLink.id.asc())
+        .all()
+    )
+    seen: dict[int, set[str]] = {lid: set() for lid in lead_ids}
+    for property_id, name in rows:
+        label = (name or '').strip()
+        if not label or property_id not in out or label in seen[property_id]:
+            continue
+        if len(out[property_id]) >= 4:
+            continue
+        seen[property_id].add(label)
+        out[property_id].append(label)
+    return out
+
+
+def _confirmed_hubspot_ids_among(lead_ids: list[int]) -> set[int]:
+    if not lead_ids:
+        return set()
+    rows = HubSpotMatch.query.filter(
+        HubSpotMatch.internal_record_type == 'lead',
+        HubSpotMatch.status == 'confirmed',
+        HubSpotMatch.internal_record_id.in_(lead_ids),
+    ).all()
+    return {int(row.internal_record_id) for row in rows if row.internal_record_id is not None}
+
+
+def _related_properties_for_merge(leads: list[Lead]) -> dict[int, list[dict[str, Any]]]:
+    """Other buildings for the same person — capped, never blocks the dialog."""
+    from app.services.contact_service import ContactService
+
+    svc = ContactService()
+    out: dict[int, list[dict[str, Any]]] = {}
+    for lead in leads:
+        try:
+            rows = svc.get_related_properties(lead.id, limit=_MERGE_CONTEXT_RELATED_CAP)
+        except Exception:  # noqa: BLE001 — decision context is best-effort
+            logger.exception('related properties for merge context failed lead=%s', lead.id)
+            rows = []
+        skinny: list[dict[str, Any]] = []
+        for row in rows:
+            prop_id = row.get('id')
+            if not prop_id:
+                continue
+            skinny.append({
+                'id': prop_id,
+                'property_street': row.get('property_street'),
+                'property_city': row.get('property_city'),
+                'lead_status': row.get('lead_status'),
+                'lead_score': row.get('lead_score'),
+            })
+        out[lead.id] = skinny
+    return out
+
+
+def _merge_decision_row(
+    lead: Lead,
+    *,
+    people: list[str],
+    activity: dict[str, Any],
+    open_task_count: int,
+    organizations: list[str],
+    hubspot_confirmed: bool,
+    related_properties: list[dict[str, Any]],
+) -> dict[str, Any]:
+    score = getattr(lead, 'lead_score', None)
+    return {
+        'id': lead.id,
+        'property_street': lead.property_street,
+        'property_city': lead.property_city,
+        'property_state': lead.property_state,
+        'property_zip': lead.property_zip,
+        'owner_display_name': _lead_owner_display_name(lead),
+        'people_names': people,
+        'county_assessor_pin': getattr(lead, 'county_assessor_pin', None),
+        'property_type': lead.property_type,
+        'units': lead.units,
+        'lead_status': lead.lead_status,
+        'lead_score': float(score) if score is not None else None,
+        'source': (lead.source or '').strip() or None,
+        'deal_source': (lead.deal_source or '').strip() or None,
+        'data_source': (lead.data_source or '').strip() or None,
+        'source_type': (getattr(lead, 'source_type', None) or '').strip() or None,
+        'created_at': _iso_or_none(lead.created_at),
+        'last_contact_date': _iso_or_none(lead.last_contact_date),
+        'date_added_to_hubspot': _iso_or_none(lead.date_added_to_hubspot),
+        'hubspot_confirmed': hubspot_confirmed,
+        'has_phone': bool(lead.has_phone),
+        'has_email': bool(lead.has_email),
+        'open_task_count': int(open_task_count or 0),
+        'organizations': organizations,
+        'activity': activity,
+        'related_properties': related_properties,
+    }
+
+
+def merge_decision_summaries(leads: list[Lead]) -> list[dict[str, Any]]:
+    """Property, source, portfolio, and activity context for the merge dialog."""
+    if not leads:
+        return []
+    ids = [lead.id for lead in leads]
+    names = _people_names_for_lead_ids(ids)
+    activity = _activity_summaries_for_lead_ids(ids)
+    tasks = _open_task_counts_for_lead_ids(ids)
+    organizations = _organization_names_for_lead_ids(ids)
+    confirmed = _confirmed_hubspot_ids_among(ids)
+    related = _related_properties_for_merge(leads)
+    return [
+        _merge_decision_row(
+            lead,
+            people=names.get(lead.id) or [],
+            activity=activity.get(lead.id) or _empty_activity_summary(),
+            open_task_count=tasks.get(lead.id, 0),
+            organizations=organizations.get(lead.id) or [],
+            hubspot_confirmed=lead.id in confirmed,
+            related_properties=related.get(lead.id) or [],
+        )
+        for lead in leads
+    ]
+
+
 def merge_preview_for_ids(lead_id: int, other_id: int) -> dict[str, Any]:
-    """Validate same-building merge and return people on both sides."""
+    """Validate same-building merge and return decision context for both sides."""
     if lead_id == other_id:
         raise ValueError('winner and loser must be different leads')
     lead = db.session.get(Lead, lead_id)
@@ -805,22 +1068,12 @@ def merge_preview_for_ids(lead_id: int, other_id: int) -> dict[str, Any]:
         raise ValueError('winner or loser lead not found')
     same_building = streets_match_same_situs(lead.property_street, other.property_street)
     mergeable = streets_match_duplicate_merge(lead.property_street, other.property_street)
-    names = _people_names_for_lead_ids([lead_id, other_id])
+    by_id = {row['id']: row for row in merge_decision_summaries([lead, other])}
     return {
         'same_building': bool(same_building),
         'mergeable': bool(mergeable),
-        'current': {
-            'id': lead.id,
-            'property_street': lead.property_street,
-            'owner_display_name': _lead_owner_display_name(lead),
-            'people_names': names.get(lead_id) or [],
-        },
-        'other': {
-            'id': other.id,
-            'property_street': other.property_street,
-            'owner_display_name': _lead_owner_display_name(other),
-            'people_names': names.get(other_id) or [],
-        },
+        'current': by_id[lead.id],
+        'other': by_id[other.id],
     }
 
 

@@ -240,7 +240,7 @@ describe('DuplicateReviewCallout', () => {
     )
     expect(screen.getByTestId('needs-review-duplicate-callout')).toBeInTheDocument()
     expect(screen.getByTestId('needs-review-cluster-comparison')).toBeInTheDocument()
-    expect(screen.getByTestId('needs-review-open-merge')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-review-open-merge')).toHaveTextContent('Review merge')
     expect(screen.queryByTestId('needs-review-merge-into-winner')).not.toBeInTheDocument()
     expect(screen.getByText('100 Main Unit 2')).toBeInTheDocument()
   })
