@@ -26,9 +26,16 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+import { alpha } from '@mui/material/styles'
 import { LEAD_STATUS_LABELS } from '@/components/LeadStatusChip'
 import { commandCenterService, searchService } from '@/services/api'
-import type { LeadStatus, SameAddressLeadSummary, SearchResultItem } from '@/types'
+import type {
+  LeadStatus,
+  MergeActivitySummary,
+  MergeRelatedProperty,
+  SameAddressLeadSummary,
+  SearchResultItem,
+} from '@/types'
 import { formatDate, formatPropertyTypeLabel, humanize } from '@/utils/formatters'
 
 const SEARCH_DEBOUNCE_MS = 300
@@ -195,6 +202,139 @@ function compareValue(row: SameAddressLeadSummary, key: string, ready: boolean):
     return bits.length ? bits.join(' · ') : 'None'
   }
   return '—'
+}
+
+function filledText(
+  primary: string | null | undefined,
+  incoming: string | null | undefined,
+): string | null {
+  const kept = (primary ?? '').trim()
+  if (kept) return kept
+  const fill = (incoming ?? '').trim()
+  return fill || null
+}
+
+function unionNames(
+  left: string[] | null | undefined,
+  right: string[] | null | undefined,
+): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const name of [...(left ?? []), ...(right ?? [])]) {
+    const text = (name || '').trim()
+    if (!text) continue
+    const key = text.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(text)
+  }
+  return out
+}
+
+const TRAILING_ZIP = /\s+\d{5}(?:-\d{4})?\s*$/
+
+/** Street the merge keeps: drop a trailing ZIP, else a more specific prefix. */
+function preferStreet(
+  primaryStreet: string | null | undefined,
+  incomingStreet: string | null | undefined,
+): string | null {
+  const primary = (primaryStreet ?? '').trim()
+  const incoming = (incomingStreet ?? '').trim()
+  if (!primary) return incoming || null
+  if (!incoming) return primary
+  if (TRAILING_ZIP.test(primary) && !TRAILING_ZIP.test(incoming)) return incoming
+  if (incoming.toUpperCase().startsWith(`${primary.toUpperCase()} `)) return incoming
+  return primary
+}
+
+function unionRelated(
+  primary: SameAddressLeadSummary,
+  incoming: SameAddressLeadSummary,
+): MergeRelatedProperty[] {
+  const exclude = new Set([primary.id, incoming.id])
+  const seen = new Set<number>()
+  const out: MergeRelatedProperty[] = []
+  for (const prop of [...(primary.related_properties ?? []), ...(incoming.related_properties ?? [])]) {
+    if (!prop || exclude.has(prop.id) || seen.has(prop.id)) continue
+    seen.add(prop.id)
+    out.push(prop)
+  }
+  return out
+}
+
+function combinedActivity(
+  primary: SameAddressLeadSummary,
+  incoming: SameAddressLeadSummary,
+): MergeActivitySummary | undefined {
+  if (primary.activity == null || incoming.activity == null) return undefined
+  const kept = primary.activity
+  const added = incoming.activity
+  const keptAt = kept.last_occurred_at ? Date.parse(kept.last_occurred_at) : Number.NaN
+  const addedAt = added.last_occurred_at ? Date.parse(added.last_occurred_at) : Number.NaN
+  const incomingLater = !Number.isNaN(addedAt) && (Number.isNaN(keptAt) || addedAt > keptAt)
+  const last = incomingLater ? added : kept
+  return {
+    total: (kept.total || 0) + (added.total || 0),
+    calls: (kept.calls || 0) + (added.calls || 0),
+    notes: (kept.notes || 0) + (added.notes || 0),
+    emails: (kept.emails || 0) + (added.emails || 0),
+    mail: (kept.mail || 0) + (added.mail || 0),
+    last_occurred_at: last.last_occurred_at ?? null,
+    last_summary: last.last_summary ?? null,
+    last_event_type: last.last_event_type ?? null,
+  }
+}
+
+/**
+ * Surviving record after merge_lead_into_winner.
+ * Status, score, created/last-contact, and non-empty copied fields stay with
+ * the primary. People, companies, activities, tasks, and other properties
+ * consolidate. data_source / deal_source / source_type are not copied.
+ */
+function afterCombinePreview(
+  primary: SameAddressLeadSummary,
+  incoming: SameAddressLeadSummary,
+): SameAddressLeadSummary {
+  const ready = primary.activity != null && incoming.activity != null
+  const units =
+    primary.units != null && !Number.isNaN(Number(primary.units))
+      ? primary.units
+      : (incoming.units ?? null)
+  return {
+    id: primary.id,
+    owner_display_name: primary.owner_display_name,
+    people_names: unionNames(primary.people_names, incoming.people_names),
+    property_street: preferStreet(primary.property_street, incoming.property_street),
+    property_city: filledText(primary.property_city, incoming.property_city),
+    property_state: filledText(primary.property_state, incoming.property_state),
+    property_zip: filledText(primary.property_zip, incoming.property_zip),
+    county_assessor_pin: filledText(primary.county_assessor_pin, incoming.county_assessor_pin),
+    property_type: filledText(primary.property_type, incoming.property_type),
+    units,
+    lead_status: primary.lead_status ?? null,
+    lead_score: primary.lead_score ?? null,
+    source: filledText(primary.source, incoming.source),
+    deal_source: filledText(primary.deal_source, null),
+    data_source: filledText(primary.data_source, null),
+    source_type: filledText(primary.source_type, null),
+    created_at: primary.created_at ?? null,
+    last_contact_date: primary.last_contact_date ?? null,
+    date_added_to_hubspot: filledText(
+      primary.date_added_to_hubspot,
+      incoming.date_added_to_hubspot,
+    ),
+    hubspot_confirmed: Boolean(primary.hubspot_confirmed || incoming.hubspot_confirmed),
+    has_phone: Boolean(primary.has_phone || incoming.has_phone),
+    has_email: Boolean(primary.has_email || incoming.has_email),
+    open_task_count: ready
+      ? (primary.open_task_count ?? 0) + (incoming.open_task_count ?? 0)
+      : primary.open_task_count,
+    organizations: ready
+      ? unionNames(primary.organizations, incoming.organizations)
+      : primary.organizations,
+    activity: combinedActivity(primary, incoming),
+    related_properties: ready ? unionRelated(primary, incoming) : primary.related_properties,
+  }
 }
 
 function searchHitLabel(item: SearchResultItem): string {
@@ -623,7 +763,7 @@ export function SameAddressMergeBanner({
         onClose={closeDialog}
         aria-labelledby="same-address-merge-title"
         fullWidth
-        maxWidth="lg"
+        maxWidth="xl"
         data-testid="same-address-merge-dialog"
         PaperProps={{ sx: { cursor: 'auto' } }}
       >
@@ -738,7 +878,7 @@ export function SameAddressMergeBanner({
               Choose primary
             </FormLabel>
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-              Left merges into the primary on the right. Pick a column to change which record stays.
+              Left merges into the primary. After combine is the record that remains. Pick a column to change which stays.
             </Typography>
             <RadioGroup
               aria-labelledby="same-address-merge-stay-label"
@@ -772,7 +912,7 @@ export function SameAddressMergeBanner({
                         data-testid="same-address-merge-incoming-empty"
                         sx={{
                           flex: 1,
-                          minWidth: 0,
+                          minWidth: 220,
                           p: 1.25,
                           borderRadius: 1,
                           border: '1px dashed',
@@ -797,7 +937,7 @@ export function SameAddressMergeBanner({
                       data-testid={`same-address-merge-facts-${view.id}`}
                       sx={{
                         flex: 1,
-                        minWidth: 0,
+                        minWidth: 220,
                         p: 1.25,
                         borderRadius: 1,
                         border: '1px solid',
@@ -859,6 +999,28 @@ export function SameAddressMergeBanner({
                     </Box>
                   )
                 }
+                const showAfter = Boolean(primary && incoming && incoming.id !== primary.id)
+                const afterView = showAfter && primary && incoming
+                  ? afterCombinePreview(primary, incoming)
+                  : null
+                const afterReady = Boolean(primary?.activity && incoming?.activity)
+                const flowArrow = (
+                  <Box
+                    aria-hidden
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      flexShrink: 0,
+                      px: 0.25,
+                      color: 'text.secondary',
+                      cursor: 'auto',
+                    }}
+                  >
+                    <Typography variant="body2" component="span">
+                      →
+                    </Typography>
+                  </Box>
+                )
                 return (
                   <Box
                     data-testid="same-address-merge-compare"
@@ -867,25 +1029,72 @@ export function SameAddressMergeBanner({
                       flexDirection: 'row',
                       alignItems: 'stretch',
                       gap: 1,
+                      overflowX: 'auto',
+                      cursor: 'auto',
                     }}
                   >
                     {column(incoming, 'in')}
-                    <Box
-                      aria-hidden
-                      sx={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        flexShrink: 0,
-                        px: 0.25,
-                        color: 'text.secondary',
-                        cursor: 'auto',
-                      }}
-                    >
-                      <Typography variant="body2" component="span">
-                        →
-                      </Typography>
-                    </Box>
+                    {flowArrow}
                     {primary ? column(primary, 'primary') : null}
+                    {afterView && primary && incoming ? (
+                      <>
+                        {flowArrow}
+                        <Box
+                          data-testid="same-address-merge-after"
+                          sx={{
+                            flex: 1,
+                            minWidth: 220,
+                            p: 1.25,
+                            borderRadius: 1,
+                            border: '1px solid',
+                            borderColor: 'success.main',
+                            bgcolor: (theme) => alpha(theme.palette.success.main, 0.08),
+                            cursor: 'auto',
+                          }}
+                        >
+                          <Typography variant="overline" color="success.dark" display="block">
+                            After combine
+                          </Typography>
+                          <Typography variant="body2" fontWeight={700}>
+                            {afterView.owner_display_name} (#{afterView.id})
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
+                            Lead #{incoming.id} is removed. People, activities, tasks, and companies combine. Empty details fill in. Status stays; score is recalculated.
+                          </Typography>
+                          {COMPARE_FIELDS.map((field) => {
+                            const value = compareValue(afterView, field.key, afterReady)
+                            const primaryValue = compareValue(primary, field.key, primary.activity != null)
+                            const shown = afterReady || field.key === 'people' || field.key === 'property'
+                            const changed = shown && value !== primaryValue
+                            return (
+                              <Box
+                                key={field.key}
+                                sx={{
+                                  py: 0.6,
+                                  borderTop: '1px solid',
+                                  borderColor: 'divider',
+                                }}
+                              >
+                                <Typography variant="caption" color="text.secondary" display="block">
+                                  {field.label}
+                                </Typography>
+                                <Typography
+                                  variant="body2"
+                                  fontWeight={changed ? 700 : 400}
+                                  sx={{ overflowWrap: 'anywhere' }}
+                                >
+                                  {shown
+                                    ? value
+                                    : (contextLoading
+                                      ? 'Loading…'
+                                      : (contextError || 'Details unavailable.'))}
+                                </Typography>
+                              </Box>
+                            )
+                          })}
+                        </Box>
+                      </>
+                    ) : null}
                   </Box>
                 )
               })()}

@@ -883,5 +883,108 @@ describe('SameAddressMergeBanner', () => {
     expect(other).toHaveTextContent('Merges in')
     expect(other).toHaveTextContent('Cook County Assessor')
     expect(other).toHaveTextContent('None')
+    const after = await screen.findByTestId('same-address-merge-after')
+    expect(after).toHaveTextContent('After combine')
+    expect(after).toHaveTextContent('Yoko Miller (#100)')
+    expect(after).toHaveTextContent('Lead #200 is removed')
+    expect(after).toHaveTextContent('Edwin Chen')
+    expect(after).toHaveTextContent('Cityscape')
+    expect(after).toHaveTextContent('HubSpot')
+    expect(after).not.toHaveTextContent('Cook County Assessor')
+    expect(after).toHaveTextContent('Yoko Holdings LLC')
+    expect(after).toHaveTextContent('200 Oak St')
+    expect(after).toHaveTextContent('3 total')
+    expect(after).toHaveTextContent('1 open task')
+  })
+
+  it('after combine fills blank primary fields and keeps status and score', async () => {
+    const user = userEvent.setup()
+    vi.mocked(commandCenterService.getMergeContext).mockResolvedValue({
+      leads: [
+        {
+          id: 100,
+          property_street: '1867 N Howe St 60614',
+          owner_display_name: 'James Malone',
+          people_names: ['James Malone'],
+          lead_status: 'skip_trace',
+          lead_score: 72,
+          source: null,
+          organizations: [],
+          related_properties: [],
+          activity: {
+            total: 1,
+            calls: 1,
+            notes: 0,
+            emails: 0,
+            mail: 0,
+            last_occurred_at: '2026-01-02T15:00:00Z',
+            last_summary: 'Called',
+          },
+          open_task_count: 0,
+          has_phone: false,
+        },
+        {
+          id: 200,
+          property_street: '1867 N Howe St',
+          property_city: 'Chicago',
+          property_state: 'IL',
+          owner_display_name: 'James + Pat',
+          people_names: ['James Malone', 'Pat Malone'],
+          county_assessor_pin: '17-01-200',
+          property_type: 'multi_family',
+          units: 2,
+          lead_status: 'mailing_no_contact_made',
+          lead_score: 10,
+          source: 'Cook County',
+          data_source: 'cook_county_assessor',
+          organizations: ['Malone LLC'],
+          related_properties: [
+            { id: 300, property_street: '9 Walton St', lead_status: 'skip_trace' },
+          ],
+          activity: {
+            total: 1,
+            calls: 0,
+            notes: 1,
+            emails: 0,
+            mail: 0,
+            last_occurred_at: '2026-04-01T15:00:00Z',
+            last_summary: 'Note added',
+          },
+          open_task_count: 2,
+          has_phone: true,
+        },
+      ],
+    })
+    render(
+      <MemoryRouter>
+        <SameAddressMergeBanner
+          leadId={100}
+          currentOwnerLabel="James Malone"
+          currentPeopleNames={['James Malone']}
+          twins={[twin200]}
+          onMerged={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    const after = await screen.findByTestId('same-address-merge-after')
+    await waitFor(() => {
+      expect(after).toHaveTextContent('PIN 17-01-200')
+    })
+    expect(after).toHaveTextContent('1867 N Howe St, Chicago IL')
+    expect(after).not.toHaveTextContent('60614')
+    expect(after).toHaveTextContent('Pat Malone')
+    expect(after).toHaveTextContent('Cook County')
+    expect(after).not.toHaveTextContent('Cook County Assessor')
+    expect(after).toHaveTextContent('Skip Trace')
+    expect(after).not.toHaveTextContent('Mailing, No Contact Made')
+    expect(after).toHaveTextContent('Score 72')
+    expect(after).not.toHaveTextContent('Score 10')
+    expect(after).toHaveTextContent('Malone LLC')
+    expect(after).toHaveTextContent('9 Walton St')
+    expect(after).toHaveTextContent('2 total')
+    expect(after).toHaveTextContent('Note added')
+    expect(after).toHaveTextContent('2 open tasks')
+    expect(after).toHaveTextContent('phone')
   })
 })
