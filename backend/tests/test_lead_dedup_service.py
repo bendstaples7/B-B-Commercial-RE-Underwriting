@@ -1080,6 +1080,190 @@ class TestSameBuildingBannerAndAdditivePeople:
             }
             assert names == {'Alice Smith', 'Bob Smith', 'Carol Smith'}
 
+    def test_merge_choices_prune_unselected_people_and_methods(self, app):
+        from app.models.contact_email import ContactEmail
+        from app.models.contact_phone import ContactPhone
+        from app.models.property_contact import PropertyContact
+        from app.services.contact_service import ContactService
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='1110 Choice Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+                owner_2_first_name='Edwin',
+                owner_2_last_name='Chen',
+                phone_1='7735551111',
+                phone_2='3125552222',
+                email_1='yoko@example.com',
+            )
+            loser = Lead(
+                property_street='1110 Choice Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+                phone_1='8475553333',
+                email_1='old@example.com',
+            )
+            db.session.add_all([winner, loser])
+            db.session.commit()
+
+            service = ContactService()
+            yoko_winner = service.create_contact({
+                'first_name': 'Yoko',
+                'last_name': 'Miller',
+                'phones': [{'value': '7735551111', 'label': 'mobile'}],
+                'emails': [{'value': 'yoko@example.com', 'label': 'personal'}],
+            })
+            edwin = service.create_contact({
+                'first_name': 'Edwin',
+                'last_name': 'Chen',
+                'phones': [{'value': '3125552222', 'label': 'mobile'}],
+            })
+            yoko_loser = service.create_contact({
+                'first_name': 'Yoko',
+                'last_name': 'Miller',
+                'phones': [{'value': '8475553333', 'label': 'home'}],
+                'emails': [{'value': 'old@example.com', 'label': 'personal'}],
+            })
+            service.link_contact_to_property(winner.id, yoko_winner.id, role='owner', is_primary=True)
+            service.link_contact_to_property(winner.id, edwin.id, role='owner', is_primary=False)
+            service.link_contact_to_property(loser.id, yoko_loser.id, role='owner', is_primary=True)
+            db.session.commit()
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ):
+                merge_lead_into_winner(
+                    winner,
+                    loser,
+                    changed_by='test',
+                    choices={
+                        'people_names': ['Yoko Miller'],
+                        'phones': ['7735551111'],
+                        'emails': ['yoko@example.com'],
+                        'keep_primary_people': True,
+                        'keep_incoming_people': True,
+                    },
+                )
+                db.session.commit()
+
+            db.session.refresh(winner)
+            assert winner.owner_first_name == 'Yoko'
+            assert winner.owner_last_name == 'Miller'
+            assert winner.owner_2_first_name is None
+            assert winner.owner_2_last_name is None
+            assert winner.phone_1 == '7735551111'
+            assert winner.phone_2 is None
+            assert winner.email_1 == 'yoko@example.com'
+            assert winner.email_2 is None
+
+            owners = PropertyContact.query.filter_by(
+                property_id=winner.id, role='owner',
+            ).all()
+            assert len(owners) == 1
+            kept_contact = db.session.get(Contact, owners[0].contact_id)
+            assert f'{kept_contact.first_name} {kept_contact.last_name}' == 'Yoko Miller'
+            phones = {
+                phone.value
+                for phone in ContactPhone.query.filter_by(contact_id=kept_contact.id).all()
+            }
+            emails = {
+                email.value
+                for email in ContactEmail.query.filter_by(contact_id=kept_contact.id).all()
+            }
+            assert phones == {'7735551111'}
+            assert emails == {'yoko@example.com'}
+
+    def test_merge_choices_empty_people_clears_owner_contacts(self, app):
+        from app.models.property_contact import PropertyContact
+        from app.services.contact_service import ContactService
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='1111 Empty Choice Ave',
+                owner_first_name='Yoko',
+                owner_last_name='Miller',
+            )
+            loser = Lead(
+                property_street='1111 Empty Choice Ave',
+                owner_first_name='Edwin',
+                owner_last_name='Chen',
+            )
+            db.session.add_all([winner, loser])
+            db.session.commit()
+            service = ContactService()
+            yoko = service.create_contact({'first_name': 'Yoko', 'last_name': 'Miller'})
+            edwin = service.create_contact({'first_name': 'Edwin', 'last_name': 'Chen'})
+            service.link_contact_to_property(winner.id, yoko.id, role='owner', is_primary=True)
+            service.link_contact_to_property(loser.id, edwin.id, role='owner', is_primary=True)
+            db.session.commit()
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ):
+                merge_lead_into_winner(
+                    winner,
+                    loser,
+                    changed_by='test',
+                    choices={
+                        'people_names': [],
+                        'phones': [],
+                        'emails': [],
+                        'keep_primary_people': False,
+                        'keep_incoming_people': False,
+                    },
+                )
+                db.session.commit()
+
+            db.session.refresh(winner)
+            assert winner.owner_first_name is None
+            assert winner.owner_last_name is None
+            assert PropertyContact.query.filter_by(property_id=winner.id, role='owner').count() == 0
+
+    def test_merge_choice_street_collision_is_skipped(self, app):
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='10 Choice St',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                owner_user_id='merge-owner',
+            )
+            loser = Lead(
+                property_street='10 Choice St 2',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                owner_user_id='merge-owner',
+            )
+            existing = Lead(
+                property_street='99 Conflict St',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                owner_user_id='merge-owner',
+            )
+            db.session.add_all([winner, loser, existing])
+            db.session.commit()
+            for lead in (winner, loser, existing):
+                refresh_lead_dedup_fields(lead)
+            db.session.commit()
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ):
+                merge_lead_into_winner(
+                    winner,
+                    loser,
+                    changed_by='test',
+                    choices={'property_street': '99 Conflict St'},
+                )
+                db.session.commit()
+
+            db.session.refresh(winner)
+            assert winner.property_street != '99 Conflict St'
+            assert winner.normalized_street != existing.normalized_street
 
     def test_merge_rejects_different_condo_units(self, app):
         from app.services.lead_dedup_service import merge_loser_into_winner

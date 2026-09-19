@@ -1467,6 +1467,47 @@ class TestMergePreviewAndUnitGuard:
             assert twin_row['open_task_count'] == 1
             assert twin_row['activity']['total'] == 0
 
+    def test_merge_context_excludes_other_users_leads(self, client, app):
+        with app.app_context():
+            current = _make_lead(app, '100 Merge Auth Ave')
+            twin = _make_lead(app, '100 Merge Auth Ave')
+            other_user = _make_lead(
+                app,
+                '100 Merge Auth Ave',
+                owner_user_id='other-user',
+            )
+
+            response = client.get(
+                f'/api/leads/{current.id}/merge-context?ids={twin.id},{other_user.id}',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 200
+            body = response.get_json()
+            returned_ids = {row['id'] for row in body['leads']}
+            assert current.id in returned_ids
+            assert twin.id in returned_ids
+            assert other_user.id not in returned_ids
+
+    def test_merge_context_rejects_more_than_twelve_ids(self, client, app):
+        with app.app_context():
+            current = _make_lead(app, '100 Merge Limit Ave')
+            extras = [
+                _make_lead(app, f'100 Merge Limit Ave Unit {index}')
+                for index in range(12)
+            ]
+
+            response = client.get(
+                (
+                    f'/api/leads/{current.id}/merge-context?ids='
+                    + ','.join(str(lead.id) for lead in extras)
+                ),
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 400
+            assert response.get_json()['error'] == 'At most 12 leads can be compared'
+
     def test_merge_context_rejects_non_integer_ids(self, client, app):
         with app.app_context():
             lead = _make_lead(app, '100 Merge Review Ave')

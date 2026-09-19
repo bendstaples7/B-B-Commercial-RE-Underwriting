@@ -496,7 +496,96 @@ def _write_contact_slots(winner: Lead, values: list[Any], prefix: str, count: in
     return bool(cleaned)
 
 
-def apply_merge_field_choices(winner: Lead, choices: dict[str, Any] | None) -> None:
+def _contact_name_key(contact: Any) -> str:
+    return ' '.join(
+        part
+        for part in [
+            str(getattr(contact, 'first_name', '') or '').strip(),
+            str(getattr(contact, 'last_name', '') or '').strip(),
+        ]
+        if part
+    ).lower()
+
+
+def _person_name_key(name: Any) -> str:
+    return ' '.join(str(name or '').strip().lower().split())
+
+
+def _filter_owner_contacts_to_people(lead_id: int, names: list[Any]) -> None:
+    """Remove owner links that are not in the dialog's explicit People result."""
+    from app.models.property_contact import PropertyContact
+
+    selected = {
+        _person_name_key(name)
+        for name in names
+        if _person_name_key(name)
+    }
+    for link in PropertyContact.query.filter_by(property_id=lead_id, role='owner').all():
+        if _contact_name_key(link.contact) not in selected:
+            db.session.delete(link)
+
+
+def _phone_choice_keys(values: list[Any]) -> set[str]:
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
+    keys: set[str] = set()
+    for value in values:
+        text = str(value or '').strip()
+        if not text:
+            continue
+        key = PhoneConfidenceService.normalize_phone(text) or text.lower()
+        if key:
+            keys.add(key)
+    return keys
+
+
+def _email_choice_keys(values: list[Any]) -> set[str]:
+    return {
+        str(value or '').strip().lower()
+        for value in values
+        if str(value or '').strip()
+    }
+
+
+def _filter_owner_contact_methods(
+    lead_id: int,
+    *,
+    phones: list[Any] | None,
+    emails: list[Any] | None,
+) -> None:
+    """Apply dialog contact-method selections to relational owner contacts."""
+    if phones is None and emails is None:
+        return
+    from app.models.contact_email import ContactEmail
+    from app.models.contact_phone import ContactPhone
+    from app.models.property_contact import PropertyContact
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
+    owner_contact_ids = [
+        link.contact_id
+        for link in PropertyContact.query.filter_by(property_id=lead_id, role='owner').all()
+    ]
+    if not owner_contact_ids:
+        return
+    if phones is not None:
+        keep_phones = _phone_choice_keys(phones)
+        for row in ContactPhone.query.filter(ContactPhone.contact_id.in_(owner_contact_ids)).all():
+            key = PhoneConfidenceService.normalize_phone(row.value) or str(row.value or '').strip().lower()
+            if key not in keep_phones:
+                db.session.delete(row)
+    if emails is not None:
+        keep_emails = _email_choice_keys(emails)
+        for row in ContactEmail.query.filter(ContactEmail.contact_id.in_(owner_contact_ids)).all():
+            if str(row.value or '').strip().lower() not in keep_emails:
+                db.session.delete(row)
+
+
+def apply_merge_field_choices(
+    winner: Lead,
+    choices: dict[str, Any] | None,
+    *,
+    ignore_conflict_ids: set[int] | None = None,
+) -> None:
     """Write the dialog's After combine edits onto the surviving lead.
 
     Score is not written here — the caller rescores. Missing keys keep whatever
@@ -504,10 +593,39 @@ def apply_merge_field_choices(winner: Lead, choices: dict[str, Any] | None) -> N
     """
     if not isinstance(choices, dict):
         return
+    names = choices.get('people_names')
+    if isinstance(names, list):
+        cleaned = [str(name).strip() for name in names if str(name).strip()]
+        winner.owner_first_name = None
+        winner.owner_last_name = None
+        winner.owner_2_first_name = None
+        winner.owner_2_last_name = None
+        if cleaned:
+            first, last = _split_person_name(cleaned[0])
+            winner.owner_first_name = first or None
+            winner.owner_last_name = last or None
+            if len(cleaned) > 1:
+                second_first, second_last = _split_person_name(cleaned[1])
+                winner.owner_2_first_name = second_first or None
+                winner.owner_2_last_name = second_last or None
     for field, limit in _MERGE_TEXT_LIMITS.items():
         if field not in choices:
             continue
         if field == 'property_type' and bool(getattr(winner, 'lead_category_locked', False)):
+            continue
+        if field == 'property_street':
+            proposed_street = _clip_choice(choices.get(field), limit)
+            if proposed_street and _dedup_index_conflict_exists(
+                lead=winner,
+                proposed_street=proposed_street,
+                ignore_ids=ignore_conflict_ids or set(),
+            ):
+                logger.info(
+                    'skipping merge-choice street for winner=%s; normalized street would collide',
+                    winner.id,
+                )
+                continue
+            setattr(winner, field, proposed_street)
             continue
         setattr(winner, field, _clip_choice(choices.get(field), limit))
     if 'units' in choices:
@@ -522,17 +640,6 @@ def apply_merge_field_choices(winner: Lead, choices: dict[str, Any] | None) -> N
     status = choices.get('lead_status')
     if isinstance(status, str) and status in _MERGE_STATUS_VALUES:
         winner.lead_status = status
-    names = choices.get('people_names')
-    if isinstance(names, list):
-        cleaned = [str(name).strip() for name in names if str(name).strip()]
-        if cleaned:
-            first, last = _split_person_name(cleaned[0])
-            winner.owner_first_name = first or None
-            winner.owner_last_name = last or None
-            if len(cleaned) > 1:
-                second_first, second_last = _split_person_name(cleaned[1])
-                winner.owner_2_first_name = second_first or None
-                winner.owner_2_last_name = second_last or None
     if isinstance(choices.get('phones'), list):
         winner.has_phone = _write_contact_slots(winner, choices['phones'], 'phone', 7)
     if isinstance(choices.get('emails'), list):
@@ -551,6 +658,8 @@ def merge_lead_into_winner(
     """Merge loser into winner (ORM). Caller must commit."""
     winner_id = winner.id
     loser_id = loser.id
+    explicit_choices = isinstance(choices, dict)
+    explicit_people_names = choices.get('people_names') if explicit_choices else None
     if isinstance(choices, dict):
         _drop_unchecked_merge_rows(
             loser_id,
@@ -615,8 +724,16 @@ def merge_lead_into_winner(
 
     _prefer_newer_sale_onto_winner(winner, loser)
     _prefer_cleaner_property_street(winner, loser)
-    # Fail closed: co-owner split must not be swallowed (silent loss of people).
-    _merge_flat_owner_people(winner, loser)
+    apply_merge_field_choices(
+        winner,
+        choices,
+        ignore_conflict_ids={winner_id, loser_id},
+    )
+    if isinstance(explicit_people_names, list):
+        _filter_owner_contacts_to_people(winner_id, explicit_people_names)
+    else:
+        # Fail closed: co-owner split must not be swallowed (silent loss of people).
+        _merge_flat_owner_people(winner, loser)
     people_before = 0
     active_owner_ids_before: set[int] = set()
     try:
@@ -652,6 +769,12 @@ def merge_lead_into_winner(
             winner_id,
             loser_id,
             exc,
+        )
+    if explicit_choices:
+        _filter_owner_contact_methods(
+            winner_id,
+            phones=choices.get('phones') if isinstance(choices.get('phones'), list) else None,
+            emails=choices.get('emails') if isinstance(choices.get('emails'), list) else None,
         )
     people_after = people_before
     try:
@@ -710,7 +833,6 @@ def merge_lead_into_winner(
         new_value=f"merged from lead {loser_id} ({loser.property_street})",
         changed_by=changed_by,
     ))
-    apply_merge_field_choices(winner, choices)
     db.session.delete(loser)
     logger.info("Merged lead %s into %s", loser_id, winner_id)
 

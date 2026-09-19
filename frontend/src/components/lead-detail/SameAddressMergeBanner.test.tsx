@@ -939,10 +939,27 @@ describe('SameAddressMergeBanner', () => {
         'Cook County Assessor',
       )
     })
+    expect(screen.getByTestId('same-address-merge-pick-100-source')).not.toBeChecked()
+    expect(screen.getByTestId('same-address-merge-after-activities')).toBeDisabled()
     const pin = screen.getByTestId('same-address-merge-after-pin')
     await user.clear(pin)
     await user.type(pin, '99-00')
     expect(pin).toHaveValue('99-00')
+    await user.click(screen.getByTestId('same-address-merge-confirm'))
+    await waitFor(() => {
+      expect(commandCenterService.mergeInto).toHaveBeenCalled()
+    })
+    const call = vi.mocked(commandCenterService.mergeInto).mock.calls.at(-1)
+    expect(call?.[0]).toBe(200)
+    expect(call?.[1]).toBe(100)
+    expect(call?.[2]).toMatchObject({
+      county_assessor_pin: '99-00',
+      source: null,
+      deal_source: null,
+      data_source: 'cook_county_assessor',
+      keep_incoming_activities: false,
+      keep_primary_activities: true,
+    })
   })
 
   it('after combine fills blank primary fields and keeps status and score', async () => {

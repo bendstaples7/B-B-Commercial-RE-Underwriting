@@ -301,10 +301,10 @@ const MERGE_ROWS: Array<{ key: string; label: string; editable: boolean }> = [
   { key: 'status', label: 'Status', editable: true },
   { key: 'score', label: 'Score', editable: false },
   { key: 'source', label: 'Source', editable: true },
-  { key: 'dates', label: 'Dates', editable: true },
-  { key: 'companies', label: 'Companies', editable: true },
-  { key: 'related', label: 'Other properties', editable: true },
-  { key: 'activities', label: 'Activities', editable: true },
+  { key: 'dates', label: 'Dates', editable: false },
+  { key: 'companies', label: 'Companies', editable: false },
+  { key: 'related', label: 'Other properties', editable: false },
+  { key: 'activities', label: 'Activities', editable: false },
   { key: 'contact', label: 'Contact', editable: true },
 ]
 
@@ -388,6 +388,13 @@ function defaultFieldPick(
   return { incoming: false, primary: false }
 }
 
+function normalizeFieldPick(key: string, pick: FieldPick): FieldPick {
+  if (CONSOLIDATE_KEYS.has(key) || !pick.primary || !pick.incoming) {
+    return pick
+  }
+  return { incoming: true, primary: false }
+}
+
 function composeField(
   key: string,
   primary: SameAddressLeadSummary,
@@ -395,9 +402,10 @@ function composeField(
   pick: FieldPick,
   ready: boolean,
 ): string {
+  const normalizedPick = normalizeFieldPick(key, pick)
   const primaryValue = fieldValue(primary, key, ready)
   const incomingValue = fieldValue(incoming, key, ready)
-  if (pick.primary && pick.incoming) {
+  if (normalizedPick.primary && normalizedPick.incoming) {
     if (CONSOLIDATE_KEYS.has(key)) {
       return fieldValue(afterCombinePreview(primary, incoming), key, ready)
     }
@@ -405,8 +413,8 @@ function composeField(
     if (!hasFieldValue(incomingValue) || primaryValue === incomingValue) return primaryValue
     return `${primaryValue} · ${incomingValue}`
   }
-  if (pick.primary) return primaryValue
-  if (pick.incoming) return incomingValue
+  if (normalizedPick.primary) return primaryValue
+  if (normalizedPick.incoming) return incomingValue
   return ''
 }
 
@@ -479,11 +487,14 @@ function buildMergeChoices(
   drafts: Record<string, string>,
   ready: boolean,
 ): MergeFieldChoices {
+  const normalizedPicks = Object.fromEntries(
+    Object.entries(picks).map(([key, pick]) => [key, normalizeFieldPick(key, pick)]),
+  ) as Record<string, FieldPick>
   const address = parseAddress(drafts.property || '')
   const sourceDraft = drafts.source || ''
   const primarySource = fieldValue(primary, 'source', ready)
   const incomingSource = fieldValue(incoming, 'source', ready)
-  const sourcePick = picks.source || { incoming: false, primary: false }
+  const sourcePick = normalizedPicks.source || { incoming: false, primary: false }
   let source: string | null
   let dealSource: string | null
   let dataSource: string | null
@@ -503,7 +514,7 @@ function buildMergeChoices(
   const statusDraft = drafts.status || ''
   const statusFromPrimary = statusLabel(primary.lead_status)
   const statusFromIncoming = statusLabel(incoming.lead_status)
-  const statusPick = picks.status || { incoming: false, primary: false }
+  const statusPick = normalizedPicks.status || { incoming: false, primary: false }
   let leadStatus: string | null = statusCodeFromLabel(statusDraft)
   if (statusPick.primary && !statusPick.incoming && statusDraft === statusFromPrimary) {
     leadStatus = primary.lead_status || null
@@ -511,7 +522,7 @@ function buildMergeChoices(
     leadStatus = incoming.lead_status || null
   }
   const typeDraft = drafts.type || ''
-  const typePick = picks.type || { incoming: false, primary: false }
+  const typePick = normalizedPicks.type || { incoming: false, primary: false }
   let propertyType = typeCodeFromLabel(typeDraft)
   if (
     typePick.primary
@@ -526,10 +537,10 @@ function buildMergeChoices(
   ) {
     propertyType = blankToNull(incoming.property_type)
   }
-  const peoplePick = picks.people || { incoming: false, primary: false }
-  const activityPick = picks.activities || { incoming: false, primary: false }
-  const companyPick = picks.companies || { incoming: false, primary: false }
-  const contactPick = picks.contact || { incoming: false, primary: false }
+  const peoplePick = normalizedPicks.people || { incoming: false, primary: false }
+  const activityPick = normalizedPicks.activities || { incoming: false, primary: false }
+  const companyPick = normalizedPicks.companies || { incoming: false, primary: false }
+  const contactPick = normalizedPicks.contact || { incoming: false, primary: false }
   const contactDraft = drafts.contact || ''
   const contactComposed = composeField('contact', primary, incoming, contactPick, ready)
   const methodsKnown = primary.phones != null || incoming.phones != null
@@ -785,10 +796,10 @@ export function SameAddressMergeBanner({
   const resolvedRows = useMemo(() => {
     if (!primaryView || !compareIncoming) return []
     return MERGE_ROWS.map((row) => {
-      const pick = {
+      const pick = normalizeFieldPick(row.key, {
         ...defaultFieldPick(row.key, primaryView, compareIncoming, compareReady),
         ...pickOverride[row.key],
-      }
+      })
       const draft = Object.prototype.hasOwnProperty.call(draftOverride, row.key)
         ? draftOverride[row.key]
         : composeField(row.key, primaryView, compareIncoming, pick, compareReady)
@@ -1366,9 +1377,16 @@ export function SameAddressMergeBanner({
                               checked={row.pick.incoming}
                               onChange={(event) => {
                                 const incoming = event.target.checked
+                                const nextPick = normalizeFieldPick(row.key, {
+                                  ...row.pick,
+                                  incoming,
+                                  primary: incoming && !CONSOLIDATE_KEYS.has(row.key)
+                                    ? false
+                                    : row.pick.primary,
+                                })
                                 setPickOverride((prev) => ({
                                   ...prev,
-                                  [row.key]: { ...row.pick, incoming },
+                                  [row.key]: nextPick,
                                 }))
                                 setDraftOverride((prev) => {
                                   const next = { ...prev }
@@ -1392,9 +1410,16 @@ export function SameAddressMergeBanner({
                               checked={row.pick.primary}
                               onChange={(event) => {
                                 const primary = event.target.checked
+                                const nextPick = normalizeFieldPick(row.key, {
+                                  ...row.pick,
+                                  primary,
+                                  incoming: primary && !CONSOLIDATE_KEYS.has(row.key)
+                                    ? false
+                                    : row.pick.incoming,
+                                })
                                 setPickOverride((prev) => ({
                                   ...prev,
-                                  [row.key]: { ...row.pick, primary },
+                                  [row.key]: nextPick,
                                 }))
                                 setDraftOverride((prev) => {
                                   const next = { ...prev }
