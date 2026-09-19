@@ -32,6 +32,7 @@ from app.schemas import (
     PropertyOrganizationLinkSchema,
     OwnerOrganizationLinkSchema,
 )
+from app.models.organization_audit_log import OrganizationAuditLog
 from app.services.organization_service import OrganizationService
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,14 @@ def _org_not_found(org_id: int):
     )
 
 
+def _org_created_by_current_user(org) -> bool:
+    created = OrganizationAuditLog.query.filter_by(
+        organization_id=org.id,
+        field_name='__created__',
+    ).order_by(OrganizationAuditLog.id.asc()).first()
+    return bool(created and created.changed_by == get_current_user_id())
+
+
 def _require_org_access(org) -> None:
     """404 when the org is not linked to a lead the caller can see."""
     if not user_can_access_association_target('organization', org.id):
@@ -167,6 +176,8 @@ def _require_exclusive_org_access(org) -> None:
         for link in OwnerOrganizationLink.query.filter_by(organization_id=org.id).all()
     )
     if not links:
+        if _org_created_by_current_user(org):
+            return
         _org_not_found(org.id)
     saw_owned = False
     for lead_id in links:
@@ -201,11 +212,7 @@ def _load_authorized_org(org_id: int, *, allow_unlinked: bool = False):
             organization_id=org.id,
         ).first()
         if property_link is None and owner_link is None:
-            created = OrganizationAuditLog.query.filter_by(
-                organization_id=org.id,
-                field_name='__created__',
-            ).order_by(OrganizationAuditLog.id.asc()).first()
-            if created is None or created.changed_by != get_current_user_id():
+            if not _org_created_by_current_user(org):
                 _org_not_found(org.id)
             return org
     _require_org_access(org)
@@ -333,7 +340,7 @@ def update_organization(org_id):
     """
     data = request.json or {}
     changed_by = get_current_user_id()
-    org = _load_authorized_org(org_id)
+    org = _load_authorized_org(org_id, allow_unlinked=True)
     _require_exclusive_org_access(org)
 
     # Partial load — only validate fields that are present
@@ -355,7 +362,7 @@ def delete_organization(org_id):
     org_id : int
     """
     changed_by = get_current_user_id()
-    org = _load_authorized_org(org_id)
+    org = _load_authorized_org(org_id, allow_unlinked=True)
     _require_exclusive_org_access(org)
     org = _org_service.soft_delete(org_id, changed_by=changed_by)
 

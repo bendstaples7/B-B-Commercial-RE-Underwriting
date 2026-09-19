@@ -530,23 +530,24 @@ def apply_association_access_scope_filter(
     lead_ids = association_access_scope.get('lead', set())
     organization_ids = association_access_scope.get('organization', set())
     contact_ids = association_access_scope.get('contact', set())
+    supported_types = tuple(getattr(association_model.target_type.type, 'enums', ()) or ())
+    type_scopes = {
+        'lead': lead_ids,
+        'organization': organization_ids,
+        'contact': contact_ids,
+    }
+    inaccessible_predicates = [
+        and_(
+            association_model.target_type == target_type,
+            ~association_model.target_id.in_(type_scopes[target_type]),
+        )
+        for target_type in supported_types
+        if target_type in type_scopes
+    ]
+    inaccessible_predicates.append(~association_model.target_type.in_(supported_types))
     inaccessible_assoc = db.session.query(association_model.id).filter(
         parent_fk_column == parent_model.id,
-        or_(
-            and_(
-                association_model.target_type == 'lead',
-                ~association_model.target_id.in_(lead_ids),
-            ),
-            and_(
-                association_model.target_type == 'organization',
-                ~association_model.target_id.in_(organization_ids),
-            ),
-            and_(
-                association_model.target_type == 'contact',
-                ~association_model.target_id.in_(contact_ids),
-            ),
-            ~association_model.target_type.in_(('lead', 'organization', 'contact')),
-        ),
+        or_(*inaccessible_predicates),
     ).correlate(parent_model).exists()
     any_assoc = db.session.query(association_model.id).filter(
         parent_fk_column == parent_model.id,
