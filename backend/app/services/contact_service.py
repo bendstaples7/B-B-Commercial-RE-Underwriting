@@ -19,6 +19,7 @@ from app.models.property_contact import PropertyContact
 from app.models.lead import Property
 from app.exceptions import ResourceNotFoundError, ConflictError, ValidationException
 from app.services.contact_backfill import phone_digits, split_phone_field, split_email_field
+from app.services.helpers.deal_source import DEAL_SOURCE_OPTIONS
 from app.services.helpers.sql_like import escape_like_pattern
 
 from sqlalchemy.orm import selectinload
@@ -57,6 +58,37 @@ def _strip_invisible(value: str) -> str:
         if not (unicodedata.category(ch).startswith('C') or unicodedata.category(ch) == 'Zs')
     )
     return cleaned.strip()
+
+
+def _normalize_capture_source(raw) -> str | None:
+    """Accept a HubSpot-aligned deal source, or None when blank."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    if text not in DEAL_SOURCE_OPTIONS:
+        raise ValidationException(
+            f'Invalid source: {text}',
+            field='source',
+            value=text,
+        )
+    return text
+
+
+def _normalize_capture_context(raw) -> str | None:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    if len(text) > 5000:
+        raise ValidationException(
+            'Context must be 5000 characters or fewer',
+            field='capture_context',
+            value=text[:80],
+        )
+    return text
 
 
 class ContactService:
@@ -101,6 +133,11 @@ class ContactService:
             role=data.get('role', 'owner'),
             role_description=data.get('role_description'),
             notes=data.get('notes'),
+            source=_normalize_capture_source(data.get('source')) if 'source' in data else None,
+            capture_context=(
+                _normalize_capture_context(data.get('capture_context'))
+                if 'capture_context' in data else None
+            ),
             keep_on_gis=bool(data.get('keep_on_gis', False)),
         )
         db.session.add(contact)
@@ -167,9 +204,17 @@ class ContactService:
         name_keys = ('first_name' in data) or ('last_name' in data)
         old_first = contact.first_name
         old_last = contact.last_name
-        for field in ('first_name', 'last_name', 'role', 'role_description', 'notes'):
+        for field in (
+            'first_name', 'last_name', 'role', 'role_description', 'notes',
+            'source', 'capture_context',
+        ):
             if field in data:
-                setattr(contact, field, data[field])
+                if field == 'source':
+                    setattr(contact, field, _normalize_capture_source(data[field]))
+                elif field == 'capture_context':
+                    setattr(contact, field, _normalize_capture_context(data[field]))
+                else:
+                    setattr(contact, field, data[field])
 
         if name_keys:
             contact.name_locked = True

@@ -240,4 +240,29 @@ describe('QuickAddPage deprioritized matches', () => {
       )
     })
   })
+
+  it('sends source, why, and notes for a lead capture', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    renderPage(['/quick-add?kind=lead'])
+
+    expect(screen.getByRole('heading', { name: 'Add lead' })).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Why are you adding this'), {
+      target: { value: 'Broker sent the address' },
+    })
+    fireEvent.change(screen.getByLabelText('Notes'), {
+      target: { value: 'Call after 5' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save to Skip Trace' }))
+
+    await waitFor(() => {
+      expect(leadService.quickAdd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          capture_kind: 'lead',
+          deal_source: 'Referral',
+          context: 'Broker sent the address',
+          note: 'Call after 5',
+        }),
+      )
+    })
+  })
 })

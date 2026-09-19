@@ -80,6 +80,29 @@ class TestCreateContact:
             assert len(emails) == 1
             assert emails[0].value == "jane@example.com"
 
+    def test_create_persists_source_and_context(self, app):
+        with app.app_context():
+            service = ContactService()
+            contact = service.create_contact({
+                "first_name": "Rita",
+                "last_name": "Ng",
+                "source": "Referral",
+                "capture_context": "Met at a broker open house",
+                "notes": "Prefers text",
+            })
+            assert contact.source == "Referral"
+            assert contact.capture_context == "Met at a broker open house"
+            assert contact.notes == "Prefers text"
+
+    def test_create_rejects_unknown_source(self, app):
+        with app.app_context():
+            service = ContactService()
+            with pytest.raises(ValidationException):
+                service.create_contact({
+                    "first_name": "Rita",
+                    "source": "Random blog",
+                })
+
     def test_create_manual_phone_defaults_confidence_90(self, app):
         """Manual create stores confidence 90 and source manual when omitted."""
         with app.app_context():

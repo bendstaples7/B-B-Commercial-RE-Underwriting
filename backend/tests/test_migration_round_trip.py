@@ -39,7 +39,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 # Expected final head revision after a complete upgrade.
-_EXPECTED_HEAD = "act_mtg_20260919"
+_EXPECTED_HEAD = "cap_src_20260919"
 
 # Key application tables that must be created by the chain on upgrade
 # and must be absent after a full downgrade to base.

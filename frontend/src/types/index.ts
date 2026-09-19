@@ -1843,6 +1843,8 @@ export interface HubSpotConfig {
 export interface QuickAddPayload {
   property_street: string
   note?: string | null
+  context?: string | null
+  capture_kind?: 'property' | 'lead' | null
   priority?: 'high' | 'medium' | 'low' | null
   deal_source?: string | null
   date_identified?: string | null
@@ -1974,6 +1976,8 @@ export interface Contact {
   role: ContactRole
   role_description: string | null
   notes: string | null
+  source?: string | null
+  capture_context?: string | null
   phones: ContactPhone[]
   emails: ContactEmail[]
   created_at: string | null
@@ -1997,6 +2001,8 @@ export interface ContactCreatePayload {
   role?: ContactRole
   role_description?: string | null
   notes?: string | null
+  source?: string | null
+  capture_context?: string | null
   phones?: Array<{ value: string; label: PhoneLabel }>
   emails?: Array<{ value: string; label: EmailLabel }>
 }
@@ -2007,6 +2013,8 @@ export interface ContactUpdatePayload {
   role?: ContactRole
   role_description?: string | null
   notes?: string | null
+  source?: string | null
+  capture_context?: string | null
   phones?: Array<{ value: string; label: PhoneLabel }>
   emails?: Array<{ value: string; label: EmailLabel }>
 }

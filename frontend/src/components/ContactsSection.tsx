@@ -951,6 +951,25 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
                             {email.value}
                           </Typography>
                         ))}
+                        {contact.source ? (
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ display: 'block' }}
+                            data-testid={`contact-source-${contact.id}`}
+                          >
+                            Source: {contact.source}
+                          </Typography>
+                        ) : null}
+                        {contact.capture_context ? (
+                          <Typography
+                            variant="body2"
+                            color="text.secondary"
+                            data-testid={`contact-context-${contact.id}`}
+                          >
+                            {contact.capture_context}
+                          </Typography>
+                        ) : null}
                         {organizations
                           .filter(
                             (org) =>

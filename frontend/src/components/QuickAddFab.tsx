@@ -7,7 +7,7 @@
  */
 import { useCallback, useLayoutEffect, useRef } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Fab, Portal } from '@mui/material'
+import { Fab, Portal, useMediaQuery, useTheme } from '@mui/material'
 import AddLocationAltIcon from '@mui/icons-material/AddLocationAlt'
 import { useAuth } from '@/context/AuthContext'
 
@@ -49,10 +49,14 @@ export function QuickAddFabHost() {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const { user, isLoading } = useAuth()
+  const theme = useTheme()
+  const isDesktop = useMediaQuery(theme.breakpoints.up('md'))
   const fabNodeRef = useRef<HTMLButtonElement | null>(null)
 
   const hideReason =
-    pathname.startsWith('/quick-add')
+    isDesktop
+      ? 'desktopUsesHeader'
+      : pathname.startsWith('/quick-add')
       ? 'onQuickAddPage'
       : pathname.startsWith('/leads/')
         ? 'onLeadDetail'

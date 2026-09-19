@@ -64,6 +64,38 @@ class TestQuickAddEndpoint:
             assert len(notes) == 1
             assert notes[0].summary.startswith('Looks promising')
             assert (notes[0].event_metadata or {}).get('body') == 'Looks promising'
+            assert lead.notes == 'Looks promising'
+
+    def test_lead_capture_stores_source_context_and_notes(self, quick_add_client, app):
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '55 Capture Context Ave, Chicago, IL',
+                    'capture_kind': 'lead',
+                    'deal_source': 'Referral',
+                    'context': 'Broker sent this yesterday',
+                    'note': 'Call the owner after 5',
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 201
+            lead = db.session.get(Lead, response.get_json()['lead_id'])
+            assert lead.source == 'manual'
+            assert lead.deal_source == 'Referral'
+            assert lead.notes == 'Call the owner after 5'
+            assert 'Broker sent this yesterday' in (lead.deal_description or '')
+            assert 'Lead capture' in (lead.deal_description or '')
+            notes = [
+                e for e in LeadTimelineEntry.query.filter_by(
+                    lead_id=lead.id, event_type='note_added', is_deleted=False,
+                ).all()
+                if (e.event_metadata or {}).get('source') == 'quick_add'
+            ]
+            assert len(notes) == 1
+            assert notes[0].summary.startswith('Broker sent this yesterday')
+            assert 'Call the owner after 5' in (notes[0].event_metadata or {}).get('body')
 
     def test_blank_note_still_writes_walk_by_activity_note(self, quick_add_client, app):
         with app.app_context():
@@ -467,6 +499,13 @@ class TestQuickAddActivityNoteBody:
             note='  Porch light on  ',
             walk_by_context='Walk-by · 123 Main · Sep 03, 2026 11:49 PM',
         ) == 'Porch light on'
+
+    def test_includes_why_and_note(self):
+        assert quick_add_activity_note_body(
+            note='Call after 5',
+            context='Broker referral',
+            walk_by_context='Lead capture · 123 Main',
+        ) == 'Broker referral\n\nCall after 5'
 
     def test_falls_back_to_walk_by_context(self):
         assert quick_add_activity_note_body(

@@ -3,7 +3,7 @@
  * Creates a Skip Trace lead and queues HubSpot deal push.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link as RouterLink, useNavigate } from 'react-router-dom'
+import { Link as RouterLink, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Alert,
   Box,
@@ -13,16 +13,12 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
-  FormControl,
   IconButton,
-  InputLabel,
   List,
   ListItem,
   ListItemButton,
   ListItemText,
-  MenuItem,
   Paper,
-  Select,
   TextField,
   Typography,
 } from '@mui/material'
@@ -39,6 +35,7 @@ import openLetterService from '@/services/openLetterApi'
 import type { QuickAddPayload, QuickAddResponse } from '@/types'
 import { QUICK_ADD_DEAL_SOURCES } from '@/types'
 import { formatDateOnly } from '@/utils/formatters'
+import { CaptureSourceFields } from '@/components/CaptureSourceFields'
 
 type Priority = 'high' | 'medium' | 'low'
 
@@ -94,14 +91,20 @@ function hubspotSuccessMessage(result: QuickAddResponse): string | null {
 
 export function QuickAddPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const kindParam = searchParams.get('kind')
+  const captureKind = kindParam === 'lead' || kindParam === 'property' ? kindParam : null
   const queryClient = useQueryClient()
   const mapsLoaded = useGoogleMapsLoaded()
   const suggestionsRef = useRef<HTMLUListElement>(null)
   const coordSourceRef = useRef<'gps' | 'place-pending' | 'place' | null>(null)
 
   const [note, setNote] = useState('')
+  const [context, setContext] = useState('')
   const [priority, setPriority] = useState<Priority | null>(null)
-  const [dealSource, setDealSource] = useState<string>(QUICK_ADD_DEAL_SOURCES[0])
+  const [dealSource, setDealSource] = useState<string>(
+    captureKind === 'lead' ? 'Referral' : QUICK_ADD_DEAL_SOURCES[0],
+  )
   const [dateIdentified, setDateIdentified] = useState(todayIsoDate)
   const [addressError, setAddressError] = useState('')
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
@@ -345,6 +348,8 @@ export function QuickAddPage() {
     quickAddMutation.mutate({
       property_street: street,
       note: note.trim() || null,
+      context: context.trim() || null,
+      capture_kind: captureKind,
       priority,
       deal_source: dealSource,
       date_identified: dateIdentified || todayIsoDate(),
@@ -360,8 +365,9 @@ export function QuickAddPage() {
   const handleReset = () => {
     setAddress('')
     setNote('')
+    setContext('')
     setPriority(null)
-    setDealSource(QUICK_ADD_DEAL_SOURCES[0])
+    setDealSource(captureKind === 'lead' ? 'Referral' : QUICK_ADD_DEAL_SOURCES[0])
     setDateIdentified(todayIsoDate())
     setSuccessResult(null)
     setExistingActionFeedback(null)
@@ -387,6 +393,17 @@ export function QuickAddPage() {
     }
     navigate('/kanban')
   }
+
+  const dialogTitle = captureKind === 'lead'
+    ? 'Add lead'
+    : captureKind === 'property'
+      ? 'Add property'
+      : 'Quick Add'
+  const intro = captureKind === 'lead'
+    ? 'Add a lead to the pipeline. Include where it came from, why it matters, and any notes.'
+    : captureKind === 'property'
+      ? 'Capture a property you are interested in. Include the source, why it stood out, and any notes.'
+      : 'Capture a walk-by address. Include the source, why it stood out, and any notes. We will add it to Skip Trace and create a HubSpot deal.'
 
   const formBody =
     successResult !== null ? (
@@ -427,7 +444,7 @@ export function QuickAddPage() {
       sx={{ maxWidth: 480, mx: 'auto', pb: 4 }}
     >
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Capture a walk-by address. We will add it to Skip Trace and create a HubSpot deal.
+        {intro}
       </Typography>
 
       {quickAddMutation.isError && (
@@ -622,21 +639,18 @@ export function QuickAddPage() {
         </Box>
       )}
 
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <InputLabel id="quick-add-deal-source-label">Deal source</InputLabel>
-        <Select
-          labelId="quick-add-deal-source-label"
-          label="Deal source"
-          value={dealSource}
-          onChange={(e) => setDealSource(e.target.value)}
-        >
-          {QUICK_ADD_DEAL_SOURCES.map((source) => (
-            <MenuItem key={source} value={source}>
-              {source}
-            </MenuItem>
-          ))}
-        </Select>
-      </FormControl>
+      <CaptureSourceFields
+        source={dealSource}
+        onSourceChange={setDealSource}
+        context={context}
+        onContextChange={setContext}
+        sourceLabelId="quick-add-deal-source-label"
+        contextPlaceholder={
+          captureKind === 'lead'
+            ? 'Who sent this, or what made it a lead…'
+            : 'Why this property stood out…'
+        }
+      />
 
       <TextField
         label="Date identified"
@@ -652,15 +666,15 @@ export function QuickAddPage() {
       />
 
       <TextField
-        label="Note (optional)"
+        label="Notes"
         value={note}
         onChange={(e) => setNote(e.target.value)}
         fullWidth
         multiline
         minRows={3}
-        sx={{ mb: 2 }}
-        placeholder="Why this property stood out…"
-        inputProps={{ 'aria-label': 'Quick add note' }}
+        sx={{ mb: 2, caretColor: 'text.primary' }}
+        placeholder="Anything else to remember"
+        inputProps={{ 'aria-label': 'Notes' }}
       />
 
       <Typography variant="subtitle2" sx={{ mb: 1 }}>
@@ -712,7 +726,7 @@ export function QuickAddPage() {
         }}
       >
         <Typography component="h1" variant="h6" fontWeight={700}>
-          Quick Add
+          {dialogTitle}
         </Typography>
         <IconButton
           aria-label="Close quick add"

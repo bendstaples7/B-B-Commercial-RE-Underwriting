@@ -109,6 +109,8 @@ def _serialize_contact(contact):
         'role': contact.role,
         'role_description': contact.role_description,
         'notes': contact.notes,
+        'source': contact.source,
+        'capture_context': contact.capture_context,
         'name_locked': bool(contact.name_locked),
         'keep_on_gis': bool(contact.keep_on_gis),
         'phones': PhoneConfidenceService.serialize_contact_phones(

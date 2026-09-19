@@ -70,6 +70,7 @@ def quick_add_lead():
         user_id=user_id,
         property_street=data['property_street'],
         note=data.get('note'),
+        context=data.get('context'),
         priority=data.get('priority'),
         deal_source=data.get('deal_source'),
         date_identified=data.get('date_identified'),
@@ -79,6 +80,7 @@ def quick_add_lead():
         property_city=data.get('property_city'),
         property_state=data.get('property_state'),
         property_zip=data.get('property_zip'),
+        capture_kind=data.get('capture_kind'),
     )
 
     # Always queue follow-up for GIS match (+ enrichment / HubSpot when enabled).

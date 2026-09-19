@@ -89,6 +89,7 @@ import { ImportWizard } from './components/ImportWizard'
 import { ImportHistoryTable } from './components/ImportHistoryTable'
 import { GeminiNarrativePanel } from './components/GeminiNarrativePanel'
 import GlobalSearchBar from '@/components/GlobalSearchBar'
+import { HeaderQuickAddButton } from '@/components/HeaderQuickAddButton'
 import type { QueueCounts } from './types'
 
 // lazyWithRetry recovers from post-deploy hashed-chunk 404s (blank page class).
@@ -2386,6 +2387,7 @@ function App() {
               </Typography>
             </Box>
           ) : null}
+          <HeaderQuickAddButton />
           <Avatar
             src={user ? '/images/avatar.png' : undefined}
             alt={user?.display_name ?? 'User'}

@@ -41,12 +41,14 @@ def build_walk_by_context_line(
     property_street: str,
     capture_location_label: str | None = None,
     captured_at: datetime | None = None,
+    label: str = 'Walk-by',
 ) -> str:
     where = (capture_location_label or property_street or '').strip()
     when = _format_capture_timestamp(captured_at)
+    prefix = (label or 'Walk-by').strip() or 'Walk-by'
     if where:
-        return f'Walk-by · {where} · {when}'
-    return f'Walk-by · {when}'
+        return f'{prefix} · {where} · {when}'
+    return f'{prefix} · {when}'
 
 
 def build_deal_description(
@@ -57,10 +59,14 @@ def build_deal_description(
     capture_longitude: float | None,
     property_street: str,
     walk_by_context: str | None = None,
+    context: str | None = None,
 ) -> str | None:
     parts: list[str] = []
     if walk_by_context and walk_by_context.strip():
         parts.append(walk_by_context.strip())
+    why = (context or '').strip()
+    if why:
+        parts.append(why)
     if note and note.strip():
         parts.append(note.strip())
     meta_lines: list[str] = []
@@ -93,18 +99,25 @@ def quick_add_activity_note_body(
     *,
     note: str | None,
     walk_by_context: str | None,
+    context: str | None = None,
 ) -> str:
     """Body shown in Activity for a quick-add capture.
 
-    Prefer the optional field note. When that is blank, still surface the
-    walk-by capture line so the visit appears as a Note Added row instead of
-    only a generic lead_imported event buried under later system activity.
+    Prefer the user's why and optional note. When both are blank, still
+    surface the capture line so the visit appears as a Note Added row instead
+    of only a generic lead_imported event buried under later system activity.
     """
+    parts: list[str] = []
+    why = (context or '').strip()
     user_note = (note or '').strip()
-    if user_note:
-        return user_note
-    context = (walk_by_context or '').strip()
-    return context or 'Walk-by capture'
+    if why:
+        parts.append(why)
+    if user_note and user_note not in parts:
+        parts.append(user_note)
+    if parts:
+        return '\n\n'.join(parts)
+    capture_line = (walk_by_context or '').strip()
+    return capture_line or 'Walk-by capture'
 
 
 class QuickAddService:
@@ -203,6 +216,7 @@ class QuickAddService:
         user_id: str,
         property_street: str,
         note: str | None = None,
+        context: str | None = None,
         priority: str | None = None,
         deal_source: str | None = None,
         date_identified: date | None = None,
@@ -212,6 +226,7 @@ class QuickAddService:
         property_city: str | None = None,
         property_state: str | None = None,
         property_zip: str | None = None,
+        capture_kind: str | None = None,
     ) -> tuple[Lead, bool]:
         """Create or update a lead from a quick-add submission."""
         street = property_street.strip()
@@ -220,20 +235,28 @@ class QuickAddService:
 
         now = datetime.now(timezone.utc)
         identified_on = date_identified or now.date()
+        resolved_kind = (capture_kind or '').strip().lower()
+        if resolved_kind not in ('', 'property', 'lead'):
+            raise ValueError('capture_kind must be property or lead')
         resolved_deal_source = (deal_source or '').strip() or DEFAULT_QUICK_ADD_DEAL_SOURCE
+        provenance = 'manual' if resolved_kind == 'lead' else QUICK_ADD_SOURCE
+        capture_label = 'Lead capture' if resolved_kind == 'lead' else 'Walk-by'
         walk_by_context = build_walk_by_context_line(
             property_street=street,
             capture_location_label=capture_location_label,
             captured_at=now,
+            label=capture_label,
         )
         capture_description = build_deal_description(
             note=note,
+            context=context,
             capture_location_label=capture_location_label,
             capture_latitude=capture_latitude,
             capture_longitude=capture_longitude,
             property_street=street,
             walk_by_context=walk_by_context,
         )
+        cleaned_note = (note or '').strip() or None
 
         manual_priority = None
         if priority:
@@ -273,7 +296,7 @@ class QuickAddService:
         if created:
             payload: dict[str, Any] = {
                 'property_street': street,
-                'source': QUICK_ADD_SOURCE,
+                'source': provenance,
                 'deal_source': resolved_deal_source,
                 'deal_description': capture_description,
                 'lead_status': QUICK_ADD_STATUS,
@@ -298,7 +321,7 @@ class QuickAddService:
             assert lead is not None
             upsert_payload: dict[str, Any] = {
                 'property_street': street,
-                'source': QUICK_ADD_SOURCE,
+                'source': provenance,
             }
             if city and not lead.property_city:
                 upsert_payload['property_city'] = city
@@ -316,6 +339,9 @@ class QuickAddService:
                 lead.manual_priority = manual_priority
             lead.owner_user_id = user_id
             lead.updated_at = datetime.utcnow()
+
+        if cleaned_note:
+            lead.notes = merge_deal_description(lead.notes, cleaned_note)
 
         from app.services.property_address_service import complete_property_address
         # GIS already attempted above when allowed — avoid a second Cook lookup.
@@ -338,6 +364,7 @@ class QuickAddService:
             note=note,
             capture_meta=capture_meta,
             created=created,
+            capture_kind=resolved_kind,
         )
         db.session.commit()
 
@@ -369,6 +396,7 @@ class QuickAddService:
                 user_id=user_id,
                 body=quick_add_activity_note_body(
                     note=note,
+                    context=context,
                     walk_by_context=walk_by_context,
                 ),
                 capture_meta=capture_meta,
@@ -388,9 +416,16 @@ class QuickAddService:
         note: str | None,
         capture_meta: dict[str, Any],
         created: bool,
+        capture_kind: str = '',
     ) -> None:
         now = datetime.now(timezone.utc)
         has_user_note = bool(note and note.strip())
+        if capture_kind == 'property':
+            created_summary = 'Quick-add: new property captured'
+        elif capture_kind == 'lead':
+            created_summary = 'Quick-add: new lead captured'
+        else:
+            created_summary = 'Quick-add: new lead captured in the field'
 
         if created:
             db.session.add(LeadTimelineEntry(
@@ -399,7 +434,7 @@ class QuickAddService:
                 occurred_at=now,
                 source='manual',
                 actor=user_id,
-                summary='Quick-add: new lead captured in the field'[:500],
+                summary=created_summary[:500],
                 event_metadata=capture_meta,
             ))
         elif not has_user_note:
