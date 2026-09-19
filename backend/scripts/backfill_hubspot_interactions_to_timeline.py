@@ -190,6 +190,23 @@ def convert_missing_meeting_interactions(lead_id: int | None = None) -> tuple[in
     failed = 0
 
     for engagement in _meeting_engagements_missing_interactions(lead_id):
+        if lead_id is not None:
+            assoc_lead_ids = {
+                int(assoc['target_id'])
+                for assoc in converter.associations_for_engagement(engagement)
+                if assoc.get('target_type') == 'lead'
+                and assoc.get('target_id') is not None
+            }
+            if assoc_lead_ids - {lead_id}:
+                failed += 1
+                logger.warning(
+                    'Skipping HubSpot MEETING engagement hubspot_id=%s for '
+                    '--lead-id=%s because it also matches lead ids %s',
+                    engagement.hubspot_id,
+                    lead_id,
+                    sorted(assoc_lead_ids - {lead_id}),
+                )
+                continue
         try:
             result = converter.convert_engagement(engagement)
         except Exception as exc:

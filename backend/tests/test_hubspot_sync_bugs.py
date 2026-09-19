@@ -1034,6 +1034,72 @@ class TestMeetingEngagementConversion:
                 hubspot_engagement_id="111073080719",
             ).count() == 1
 
+    def test_lead_scoped_backfill_rejects_multi_lead_meeting(self, app):
+        """--lead-id must not convert a meeting that would mutate another lead."""
+        from scripts.backfill_hubspot_interactions_to_timeline import (
+            convert_missing_meeting_interactions,
+        )
+
+        with app.app_context():
+            lead = Lead(
+                property_street="2551 W Eastwood Ave",
+                lead_status="skip_trace",
+            )
+            other_lead = Lead(
+                property_street="2553 W Eastwood Ave",
+                lead_status="skip_trace",
+            )
+            db.session.add_all([lead, other_lead])
+            db.session.flush()
+
+            db.session.add_all([
+                HubSpotMatch(
+                    hubspot_record_type="contact",
+                    hubspot_id="107754",
+                    internal_record_type="lead",
+                    internal_record_id=lead.id,
+                    confidence="HIGH",
+                    status="confirmed",
+                    matching_criteria="address_match",
+                ),
+                HubSpotMatch(
+                    hubspot_record_type="deal",
+                    hubspot_id="deal_107754",
+                    internal_record_type="lead",
+                    internal_record_id=other_lead.id,
+                    confidence="HIGH",
+                    status="confirmed",
+                    matching_criteria="address_match",
+                ),
+            ])
+            db.session.add(HubSpotEngagement(
+                hubspot_id="111073080721",
+                engagement_type="MEETING",
+                raw_payload={
+                    "engagement": {
+                        "id": 111073080721,
+                        "type": "MEETING",
+                        "createdAt": 1781551566511,
+                        "timestamp": 1781119500000,
+                        "bodyPreview": "multi-lead meeting",
+                    },
+                    "metadata": {"body": "multi-lead meeting"},
+                    "associations": {
+                        "dealIds": ["deal_107754"],
+                        "contactIds": [107754],
+                        "companyIds": [],
+                    },
+                },
+            ))
+            db.session.commit()
+
+            created, failed = convert_missing_meeting_interactions(lead.id)
+
+            assert (created, failed) == (0, 1)
+            assert Interaction.query.filter_by(
+                hubspot_engagement_id="111073080721",
+            ).count() == 0
+
 
 # ===========================================================================
 # Preservation Tests — Property 2
