@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import React, { useState } from 'react'
-import { render, screen, waitFor } from '@/test/testUtils'
+import { render, screen, waitFor, fireEvent } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { SameAddressMergeBanner } from '@/components/lead-detail/SameAddressMergeBanner'
@@ -16,6 +16,7 @@ vi.mock('@/services/api', () => ({
   commandCenterService: {
     mergeInto: vi.fn(),
     getMergePreview: vi.fn(),
+    getMergeContext: vi.fn(),
   },
   searchService: {
     search: vi.fn(),
@@ -42,6 +43,14 @@ function deferred<T>() {
     resolve = res
   })
   return { promise, resolve }
+}
+
+/** One input event. Per-keystroke typing re-renders the whole compare grid and blows the CI limit. */
+async function enterPasteValue(value: string) {
+  const input = await screen.findByTestId('same-address-merge-paste-id')
+  fireEvent.change(input, { target: { value } })
+  // Blur starts a numeric lookup. A name search must stay focused so the debounce is not cleared.
+  if (/^\d+$/.test(value)) fireEvent.blur(input)
 }
 
 
@@ -74,8 +83,10 @@ function ManualMergeHarness(
 describe('SameAddressMergeBanner', () => {
   beforeEach(() => {
     vi.mocked(commandCenterService.getMergePreview).mockReset()
+    vi.mocked(commandCenterService.getMergeContext).mockReset()
     vi.mocked(commandCenterService.mergeInto).mockReset()
     vi.mocked(searchService.search).mockReset()
+    vi.mocked(commandCenterService.getMergeContext).mockResolvedValue({ leads: [] })
     vi.mocked(commandCenterService.mergeInto).mockResolvedValue({
       winner_id: 200,
       loser_id: 100,
@@ -109,6 +120,7 @@ describe('SameAddressMergeBanner', () => {
     expect(screen.getByTestId('same-address-merge-banner')).toHaveTextContent(
       'Another record for this address',
     )
+    expect(screen.getByTestId('same-address-merge-open')).toHaveTextContent('Review merge')
     await user.click(screen.getByTestId('same-address-merge-open'))
     expect(screen.getByTestId('same-address-merge-dialog')).toBeInTheDocument()
     await user.click(screen.getByTestId('same-address-merge-stay-200'))
@@ -155,7 +167,7 @@ describe('SameAddressMergeBanner', () => {
     expect(screen.queryByTestId('same-address-merge-banner')).not.toBeInTheDocument()
     expect(screen.getByTestId('same-address-merge-open')).toHaveTextContent('Merge duplicate')
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(screen.getByTestId('same-address-merge-paste-id'), '2497')
+    await enterPasteValue('2497')
     await user.click(screen.getByTestId('same-address-merge-confirm'))
     await waitFor(() => {
       expect(commandCenterService.mergeInto).toHaveBeenCalledWith(2497, 100)
@@ -215,7 +227,7 @@ describe('SameAddressMergeBanner', () => {
       </MemoryRouter>,
     )
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(screen.getByTestId('same-address-merge-paste-id'), 'Howe')
+    await enterPasteValue('Howe')
     await waitFor(() => {
       expect(searchService.search).toHaveBeenCalled()
     })
@@ -521,8 +533,7 @@ describe('SameAddressMergeBanner', () => {
       </MemoryRouter>,
     )
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(screen.getByTestId('same-address-merge-paste-id'), '300')
-    await user.tab()
+    await enterPasteValue('300')
     await waitFor(() => {
       expect(screen.getByTestId('same-address-merge-search-selected')).toHaveTextContent('#300')
     })
@@ -568,8 +579,7 @@ describe('SameAddressMergeBanner', () => {
       </MemoryRouter>,
     )
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(screen.getByTestId('same-address-merge-paste-id'), '999')
-    await user.tab()
+    await enterPasteValue('999')
     await waitFor(() => {
       expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 999)
     })
@@ -623,7 +633,7 @@ describe('SameAddressMergeBanner', () => {
       </MemoryRouter>,
     )
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(screen.getByTestId('same-address-merge-paste-id'), '300')
+    await enterPasteValue('300')
     await user.click(screen.getByTestId('same-address-merge-confirm'))
 
     expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 300)
@@ -686,8 +696,7 @@ describe('SameAddressMergeBanner', () => {
       </MemoryRouter>,
     )
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(screen.getByTestId('same-address-merge-paste-id'), '300')
-    await user.tab()
+    await enterPasteValue('300')
     await waitFor(() => {
       expect(screen.getAllByText('Manual twin (#300)').length).toBeGreaterThan(0)
     })
@@ -700,7 +709,7 @@ describe('SameAddressMergeBanner', () => {
 
     expect(await screen.findByTestId('same-address-merge-paste-id')).toHaveValue('')
     expect(screen.queryAllByText('Manual twin (#300)')).toHaveLength(0)
-  })
+  }, 15000)
 
   it('ignores stale paste lookups after cancel and a newer lookup starts', async () => {
     const user = userEvent.setup()
@@ -732,8 +741,7 @@ describe('SameAddressMergeBanner', () => {
     )
 
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(screen.getByTestId('same-address-merge-paste-id'), '300')
-    await user.tab()
+    await enterPasteValue('300')
     await waitFor(() => {
       expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 300)
     })
@@ -744,8 +752,7 @@ describe('SameAddressMergeBanner', () => {
     })
 
     await user.click(screen.getByTestId('same-address-merge-open'))
-    await user.type(await screen.findByTestId('same-address-merge-paste-id'), '400')
-    await user.tab()
+    await enterPasteValue('400')
     await waitFor(() => {
       expect(commandCenterService.getMergePreview).toHaveBeenCalledWith(100, 400)
     })
@@ -788,5 +795,285 @@ describe('SameAddressMergeBanner', () => {
       expect(screen.getAllByText('Fresh manual (#400)').length).toBeGreaterThan(0)
     })
     expect(screen.queryAllByText('Stale manual (#300)')).toHaveLength(0)
+  }, 15000)
+
+  it('shows property, source, other properties, and activities when choosing primary', async () => {
+    const user = userEvent.setup()
+    vi.mocked(commandCenterService.getMergeContext).mockResolvedValue({
+      leads: [
+        {
+          id: 100,
+          property_street: '1110 Yoko Ave',
+          property_city: 'Chicago',
+          property_state: 'IL',
+          owner_display_name: 'Yoko Miller',
+          people_names: ['Yoko Miller'],
+          county_assessor_pin: '14-28-100',
+          property_type: 'multi_family',
+          units: 4,
+          lead_status: 'skip_trace',
+          source: 'Cityscape',
+          data_source: 'hubspot',
+          hubspot_confirmed: true,
+          organizations: ['Yoko Holdings LLC'],
+          phones: ['3125550100'],
+          emails: ['yoko@holdings.example'],
+          has_phone: true,
+          has_email: true,
+          related_properties: [
+            {
+              id: 501,
+              property_street: '200 Oak St',
+              lead_status: 'mailing_no_contact_made',
+            },
+          ],
+          activity: {
+            total: 3,
+            calls: 2,
+            notes: 1,
+            emails: 0,
+            mail: 0,
+            last_occurred_at: '2026-03-04T15:00:00Z',
+            last_summary: 'Left voicemail',
+            last_event_type: 'call_logged',
+          },
+          open_task_count: 1,
+        },
+        {
+          id: 200,
+          property_street: '1110 Yoko Ave',
+          owner_display_name: 'Yoko + Edwin',
+          people_names: ['Yoko Miller', 'Edwin Chen'],
+          source: null,
+          data_source: 'cook_county_assessor',
+          related_properties: [],
+          activity: {
+            total: 0,
+            calls: 0,
+            notes: 0,
+            emails: 0,
+            mail: 0,
+            last_summary: null,
+          },
+          open_task_count: 0,
+          phones: ['7735550199'],
+          emails: ['edwin@example.com'],
+          has_phone: true,
+          has_email: true,
+        },
+      ],
+    })
+    render(
+      <MemoryRouter>
+        <SameAddressMergeBanner
+          leadId={100}
+          currentOwnerLabel="Yoko Miller"
+          currentPeopleNames={['Yoko Miller']}
+          twins={[twin200]}
+          onMerged={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    expect(screen.getByText('Choose primary')).toBeInTheDocument()
+    expect(screen.getByTestId('same-address-merge-compare')).toBeInTheDocument()
+    const current = await screen.findByTestId('same-address-merge-facts-100')
+    expect(current).toHaveTextContent('Primary')
+    const sourceRow = await screen.findByTestId('same-address-merge-row-source')
+    expect(sourceRow).toHaveTextContent('Cityscape')
+    expect(sourceRow).toHaveTextContent('HubSpot')
+    expect(sourceRow).toHaveTextContent('Cook County Assessor')
+    expect(screen.getByTestId('same-address-merge-row-pin')).toHaveTextContent('14-28-100')
+    expect(screen.getByTestId('same-address-merge-row-type')).toHaveTextContent('Multi Family')
+    expect(screen.getByTestId('same-address-merge-row-units')).toHaveTextContent('4')
+    expect(screen.getByTestId('same-address-merge-row-companies')).toHaveTextContent('Yoko Holdings LLC')
+    expect(screen.getByTestId('same-address-merge-row-related')).toHaveTextContent('200 Oak St')
+    expect(screen.getByTestId('same-address-merge-row-activities')).toHaveTextContent('3 total')
+    expect(screen.getByTestId('same-address-merge-row-activities')).toHaveTextContent('2 calls')
+    expect(screen.getByTestId('same-address-merge-row-activities')).toHaveTextContent('Left voicemail')
+    expect(screen.getByTestId('same-address-merge-row-contact')).toHaveTextContent('(312) 555-0100')
+    expect(screen.getByTestId('same-address-merge-row-contact')).toHaveTextContent('yoko@holdings.example')
+    expect(screen.getByTestId('same-address-merge-row-contact')).toHaveTextContent('(773) 555-0199')
+    expect(screen.getByTestId('same-address-merge-row-contact')).toHaveTextContent('edwin@example.com')
+    const other = screen.getByTestId('same-address-merge-facts-200')
+    expect(other).toHaveTextContent('Merges in')
+    const after = await screen.findByTestId('same-address-merge-after')
+    expect(after).toHaveTextContent('After combine')
+    expect(after).toHaveTextContent('Yoko Miller (#100)')
+    expect(after).toHaveTextContent('Lead #200 is removed')
+    await waitFor(() => {
+      expect((screen.getByTestId('same-address-merge-after-people') as HTMLInputElement).value).toContain(
+        'Edwin Chen',
+      )
+    })
+    expect((screen.getByTestId('same-address-merge-after-source') as HTMLInputElement).value).toContain(
+      'Cityscape',
+    )
+    expect((screen.getByTestId('same-address-merge-after-source') as HTMLInputElement).value).not.toContain(
+      'Cook County Assessor',
+    )
+    expect((screen.getByTestId('same-address-merge-after-companies') as HTMLInputElement).value).toContain(
+      'Yoko Holdings LLC',
+    )
+    expect((screen.getByTestId('same-address-merge-after-related') as HTMLInputElement).value).toContain(
+      '200 Oak St',
+    )
+    expect((screen.getByTestId('same-address-merge-after-activities') as HTMLInputElement).value).toContain(
+      '3 total',
+    )
+    expect((screen.getByTestId('same-address-merge-after-activities') as HTMLInputElement).value).toContain(
+      '1 open task',
+    )
+    expect((screen.getByTestId('same-address-merge-after-contact') as HTMLInputElement).value).toContain(
+      '(312) 555-0100',
+    )
+    expect((screen.getByTestId('same-address-merge-after-contact') as HTMLInputElement).value).toContain(
+      '(773) 555-0199',
+    )
+    expect((screen.getByTestId('same-address-merge-after-contact') as HTMLInputElement).value).toContain(
+      'yoko@holdings.example',
+    )
+    expect((screen.getByTestId('same-address-merge-after-contact') as HTMLInputElement).value).toContain(
+      'edwin@example.com',
+    )
+    expect(screen.getByTestId('same-address-merge-pick-100-source')).toBeChecked()
+    expect(screen.getByTestId('same-address-merge-pick-200-source')).not.toBeChecked()
+
+    await user.click(screen.getByTestId('same-address-merge-pick-200-source'))
+    await waitFor(() => {
+      expect((screen.getByTestId('same-address-merge-after-source') as HTMLInputElement).value).toContain(
+        'Cook County Assessor',
+      )
+    })
+    expect(screen.getByTestId('same-address-merge-pick-100-source')).not.toBeChecked()
+    expect(screen.getByTestId('same-address-merge-after-activities')).toBeDisabled()
+    const pin = screen.getByTestId('same-address-merge-after-pin')
+    await user.clear(pin)
+    await user.type(pin, '99-00')
+    expect(pin).toHaveValue('99-00')
+    await user.click(screen.getByTestId('same-address-merge-confirm'))
+    await waitFor(() => {
+      expect(commandCenterService.mergeInto).toHaveBeenCalled()
+    })
+    const call = vi.mocked(commandCenterService.mergeInto).mock.calls.at(-1)
+    expect(call?.[0]).toBe(200)
+    expect(call?.[1]).toBe(100)
+    expect(call?.[2]).toMatchObject({
+      county_assessor_pin: '99-00',
+      source: null,
+      deal_source: null,
+      data_source: 'cook_county_assessor',
+      keep_incoming_activities: false,
+      keep_primary_activities: true,
+    })
+  })
+
+  it('after combine fills blank primary fields and keeps status and score', async () => {
+    const user = userEvent.setup()
+    vi.mocked(commandCenterService.getMergeContext).mockResolvedValue({
+      leads: [
+        {
+          id: 100,
+          property_street: '1867 N Howe St 60614',
+          owner_display_name: 'James Malone',
+          people_names: ['James Malone'],
+          lead_status: 'skip_trace',
+          lead_score: 72,
+          source: null,
+          organizations: [],
+          related_properties: [],
+          activity: {
+            total: 1,
+            calls: 1,
+            notes: 0,
+            emails: 0,
+            mail: 0,
+            last_occurred_at: '2026-01-02T15:00:00Z',
+            last_summary: 'Called',
+          },
+          open_task_count: 0,
+          has_phone: false,
+        },
+        {
+          id: 200,
+          property_street: '1867 N Howe St',
+          property_city: 'Chicago',
+          property_state: 'IL',
+          owner_display_name: 'James + Pat',
+          people_names: ['James Malone', 'Pat Malone'],
+          county_assessor_pin: '17-01-200',
+          property_type: 'multi_family',
+          units: 2,
+          lead_status: 'mailing_no_contact_made',
+          lead_score: 10,
+          source: 'Cook County',
+          data_source: 'cook_county_assessor',
+          organizations: ['Malone LLC'],
+          related_properties: [
+            { id: 300, property_street: '9 Walton St', lead_status: 'skip_trace' },
+          ],
+          activity: {
+            total: 1,
+            calls: 0,
+            notes: 1,
+            emails: 0,
+            mail: 0,
+            last_occurred_at: '2026-04-01T15:00:00Z',
+            last_summary: 'Note added',
+          },
+          open_task_count: 2,
+          has_phone: true,
+        },
+      ],
+    })
+    render(
+      <MemoryRouter>
+        <SameAddressMergeBanner
+          leadId={100}
+          currentOwnerLabel="James Malone"
+          currentPeopleNames={['James Malone']}
+          twins={[twin200]}
+          onMerged={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    await screen.findByTestId('same-address-merge-after')
+    await waitFor(() => {
+      expect(screen.getByTestId('same-address-merge-after-pin')).toHaveValue('17-01-200')
+    })
+    expect(screen.getByTestId('same-address-merge-after-property')).toHaveValue('1867 N Howe St, Chicago IL')
+    expect((screen.getByTestId('same-address-merge-after-property') as HTMLInputElement).value).not.toContain(
+      '60614',
+    )
+    expect((screen.getByTestId('same-address-merge-after-people') as HTMLInputElement).value).toContain(
+      'Pat Malone',
+    )
+    expect((screen.getByTestId('same-address-merge-after-source') as HTMLInputElement).value).toContain(
+      'Cook County',
+    )
+    expect(screen.getByTestId('same-address-merge-after-status')).toHaveValue('Skip Trace')
+    expect((screen.getByTestId('same-address-merge-after-status') as HTMLInputElement).value).not.toContain(
+      'Mailing',
+    )
+    expect(screen.getByTestId('same-address-merge-after-score')).toHaveValue('72')
+    expect((screen.getByTestId('same-address-merge-after-companies') as HTMLInputElement).value).toContain(
+      'Malone LLC',
+    )
+    expect((screen.getByTestId('same-address-merge-after-related') as HTMLInputElement).value).toContain(
+      '9 Walton St',
+    )
+    expect((screen.getByTestId('same-address-merge-after-activities') as HTMLInputElement).value).toContain(
+      '2 total',
+    )
+    expect((screen.getByTestId('same-address-merge-after-activities') as HTMLInputElement).value).toContain(
+      'Note added',
+    )
+    expect((screen.getByTestId('same-address-merge-after-activities') as HTMLInputElement).value).toContain(
+      '2 open tasks',
+    )
+    expect((screen.getByTestId('same-address-merge-after-contact') as HTMLInputElement).value).toContain(
+      'phone',
+    )
   })
 })

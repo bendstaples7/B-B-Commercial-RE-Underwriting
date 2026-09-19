@@ -1647,12 +1647,57 @@ export interface RelatedPropertySummary {
   lead_score?: number | null
 }
 
+/** Other building shown on a merge-review card (not the record being compared). */
+export interface MergeRelatedProperty {
+  id: number
+  property_street: string | null
+  property_city?: string | null
+  lead_status?: string | null
+  lead_score?: number | null
+}
+
+/** Timeline rollup so merge review can see what activity is attached. */
+export interface MergeActivitySummary {
+  total: number
+  calls: number
+  notes: number
+  emails: number
+  mail: number
+  last_occurred_at?: string | null
+  last_summary?: string | null
+  last_event_type?: string | null
+}
+
 /** Same-address duplicate lead for the merge banner (not portfolio). */
 export interface SameAddressLeadSummary {
   id: number
   property_street: string | null
   owner_display_name: string
   people_names: string[]
+  property_city?: string | null
+  property_state?: string | null
+  property_zip?: string | null
+  county_assessor_pin?: string | null
+  property_type?: string | null
+  units?: number | null
+  lead_status?: string | null
+  lead_score?: number | null
+  source?: string | null
+  deal_source?: string | null
+  data_source?: string | null
+  source_type?: string | null
+  created_at?: string | null
+  last_contact_date?: string | null
+  date_added_to_hubspot?: string | null
+  hubspot_confirmed?: boolean
+  has_phone?: boolean
+  has_email?: boolean
+  phones?: string[]
+  emails?: string[]
+  open_task_count?: number
+  organizations?: string[]
+  activity?: MergeActivitySummary | null
+  related_properties?: MergeRelatedProperty[]
 }
 
 export type EntityLookupStatus =

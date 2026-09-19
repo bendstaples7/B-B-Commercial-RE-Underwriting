@@ -313,7 +313,7 @@ export function NeedsReviewClarityContent({
             }}
             sx={{ cursor: 'pointer' }}
           >
-            Merge
+            Review merge
           </Button>
         ) : null}
         {!onOpenMerge && canMerge && mergeLoserId != null && mergeWinnerId != null && (

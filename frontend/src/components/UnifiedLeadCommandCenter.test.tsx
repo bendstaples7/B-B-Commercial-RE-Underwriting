@@ -31,6 +31,7 @@ vi.mock('@/services/api', () => ({
     updateCategory: vi.fn(),
     mergeInto: vi.fn(),
     getMergePreview: vi.fn(),
+    getMergeContext: vi.fn(),
     dismissDuplicateReview: vi.fn(),
     clearReview: vi.fn(),
     moveToSkipTrace: vi.fn(),
@@ -449,7 +450,7 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
       )
       expect(screen.getByTestId('needs-review-duplicate-callout')).toBeInTheDocument()
       expect(screen.getByTestId('needs-review-cluster-comparison')).toBeInTheDocument()
-      expect(screen.getByTestId('needs-review-open-merge')).toBeInTheDocument()
+      expect(screen.getByTestId('needs-review-open-merge')).toHaveTextContent('Review merge')
       expect(screen.getByTestId('needs-review-clarity-reason')).toHaveTextContent(
         'Possible duplicate records',
       )

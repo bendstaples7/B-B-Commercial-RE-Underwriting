@@ -1382,6 +1382,141 @@ class TestMergePreviewAndUnitGuard:
             assert body['same_building'] is False
             assert body.get('mergeable') is False
 
+    def test_merge_context_includes_source_properties_and_activities(self, client, app):
+        from datetime import datetime as dt
+
+        with app.app_context():
+            current = _make_lead(
+                app,
+                '100 Merge Review Ave',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                source='Cityscape',
+                deal_source='Referral',
+                data_source='hubspot',
+                property_city='Chicago',
+                property_state='IL',
+                county_assessor_pin='14-28-100',
+                property_type='multi_family',
+                units=4,
+                lead_status='skip_trace',
+                phone_1='3125550100',
+                email_1='ada@example.com',
+            )
+            twin = _make_lead(
+                app,
+                '100 Merge Review Ave',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                data_source='cook_county_assessor',
+                lead_status='mailing_no_contact_made',
+            )
+            portfolio = _make_lead(
+                app,
+                '200 Other Portfolio St',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                lead_status='negotiating_remote',
+            )
+            from app.services.lead_dedup_service import refresh_lead_dedup_fields
+            for item in (current, twin, portfolio):
+                refresh_lead_dedup_fields(item)
+            db.session.add(LeadTimelineEntry(
+                lead_id=current.id,
+                event_type='call_logged',
+                occurred_at=dt(2026, 3, 4, 15, 0, 0),
+                source='manual',
+                actor='test',
+                summary='Left voicemail',
+            ))
+            db.session.add(LeadTask(
+                lead_id=twin.id,
+                task_type='custom',
+                title='Call back',
+                status='open',
+                created_by='test',
+            ))
+            db.session.commit()
+
+            response = client.get(
+                f'/api/leads/{current.id}/merge-context?ids={twin.id}',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            by_id = {row['id']: row for row in body['leads']}
+            assert set(by_id) == {current.id, twin.id}
+            assert portfolio.id not in by_id
+
+            current_row = by_id[current.id]
+            assert current_row['source'] == 'Cityscape'
+            assert current_row['deal_source'] == 'Referral'
+            assert current_row['data_source'] == 'hubspot'
+            assert current_row['county_assessor_pin'] == '14-28-100'
+            assert current_row['units'] == 4
+            assert current_row['activity']['calls'] == 1
+            assert current_row['activity']['total'] == 1
+            assert current_row['activity']['last_summary'] == 'Left voicemail'
+            assert '3125550100' in current_row['phones']
+            assert 'ada@example.com' in current_row['emails']
+            related_ids = {row['id'] for row in current_row['related_properties']}
+            assert portfolio.id in related_ids
+
+            twin_row = by_id[twin.id]
+            assert twin_row['data_source'] == 'cook_county_assessor'
+            assert twin_row['open_task_count'] == 1
+            assert twin_row['activity']['total'] == 0
+
+    def test_merge_context_excludes_other_users_leads(self, client, app):
+        with app.app_context():
+            current = _make_lead(app, '100 Merge Auth Ave')
+            twin = _make_lead(app, '100 Merge Auth Ave')
+            other_user = _make_lead(
+                app,
+                '100 Merge Auth Ave',
+                owner_user_id='other-user',
+            )
+
+            response = client.get(
+                f'/api/leads/{current.id}/merge-context?ids={twin.id},{other_user.id}',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 200
+            body = response.get_json()
+            returned_ids = {row['id'] for row in body['leads']}
+            assert current.id in returned_ids
+            assert twin.id in returned_ids
+            assert other_user.id not in returned_ids
+
+    def test_merge_context_rejects_more_than_twelve_ids(self, client, app):
+        with app.app_context():
+            current = _make_lead(app, '100 Merge Limit Ave')
+            extras = [
+                _make_lead(app, f'100 Merge Limit Ave Unit {index}')
+                for index in range(12)
+            ]
+
+            response = client.get(
+                (
+                    f'/api/leads/{current.id}/merge-context?ids='
+                    + ','.join(str(lead.id) for lead in extras)
+                ),
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 400
+            assert response.get_json()['error'] == 'At most 12 leads can be compared'
+
+    def test_merge_context_rejects_non_integer_ids(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '100 Merge Review Ave')
+            response = client.get(
+                f'/api/leads/{lead.id}/merge-context?ids=nope',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 400
+
     def test_merge_into_rejects_other_unit(self, client, app):
         from app.services.lead_dedup_service import refresh_lead_dedup_fields
 
@@ -1420,6 +1555,146 @@ class TestMergePreviewAndUnitGuard:
             assert body['merged'] is True
             assert body['winner_id'] == unit.id
             assert body['loser_id'] == husk.id
+
+    def test_merge_into_applies_field_choices(self, client, app):
+        from app.models.lead_task import LeadTask
+        from app.services.lead_dedup_service import refresh_lead_dedup_fields
+
+        with app.app_context():
+            winner = _make_lead(
+                app,
+                '10 Choice St',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                source='Cityscape',
+                deal_source='Existing deal',
+                data_source='manual',
+                lead_status='skip_trace',
+                county_assessor_pin='14-1',
+            )
+            loser = _make_lead(
+                app,
+                '10 Choice St',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                source='Assessor',
+                lead_status='mailing_no_contact_made',
+            )
+            for item in (winner, loser):
+                refresh_lead_dedup_fields(item)
+            db.session.add(LeadTask(
+                lead_id=loser.id,
+                task_type='custom',
+                title='Do not keep',
+                status='open',
+                created_by='test',
+            ))
+            db.session.commit()
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ), patch(
+                'app.services.lead_refresh.refresh_lead_scoring',
+            ):
+                response = client.post(
+                    f'/api/leads/{loser.id}/merge-into/{winner.id}',
+                    headers=_AUTH_HEADERS,
+                    json={'choices': {
+                        'property_street': '10 Choice Street',
+                        'property_city': 'Chicago',
+                        'property_state': 'IL',
+                        'property_zip': '60614',
+                        'county_assessor_pin': '99-00',
+                        'source': 'Picked source',
+                        'deal_source': None,
+                        'data_source': None,
+                        'lead_status': 'negotiating_remote',
+                        'people_names': ['Pat Malone'],
+                        'keep_incoming_activities': False,
+                        'units': 6,
+                    }},
+                )
+            assert response.status_code == 200, response.get_json()
+            db.session.refresh(winner)
+            assert winner.property_street == '10 Choice Street'
+            assert winner.property_city == 'Chicago'
+            assert winner.property_state == 'IL'
+            assert winner.property_zip == '60614'
+            assert winner.county_assessor_pin == '99-00'
+            assert winner.source == 'Picked source'
+            assert winner.deal_source is None
+            assert winner.data_source is None
+            assert winner.lead_status == 'negotiating_remote'
+            assert winner.units == 6
+            assert winner.owner_first_name == 'Pat'
+            assert winner.owner_last_name == 'Malone'
+            assert LeadTask.query.filter_by(lead_id=winner.id, title='Do not keep').count() == 0
+            timeline = LeadTimelineEntry.query.filter_by(
+                lead_id=winner.id,
+                event_type='leads_merged',
+            ).order_by(LeadTimelineEntry.id.desc()).first()
+            assert timeline is not None
+            assert 'selected merge choices' in timeline.summary
+            assert 'all phone numbers' not in timeline.summary
+
+    def test_merge_into_keeps_incoming_activities_when_selected(self, client, app):
+        from app.services.lead_dedup_service import refresh_lead_dedup_fields
+
+        with app.app_context():
+            winner = _make_lead(
+                app,
+                '11 Choice St',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+            )
+            loser = _make_lead(
+                app,
+                '11 Choice St',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+            )
+            for item in (winner, loser):
+                refresh_lead_dedup_fields(item)
+            db.session.add(LeadTask(
+                lead_id=loser.id,
+                task_type='custom',
+                title='Keep this task',
+                status='open',
+                created_by='test',
+            ))
+            db.session.add(LeadTimelineEntry(
+                lead_id=loser.id,
+                event_type='note_added',
+                occurred_at=datetime(2026, 5, 4, 15, 0, 0),
+                source='manual',
+                actor='test',
+                summary='Keep this timeline entry',
+            ))
+            db.session.commit()
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ), patch(
+                'app.services.lead_refresh.refresh_lead_scoring',
+            ):
+                response = client.post(
+                    f'/api/leads/{loser.id}/merge-into/{winner.id}',
+                    headers=_AUTH_HEADERS,
+                    json={'choices': {
+                        'people_names': ['Ada Lovelace'],
+                        'keep_incoming_activities': True,
+                        'keep_primary_activities': True,
+                    }},
+                )
+
+            assert response.status_code == 200, response.get_json()
+            assert LeadTask.query.filter_by(
+                lead_id=winner.id,
+                title='Keep this task',
+            ).count() == 1
+            assert LeadTimelineEntry.query.filter_by(
+                lead_id=winner.id,
+                summary='Keep this timeline entry',
+            ).count() == 1
 
 
 class TestMoveToSkipTrace:

@@ -1266,6 +1266,30 @@ export const prospectService = {
     api.post('/prospects/sync').then(r => r.data),
 }
 
+/** Field picks from the merge dialog. Omitted keys keep the normal merge rules. */
+export type MergeFieldChoices = {
+  property_street?: string | null
+  property_city?: string | null
+  property_state?: string | null
+  property_zip?: string | null
+  county_assessor_pin?: string | null
+  property_type?: string | null
+  units?: number | null
+  lead_status?: string | null
+  source?: string | null
+  deal_source?: string | null
+  data_source?: string | null
+  people_names?: string[]
+  phones?: string[]
+  emails?: string[]
+  keep_incoming_people?: boolean
+  keep_primary_people?: boolean
+  keep_incoming_activities?: boolean
+  keep_primary_activities?: boolean
+  keep_incoming_companies?: boolean
+  keep_primary_companies?: boolean
+}
+
 export const commandCenterService = {
   getCommandCenter: (leadId: number): Promise<CommandCenterPayload> =>
     api.get(`/leads/${leadId}/command-center`).then(r => r.data),
@@ -1326,8 +1350,12 @@ export const commandCenterService = {
   mergeInto: (
     loserId: number,
     winnerId: number,
+    choices?: MergeFieldChoices,
   ): Promise<{ winner_id: number; loser_id: number; merged: boolean }> =>
-    api.post(`/leads/${loserId}/merge-into/${winnerId}`).then(r => r.data),
+    api.post(
+      `/leads/${loserId}/merge-into/${winnerId}`,
+      choices ? { choices } : {},
+    ).then(r => r.data),
   getMergePreview: (
     leadId: number,
     otherId: number,
@@ -1338,6 +1366,15 @@ export const commandCenterService = {
     other: SameAddressLeadSummary
   }> =>
     api.get(`/leads/${leadId}/merge-preview/${otherId}`).then(r => r.data),
+  getMergeContext: (
+    leadId: number,
+    otherIds: number[],
+  ): Promise<{ leads: SameAddressLeadSummary[] }> =>
+    api.get(`/leads/${leadId}/merge-context`, {
+      params: {
+        ids: otherIds.filter((id) => id !== leadId).join(','),
+      },
+    }).then(r => r.data),
   updateCategory: (
     leadId: number,
     leadCategory: 'residential' | 'commercial',

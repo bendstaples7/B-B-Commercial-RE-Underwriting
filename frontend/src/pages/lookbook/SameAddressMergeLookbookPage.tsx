@@ -139,7 +139,7 @@ export default function SameAddressMergeLookbookPage() {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         On <code>/leads/:id</code>, open <strong>⋯</strong> next to the status chip →{' '}
         <strong>Merge duplicate…</strong>. When a twin is auto-detected, a blue banner also
-        offers <strong>Merge</strong>.
+        offers <strong>Review merge</strong>.
       </Typography>
       {lastMerged ? (
         <Typography variant="body2" sx={{ mb: 2 }} data-testid="merge-lookbook-last">
@@ -191,7 +191,7 @@ export default function SameAddressMergeLookbookPage() {
             When a twin is auto-detected
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Blue banner with <strong>Merge</strong> (⋯ menu still available).
+            Blue banner with <strong>Review merge</strong> (⋯ menu still available).
           </Typography>
           <FakeCommandCenterHeader mergeOpen={autoOpen} onOpenMerge={() => setAutoOpen(true)} />
           <SameAddressMergeBanner

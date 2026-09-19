@@ -393,10 +393,326 @@ def _prefer_cleaner_property_street(winner: Lead, loser: Lead) -> None:
         # Address completion runs once at merge level — avoid double GIS here.
 
 
-def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedup_sentinel') -> None:
+_MERGE_STATUS_VALUES = frozenset({
+    'skip_trace',
+    'awaiting_skip_trace',
+    'mailing_no_contact_made',
+    'mailing_contacted_no_interest',
+    'mailing_contacted_interested',
+    'negotiating_remote',
+    'in_person_appointment',
+    'offer_delivered',
+    'deprioritize',
+    'deal_won',
+    'deal_lost',
+    'suppressed',
+    'do_not_contact',
+})
+
+_MERGE_TEXT_LIMITS = {
+    'property_street': 500,
+    'property_city': 100,
+    'property_state': 50,
+    'property_zip': 20,
+    'county_assessor_pin': 50,
+    'property_type': 50,
+    'source': 100,
+    'deal_source': 255,
+    'data_source': 100,
+}
+
+
+def _clip_choice(value: Any, limit: int) -> str | None:
+    text = '' if value is None else str(value).strip()
+    if not text:
+        return None
+    return text[:limit]
+
+
+def _split_person_name(name: str) -> tuple[str, str]:
+    parts = [part for part in str(name or '').replace(',', ' ').split() if part]
+    if not parts:
+        return '', ''
+    if len(parts) == 1:
+        return parts[0][:128], ''
+    return parts[0][:128], ' '.join(parts[1:])[:128]
+
+
+def _delete_lead_rows(table_name: str, column: str, lead_id: int) -> None:
+    table = db.metadata.tables.get(table_name)
+    if table is None or column not in table.c:
+        return
+    db.session.execute(table.delete().where(table.c[column] == lead_id))
+
+
+def _drop_unchecked_merge_rows(
+    lead_id: int,
+    *,
+    drop_timeline: bool,
+    drop_tasks: bool,
+    drop_contacts: bool,
+    drop_orgs: bool,
+) -> None:
+    if drop_timeline:
+        _delete_lead_rows('lead_timeline_entries', 'lead_id', lead_id)
+    if drop_tasks:
+        _delete_lead_rows('lead_tasks', 'lead_id', lead_id)
+        _delete_lead_rows('tasks', 'lead_id', lead_id)
+    if drop_contacts:
+        _delete_lead_rows('property_contacts', 'property_id', lead_id)
+    if drop_orgs:
+        _delete_lead_rows('property_organization_links', 'property_id', lead_id)
+
+
+def _choice_flag(choices: dict[str, Any] | None, key: str, default: bool = True) -> bool:
+    if not isinstance(choices, dict) or key not in choices:
+        return default
+    return bool(choices.get(key))
+
+
+def _write_contact_slots(winner: Lead, values: list[Any], prefix: str, count: int) -> bool:
+    """Replace flat phone_1.. or email_1.. with the dialog's chosen list."""
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    limit = 255 if prefix == 'email' else 80
+    for raw in values:
+        text = str(raw or '').strip()
+        if not text:
+            continue
+        if prefix == 'phone':
+            key = PhoneConfidenceService.normalize_phone(text) or text.lower()
+        else:
+            key = text.lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(text[:limit])
+        if len(cleaned) >= count:
+            break
+    for index in range(1, count + 1):
+        setattr(winner, f'{prefix}_{index}', cleaned[index - 1] if index <= len(cleaned) else None)
+    return bool(cleaned)
+
+
+def _contact_name_key(contact: Any) -> str:
+    return _person_name_key(' '.join(
+        part
+        for part in [
+            str(getattr(contact, 'first_name', '') or '').strip(),
+            str(getattr(contact, 'last_name', '') or '').strip(),
+        ]
+        if part
+    ))
+
+
+def _person_name_key(name: Any) -> str:
+    return ' '.join(str(name or '').strip().lower().split())
+
+
+def _filter_owner_contacts_to_people(lead_id: int, names: list[Any]) -> None:
+    """Remove owner links that are not in the dialog's explicit People result."""
+    from app.models.property_contact import PropertyContact
+
+    selected = {
+        _person_name_key(name)
+        for name in names
+        if _person_name_key(name)
+    }
+    for link in PropertyContact.query.filter_by(property_id=lead_id, role='owner').all():
+        if _contact_name_key(link.contact) not in selected:
+            db.session.delete(link)
+
+
+def _phone_choice_keys(values: list[Any]) -> set[str]:
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
+    keys: set[str] = set()
+    for value in values:
+        text = str(value or '').strip()
+        if not text:
+            continue
+        key = PhoneConfidenceService.normalize_phone(text) or text.lower()
+        if key:
+            keys.add(key)
+    return keys
+
+
+def _email_choice_keys(values: list[Any]) -> set[str]:
+    return {
+        str(value or '').strip().lower()
+        for value in values
+        if str(value or '').strip()
+    }
+
+
+def _filter_owner_contact_methods(
+    lead_id: int,
+    *,
+    phones: list[Any] | None,
+    emails: list[Any] | None,
+) -> None:
+    """Apply dialog contact-method selections to relational owner contacts."""
+    if phones is None and emails is None:
+        return
+    from app.models.contact import Contact
+    from app.models.contact_email import ContactEmail
+    from app.models.contact_phone import ContactPhone
+    from app.models.property_contact import PropertyContact
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
+    owner_links = PropertyContact.query.filter_by(property_id=lead_id, role='owner').all()
+    owner_contact_ids: list[int] = []
+    for link in owner_links:
+        shared_elsewhere = PropertyContact.query.filter(
+            PropertyContact.contact_id == link.contact_id,
+            PropertyContact.property_id != lead_id,
+        ).first()
+        if shared_elsewhere is not None:
+            original = link.contact
+            clone = Contact(
+                first_name=original.first_name,
+                last_name=original.last_name,
+                role=original.role,
+                role_description=original.role_description,
+                notes=original.notes,
+                name_locked=original.name_locked,
+                keep_on_gis=original.keep_on_gis,
+            )
+            db.session.add(clone)
+            db.session.flush()
+            for phone in original.phones or []:
+                db.session.add(ContactPhone(
+                    contact_id=clone.id,
+                    value=phone.value,
+                    label=phone.label,
+                    notes=phone.notes,
+                    confidence_score=phone.confidence_score,
+                    last_outcome=phone.last_outcome,
+                    last_called_at=phone.last_called_at,
+                    source=phone.source,
+                ))
+            for email in original.emails or []:
+                db.session.add(ContactEmail(
+                    contact_id=clone.id,
+                    value=email.value,
+                    label=email.label,
+                ))
+            link.contact_id = clone.id
+            owner_contact_ids.append(clone.id)
+        else:
+            owner_contact_ids.append(link.contact_id)
+    if not owner_contact_ids:
+        return
+    if phones is not None:
+        keep_phones = _phone_choice_keys(phones)
+        for row in ContactPhone.query.filter(ContactPhone.contact_id.in_(owner_contact_ids)).all():
+            key = PhoneConfidenceService.normalize_phone(row.value) or str(row.value or '').strip().lower()
+            if key not in keep_phones:
+                db.session.delete(row)
+    if emails is not None:
+        keep_emails = _email_choice_keys(emails)
+        for row in ContactEmail.query.filter(ContactEmail.contact_id.in_(owner_contact_ids)).all():
+            if str(row.value or '').strip().lower() not in keep_emails:
+                db.session.delete(row)
+
+
+def apply_merge_field_choices(
+    winner: Lead,
+    choices: dict[str, Any] | None,
+    *,
+    ignore_conflict_ids: set[int] | None = None,
+) -> None:
+    """Write the dialog's After combine edits onto the surviving lead.
+
+    Score is not written here — the caller rescores. Missing keys keep whatever
+    the structural merge already copied.
+    """
+    if not isinstance(choices, dict):
+        return
+    names = choices.get('people_names')
+    if isinstance(names, list):
+        cleaned = [str(name).strip() for name in names if str(name).strip()]
+        winner.owner_first_name = None
+        winner.owner_last_name = None
+        winner.owner_2_first_name = None
+        winner.owner_2_last_name = None
+        if cleaned:
+            first, last = _split_person_name(cleaned[0])
+            winner.owner_first_name = first or None
+            winner.owner_last_name = last or None
+            if len(cleaned) > 1:
+                second_first, second_last = _split_person_name(cleaned[1])
+                winner.owner_2_first_name = second_first or None
+                winner.owner_2_last_name = second_last or None
+    for field, limit in _MERGE_TEXT_LIMITS.items():
+        if field not in choices:
+            continue
+        if field == 'property_type' and bool(getattr(winner, 'lead_category_locked', False)):
+            continue
+        if field == 'property_street':
+            proposed_street = _clip_choice(choices.get(field), limit)
+            if proposed_street and _dedup_index_conflict_exists(
+                lead=winner,
+                proposed_street=proposed_street,
+                ignore_ids=ignore_conflict_ids or set(),
+            ):
+                logger.info(
+                    'skipping merge-choice street for winner=%s; normalized street would collide',
+                    winner.id,
+                )
+                continue
+            setattr(winner, field, proposed_street)
+            continue
+        setattr(winner, field, _clip_choice(choices.get(field), limit))
+    if 'units' in choices:
+        raw = choices.get('units')
+        if raw in (None, ''):
+            winner.units = None
+        else:
+            try:
+                winner.units = int(raw)
+            except (TypeError, ValueError):
+                pass
+    status = choices.get('lead_status')
+    if isinstance(status, str) and status in _MERGE_STATUS_VALUES:
+        winner.lead_status = status
+    if isinstance(choices.get('phones'), list):
+        winner.has_phone = _write_contact_slots(winner, choices['phones'], 'phone', 7)
+    if isinstance(choices.get('emails'), list):
+        winner.has_email = _write_contact_slots(winner, choices['emails'], 'email', 5)
+    if getattr(winner, 'property_street', None):
+        refresh_lead_dedup_fields(winner)
+
+
+def merge_lead_into_winner(
+    winner: Lead,
+    loser: Lead,
+    *,
+    changed_by: str = 'dedup_sentinel',
+    choices: dict[str, Any] | None = None,
+) -> None:
     """Merge loser into winner (ORM). Caller must commit."""
     winner_id = winner.id
     loser_id = loser.id
+    explicit_choices = isinstance(choices, dict)
+    explicit_people_names = choices.get('people_names') if explicit_choices else None
+    if isinstance(choices, dict):
+        _drop_unchecked_merge_rows(
+            loser_id,
+            drop_timeline=not _choice_flag(choices, 'keep_incoming_activities'),
+            drop_tasks=not _choice_flag(choices, 'keep_incoming_activities'),
+            drop_contacts=not _choice_flag(choices, 'keep_incoming_people'),
+            drop_orgs=not _choice_flag(choices, 'keep_incoming_companies'),
+        )
+        _drop_unchecked_merge_rows(
+            winner_id,
+            drop_timeline=not _choice_flag(choices, 'keep_primary_activities'),
+            drop_tasks=not _choice_flag(choices, 'keep_primary_activities'),
+            drop_contacts=not _choice_flag(choices, 'keep_primary_people'),
+            drop_orgs=not _choice_flag(choices, 'keep_primary_companies'),
+        )
 
     for table_name, col_name in FK_REPOINTS:
         table = db.metadata.tables[table_name]
@@ -446,8 +762,16 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
 
     _prefer_newer_sale_onto_winner(winner, loser)
     _prefer_cleaner_property_street(winner, loser)
-    # Fail closed: co-owner split must not be swallowed (silent loss of people).
-    _merge_flat_owner_people(winner, loser)
+    apply_merge_field_choices(
+        winner,
+        choices,
+        ignore_conflict_ids={winner_id, loser_id},
+    )
+    if isinstance(explicit_people_names, list):
+        _filter_owner_contacts_to_people(winner_id, explicit_people_names)
+    else:
+        # Fail closed: co-owner split must not be swallowed (silent loss of people).
+        _merge_flat_owner_people(winner, loser)
     people_before = 0
     active_owner_ids_before: set[int] = set()
     try:
@@ -484,6 +808,12 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
             loser_id,
             exc,
         )
+    if explicit_choices:
+        _filter_owner_contact_methods(
+            winner_id,
+            phones=choices.get('phones') if isinstance(choices.get('phones'), list) else None,
+            emails=choices.get('emails') if isinstance(choices.get('emails'), list) else None,
+        )
     people_after = people_before
     try:
         from app.models.property_contact import PropertyContact
@@ -494,19 +824,24 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
         pass
     try:
         from app.services.lead_timeline_service import LeadTimelineService
+        if explicit_choices:
+            summary = f'Combined record #{loser_id} into this one with selected merge choices.'
+        else:
+            summary = (
+                f'Combined record #{loser_id} into this one. '
+                'People from both were kept; the same person got all phone numbers.'
+            )
         LeadTimelineService().append(
             winner_id,
             'leads_merged',
             changed_by,
-            (
-                f'Combined record #{loser_id} into this one. '
-                'People from both were kept; the same person got all phone numbers.'
-            ),
+            summary,
             metadata={
                 'loser_id': loser_id,
                 'winner_id': winner_id,
                 'people_kept': people_after,
                 'contacts_combined': int(contacts_combined or 0),
+                'selected_merge_choices': explicit_choices,
             },
             source='system',
             commit=False,
@@ -795,8 +1130,309 @@ def same_address_lead_summaries(
     return summaries
 
 
+_CALL_EVENTS = frozenset({'call_logged', 'hubspot_call'})
+_NOTE_EVENTS = frozenset({'note_added', 'hubspot_note'})
+_EMAIL_EVENTS = frozenset({'email_logged'})
+_MAIL_EVENTS = frozenset({'mail_queued', 'mail_sent', 'mail_delivered'})
+_MERGE_CONTEXT_RELATED_CAP = 6
+
+
+def _iso_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, 'isoformat'):
+        return value.isoformat()
+    text = str(value).strip()
+    return text or None
+
+
+def _event_type_name(value: Any) -> str:
+    raw = getattr(value, 'value', None)
+    if isinstance(raw, str) and raw:
+        return raw
+    text = str(value or '')
+    if '.' in text:
+        return text.rsplit('.', 1)[-1]
+    return text
+
+
+def _empty_activity_summary() -> dict[str, Any]:
+    return {
+        'total': 0,
+        'calls': 0,
+        'notes': 0,
+        'emails': 0,
+        'mail': 0,
+        'last_occurred_at': None,
+        'last_summary': None,
+        'last_event_type': None,
+    }
+
+
+def _activity_summaries_for_lead_ids(lead_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Timeline counts plus the latest non-deleted activity per lead."""
+    from app.models.lead_timeline_entry import LeadTimelineEntry
+
+    out = {lid: _empty_activity_summary() for lid in lead_ids}
+    if not lead_ids:
+        return out
+    counts = (
+        db.session.query(
+            LeadTimelineEntry.lead_id,
+            LeadTimelineEntry.event_type,
+            func.count(LeadTimelineEntry.id),
+        )
+        .filter(
+            LeadTimelineEntry.lead_id.in_(lead_ids),
+            LeadTimelineEntry.is_deleted.is_(False),
+        )
+        .group_by(LeadTimelineEntry.lead_id, LeadTimelineEntry.event_type)
+        .all()
+    )
+    for lead_id, event_type, count in counts:
+        row = out.get(lead_id)
+        if row is None:
+            continue
+        n = int(count or 0)
+        row['total'] += n
+        name = _event_type_name(event_type)
+        if name in _CALL_EVENTS:
+            row['calls'] += n
+        elif name in _NOTE_EVENTS:
+            row['notes'] += n
+        elif name in _EMAIL_EVENTS:
+            row['emails'] += n
+        elif name in _MAIL_EVENTS:
+            row['mail'] += n
+
+    latest_at = (
+        db.session.query(
+            LeadTimelineEntry.lead_id.label('lead_id'),
+            func.max(LeadTimelineEntry.occurred_at).label('occurred_at'),
+        )
+        .filter(
+            LeadTimelineEntry.lead_id.in_(lead_ids),
+            LeadTimelineEntry.is_deleted.is_(False),
+        )
+        .group_by(LeadTimelineEntry.lead_id)
+        .subquery()
+    )
+    latest_rows = (
+        db.session.query(LeadTimelineEntry)
+        .join(
+            latest_at,
+            and_(
+                LeadTimelineEntry.lead_id == latest_at.c.lead_id,
+                LeadTimelineEntry.occurred_at == latest_at.c.occurred_at,
+            ),
+        )
+        .filter(LeadTimelineEntry.is_deleted.is_(False))
+        .all()
+    )
+    best: dict[int, LeadTimelineEntry] = {}
+    for entry in latest_rows:
+        current = best.get(entry.lead_id)
+        if current is None or entry.id > current.id:
+            best[entry.lead_id] = entry
+    for lead_id, entry in best.items():
+        row = out.get(lead_id)
+        if row is None:
+            continue
+        summary = (entry.summary or '').strip()
+        row['last_occurred_at'] = _iso_or_none(entry.occurred_at)
+        row['last_summary'] = summary[:180] if summary else None
+        row['last_event_type'] = _event_type_name(entry.event_type) or None
+    return out
+
+
+def _open_task_counts_for_lead_ids(lead_ids: list[int]) -> dict[int, int]:
+    from app.models.lead_task import LeadTask
+
+    if not lead_ids:
+        return {}
+    rows = (
+        db.session.query(LeadTask.lead_id, func.count(LeadTask.id))
+        .filter(
+            LeadTask.lead_id.in_(lead_ids),
+            LeadTask.status == 'open',
+        )
+        .group_by(LeadTask.lead_id)
+        .all()
+    )
+    return {int(lead_id): int(count or 0) for lead_id, count in rows}
+
+
+def _organization_names_for_lead_ids(lead_ids: list[int]) -> dict[int, list[str]]:
+    from app.models.organization import Organization
+    from app.models.property_organization_link import PropertyOrganizationLink
+
+    out: dict[int, list[str]] = {lid: [] for lid in lead_ids}
+    if not lead_ids:
+        return out
+    rows = (
+        db.session.query(PropertyOrganizationLink.property_id, Organization.name)
+        .join(Organization, Organization.id == PropertyOrganizationLink.organization_id)
+        .filter(PropertyOrganizationLink.property_id.in_(lead_ids))
+        .order_by(PropertyOrganizationLink.id.asc())
+        .all()
+    )
+    seen: dict[int, set[str]] = {lid: set() for lid in lead_ids}
+    for property_id, name in rows:
+        label = (name or '').strip()
+        if not label or property_id not in out or label in seen[property_id]:
+            continue
+        if len(out[property_id]) >= 4:
+            continue
+        seen[property_id].add(label)
+        out[property_id].append(label)
+    return out
+
+
+def _confirmed_hubspot_ids_among(lead_ids: list[int]) -> set[int]:
+    if not lead_ids:
+        return set()
+    rows = HubSpotMatch.query.filter(
+        HubSpotMatch.internal_record_type == 'lead',
+        HubSpotMatch.status == 'confirmed',
+        HubSpotMatch.internal_record_id.in_(lead_ids),
+    ).all()
+    return {int(row.internal_record_id) for row in rows if row.internal_record_id is not None}
+
+
+def _related_properties_for_merge(leads: list[Lead]) -> dict[int, list[dict[str, Any]]]:
+    """Other buildings for the same person — capped, never blocks the dialog."""
+    from app.services.contact_service import ContactService
+
+    svc = ContactService()
+    out: dict[int, list[dict[str, Any]]] = {}
+    for lead in leads:
+        try:
+            rows = svc.get_related_properties(lead.id, limit=_MERGE_CONTEXT_RELATED_CAP)
+        except Exception:  # noqa: BLE001 — decision context is best-effort
+            logger.exception('related properties for merge context failed lead=%s', lead.id)
+            rows = []
+        skinny: list[dict[str, Any]] = []
+        for row in rows:
+            prop_id = row.get('id')
+            if not prop_id:
+                continue
+            skinny.append({
+                'id': prop_id,
+                'property_street': row.get('property_street'),
+                'property_city': row.get('property_city'),
+                'lead_status': row.get('lead_status'),
+                'lead_score': row.get('lead_score'),
+            })
+        out[lead.id] = skinny
+    return out
+
+
+def _contact_methods_for_merge(leads: list[Lead]) -> dict[int, dict[str, list[str]]]:
+    """Actual phone numbers and emails on each lead, not just yes/no flags."""
+    from app.services.outreach_method_service import _collect_emails_for_lead
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
+    out: dict[int, dict[str, list[str]]] = {}
+    for lead in leads:
+        phones: list[str] = []
+        try:
+            seen: set[str] = set()
+            for item in PhoneConfidenceService.build_phones_payload(lead.id, lead):
+                value = str(item.get('value') or '').strip()
+                if not value:
+                    continue
+                key = PhoneConfidenceService.normalize_phone(value) or value.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                phones.append(value)
+        except Exception:  # noqa: BLE001 — decision context is best-effort
+            logger.exception('phones for merge context failed lead=%s', lead.id)
+            phones = []
+        try:
+            emails = _collect_emails_for_lead(lead.id, lead)
+        except Exception:  # noqa: BLE001
+            logger.exception('emails for merge context failed lead=%s', lead.id)
+            emails = []
+        out[lead.id] = {'phones': phones, 'emails': emails}
+    return out
+
+
+def _merge_decision_row(
+    lead: Lead,
+    *,
+    people: list[str],
+    activity: dict[str, Any],
+    open_task_count: int,
+    organizations: list[str],
+    hubspot_confirmed: bool,
+    related_properties: list[dict[str, Any]],
+    phones: list[str],
+    emails: list[str],
+) -> dict[str, Any]:
+    score = getattr(lead, 'lead_score', None)
+    return {
+        'id': lead.id,
+        'property_street': lead.property_street,
+        'property_city': lead.property_city,
+        'property_state': lead.property_state,
+        'property_zip': lead.property_zip,
+        'owner_display_name': _lead_owner_display_name(lead),
+        'people_names': people,
+        'county_assessor_pin': getattr(lead, 'county_assessor_pin', None),
+        'property_type': lead.property_type,
+        'units': lead.units,
+        'lead_status': lead.lead_status,
+        'lead_score': float(score) if score is not None else None,
+        'source': (lead.source or '').strip() or None,
+        'deal_source': (lead.deal_source or '').strip() or None,
+        'data_source': (lead.data_source or '').strip() or None,
+        'source_type': (getattr(lead, 'source_type', None) or '').strip() or None,
+        'created_at': _iso_or_none(lead.created_at),
+        'last_contact_date': _iso_or_none(lead.last_contact_date),
+        'date_added_to_hubspot': _iso_or_none(lead.date_added_to_hubspot),
+        'hubspot_confirmed': hubspot_confirmed,
+        'has_phone': bool(phones) or bool(lead.has_phone),
+        'has_email': bool(emails) or bool(lead.has_email),
+        'phones': phones,
+        'emails': emails,
+        'open_task_count': int(open_task_count or 0),
+        'organizations': organizations,
+        'activity': activity,
+        'related_properties': related_properties,
+    }
+
+
+def merge_decision_summaries(leads: list[Lead]) -> list[dict[str, Any]]:
+    """Property, source, portfolio, and activity context for the merge dialog."""
+    if not leads:
+        return []
+    ids = [lead.id for lead in leads]
+    names = _people_names_for_lead_ids(ids)
+    activity = _activity_summaries_for_lead_ids(ids)
+    tasks = _open_task_counts_for_lead_ids(ids)
+    organizations = _organization_names_for_lead_ids(ids)
+    confirmed = _confirmed_hubspot_ids_among(ids)
+    related = _related_properties_for_merge(leads)
+    methods = _contact_methods_for_merge(leads)
+    return [
+        _merge_decision_row(
+            lead,
+            people=names.get(lead.id) or [],
+            activity=activity.get(lead.id) or _empty_activity_summary(),
+            open_task_count=tasks.get(lead.id, 0),
+            organizations=organizations.get(lead.id) or [],
+            hubspot_confirmed=lead.id in confirmed,
+            related_properties=related.get(lead.id) or [],
+            phones=(methods.get(lead.id) or {}).get('phones') or [],
+            emails=(methods.get(lead.id) or {}).get('emails') or [],
+        )
+        for lead in leads
+    ]
+
+
 def merge_preview_for_ids(lead_id: int, other_id: int) -> dict[str, Any]:
-    """Validate same-building merge and return people on both sides."""
+    """Validate same-building merge and return decision context for both sides."""
     if lead_id == other_id:
         raise ValueError('winner and loser must be different leads')
     lead = db.session.get(Lead, lead_id)
@@ -805,22 +1441,12 @@ def merge_preview_for_ids(lead_id: int, other_id: int) -> dict[str, Any]:
         raise ValueError('winner or loser lead not found')
     same_building = streets_match_same_situs(lead.property_street, other.property_street)
     mergeable = streets_match_duplicate_merge(lead.property_street, other.property_street)
-    names = _people_names_for_lead_ids([lead_id, other_id])
+    by_id = {row['id']: row for row in merge_decision_summaries([lead, other])}
     return {
         'same_building': bool(same_building),
         'mergeable': bool(mergeable),
-        'current': {
-            'id': lead.id,
-            'property_street': lead.property_street,
-            'owner_display_name': _lead_owner_display_name(lead),
-            'people_names': names.get(lead_id) or [],
-        },
-        'other': {
-            'id': other.id,
-            'property_street': other.property_street,
-            'owner_display_name': _lead_owner_display_name(other),
-            'people_names': names.get(other_id) or [],
-        },
+        'current': by_id[lead.id],
+        'other': by_id[other.id],
     }
 
 
@@ -872,6 +1498,7 @@ def merge_loser_into_winner(
     *,
     changed_by: str = 'manual_soft_merge',
     commit: bool = True,
+    choices: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Merge *loser_id* into *winner_id*; clear duplicate review flags on winner."""
     if winner_id == loser_id:
@@ -884,7 +1511,7 @@ def merge_loser_into_winner(
         raise ValueError('leads do not share the same address / unit')
 
     with db.session.begin_nested():
-        merge_lead_into_winner(winner, loser, changed_by=changed_by)
+        merge_lead_into_winner(winner, loser, changed_by=changed_by, choices=choices)
         winner.review_required = False
         if winner.review_reason == 'duplicate_lead_cluster':
             winner.review_reason = None
