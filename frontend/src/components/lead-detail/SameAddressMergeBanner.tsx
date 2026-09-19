@@ -140,24 +140,6 @@ function activityLine(row: SameAddressLeadSummary): string {
   return line
 }
 
-function relatedLine(row: SameAddressLeadSummary): string {
-  const related = row.related_properties
-  if (!related) return ''
-  if (!related.length) return 'Other properties: none'
-  const labels = related.map((prop) => {
-    const street = (prop.property_street || `Lead #${prop.id}`).trim()
-    const status = statusLabel(prop.lead_status)
-    return status ? `${street} (${status})` : street
-  })
-  return `Other properties (${related.length}): ${labels.join('; ')}`
-}
-
-function companiesLine(row: SameAddressLeadSummary): string {
-  const names = (row.organizations ?? []).map((name) => name.trim()).filter(Boolean)
-  if (!names.length) return ''
-  return `Companies: ${names.join(', ')}`
-}
-
 function datesLine(row: SameAddressLeadSummary): string {
   const bits: string[] = []
   if (row.created_at) bits.push(`Added ${formatDate(row.created_at)}`)
@@ -165,20 +147,54 @@ function datesLine(row: SameAddressLeadSummary): string {
   return bits.join(' · ')
 }
 
-function contactBits(row: SameAddressLeadSummary): string {
-  const bits: string[] = []
-  if (row.has_phone) bits.push('phone')
-  if (row.has_email) bits.push('email')
-  return bits.length ? `Contact on file: ${bits.join(' · ')}` : ''
+const COMPARE_FIELDS: Array<{ key: string; label: string }> = [
+  { key: 'people', label: 'People' },
+  { key: 'property', label: 'This property' },
+  { key: 'details', label: 'Property' },
+  { key: 'source', label: 'Source' },
+  { key: 'dates', label: 'Dates' },
+  { key: 'companies', label: 'Companies' },
+  { key: 'related', label: 'Other properties' },
+  { key: 'activities', label: 'Activities' },
+  { key: 'contact', label: 'Contact' },
+]
+
+function relatedValue(row: SameAddressLeadSummary): string {
+  const related = row.related_properties
+  if (!related?.length) return 'None'
+  return related.map((prop) => {
+    const street = (prop.property_street || `Lead #${prop.id}`).trim()
+    const status = statusLabel(prop.lead_status)
+    return status ? `${street} (${status})` : street
+  }).join('; ')
 }
 
-function FactLine({ children }: { children: string }) {
-  if (!children) return null
-  return (
-    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
-      {children}
-    </Typography>
-  )
+function activityValue(row: SameAddressLeadSummary): string {
+  const line = activityLine(row)
+  if (!line || line === 'Activities: none') return 'None'
+  return line.replace(/^Activities: /, '')
+}
+
+function compareValue(row: SameAddressLeadSummary, key: string, ready: boolean): string {
+  if (key === 'people') return peopleLine(row.people_names)
+  if (key === 'property') return addressLine(row)
+  if (!ready) return '…'
+  if (key === 'details') return propertyFactsLine(row) || '—'
+  if (key === 'source') return sourceLine(row)
+  if (key === 'dates') return datesLine(row) || '—'
+  if (key === 'companies') {
+    const names = (row.organizations ?? []).map((name) => name.trim()).filter(Boolean)
+    return names.length ? names.join(', ') : 'None'
+  }
+  if (key === 'related') return relatedValue(row)
+  if (key === 'activities') return activityValue(row)
+  if (key === 'contact') {
+    const bits: string[] = []
+    if (row.has_phone) bits.push('phone')
+    if (row.has_email) bits.push('email')
+    return bits.length ? bits.join(' · ') : 'None'
+  }
+  return '—'
 }
 
 function searchHitLabel(item: SearchResultItem): string {
@@ -607,7 +623,7 @@ export function SameAddressMergeBanner({
         onClose={closeDialog}
         aria-labelledby="same-address-merge-title"
         fullWidth
-        maxWidth="md"
+        maxWidth="lg"
         data-testid="same-address-merge-dialog"
         PaperProps={{ sx: { cursor: 'auto' } }}
       >
@@ -721,69 +737,164 @@ export function SameAddressMergeBanner({
             <FormLabel id="same-address-merge-stay-label" sx={{ mb: 0.5 }}>
               Choose primary
             </FormLabel>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+              Left merges into the primary on the right. Pick a column to change which record stays.
+            </Typography>
             <RadioGroup
               aria-labelledby="same-address-merge-stay-label"
               value={String(winnerId)}
               onChange={(event) => handleWinnerChange(Number(event.target.value))}
             >
-              {options.map((row) => {
-                const detail = decisionById[row.id]
-                const view: SameAddressLeadSummary = detail
-                  ? {
-                      ...row,
-                      ...detail,
-                      owner_display_name: detail.owner_display_name || row.owner_display_name,
-                      people_names: detail.people_names?.length
-                        ? detail.people_names
-                        : row.people_names,
-                      property_street: detail.property_street || row.property_street,
-                    }
-                  : row
-                const ready = view.activity != null
-                return (
-                  <FormControlLabel
-                    key={row.id}
-                    value={String(row.id)}
-                    sx={{ alignItems: 'flex-start', mr: 0, mb: 1 }}
-                    control={<Radio data-testid={`same-address-merge-stay-${row.id}`} sx={{ pt: 0.25 }} />}
-                    label={
-                      <Box data-testid={`same-address-merge-facts-${row.id}`} sx={{ py: 0.25 }}>
-                        <Typography variant="body2" fontWeight={600}>
-                          {view.owner_display_name} (#{view.id})
-                          {view.id === leadId ? ' · this lead' : ''}
+              {(() => {
+                const views = options.map((row) => {
+                  const detail = decisionById[row.id]
+                  const view: SameAddressLeadSummary = detail
+                    ? {
+                        ...row,
+                        ...detail,
+                        owner_display_name: detail.owner_display_name || row.owner_display_name,
+                        people_names: detail.people_names?.length
+                          ? detail.people_names
+                          : row.people_names,
+                        property_street: detail.property_street || row.property_street,
+                      }
+                    : row
+                  return view
+                })
+                const primary = views.find((row) => row.id === winnerId) ?? views[0]
+                const incoming = views.find((row) => row.id === removeId)
+                  ?? views.find((row) => row.id !== primary?.id)
+                  ?? null
+                const column = (view: SameAddressLeadSummary | null, role: 'in' | 'primary') => {
+                  if (!view) {
+                    return (
+                      <Box
+                        data-testid="same-address-merge-incoming-empty"
+                        sx={{
+                          flex: 1,
+                          minWidth: 0,
+                          p: 1.25,
+                          borderRadius: 1,
+                          border: '1px dashed',
+                          borderColor: 'divider',
+                          cursor: 'auto',
+                        }}
+                      >
+                        <Typography variant="overline" color="text.secondary">
+                          Merges in
                         </Typography>
-                        <FactLine>{`This property: ${addressLine(view)}`}</FactLine>
-                        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
-                          {peopleLine(view.people_names)}
+                        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                          Search for the other lead. Its property, source, and activities will show here.
                         </Typography>
-                        {ready ? (
-                          <>
-                            <FactLine>{propertyFactsLine(view)}</FactLine>
-                            <FactLine>{`Source: ${sourceLine(view)}`}</FactLine>
-                            <FactLine>{datesLine(view)}</FactLine>
-                            <FactLine>{companiesLine(view)}</FactLine>
-                            <FactLine>{relatedLine(view)}</FactLine>
-                            <FactLine>{activityLine(view)}</FactLine>
-                            <FactLine>{contactBits(view)}</FactLine>
-                          </>
-                        ) : (
-                          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
-                            {contextLoading
-                              ? 'Loading properties, source, and activities…'
-                              : (contextError || 'Details unavailable.')}
-                          </Typography>
-                        )}
                       </Box>
-                    }
-                  />
+                    )
+                  }
+                  const ready = view.activity != null
+                  const isPrimary = role === 'primary'
+                  const other = isPrimary ? incoming : primary
+                  return (
+                    <Box
+                      data-testid={`same-address-merge-facts-${view.id}`}
+                      sx={{
+                        flex: 1,
+                        minWidth: 0,
+                        p: 1.25,
+                        borderRadius: 1,
+                        border: '1px solid',
+                        borderColor: isPrimary ? 'primary.main' : 'divider',
+                        bgcolor: isPrimary ? 'action.hover' : 'background.paper',
+                        cursor: 'auto',
+                      }}
+                    >
+                      <Box
+                        component="label"
+                        sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, mb: 0.5, cursor: 'pointer' }}
+                      >
+                        <Radio
+                          value={String(view.id)}
+                          data-testid={`same-address-merge-stay-${view.id}`}
+                          inputProps={{ 'aria-label': `Choose #${view.id} as primary` }}
+                          sx={{ p: 0.25, mt: 0.25, cursor: 'pointer' }}
+                        />
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="overline" color={isPrimary ? 'primary.main' : 'text.secondary'} display="block">
+                            {isPrimary ? 'Primary' : 'Merges in'}
+                          </Typography>
+                          <Typography variant="body2" fontWeight={700}>
+                            {view.owner_display_name} (#{view.id})
+                            {view.id === leadId ? ' · this lead' : ''}
+                          </Typography>
+                        </Box>
+                      </Box>
+                      {COMPARE_FIELDS.map((field) => {
+                        const value = compareValue(view, field.key, ready)
+                        const otherValue = other ? compareValue(other, field.key, other.activity != null) : value
+                        const differ = Boolean(other) && value !== otherValue
+                        return (
+                          <Box
+                            key={field.key}
+                            sx={{
+                              py: 0.6,
+                              borderTop: '1px solid',
+                              borderColor: 'divider',
+                            }}
+                          >
+                            <Typography variant="caption" color="text.secondary" display="block">
+                              {field.label}
+                            </Typography>
+                            <Typography
+                              variant="body2"
+                              fontWeight={differ ? 700 : 400}
+                              sx={{ overflowWrap: 'anywhere' }}
+                            >
+                              {ready || field.key === 'people' || field.key === 'property'
+                                ? value
+                                : (contextLoading
+                                  ? 'Loading…'
+                                  : (contextError || 'Details unavailable.'))}
+                            </Typography>
+                          </Box>
+                        )
+                      })}
+                    </Box>
+                  )
+                }
+                return (
+                  <Box
+                    data-testid="same-address-merge-compare"
+                    sx={{
+                      display: 'flex',
+                      flexDirection: 'row',
+                      alignItems: 'stretch',
+                      gap: 1,
+                    }}
+                  >
+                    {column(incoming, 'in')}
+                    <Box
+                      aria-hidden
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        flexShrink: 0,
+                        px: 0.25,
+                        color: 'text.secondary',
+                        cursor: 'auto',
+                      }}
+                    >
+                      <Typography variant="body2" component="span">
+                        →
+                      </Typography>
+                    </Box>
+                    {primary ? column(primary, 'primary') : null}
+                  </Box>
                 )
-              })}
+              })()}
             </RadioGroup>
           </FormControl>
           {removable.length > 1 ? (
             <FormControl component="fieldset" sx={{ mt: 1.5, display: 'block' }}>
               <FormLabel id="same-address-merge-remove-label" sx={{ mb: 0.5 }}>
-                Remove
+                Which record merges in
               </FormLabel>
               <RadioGroup
                 aria-labelledby="same-address-merge-remove-label"
