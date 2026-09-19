@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import {
   Box,
   Button,
@@ -8,17 +8,21 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  IconButton,
   Link,
   Paper,
   Stack,
+  TextField,
   Typography,
 } from '@mui/material'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import EmailOutlinedIcon from '@mui/icons-material/EmailOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
+import CheckIcon from '@mui/icons-material/Check'
+import CloseIcon from '@mui/icons-material/Close'
 import LocalPostOfficeOutlinedIcon from '@mui/icons-material/LocalPostOfficeOutlined'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
-import type { CommandCenterPayload, Contact, LeadPhone, PropertyContactSummary } from '@/types'
+import type { CommandCenterPayload, LeadPhone, PropertyContactSummary } from '@/types'
 import {
   ccCardSx,
   ccMetaSx,
@@ -33,14 +37,10 @@ import {
   additionalPeopleForKeyContact,
   contactDisplayName,
   primaryEditablePersonContact,
-  splitDisplayName,
-  unlinkedPeopleFromLead,
-  type UnlinkedLeadPerson,
 } from '@/utils/propertyContacts'
 import { ContactNameInlineEdit } from '@/components/ContactNameInlineEdit'
 import {
   ContactFormModal,
-  type ContactFormInitialValues,
 } from '@/components/ContactFormModal'
 import { contactService } from '@/services/api'
 import { AppSnackbar } from '@/components/AppSnackbar'
@@ -167,27 +167,92 @@ function toFormEmailLabel(label: string | null | undefined): FormEmailLabel {
   return 'personal'
 }
 
-function channelsToInitialValues(
-  name: string,
-  channels: KeyContactChannel[],
-): ContactFormInitialValues {
-  const parts = splitDisplayName(name)
-  const phones = channels
-    .filter((c): c is Extract<KeyContactChannel, { kind: 'phone' }> => c.kind === 'phone')
-    .map((c) => ({
-      value: c.phone.value,
-      label: toFormPhoneLabel(c.phone.label),
-    }))
-  const emails = channels
-    .filter((c): c is Extract<KeyContactChannel, { kind: 'email' }> => c.kind === 'email')
-    .map((c) => ({ value: c.value, label: 'personal' as const }))
-  return {
-    firstName: parts.first_name ?? '',
-    lastName: parts.last_name ?? '',
-    role: 'owner',
-    phones,
-    emails,
+function FieldPencil({
+  value,
+  ariaLabel,
+  editTestId,
+  inputTestId,
+  onSave,
+  children,
+}: {
+  value: string
+  ariaLabel: string
+  editTestId: string
+  inputTestId: string
+  onSave: (next: string) => Promise<void>
+  children: ReactNode
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value)
+  const [saving, setSaving] = useState(false)
+
+  if (editing) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0, flex: 1 }}>
+        <TextField
+          size="small"
+          fullWidth
+          value={draft}
+          autoFocus
+          onChange={(e) => setDraft(e.target.value)}
+          inputProps={{
+            'data-testid': inputTestId,
+            style: { cursor: 'text' },
+          }}
+          sx={{ caretColor: 'text.primary' }}
+        />
+        <IconButton
+          size="small"
+          color="primary"
+          aria-label={`Save ${ariaLabel}`}
+          disabled={saving}
+          onClick={() => {
+            setSaving(true)
+            void onSave(draft).then(
+              () => {
+                setEditing(false)
+                setSaving(false)
+              },
+              () => setSaving(false),
+            )
+          }}
+          sx={{ cursor: 'pointer' }}
+        >
+          <CheckIcon fontSize="small" />
+        </IconButton>
+        <IconButton
+          size="small"
+          aria-label={`Cancel ${ariaLabel}`}
+          disabled={saving}
+          onClick={() => {
+            setDraft(value)
+            setEditing(false)
+          }}
+          sx={{ cursor: 'pointer' }}
+        >
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </Box>
+    )
   }
+
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+      <Box sx={{ flex: 1, minWidth: 0 }}>{children}</Box>
+      <IconButton
+        size="small"
+        aria-label={ariaLabel}
+        data-testid={editTestId}
+        onClick={() => {
+          setDraft(value)
+          setEditing(true)
+        }}
+        sx={{ cursor: 'pointer', p: 0.25, flexShrink: 0 }}
+      >
+        <EditOutlinedIcon sx={{ fontSize: 16 }} />
+      </IconButton>
+    </Box>
+  )
 }
 
 /**
@@ -197,9 +262,6 @@ function channelsToInitialValues(
 export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyContactCardProps) {
   const queryClient = useQueryClient()
   const [addOpen, setAddOpen] = useState(false)
-  const [editOpen, setEditOpen] = useState(false)
-  const [editDetailsLoading, setEditDetailsLoading] = useState(false)
-  const [prefetchedEditContact, setPrefetchedEditContact] = useState<Contact | null>(null)
   const [clearDialogOpen, setClearDialogOpen] = useState(false)
   const [snackbar, setSnackbar] = useState<{
     open: boolean
@@ -209,33 +271,19 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
     open: false,
     message: '',
   })
-  const channels = resolveKeyContactChannels(commandCenterData)
-  const mailing = formatKeyContactMailing(commandCenterData)
-  const displayName = name?.trim() || 'No contact on file'
   const editablePerson = primaryEditablePersonContact(commandCenterData.contacts)
   const extraPeople = additionalPeopleForKeyContact(commandCenterData.contacts)
-  const ghostPeople = useMemo(
-    () =>
-      unlinkedPeopleFromLead(commandCenterData.contacts, {
-        ownerFirst: commandCenterData.owner_first_name,
-        ownerLast: commandCenterData.owner_last_name,
-        owner2First: commandCenterData.owner_2_first_name,
-        owner2Last: commandCenterData.owner_2_last_name,
-        organizations: commandCenterData.organizations,
-        phones: commandCenterData.phones,
-        emails: commandCenterData.emails,
-      }),
-    [
-      commandCenterData.contacts,
-      commandCenterData.owner_first_name,
-      commandCenterData.owner_last_name,
-      commandCenterData.owner_2_first_name,
-      commandCenterData.owner_2_last_name,
-      commandCenterData.organizations,
-      commandCenterData.phones,
-      commandCenterData.emails,
-    ],
-  )
+  const personName = editablePerson ? contactDisplayName(editablePerson) : ''
+  const orgName = (commandCenterData.organizations ?? [])
+    .map((org) => org.name?.trim())
+    .find(Boolean) || ''
+  const passedName = name?.trim() || ''
+  const displayName = personName
+    || (passedName && passedName === orgName ? orgName : '')
+    || orgName
+    || 'No contact on file'
+  const channels = editablePerson ? resolveKeyContactChannels(commandCenterData) : []
+  const mailing = formatKeyContactMailing(commandCenterData)
   const phoneChannels = channels.filter(
     (c): c is Extract<KeyContactChannel, { kind: 'phone' }> => c.kind === 'phone',
   )
@@ -243,31 +291,83 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
     (c): c is Extract<KeyContactChannel, { kind: 'email' }> => c.kind === 'email',
   )
   const contactsUntrusted = Boolean(commandCenterData.contacts_likely_prior_owner)
-  const flatOwnerGhost: UnlinkedLeadPerson | null =
-    ghostPeople.find((p) => p.source === 'flat_owner') ?? null
-  const canEditDetails = !contactsUntrusted && (Boolean(editablePerson) || ghostPeople.length > 0)
-  const canClearOwner = (
-    !contactsUntrusted
-    && displayName !== 'No contact on file'
-    && (Boolean(editablePerson) || Boolean(flatOwnerGhost))
-  )
+  const canEditDetails = !contactsUntrusted && Boolean(editablePerson)
+  const canClearOwner = canEditDetails && displayName !== 'No contact on file'
+
+  const refreshContact = () => {
+    void queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
+    void queryClient.invalidateQueries({ queryKey: ['propertyContacts', commandCenterData.id] })
+  }
+
+  const savePerson = async (extra: {
+    first_name?: string | null
+    last_name?: string | null
+    phones?: Array<{ value: string; label: FormPhoneLabel }>
+    emails?: Array<{ value: string; label: FormEmailLabel }>
+  }) => {
+    if (!editablePerson) {
+      setSnackbar({ open: true, message: 'Add a person before editing.', severity: 'error' })
+      throw new Error('No person to edit')
+    }
+    try {
+      await contactService.updateContact(editablePerson.id, extra)
+      refreshContact()
+      setSnackbar({ open: true, message: 'Saved.', severity: 'success' })
+    } catch (err) {
+      setSnackbar({
+        open: true,
+        message: err instanceof Error ? err.message : 'Could not save.',
+        severity: 'error',
+      })
+      throw err
+    }
+  }
+
+  const savePhoneValue = (previous: string, next: string) => {
+    const trimmed = next.trim()
+    const current = (editablePerson?.phones || [])
+      .filter((p) => (p.value || '').trim())
+      .map((p) => ({ value: p.value, label: toFormPhoneLabel(p.label) }))
+    let phones = current
+    if (current.length === 0) {
+      phones = trimmed ? [{ value: trimmed, label: 'mobile' as const }] : []
+    } else {
+      const match = current.findIndex((p) => p.value === previous)
+      const target = match >= 0 ? match : 0
+      phones = current
+        .map((p, i) => (i === target ? { ...p, value: trimmed } : p))
+        .filter((p) => p.value.trim())
+    }
+    return savePerson({ phones })
+  }
+
+  const saveEmailValue = (previous: string, next: string) => {
+    const trimmed = next.trim()
+    const current = (editablePerson?.emails || [])
+      .filter((e) => (e.value || '').trim())
+      .map((e) => ({ value: e.value, label: toFormEmailLabel(e.label) }))
+    let emails = current
+    if (current.length === 0) {
+      emails = trimmed ? [{ value: trimmed, label: 'personal' as const }] : []
+    } else {
+      const match = current.findIndex((e) => e.value.toLowerCase() === previous.toLowerCase())
+      const target = match >= 0 ? match : 0
+      emails = current
+        .map((e, i) => (i === target ? { ...e, value: trimmed } : e))
+        .filter((e) => e.value.trim())
+    }
+    return savePerson({ emails })
+  }
 
   const clearOwnerMutation = useMutation({
     mutationFn: () => {
-      if (editablePerson) {
-        return contactService.clearOwnerPerson(commandCenterData.id, {
-          contact_id: editablePerson.id,
-          first_name: editablePerson.first_name,
-          last_name: editablePerson.last_name,
-          reason: 'cleared_from_key_contact',
-        })
-      }
-      if (!flatOwnerGhost) {
+      if (!editablePerson) {
         return Promise.reject(new Error('No owner to clear'))
       }
       return contactService.clearOwnerPerson(commandCenterData.id, {
-        first_name: flatOwnerGhost.first_name,
-        last_name: flatOwnerGhost.last_name,
+        contact_id: editablePerson.id,
+        first_name: editablePerson.first_name,
+        last_name: editablePerson.last_name,
         reason: 'cleared_from_key_contact',
       })
     },
@@ -290,107 +390,6 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
     },
   })
 
-  const {
-    data: editableContactDetail,
-    refetch: fetchEditableContactDetail,
-  } = useQuery({
-    queryKey: ['contact', editablePerson?.id],
-    queryFn: () => contactService.getContact(editablePerson!.id),
-    enabled: false,
-  })
-
-  useEffect(() => {
-    setPrefetchedEditContact(null)
-  }, [editablePerson?.id])
-
-  const editContact = useMemo(() => {
-    if (!editablePerson) return undefined
-    const fullContact = prefetchedEditContact ?? editableContactDetail
-    if (!fullContact) return editablePerson
-    return {
-      ...fullContact,
-      property_contact_role: editablePerson.role,
-      is_primary: editablePerson.is_primary,
-    }
-  }, [editableContactDetail, editablePerson, prefetchedEditContact])
-
-  const openEditDetails = async () => {
-    if (!editablePerson) {
-      setEditOpen(true)
-      return
-    }
-    setEditDetailsLoading(true)
-    try {
-      const result = await fetchEditableContactDetail()
-      if (!result.data) {
-        setSnackbar({
-          open: true,
-          message: 'Could not load contact details. Please try again.',
-        })
-        return
-      }
-      setPrefetchedEditContact(result.data)
-      setSnackbar((s) => ({ ...s, open: false }))
-      setEditOpen(true)
-    } catch {
-      setSnackbar({
-        open: true,
-        message: 'Could not load contact details. Please try again.',
-      })
-    } finally {
-      setEditDetailsLoading(false)
-    }
-  }
-
-  const editInitialValues = useMemo(() => {
-    if (editablePerson) {
-      // Seed flat lead channels too; the form dedupes them against contact rows.
-      return {
-        firstName: editablePerson.first_name ?? '',
-        lastName: editablePerson.last_name ?? '',
-        role: 'owner' as const,
-        phones: phoneChannels.map((ch) => ({
-          value: ch.phone.value,
-          label: toFormPhoneLabel(ch.phone.label),
-        })),
-        emails: emailChannels.map((ch) => ({ value: ch.value, label: 'personal' as const })),
-      }
-    }
-    const ghost = ghostPeople[0]
-    if (ghost) {
-      const ghostPhones = ghost.phones.length
-        ? ghost.phones.map((p) => ({ value: p.value, label: toFormPhoneLabel(p.label) }))
-        : phoneChannels.map((ch) => ({
-            value: ch.phone.value,
-            label: toFormPhoneLabel(ch.phone.label),
-          }))
-      const ghostEmails = ghost.emails.length
-        ? ghost.emails.map((e) => ({
-            value: e.value,
-            label: toFormEmailLabel(e.label),
-          }))
-        : emailChannels.map((ch) => ({ value: ch.value, label: 'personal' as const }))
-      return {
-        firstName: ghost.first_name ?? '',
-        lastName: ghost.last_name ?? '',
-        role: 'owner' as const,
-        phones: ghostPhones,
-        emails: ghostEmails,
-      }
-    }
-    if (displayName === 'No contact on file') {
-      return channelsToInitialValues('', channels)
-    }
-    return channelsToInitialValues(displayName, channels)
-  }, [
-    editablePerson,
-    ghostPeople,
-    displayName,
-    channels,
-    phoneChannels,
-    emailChannels,
-  ])
-
   const contactBody = (
     <>
       {editablePerson ? (
@@ -399,7 +398,6 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
             contactId={editablePerson.id}
             displayName={displayName}
             leadId={commandCenterData.id}
-            isPrimary
             inputTestId="key-contact-name-edit-input"
             editButtonTestId="edit-key-contact-name-btn"
             displayNameTestId="key-contact-name"
@@ -413,30 +411,73 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
       )}
       <Stack spacing={1}>
         {phoneChannels.length === 0 ? (
-          <Typography sx={ccMetaSx} data-testid="key-contact-phone-empty">
-            No phone on file
-          </Typography>
+          canEditDetails ? (
+            <FieldPencil
+              value=""
+              ariaLabel="Edit phone"
+              editTestId="key-contact-phone-edit"
+              inputTestId="key-contact-phone-edit-input"
+              onSave={(next) => savePhoneValue('', next)}
+            >
+              <Typography sx={ccMetaSx} data-testid="key-contact-phone-empty">
+                No phone on file
+              </Typography>
+            </FieldPencil>
+          ) : (
+            <Typography sx={ccMetaSx} data-testid="key-contact-phone-empty">
+              No phone on file
+            </Typography>
+          )
         ) : (
-          phoneChannels.map((ch, idx) => (
-            <PhoneRow
-              key={`phone-${phoneKey(ch.phone.value)}-${idx}`}
-              phone={ch.phone}
-              dense={false}
-              actionable={!contactsUntrusted}
-              valueTestId={idx === 0 ? 'key-contact-phone' : `key-contact-phone-${idx + 1}`}
-            />
-          ))
+          phoneChannels.map((ch, idx) => {
+            const row = (
+              <PhoneRow
+                phone={ch.phone}
+                dense={false}
+                actionable={!contactsUntrusted}
+                valueTestId={idx === 0 ? 'key-contact-phone' : `key-contact-phone-${idx + 1}`}
+              />
+            )
+            if (!canEditDetails) {
+              return <Box key={`phone-${phoneKey(ch.phone.value)}-${idx}`}>{row}</Box>
+            }
+            return (
+              <FieldPencil
+                key={`phone-${phoneKey(ch.phone.value)}-${idx}`}
+                value={ch.phone.value}
+                ariaLabel="Edit phone"
+                editTestId={idx === 0 ? 'key-contact-phone-edit' : `key-contact-phone-edit-${idx + 1}`}
+                inputTestId={idx === 0 ? 'key-contact-phone-edit-input' : `key-contact-phone-edit-input-${idx + 1}`}
+                onSave={(next) => savePhoneValue(ch.phone.value, next)}
+              >
+                {row}
+              </FieldPencil>
+            )
+          })
         )}
         {emailChannels.length === 0 ? (
-          <Typography sx={ccMetaSx} data-testid="key-contact-email-empty">
-            No email on file
-          </Typography>
+          canEditDetails ? (
+            <FieldPencil
+              value=""
+              ariaLabel="Edit email"
+              editTestId="key-contact-email-edit"
+              inputTestId="key-contact-email-edit-input"
+              onSave={(next) => saveEmailValue('', next)}
+            >
+              <Typography sx={ccMetaSx} data-testid="key-contact-email-empty">
+                No email on file
+              </Typography>
+            </FieldPencil>
+          ) : (
+            <Typography sx={ccMetaSx} data-testid="key-contact-email-empty">
+              No email on file
+            </Typography>
+          )
         ) : (
           emailChannels.map((ch, idx) => {
             const testId = idx === 0 ? 'key-contact-email' : `key-contact-email-${idx + 1}`
-            return (
+            const row = (
               <Box
-                key={`email-${ch.value.toLowerCase()}`}
                 sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}
               >
                 <EmailOutlinedIcon sx={{ fontSize: 18, color: 'text.secondary', flexShrink: 0 }} />
@@ -477,6 +518,21 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
                 )}
               </Box>
             )
+            if (!canEditDetails) {
+              return <Box key={`email-${ch.value.toLowerCase()}`}>{row}</Box>
+            }
+            return (
+              <FieldPencil
+                key={`email-${ch.value.toLowerCase()}`}
+                value={ch.value}
+                ariaLabel="Edit email"
+                editTestId={idx === 0 ? 'key-contact-email-edit' : `key-contact-email-edit-${idx + 1}`}
+                inputTestId={idx === 0 ? 'key-contact-email-edit-input' : `key-contact-email-edit-input-${idx + 1}`}
+                onSave={(next) => saveEmailValue(ch.value, next)}
+              >
+                {row}
+              </FieldPencil>
+            )
           })
         )}
         <Box
@@ -511,33 +567,19 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
             </Typography>
           )}
         </Box>
-        {canEditDetails && (
+        {canClearOwner && (
           <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
             <Button
               size="small"
               variant="text"
-              startIcon={<EditOutlinedIcon />}
-              onClick={() => { void openEditDetails() }}
-              aria-label="Edit contact details"
-              disabled={editDetailsLoading}
-              data-testid="key-contact-edit-details-btn"
+              color="error"
+              onClick={() => setClearDialogOpen(true)}
+              disabled={clearOwnerMutation.isPending}
+              data-testid="key-contact-clear-owner-btn"
               sx={{ cursor: 'pointer', px: 0.5, ml: -0.5 }}
             >
-              {editDetailsLoading ? 'Loading details…' : 'Edit phone & details'}
+              Clear from lead
             </Button>
-            {canClearOwner && (
-              <Button
-                size="small"
-                variant="text"
-                color="error"
-                onClick={() => setClearDialogOpen(true)}
-                disabled={clearOwnerMutation.isPending}
-                data-testid="key-contact-clear-owner-btn"
-                sx={{ cursor: 'pointer', px: 0.5 }}
-              >
-                Clear from lead
-              </Button>
-            )}
           </Box>
         )}
         {extraPeople.length > 0 && (
@@ -638,18 +680,6 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
           onClose={() => setAddOpen(false)}
           propertyId={commandCenterData.id}
           allowLinkExisting
-        />
-        <ContactFormModal
-          open={editOpen}
-          onClose={() => {
-            setEditOpen(false)
-            setPrefetchedEditContact(null)
-          }}
-          propertyId={commandCenterData.id}
-          contact={editContact}
-          initialValues={editInitialValues}
-          linkAsPrimary={!editablePerson}
-          allowLinkExisting={false}
         />
         <Dialog open={clearDialogOpen} onClose={() => setClearDialogOpen(false)}>
           <DialogTitle>Clear owner from lead?</DialogTitle>

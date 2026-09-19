@@ -13,6 +13,7 @@ from googleapiclient.discovery import build
 from app import db
 from app.models.lead import Lead, LeadAuditTrail
 from app.models.import_job import ImportJob, FieldMapping, OAuthToken
+from app.services.deduplication_engine import _INGEST_NEVER_WRITE
 from app.services.helpers.deal_source import (
     infer_deal_source_from_lead_fields,
 )
@@ -300,8 +301,27 @@ FLOAT_FIELDS = {"bathrooms", "tax_bill_2021"}
 # Fields expected to hold date values (YYYY-MM-DD or similar)
 DATE_FIELDS = {"acquisition_date", "date_identified", "date_skip_traced", "date_added_to_hubspot"}
 
-# Fields expected to hold boolean values
-BOOLEAN_FIELDS = {"needs_skip_trace", "up_next_to_mail"}
+# Fields expected to hold boolean values. Pipeline booleans (needs_skip_trace,
+# up_next_to_mail) are not importable — they live in _PROTECTED_IMPORT_FIELDS.
+BOOLEAN_FIELDS: set[str] = set()
+
+# Sheet mappings may not write identity, scoring, or pipeline columns.
+_PROTECTED_IMPORT_FIELDS = _INGEST_NEVER_WRITE | {
+    'owner_user_id',
+    'data_source',
+}
+
+IMPORTABLE_LEAD_FIELDS = (
+    set(FIELD_SYNONYMS)
+    | set(FIELD_MAX_LENGTHS)
+    | INTEGER_FIELDS
+    | FLOAT_FIELDS
+    | DATE_FIELDS
+    | BOOLEAN_FIELDS
+    | {
+        'notes', 'returned_addresses', 'socials',
+    }
+) - _PROTECTED_IMPORT_FIELDS
 
 # Google Sheets API scopes
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
@@ -575,6 +595,12 @@ class GoogleSheetsImporter:
             elif isinstance(raw_value, str):
                 raw_value = raw_value.strip()
             cleaned[db_field] = raw_value
+
+        cleaned = {
+            field_name: value
+            for field_name, value in cleaned.items()
+            if field_name in IMPORTABLE_LEAD_FIELDS
+        }
 
         # Check if the row has any data at all — skip completely empty rows
         has_any_data = any(v is not None for v in cleaned.values())
@@ -1032,8 +1058,6 @@ class GoogleSheetsImporter:
         "phone_1", "phone_2", "phone_3", "email_1", "email_2",
         "mailing_address", "mailing_city", "mailing_state", "mailing_zip",
         "source", "date_identified", "notes",
-        "needs_skip_trace", "skip_tracer", "date_skip_traced",
-        "date_added_to_hubspot",
         "units", "units_allowed", "zoning", "county_assessor_pin",
         "tax_bill_2021", "most_recent_sale",
         "owner_2_first_name", "owner_2_last_name",
@@ -1041,14 +1065,23 @@ class GoogleSheetsImporter:
         "phone_4", "phone_5", "phone_6", "phone_7",
         "email_3", "email_4", "email_5",
         "socials",
-        "up_next_to_mail", "mailer_history",
         "lead_category",
     }
 
     def _update_lead_fields(self, lead: Lead, data: dict, changed_by: str) -> None:
         """Update lead fields and create audit trail entries for changes."""
+        skip_owner_names = False
+        if any(name in data for name in ('owner_first_name', 'owner_last_name')):
+            from app.services.contact_service import ContactService
+            skip_owner_names = ContactService.primary_owner_name_locked(lead.id)
         for field_name in self.AUDITABLE_FIELDS:
-            if field_name not in data:
+            if field_name not in data or field_name in _PROTECTED_IMPORT_FIELDS:
+                continue
+            if field_name in ('lead_category', 'property_type') and getattr(
+                lead, 'lead_category_locked', False,
+            ):
+                continue
+            if skip_owner_names and field_name in ('owner_first_name', 'owner_last_name'):
                 continue
             new_value = data[field_name]
             old_value = getattr(lead, field_name, None)
@@ -1070,7 +1103,11 @@ class GoogleSheetsImporter:
 
         # Infer property_type from units when the sheet didn't supply it
         # and the lead still has no property_type after the update.
-        if not lead.property_type and lead.units:
+        if (
+            not lead.property_type
+            and lead.units
+            and not getattr(lead, 'lead_category_locked', False)
+        ):
             inferred = self._infer_property_type_from_units(lead.units)
             if inferred:
                 # Read the actual current value before overwriting it so the
@@ -1144,6 +1181,8 @@ class GoogleSheetsImporter:
     def _set_lead_fields(lead: Lead, data: dict) -> None:
         """Set fields on a brand-new Lead from validated data."""
         for key, value in data.items():
+            if key not in IMPORTABLE_LEAD_FIELDS:
+                continue
             if hasattr(lead, key):
                 setattr(lead, key, value)
         # Infer property_type from units when the sheet didn't supply it
@@ -1302,7 +1341,9 @@ class GoogleSheetsImporter:
                     if not connector:
                         gis_no_connector += 1
                         continue
-                    outcome = ingestion_svc._enrich_with_gis(lead, connector, job_id)
+                    outcome = ingestion_svc._enrich_with_gis(
+                        lead, connector, job_id, is_creation=False,
+                    )
                     if outcome.get('error'):
                         gis_errors += 1
                     elif outcome.get('match_found'):

@@ -8,8 +8,6 @@ Implements all operations required by Requirements 1.1–1.6:
   - list (paginated, filterable)
 """
 import logging
-import re
-import unicodedata
 from datetime import datetime
 from typing import Optional
 
@@ -19,31 +17,12 @@ from app.models.organization_audit_log import OrganizationAuditLog
 from app.models.property_organization_link import PropertyOrganizationLink
 from app.models.owner_organization_link import OwnerOrganizationLink
 from app.exceptions import OrganizationValidationError, ResourceNotFoundError
+from app.services.helpers.text import strip_invisible as _strip_invisible
 
 logger = logging.getLogger(__name__)
 
 # Fields that are tracked in the audit log when updated
 AUDITABLE_FIELDS = ('name', 'org_type', 'status', 'notes', 'source', 'hubspot_company_id')
-
-# Regex that matches any Unicode whitespace or control character (categories Zs and Cc).
-# Used to strip all non-printable / non-visible characters before empty-check validation.
-_WHITESPACE_AND_CONTROL_RE = re.compile(r'[\s\x00-\x1f\x7f-\x9f\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+')
-
-
-def _strip_invisible(value: str) -> str:
-    """Strip all Unicode whitespace and control characters from *value*.
-
-    This is stricter than ``str.strip()`` which only removes ASCII whitespace.
-    It handles the full Unicode Zs (space separators) and Cc (control characters)
-    categories so that inputs like '\\x7f' or '\\u205f' are treated as empty.
-    """
-    # Remove all characters whose Unicode category starts with 'C' (control/format/etc.)
-    # or is 'Zs' (space separator), then strip remaining ASCII whitespace.
-    cleaned = ''.join(
-        ch for ch in value
-        if not (unicodedata.category(ch).startswith('C') or unicodedata.category(ch) == 'Zs')
-    )
-    return cleaned.strip()
 
 
 class OrganizationService:
@@ -279,19 +258,24 @@ class OrganizationService:
 
         return link
 
-    def unlink_property(self, link_id: int) -> None:
-        """Delete a PropertyOrganizationLink by its primary key.
+    def unlink_property(self, link_id: int, *, organization_id: int) -> None:
+        """Delete a PropertyOrganizationLink that belongs to *organization_id*.
 
         Parameters
         ----------
         link_id : int
+        organization_id : int
+            Must match the link's organization. Wrong-org ids 404.
 
         Raises
         ------
         ResourceNotFoundError
-            If no link with *link_id* exists.
+            If no matching link exists.
         """
-        link = PropertyOrganizationLink.query.get(link_id)
+        link = PropertyOrganizationLink.query.filter_by(
+            id=link_id,
+            organization_id=organization_id,
+        ).first()
         if link is None:
             raise ResourceNotFoundError(
                 f"PropertyOrganizationLink id={link_id} not found.",
@@ -341,19 +325,24 @@ class OrganizationService:
         )
         return link
 
-    def unlink_owner(self, link_id: int) -> None:
-        """Delete an OwnerOrganizationLink by its primary key.
+    def unlink_owner(self, link_id: int, *, organization_id: int) -> None:
+        """Delete an OwnerOrganizationLink that belongs to *organization_id*.
 
         Parameters
         ----------
         link_id : int
+        organization_id : int
+            Must match the link's organization. Wrong-org ids 404.
 
         Raises
         ------
         ResourceNotFoundError
-            If no link with *link_id* exists.
+            If no matching link exists.
         """
-        link = OwnerOrganizationLink.query.get(link_id)
+        link = OwnerOrganizationLink.query.filter_by(
+            id=link_id,
+            organization_id=organization_id,
+        ).first()
         if link is None:
             raise ResourceNotFoundError(
                 f"OwnerOrganizationLink id={link_id} not found.",
@@ -433,6 +422,16 @@ class OrganizationService:
             query = query.filter(Organization.org_type == filters['org_type'])
         if filters.get('status'):
             query = query.filter(Organization.status == filters['status'])
+
+        linked_property_ids = filters.get('linked_property_ids')
+        if linked_property_ids is not None:
+            if not linked_property_ids:
+                return [], 0
+            query = (
+                query.join(PropertyOrganizationLink)
+                .filter(PropertyOrganizationLink.property_id.in_(linked_property_ids))
+                .distinct()
+            )
 
         query = query.order_by(Organization.created_at.desc())
 

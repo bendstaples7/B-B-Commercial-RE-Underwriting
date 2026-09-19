@@ -1914,9 +1914,10 @@ class TestDealAccessViaLead:
             deal_id = deal.id
 
             if link_exists:
-                # Create a Lead and link it to the Deal
+                # Create a Lead owned by the querying user and link it to the Deal
                 lead = Lead(
                     property_street="456 Lead Ave",
+                    owner_user_id=querying_user,
                 )
                 _db.session.add(lead)
                 _db.session.flush()
@@ -1935,7 +1936,7 @@ class TestDealAccessViaLead:
 
             # Truth table:
             # user_is_owner=True  → True (regardless of link)
-            # user_is_owner=False, link_exists=True  → True (Req 14.3)
+            # user_is_owner=False, link_exists=True  → True (own lead, Req 14.3)
             # user_is_owner=False, link_exists=False → False
             if user_is_owner:
                 assert result is True, (

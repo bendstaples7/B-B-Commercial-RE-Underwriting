@@ -38,7 +38,7 @@ COPYABLE_FIELDS = [
     'asking_price',
     'most_recent_sale', 'owner_2_first_name', 'owner_2_last_name',
     'address_2', 'returned_addresses', 'up_next_to_mail', 'mailer_history',
-    'lead_score', 'lead_category', 'property_type',
+    'lead_category', 'property_type',
 ]
 
 FK_REPOINTS = [
@@ -184,7 +184,14 @@ def find_lead_by_identity(
                 q = q.filter(Lead.owner_user_id == owner_user_id)
             hit = q.first()
             if hit:
-                return hit
+                if owner_user_id or not hit.owner_user_id:
+                    return hit
+                other = q.filter(
+                    Lead.owner_user_id.isnot(None),
+                    Lead.owner_user_id != hit.owner_user_id,
+                ).first()
+                if other is None:
+                    return hit
 
     street_key = dedup_street_key(property_street)
     first = (owner_first_name or '').strip()
@@ -198,7 +205,14 @@ def find_lead_by_identity(
         q = q.filter(Lead.owner_user_id == owner_user_id)
     hit = q.first()
     if hit:
-        return hit
+        if owner_user_id or not hit.owner_user_id:
+            return hit
+        other = q.filter(
+            Lead.owner_user_id.isnot(None),
+            Lead.owner_user_id != hit.owner_user_id,
+        ).first()
+        if other is None:
+            return hit
 
     # Fallback when normalized_street not yet backfilled on older rows.
     q = Lead.query.filter(Lead.property_street.isnot(None))
@@ -792,7 +806,27 @@ def merge_lead_into_winner(
                         table.update().where(table.c.id == row_id).values({col_name: winner_id})
                     )
             except IntegrityError:
-                db.session.execute(table.delete().where(table.c.id == row_id))
+                logger.warning(
+                    'merge skip unique-clash delete table=%s id=%s winner=%s loser=%s',
+                    table_name, row_id, winner_id, loser_id,
+                )
+                retry_values = {col_name: winner_id}
+                for uniq_col in ('hubspot_task_id', 'hubspot_activity_id'):
+                    if uniq_col in table.c:
+                        retry_values[uniq_col] = None
+                if len(retry_values) == 1:
+                    continue
+                try:
+                    with db.session.begin_nested():
+                        db.session.execute(
+                            table.update().where(table.c.id == row_id).values(retry_values)
+                        )
+                except IntegrityError:
+                    logger.warning(
+                        'merge could not reattach table=%s id=%s after clearing unique keys',
+                        table_name,
+                        row_id,
+                    )
 
     _repoint_hubspot_matches(winner_id, loser_id)
 
@@ -986,9 +1020,8 @@ def find_duplicate_clusters() -> list[list[Lead]]:
 def find_building_owner_siblings(lead: Lead, *, limit: int = 40) -> list[Lead]:
     """Same property-owner leads whose street matches *lead* at building level.
 
-    Matches on owner first/last name — not ``owner_user_id`` (CRM assignee).
-    Assignees commonly own thousands of leads; filtering by assignee + a small
-    id-ordered window misses same-building twins (e.g. street-only husk vs unit).
+    Matches on owner first/last name plus the same CRM assignee
+    (``owner_user_id``). Auto-merge must never absorb another user's lead.
     """
     street = (lead.property_street or '').strip()
     lead_id = getattr(lead, 'id', None)
@@ -1006,6 +1039,11 @@ def find_building_owner_siblings(lead: Lead, *, limit: int = 40) -> list[Lead]:
         Lead.property_street != '',
     )
     q = _owner_name_filters(q, first, last)
+    assignee = getattr(lead, 'owner_user_id', None)
+    if assignee:
+        q = q.filter(Lead.owner_user_id == assignee)
+    else:
+        q = q.filter(Lead.owner_user_id.is_(None))
 
     siblings: list[Lead] = []
     q = _street_prefilter(q, street)
@@ -1585,6 +1623,8 @@ def merge_loser_into_winner(
     loser = db.session.get(Lead, loser_id)
     if winner is None or loser is None:
         raise ValueError('winner or loser lead not found')
+    if (winner.owner_user_id or None) != (loser.owner_user_id or None):
+        raise ValueError('cannot merge leads owned by different users')
     if not streets_match_duplicate_merge(winner.property_street, loser.property_street):
         raise ValueError('leads do not share the same address / unit')
 
@@ -1665,6 +1705,12 @@ def try_absorb_duplicate_for_lead(
                 loser = db.session.get(Lead, loser.id)
                 if winner is None or loser is None:
                     break
+                if (winner.owner_user_id or None) != (loser.owner_user_id or None):
+                    logger.warning(
+                        'skip absorb across assignees winner=%s loser=%s',
+                        winner.id, loser.id,
+                    )
+                    continue
                 pair = {
                     'winner_id': winner.id,
                     'loser_id': loser.id,

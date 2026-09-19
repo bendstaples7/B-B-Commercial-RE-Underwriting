@@ -199,6 +199,7 @@ class LenderService:
         scenario: str,
         profile_id: int,
         is_primary: bool = False,
+        user_id: str | None = None,
     ) -> DealLenderSelection:
         """Attach a LenderProfile to a Deal's scenario.
 
@@ -210,15 +211,28 @@ class LenderService:
             scenario: 'A' or 'B'.
             profile_id: The LenderProfile to attach.
             is_primary: Whether this selection is the primary lender.
+            user_id: Profile owner; required so another user's rates cannot
+                be attached by id.
 
         Returns:
             The created DealLenderSelection model instance.
 
         Raises:
             LenderAttachmentLimitError: When > 3 profiles per scenario.
+            ValueError: If the profile is missing or not owned by user_id.
 
         Requirements: 6.5, 6.6, 6.7
         """
+        if not user_id or user_id == 'anonymous':
+            raise ValueError(f"Lender profile {profile_id} not found")
+        profile = LenderProfile.query.filter_by(
+            id=profile_id, created_by_user_id=user_id,
+        ).first()
+        if profile is None:
+            raise ValueError(
+                f"Lender profile {profile_id} not found for user {user_id}"
+            )
+
         # Enforce limit of 3 per (deal_id, scenario)
         current_count = DealLenderSelection.query.filter_by(
             deal_id=deal_id, scenario=scenario

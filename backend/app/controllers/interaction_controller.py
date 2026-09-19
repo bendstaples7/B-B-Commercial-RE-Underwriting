@@ -20,6 +20,12 @@ from functools import wraps
 from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
+from app.api_utils import (
+    load_authorized_lead,
+    owned_lead_ids_for_current_user,
+    user_can_access_association_target,
+    user_can_access_association_targets,
+)
 from app.exceptions import RealEstateAnalysisException
 from app.services.interaction_service import InteractionService
 
@@ -145,6 +151,29 @@ def _parse_pagination(args):
     return page, per_page
 
 
+def _interaction_not_found(interaction_id: int):
+    return jsonify({
+        'success': False,
+        'error': {
+            'message': f'Interaction {interaction_id} not found',
+            'status_code': 404,
+        },
+    }), 404
+
+
+def _associations_from_interaction(interaction):
+    try:
+        return list(interaction.associations.all())
+    except Exception:
+        return []
+
+
+def _deny_if_cannot_access_interaction(interaction):
+    if not user_can_access_association_targets(_associations_from_interaction(interaction)):
+        return _interaction_not_found(interaction.id)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Interaction CRUD routes  (prefix: /api/interactions)
 # ---------------------------------------------------------------------------
@@ -180,8 +209,22 @@ def list_interactions():
     if args.get('source'):
         filters['source'] = args['source']
 
+    if filters.get('target_type') and filters.get('target_id') is not None:
+        if not user_can_access_association_target(
+            filters['target_type'], filters['target_id'],
+        ):
+            return jsonify({
+                'interactions': [],
+                'total': 0,
+                'page': page,
+                'per_page': per_page,
+            }), 200
+
     interactions, total = _interaction_service.list(
-        filters=filters, page=page, per_page=per_page
+        filters=filters,
+        page=page,
+        per_page=per_page,
+        lead_id_scope=owned_lead_ids_for_current_user(),
     )
 
     return jsonify({
@@ -209,6 +252,14 @@ def create_interaction():
     is_orphaned      : bool (optional, default False)
     """
     data = request.get_json(silent=True) or {}
+    if not user_can_access_association_targets(data.get('associations')):
+        return jsonify({
+            'success': False,
+            'error': {
+                'message': 'Not found',
+                'status_code': 404,
+            },
+        }), 404
     interaction = _interaction_service.create(data)
     return jsonify(_serialize_interaction(interaction)), 201
 
@@ -218,6 +269,9 @@ def create_interaction():
 def get_interaction(interaction_id):
     """Get a single Interaction by ID, including its associations."""
     interaction = _interaction_service.get(interaction_id)
+    denied = _deny_if_cannot_access_interaction(interaction)
+    if denied is not None:
+        return denied
     return jsonify(_serialize_interaction(interaction)), 200
 
 
@@ -233,6 +287,10 @@ def update_interaction(interaction_id):
     interaction_type : str
     """
     data = request.get_json(silent=True) or {}
+    existing = _interaction_service.get(interaction_id)
+    denied = _deny_if_cannot_access_interaction(existing)
+    if denied is not None:
+        return denied
     interaction = _interaction_service.update(interaction_id, data)
     return jsonify(_serialize_interaction(interaction)), 200
 
@@ -241,6 +299,10 @@ def update_interaction(interaction_id):
 @handle_errors
 def delete_interaction(interaction_id):
     """Delete an Interaction and its associations."""
+    existing = _interaction_service.get(interaction_id)
+    denied = _deny_if_cannot_access_interaction(existing)
+    if denied is not None:
+        return denied
     _interaction_service.delete(interaction_id)
     return jsonify({'success': True, 'message': f'Interaction {interaction_id} deleted'}), 200
 
@@ -270,6 +332,10 @@ def get_lead_interaction_timeline(lead_id):
     date_from  : ISO datetime — earliest date (inclusive)
     date_to    : ISO datetime — latest date (inclusive)
     """
+    _lead, denied = load_authorized_lead(lead_id)
+    if denied is not None:
+        return denied
+
     args = request.args
     filters = {}
     if args.get('entry_type'):
@@ -316,6 +382,9 @@ def get_organization_timeline(org_id):
         filters['date_from'] = args['date_from']
     if args.get('date_to'):
         filters['date_to'] = args['date_to']
+
+    from app.controllers.organization_controller import _load_authorized_org
+    _load_authorized_org(org_id)
 
     entries = _interaction_service.get_timeline(
         target_type='organization',

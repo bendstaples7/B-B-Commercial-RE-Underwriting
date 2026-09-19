@@ -108,10 +108,69 @@ def app():
     if 'FLASK_ENV' in os.environ:
         del os.environ['FLASK_ENV']
 
+# Pass this on a request (or use ``anon_client``) when the test must stay anonymous.
+ANON_HEADERS = {'X-User-Id': ''}
+
+
+def seed_user(user_id: str = 'test-user', *, is_admin: bool = False, email: str | None = None):
+    """Insert or update a ``User`` row so ``X-User-Id`` admin checks resolve."""
+    from app.models.user import User
+
+    email = email or f'{user_id}@example.com'
+    existing = User.query.filter_by(user_id=user_id).first()
+    if existing is not None:
+        existing.is_admin = is_admin
+        existing.is_active = True
+        db.session.commit()
+        return existing
+    user = User(
+        user_id=user_id,
+        email=email,
+        email_lower=email.lower(),
+        password_hash='x',
+        display_name=user_id,
+        is_active=True,
+        is_admin=is_admin,
+    )
+    db.session.add(user)
+    db.session.commit()
+    return user
+
+
 @pytest.fixture
 def client(app):
-    """Create test client."""
+    """Create test client with a default test-user identity.
+
+    Product /api routes are fail-closed without a user. Tests that prove the
+    401 gate should use ``anon_client`` or ``ANON_HEADERS``.
+    """
+    return wrap_test_client_with_user(app.test_client())
+
+
+@pytest.fixture
+def anon_client(app):
+    """Unwrapped test client — no injected identity."""
     return app.test_client()
+
+
+def wrap_test_client_with_user(client, user_id: str = 'test-user'):
+    """Attach a default X-User-Id unless the caller already set identity headers.
+
+    Tests that need an anonymous request should pass ``ANON_HEADERS``
+    (``X-User-Id: ''``) or an Authorization header so this wrapper does not
+    inject a user.
+    """
+    original_open = client.open
+
+    def open_with_identity(*args, **kwargs):
+        headers = dict(kwargs.get('headers') or {})
+        if 'Authorization' not in headers and 'X-User-Id' not in headers:
+            headers['X-User-Id'] = user_id
+            kwargs['headers'] = headers
+        return original_open(*args, **kwargs)
+
+    client.open = open_with_identity
+    return client
 
 @pytest.fixture
 def seeded_app(app):

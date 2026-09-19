@@ -11,6 +11,11 @@ from functools import wraps
 from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
+from app.api_utils import (
+    owned_lead_ids_for_current_user,
+    user_can_access_association_target,
+    user_can_access_association_targets,
+)
 from app.exceptions import RealEstateAnalysisException
 from app.schemas import TaskSchema, TaskAssociationSchema
 from app.services.task_service import TaskService
@@ -96,6 +101,33 @@ def _collect_task_lead_ids(task):
     return lead_ids
 
 
+def _task_not_found(task_id: int):
+    return jsonify({
+        'error': 'Not found',
+        'message': f'Task {task_id} not found',
+    }), 404
+
+
+def _associations_for_task_access(task):
+    """Lead FK plus every association row this task touches."""
+    assocs = []
+    try:
+        assocs = list(task.associations.all())
+    except Exception:  # pragma: no cover — association load is best-effort
+        logger.debug("Could not enumerate task associations for access check", exc_info=True)
+    direct = getattr(task, 'lead_id', None)
+    if direct is not None:
+        assocs = list(assocs) + [{'target_type': 'lead', 'target_id': direct}]
+    return assocs
+
+
+def _deny_if_cannot_access_task(task):
+    """Opaque 404 when the caller cannot access every target this task touches."""
+    if not user_can_access_association_targets(_associations_for_task_access(task)):
+        return _task_not_found(task.id)
+    return None
+
+
 def _refresh_associated_leads(task):
     """Refresh lead_score + recommended_action for every lead this task touches.
 
@@ -170,7 +202,23 @@ def list_tasks():
     page = max(1, page)
     per_page = max(1, min(per_page, 100))
 
-    tasks, total = _service.list(filters=filters, page=page, per_page=per_page)
+    if filters.get('target_type') and filters.get('target_id') is not None:
+        if not user_can_access_association_target(
+            filters['target_type'], filters['target_id'],
+        ):
+            return jsonify({
+                'tasks': [],
+                'total': 0,
+                'page': page,
+                'per_page': per_page,
+            }), 200
+
+    tasks, total = _service.list(
+        filters=filters,
+        page=page,
+        per_page=per_page,
+        lead_id_scope=owned_lead_ids_for_current_user(),
+    )
 
     return jsonify({
         'tasks': [_serialize_task(t) for t in tasks],
@@ -195,15 +243,17 @@ def create_task():
     source       : str  manual/hubspot_import (default: manual)
     associations : list of {target_type, target_id} (optional)
     """
-    body = request.json or {}
+    body = dict(request.json or {})
+    raw_associations = body.pop('associations', [])
     data = _task_schema.load(body)
-
-    # Parse associations from raw request body (task_id is not known yet,
-    # so load with partial=True to skip the required task_id check).
-    raw_associations = body.get('associations', [])
     assoc_schema = TaskAssociationSchema(many=True, partial=('task_id',))
     associations = assoc_schema.load(raw_associations) if raw_associations else []
     data['associations'] = associations
+    if associations and not user_can_access_association_targets(associations):
+        return jsonify({
+            'error': 'Not found',
+            'message': 'Not found',
+        }), 404
 
     task = _service.create(data)
     _refresh_associated_leads(task)
@@ -218,6 +268,9 @@ def get_task(task_id):
     Applies overdue check on read (Requirement 3.6).
     """
     task = _service.get(task_id)
+    denied = _deny_if_cannot_access_task(task)
+    if denied is not None:
+        return denied
     return jsonify(_serialize_task(task)), 200
 
 
@@ -237,6 +290,10 @@ def update_task(task_id):
     body = request.json or {}
     # Use partial=True so only provided fields are validated/updated
     data = _task_schema.load(body, partial=True)
+    task = _service.get(task_id)
+    denied = _deny_if_cannot_access_task(task)
+    if denied is not None:
+        return denied
     task = _service.update(task_id, data)
     _refresh_associated_leads(task)
     return jsonify(_serialize_task(task)), 200
@@ -253,6 +310,9 @@ def delete_task(task_id):
     action engine, so removing a task can change the recommended action.
     """
     task = _service.get(task_id)
+    denied = _deny_if_cannot_access_task(task)
+    if denied is not None:
+        return denied
 
     affected_lead_ids = _collect_task_lead_ids(task)
 
@@ -273,6 +333,10 @@ def complete_task(task_id):
     Requirement 3.2: WHEN a user marks a Task as completed, THE Platform
     SHALL record the completion timestamp.
     """
+    task = _service.get(task_id)
+    denied = _deny_if_cannot_access_task(task)
+    if denied is not None:
+        return denied
     task = _service.complete(task_id)
     _refresh_associated_leads(task)
     return jsonify(_serialize_task(task)), 200

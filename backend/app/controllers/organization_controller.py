@@ -12,7 +12,15 @@ from functools import wraps
 from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
-from app.api_utils import get_current_user_id
+from app.api_utils import (
+    current_user_is_admin,
+    get_current_user_id,
+    load_authorized_lead,
+    owned_lead_ids_for_current_user,
+    require_auth,
+    user_can_access_association_target,
+    user_can_access_lead,
+)
 from app.exceptions import (
     OrganizationValidationError,
     ResourceNotFoundError,
@@ -124,6 +132,64 @@ def _serialize_org(org):
     return _org_schema.dump(org)
 
 
+def _org_not_found(org_id: int):
+    raise ResourceNotFoundError(
+        f"Organization id={org_id} not found.",
+        payload={'org_id': org_id},
+    )
+
+
+def _require_org_access(org) -> None:
+    """404 when the org is not linked to a lead the caller can see."""
+    if not user_can_access_association_target('organization', org.id):
+        _org_not_found(org.id)
+
+
+def _require_exclusive_org_access(org) -> None:
+    """404 when any linked lead is outside the caller's scope.
+
+    A company tied to someone else's property must not be renamed or
+    deactivated from a property you also share.
+    """
+    if current_user_is_admin():
+        return
+    from app import db
+    from app.models.lead import Lead
+    from app.models.property_organization_link import PropertyOrganizationLink
+
+    links = PropertyOrganizationLink.query.filter_by(organization_id=org.id).all()
+    if not links:
+        _org_not_found(org.id)
+    saw_owned = False
+    for link in links:
+        lead = db.session.get(Lead, link.property_id)
+        if user_can_access_lead(lead):
+            saw_owned = True
+        elif lead is not None:
+            _org_not_found(org.id)
+    if not saw_owned:
+        _org_not_found(org.id)
+
+
+def _load_authorized_org(org_id: int, *, allow_unlinked: bool = False):
+    from app.models.organization import Organization
+    from app import db
+
+    org = db.session.get(Organization, org_id)
+    if org is None:
+        _org_not_found(org_id)
+    if allow_unlinked:
+        from app.api_utils import current_user_is_admin
+        from app.models.property_organization_link import PropertyOrganizationLink
+        if current_user_is_admin():
+            return org
+        links = PropertyOrganizationLink.query.filter_by(organization_id=org.id).all()
+        if not links:
+            return org
+    _require_org_access(org)
+    return org
+
+
 def _serialize_audit_entry(entry):
     """Serialize an OrganizationAuditLog entry."""
     return _audit_schema.dump(entry)
@@ -145,6 +211,7 @@ def _serialize_owner_link(link):
 
 @organization_bp.route('/', methods=['GET'])
 @handle_errors
+@require_auth
 def list_organizations():
     """List organizations with pagination and optional filters.
 
@@ -167,6 +234,10 @@ def list_organizations():
     if args.get('status'):
         filters['status'] = args['status']
 
+    scope = owned_lead_ids_for_current_user()
+    if scope is not None:
+        filters['linked_property_ids'] = scope
+
     records, total = _org_service.list(page=page, per_page=per_page, filters=filters)
 
     return jsonify({
@@ -180,6 +251,7 @@ def list_organizations():
 
 @organization_bp.route('/', methods=['POST'])
 @handle_errors
+@require_auth
 def create_organization():
     """Create a new organization.
 
@@ -190,7 +262,6 @@ def create_organization():
     status : str (optional, default 'unknown')
     notes : str (optional)
     source : str (optional)
-    hubspot_company_id : str (optional)
     """
     data = request.json or {}
     changed_by = get_current_user_id()
@@ -205,6 +276,7 @@ def create_organization():
 
 @organization_bp.route('/<int:org_id>', methods=['GET'])
 @handle_errors
+@require_auth
 def get_organization(org_id):
     """Get a single organization by ID.
 
@@ -221,25 +293,26 @@ def get_organization(org_id):
 
     org = db.session.get(Organization, org_id)
     if org is None:
-        raise ResourceNotFoundError(
-            f"Organization id={org_id} not found.",
-            payload={'org_id': org_id},
-        )
+        _org_not_found(org_id)
+    _require_org_access(org)
 
     return jsonify(_serialize_org(org)), 200
 
 
 @organization_bp.route('/<int:org_id>', methods=['PUT'])
 @handle_errors
+@require_auth
 def update_organization(org_id):
     """Update an existing organization.
 
     Request body
     ------------
-    Any subset of: name, org_type, status, notes, source, hubspot_company_id
+    Any subset of: name, org_type, status, notes, source
     """
     data = request.json or {}
     changed_by = get_current_user_id()
+    org = _load_authorized_org(org_id)
+    _require_exclusive_org_access(org)
 
     # Partial load — only validate fields that are present
     validated = _org_schema.load(data, partial=True)
@@ -251,6 +324,7 @@ def update_organization(org_id):
 
 @organization_bp.route('/<int:org_id>', methods=['DELETE'])
 @handle_errors
+@require_auth
 def delete_organization(org_id):
     """Soft-delete an organization by setting its status to 'inactive'.
 
@@ -259,6 +333,8 @@ def delete_organization(org_id):
     org_id : int
     """
     changed_by = get_current_user_id()
+    org = _load_authorized_org(org_id)
+    _require_exclusive_org_access(org)
     org = _org_service.soft_delete(org_id, changed_by=changed_by)
 
     return jsonify({
@@ -269,6 +345,7 @@ def delete_organization(org_id):
 
 @organization_bp.route('/<int:org_id>/audit-log', methods=['GET'])
 @handle_errors
+@require_auth
 def get_organization_audit_log(org_id):
     """Get all audit log entries for an organization, oldest first.
 
@@ -276,6 +353,7 @@ def get_organization_audit_log(org_id):
     ----------
     org_id : int
     """
+    _load_authorized_org(org_id)
     entries = _org_service.get_audit_log(org_id)
 
     return jsonify({
@@ -286,6 +364,7 @@ def get_organization_audit_log(org_id):
 
 @organization_bp.route('/<int:org_id>/links/properties', methods=['POST'])
 @handle_errors
+@require_auth
 def link_property(org_id):
     """Link a property (Lead) to an organization.
 
@@ -303,6 +382,11 @@ def link_property(org_id):
         'role': data.get('role'),
     })
 
+    _lead, err = load_authorized_lead(link_data['property_id'])
+    if err is not None:
+        return err
+    _load_authorized_org(org_id, allow_unlinked=True)
+
     link = _org_service.link_property(
         org_id=org_id,
         property_id=link_data['property_id'],
@@ -314,6 +398,7 @@ def link_property(org_id):
 
 @organization_bp.route('/<int:org_id>/links/properties/<int:link_id>', methods=['DELETE'])
 @handle_errors
+@require_auth
 def unlink_property(org_id, link_id):
     """Remove a property link from an organization.
 
@@ -322,7 +407,19 @@ def unlink_property(org_id, link_id):
     org_id : int
     link_id : int
     """
-    _org_service.unlink_property(link_id)
+    _load_authorized_org(org_id)
+    from app.models.property_organization_link import PropertyOrganizationLink
+    from app.models.lead import Lead
+    from app import db
+    link = PropertyOrganizationLink.query.filter_by(
+        id=link_id, organization_id=org_id,
+    ).first()
+    if link is None:
+        _org_not_found(org_id)
+    lead = db.session.get(Lead, link.property_id)
+    if not user_can_access_lead(lead):
+        _org_not_found(org_id)
+    _org_service.unlink_property(link_id, organization_id=org_id)
 
     return jsonify({
         'message': f'Property link {link_id} removed from organization {org_id}.',
@@ -331,6 +428,7 @@ def unlink_property(org_id, link_id):
 
 @organization_bp.route('/<int:org_id>/links/owners', methods=['POST'])
 @handle_errors
+@require_auth
 def link_owner(org_id):
     """Link an owner (Lead) to an organization.
 
@@ -348,6 +446,11 @@ def link_owner(org_id):
         'role': data.get('role'),
     })
 
+    _load_authorized_org(org_id)
+    _lead, err = load_authorized_lead(link_data['owner_id'])
+    if err is not None:
+        return err
+
     link = _org_service.link_owner(
         org_id=org_id,
         owner_id=link_data['owner_id'],
@@ -359,6 +462,7 @@ def link_owner(org_id):
 
 @organization_bp.route('/<int:org_id>/links/owners/<int:link_id>', methods=['DELETE'])
 @handle_errors
+@require_auth
 def unlink_owner(org_id, link_id):
     """Remove an owner link from an organization.
 
@@ -367,7 +471,19 @@ def unlink_owner(org_id, link_id):
     org_id : int
     link_id : int
     """
-    _org_service.unlink_owner(link_id)
+    _load_authorized_org(org_id)
+    from app.models.owner_organization_link import OwnerOrganizationLink
+    from app.models.lead import Lead
+    from app import db
+    link = OwnerOrganizationLink.query.filter_by(
+        id=link_id, organization_id=org_id,
+    ).first()
+    if link is None:
+        _org_not_found(org_id)
+    lead = db.session.get(Lead, link.owner_id)
+    if not user_can_access_lead(lead):
+        _org_not_found(org_id)
+    _org_service.unlink_owner(link_id, organization_id=org_id)
 
     return jsonify({
         'message': f'Owner link {link_id} removed from organization {org_id}.',

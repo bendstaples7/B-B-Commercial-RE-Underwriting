@@ -526,6 +526,11 @@ class DataSourceConnector:
                 continue
             if skip_owner_names and field_name in ('owner_first_name', 'owner_last_name'):
                 continue
+            if (
+                field_name == 'property_type'
+                and getattr(lead, 'lead_category_locked', False)
+            ):
+                continue
 
             old_value = getattr(lead, field_name, None)
             if field_name in JSON_MERGE_FIELDS:

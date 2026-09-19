@@ -213,7 +213,7 @@ export function splitDisplayName(full: string): { first_name: string | null; las
   return { first_name: parts.slice(0, -1).join(' '), last_name: parts[parts.length - 1] }
 }
 
-/** First linked person we can rename (not company / address-like). */
+/** First person in the list we can rename (not company / address-like). */
 export function primaryEditablePersonContact(
   contacts: PropertyContactSummary[] | undefined | null,
 ): PropertyContactSummary | null {
@@ -223,12 +223,10 @@ export function primaryEditablePersonContact(
     && !isAddressLikeContactName(contact)
     && !isEntityContactName(contact)
     && Boolean(contactDisplayName(contact))
-  const primary = ranked.find((contact) => contact.is_primary && personOk(contact))
-  if (primary) return primary
   return ranked.find(personOk) ?? null
 }
 
-/** Extra people on Key Contact (not the primary, not companies / address-like). */
+/** Other people on Key Contact (not the top person, not companies / address-like). */
 export function additionalPeopleForKeyContact(
   contacts: PropertyContactSummary[] | undefined | null,
 ): PropertyContactSummary[] {
@@ -350,6 +348,9 @@ export function ownerDisplayEntries(
     considerPair(contact, contact)
   }
   for (const pair of flatPairs) {
+    // A person name only counts once it is a saved contact. Company and
+    // address leftovers can still show from the lead until they are linked.
+    if (ownerRankTier(pair) === 0) continue
     considerPair(pair)
   }
 
@@ -454,13 +455,13 @@ export function unlinkedPeopleFromLead(
 }
 
 /**
- * Prefer a real person from contacts; then linked company name; then any named contact.
- * Falls back to flat owner first/last when owner contacts are absent or unnamed.
+ * Prefer a real person from contacts, then a linked company, then any named contact.
+ * A name stored only on the lead is not shown — it has to be a saved person first.
  */
 export function primaryOwnerDisplayName(
   contacts: PropertyContactSummary[] | undefined | null,
-  fallbackFirst?: string | null,
-  fallbackLast?: string | null,
+  _fallbackFirst?: string | null,
+  _fallbackLast?: string | null,
   organizations?: PropertyOrganizationSummary[] | null,
 ): string {
   const ranked = rankOwnersForDisplay(contacts)
@@ -468,15 +469,6 @@ export function primaryOwnerDisplayName(
     if (isAddressLikeContactName(contact) || isEntityContactName(contact)) continue
     const name = contactDisplayName(contact)
     if (name) return name
-  }
-
-  const flat = [fallbackFirst, fallbackLast].filter(Boolean).join(' ')
-  if (
-    flat
-    && !isAddressLikeContactName({ first_name: fallbackFirst, last_name: fallbackLast })
-    && !isEntityContactName({ first_name: fallbackFirst, last_name: fallbackLast })
-  ) {
-    return flat
   }
 
   const orgName = (organizations ?? []).map((o) => o.name?.trim()).find(Boolean)
@@ -487,7 +479,6 @@ export function primaryOwnerDisplayName(
     const name = contactDisplayName(contact)
     if (name) return name
   }
-  if (flat) return flat
   for (const contact of ranked) {
     const name = contactDisplayName(contact)
     if (name) return name

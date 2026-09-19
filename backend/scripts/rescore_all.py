@@ -39,5 +39,5 @@ with app.app_context():
     logger.info("Scoring %d leads...", total)
 
     engine = LeadScoringEngine()
-    n = engine.bulk_rescore('default')
+    n = engine.bulk_rescore('default', all_owners=True)
     logger.info("Done: %d leads rescored (live fields only, no history rows)", n)

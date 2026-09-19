@@ -2,26 +2,15 @@
 
 Implements Requirements 3.1, 3.2, 3.3, 3.5, 3.6.
 """
-import unicodedata
 from datetime import datetime
+
+from sqlalchemy import or_
 
 from app import db
 from app.models.task import Task
 from app.models.task_association import TaskAssociation
 from app.exceptions import TaskValidationError, ResourceNotFoundError
-
-
-def _strip_invisible(value: str) -> str:
-    """Strip all Unicode whitespace and control characters from *value*.
-
-    Stricter than ``str.strip()`` — handles Unicode Zs (space separators) and
-    Cc (control characters) so inputs like '\\x7f' are treated as empty.
-    """
-    cleaned = ''.join(
-        ch for ch in value
-        if not (unicodedata.category(ch).startswith('C') or unicodedata.category(ch) == 'Zs')
-    )
-    return cleaned.strip()
+from app.services.helpers.text import strip_invisible as _strip_invisible
 
 
 class TaskService:
@@ -66,9 +55,7 @@ class TaskService:
             due_date=data.get('due_date'),
             status=data.get('status', 'open'),
             priority=data.get('priority', 'medium'),
-            source=data.get('source', 'manual'),
-            hubspot_task_id=data.get('hubspot_task_id'),
-            raw_payload=data.get('raw_payload'),
+            source='manual',
         )
         db.session.add(task)
         db.session.flush()  # populate task.id before creating associations
@@ -94,7 +81,7 @@ class TaskService:
         Args:
             task_id: Primary key of the Task to update.
             data: dict of fields to update (title, body, due_date, status,
-                  priority, hubspot_task_id, raw_payload).
+                  priority).
 
         Returns:
             The updated Task instance.
@@ -115,8 +102,7 @@ class TaskService:
                 )
             task.title = _strip_invisible(title)
 
-        updatable = ('body', 'due_date', 'status', 'priority',
-                     'hubspot_task_id', 'raw_payload')
+        updatable = ('body', 'due_date', 'status', 'priority')
         for field in updatable:
             if field in data:
                 setattr(task, field, data[field])
@@ -193,7 +179,7 @@ class TaskService:
     # List
     # ------------------------------------------------------------------
 
-    def list(self, filters: dict = None, page: int = 1, per_page: int = 20):
+    def list(self, filters: dict = None, page: int = 1, per_page: int = 20, lead_id_scope=None):
         """Return a paginated, filtered list of Tasks.
 
         Supported filter keys:
@@ -204,15 +190,14 @@ class TaskService:
             - target_type (str): filter by association target_type
             - target_id (int): filter by association target_id (requires target_type)
 
-        Args:
-            filters: dict of filter criteria (see above).
-            page: 1-based page number.
-            per_page: number of results per page.
-
-        Returns:
-            Tuple of (list[Task], total_count).
+        ``lead_id_scope``:
+            ``None`` — no owner filter (admin).
+            empty set — return no rows.
+            otherwise — only tasks attached to those lead ids.
         """
         filters = filters or {}
+        if lead_id_scope is not None and not lead_id_scope:
+            return [], 0
         query = Task.query
 
         if 'status' in filters:
@@ -235,6 +220,18 @@ class TaskService:
             if 'target_id' in filters:
                 query = query.filter(TaskAssociation.target_id == filters['target_id'])
             query = query.distinct()
+
+        if lead_id_scope is not None:
+            assoc_ids = db.session.query(TaskAssociation.task_id).filter(
+                TaskAssociation.target_type == 'lead',
+                TaskAssociation.target_id.in_(lead_id_scope),
+            )
+            query = query.filter(
+                or_(
+                    Task.lead_id.in_(lead_id_scope),
+                    Task.id.in_(assoc_ids),
+                )
+            )
 
         total = query.count()
         tasks = query.order_by(Task.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()

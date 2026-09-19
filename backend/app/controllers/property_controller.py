@@ -27,7 +27,6 @@ from app.models import (
 )
 from app.models.contact import Contact
 from app.models.property_contact import PropertyContact
-from app.models.user import User
 from app.schemas import LeadListQuerySchema
 from app.services.lead_scoring_engine import LeadScoringEngine
 from app.services.scoring_rubric import calculate_score_tier, display_most_recent_sale
@@ -60,29 +59,9 @@ _DEPRECATED_CONTACT_FIELDS = {
 
 
 def _current_user_is_admin() -> bool:
-    """Return True when the currently authenticated user has is_admin=True.
-
-    Uses g.is_admin set by require_auth (live DB lookup on every authenticated
-    request). Falls back to querying the database only when g.is_admin is not
-    set (e.g. during testing or legacy paths).
-
-    Returns False on any error so ownership scoping is always enforced when
-    admin status cannot be confirmed.
-    """
-    from flask import g
-    try:
-        # Fast path: use is_admin set by require_auth (live DB lookup)
-        is_admin = getattr(g, 'is_admin', None)
-        if is_admin is not None:
-            return bool(is_admin)
-        # Fallback: query database directly (legacy/test paths)
-        user_id = getattr(g, 'user_id', None)
-        if not user_id or user_id == 'anonymous':
-            return False
-        user = User.query.filter_by(user_id=user_id).first()
-        return bool(user and user.is_admin)
-    except Exception:
-        return False
+    """Return True when the currently authenticated user has is_admin=True."""
+    from app.api_utils import current_user_is_admin
+    return current_user_is_admin()
 
 
 # ---------------------------------------------------------------------------

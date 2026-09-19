@@ -463,7 +463,9 @@ class MarketingManager:
         )
         query = query.filter(~Lead.id.in_(opted_out_lead_ids))
 
-        # Add matching leads to the new list
+        # Add matching leads to the new list (owner-scoped)
+        query = query.filter(Lead.owner_user_id == user_id)
+
         matching_leads = query.all()
         added = 0
         for lead in matching_leads:

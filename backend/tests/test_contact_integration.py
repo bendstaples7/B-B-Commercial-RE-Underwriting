@@ -39,7 +39,10 @@ def _make_property(street: str = "100 Integration St") -> Lead:
 
 def _make_contact(first: str, last: str, role: str = "owner") -> Contact:
     """Create and persist a minimal Contact record."""
-    contact = Contact(first_name=first, last_name=last, role=role)
+    contact = Contact(
+        first_name=first, last_name=last, role=role,
+        created_by_user_id="test-user",
+    )
     db.session.add(contact)
     db.session.commit()
     return contact
@@ -205,6 +208,7 @@ class TestPrimaryDemotion:
                 "role": "owner",
                 "is_primary": True,
             },
+            headers=_AUTH_HEADERS,
         )
         assert resp.status_code == 201
 
@@ -233,7 +237,7 @@ class TestPrimaryDemotion:
             active_id = active.id
             former_id = former.id
 
-        anon = client.get(f"/api/properties/{prop_id}/contacts")
+        anon = client.get(f"/api/properties/{prop_id}/contacts", headers={'X-User-Id': ''})
         assert anon.status_code == 401
 
         default_resp = client.get(f"/api/properties/{prop_id}/contacts", headers=_AUTH_HEADERS)
@@ -273,6 +277,7 @@ class TestPrimaryDemotion:
                 "role": "owner",
                 "is_primary": True,
             },
+            headers=_AUTH_HEADERS,
         )
         assert resp.status_code == 201
 
@@ -306,6 +311,7 @@ class TestPrimaryDemotion:
                 "role": "owner",
                 "is_primary": False,
             },
+            headers=_AUTH_HEADERS,
         )
         assert resp.status_code == 201
 
@@ -338,7 +344,10 @@ class TestDeletePrimaryNoAutoPromotion:
             secondary_id = secondary.id
 
         # DELETE the primary contact link
-        resp = client.delete(f"/api/properties/{prop_id}/contacts/{primary_id}")
+        resp = client.delete(
+            f"/api/properties/{prop_id}/contacts/{primary_id}",
+            headers=_AUTH_HEADERS,
+        )
         assert resp.status_code == 204
 
         # Verify via HTTP that secondary is still not primary
@@ -364,7 +373,10 @@ class TestDeletePrimaryNoAutoPromotion:
             primary_id = primary.id
             secondary_id = secondary.id
 
-        resp = client.delete(f"/api/properties/{prop_id}/contacts/{primary_id}")
+        resp = client.delete(
+            f"/api/properties/{prop_id}/contacts/{primary_id}",
+            headers=_AUTH_HEADERS,
+        )
         assert resp.status_code == 204
 
         with app.app_context():
@@ -389,7 +401,7 @@ class TestDeletePrimaryNoAutoPromotion:
             prop_id = prop.id
             primary_id = primary.id
 
-        resp = client.delete(f"/api/properties/{prop_id}/contacts/{primary_id}")
+        resp = client.delete(f"/api/properties/{prop_id}/contacts/{primary_id}", headers=_AUTH_HEADERS)
         assert resp.status_code == 204
 
         with app.app_context():
@@ -405,7 +417,7 @@ class TestDeletePrimaryNoAutoPromotion:
             prop_id = prop.id
             contact_id = contact.id
 
-        resp = client.delete(f"/api/properties/{prop_id}/contacts/{contact_id}")
+        resp = client.delete(f"/api/properties/{prop_id}/contacts/{contact_id}", headers=_AUTH_HEADERS)
         assert resp.status_code == 404
 
 

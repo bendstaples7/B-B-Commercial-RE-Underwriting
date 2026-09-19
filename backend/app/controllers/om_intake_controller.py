@@ -79,11 +79,9 @@ def handle_errors(f):
 
 
 def get_user_id() -> str:
-    """Extract user ID from request headers.
-
-    Falls back to 'anonymous' for development/testing.
-    """
-    return request.headers.get('X-User-Id', 'anonymous')
+    """Return the signed-in user from request identity (JWT / test header)."""
+    from app.api_utils import get_current_user_id
+    return get_current_user_id()
 
 
 # ---------------------------------------------------------------------------

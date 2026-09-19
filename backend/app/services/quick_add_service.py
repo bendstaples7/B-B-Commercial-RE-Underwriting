@@ -293,6 +293,12 @@ class QuickAddService:
                 data_source=QUICK_ADD_DATA_SOURCE,
                 owner_user_id=user_id,
             )
+            if not (lead.deal_source or '').strip():
+                lead.deal_source = resolved_deal_source
+            if capture_description and not (lead.deal_description or '').strip():
+                lead.deal_description = capture_description
+            if manual_priority is not None and lead.manual_priority is None:
+                lead.manual_priority = manual_priority
         else:
             lead = existing
             assert lead is not None

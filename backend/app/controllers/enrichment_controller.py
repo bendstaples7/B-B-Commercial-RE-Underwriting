@@ -10,6 +10,7 @@ from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
 from app import db, limiter
+from app.api_utils import load_authorized_lead, user_can_access_lead
 from app.models import Lead, DataSource, EnrichmentRecord
 from app.services.data_source_connector import DataSourceConnector
 
@@ -149,12 +150,9 @@ def enrich_lead(lead_id):
     200 with the enrichment record.
     404 if lead or data source not found.
     """
-    lead = db.session.get(Lead, lead_id)
-    if not lead:
-        return jsonify({
-            'error': 'Lead not found',
-            'message': f'Lead {lead_id} does not exist',
-        }), 404
+    lead, err = load_authorized_lead(lead_id)
+    if err is not None:
+        return err
 
     data = request.get_json()
     if not data:
@@ -230,6 +228,18 @@ def bulk_enrich():
         }), 400
 
     if len(lead_ids) == 0:
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'lead_ids must not be empty',
+        }), 400
+
+    allowed = []
+    for lid in lead_ids:
+        lead = db.session.get(Lead, lid)
+        if lead is not None and user_can_access_lead(lead):
+            allowed.append(lid)
+    lead_ids = allowed
+    if not lead_ids:
         return jsonify({
             'error': 'Validation error',
             'message': 'lead_ids must not be empty',

@@ -6,6 +6,7 @@ import logging
 
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry
+from app.services.action_eligibility import TERMINAL_LEAD_STATUSES
 
 logger = logging.getLogger(__name__)
 _HEAL_CANDIDATE_ID_CHUNK_SIZE = 1000
@@ -305,7 +306,7 @@ def apply_lead_status_change(
     if new_status == old_status:
         # Idempotent bulk DNC/suppress must still clear leftover open tasks /
         # rematch mirrors when the lead is already in that terminal status.
-        if new_status in ('do_not_contact', 'suppressed'):
+        if new_status in TERMINAL_LEAD_STATUSES:
             lead.recommended_action = None
             cancelled_hubspot_ids = _cancel_tasks_for_terminal_status(
                 lead.id,
@@ -334,19 +335,12 @@ def apply_lead_status_change(
         if SkipTraceEnqueue._find_open_future_recent_sale_hold(lead.id) is None:
             lead.needs_skip_trace = True
 
-    if new_status == 'do_not_contact':
+    if new_status in TERMINAL_LEAD_STATUSES:
         lead.recommended_action = None
         cancelled_hubspot_ids = _cancel_tasks_for_terminal_status(
             lead.id,
             actor=actor,
-            status='do_not_contact',
-        )
-    elif new_status == 'suppressed':
-        lead.recommended_action = None
-        cancelled_hubspot_ids = _cancel_tasks_for_terminal_status(
-            lead.id,
-            actor=actor,
-            status='suppressed',
+            status=new_status,
         )
     else:
         cancelled_hubspot_ids: set[str] = set()
@@ -378,6 +372,6 @@ def apply_lead_status_change(
         # Caller owns the transaction; sync after they commit.
         pass
 
-    if recompute_action and new_status not in ('do_not_contact', 'suppressed'):
+    if recompute_action and new_status not in TERMINAL_LEAD_STATUSES:
         from app.services.lead_refresh import refresh_lead_scoring
         refresh_lead_scoring(lead.id)

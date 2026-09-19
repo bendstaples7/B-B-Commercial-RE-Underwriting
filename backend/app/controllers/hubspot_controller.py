@@ -7,7 +7,6 @@ decorator for consistent JSON error responses.
 
 URL prefix: /api/hubspot  (registered in app/__init__.py)
 """
-import glob
 import json
 import logging
 import os
@@ -17,7 +16,14 @@ from functools import wraps
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 from marshmallow import ValidationError
 
-from app.api_utils import get_current_user_id
+from app.api_utils import (
+    get_current_user_id,
+    require_auth,
+    require_admin,
+    user_can_access_lead,
+    user_can_access_association_target,
+    current_user_is_admin,
+)
 from app.exceptions import (
     ImportRunNotFoundError,
     MatchNotFoundError,
@@ -48,6 +54,79 @@ _webhook_log_summary_schema = WebhookLogSummarySchema()
 DEFAULT_PAGE = 1
 DEFAULT_PER_PAGE = 20
 MAX_PER_PAGE = 100
+
+
+def _deny_inaccessible_match_target(match, override_id=None, *, ignore_current=False):
+    """404 when the match would link the caller to a lead/org they cannot access.
+
+    ``ignore_current=True`` skips the existing suggested id (reject / new-record).
+    Unique-PIN pending rows often point at another owner's lead; reviewers must
+    still be able to reject or mark new-record without confirming onto that lead.
+    """
+    from app import db
+    from app.models.lead import Lead
+
+    if override_id is not None:
+        target_id = override_id
+    elif ignore_current:
+        return
+    else:
+        target_id = match.internal_record_id
+    if not target_id:
+        return
+    if current_user_is_admin():
+        return
+    record_type = match.internal_record_type
+    try:
+        target_id = int(target_id)
+    except (TypeError, ValueError):
+        raise MatchNotFoundError(
+            f"HubSpotMatch id={match.id} not found.",
+            payload={'match_id': match.id},
+        )
+    if record_type == 'organization':
+        from app.models.property_organization_link import PropertyOrganizationLink
+        links = PropertyOrganizationLink.query.filter_by(
+            organization_id=target_id,
+        ).all()
+        # Unlinked HubSpot company orgs are shared CRM; same as link-property.
+        if not links:
+            return
+        if user_can_access_association_target('organization', target_id):
+            return
+        raise MatchNotFoundError(
+            f"HubSpotMatch id={match.id} not found.",
+            payload={'match_id': match.id},
+        )
+    if record_type == 'contact':
+        if not user_can_access_association_target('contact', target_id):
+            raise MatchNotFoundError(
+                f"HubSpotMatch id={match.id} not found.",
+                payload={'match_id': match.id},
+            )
+        return
+    if record_type not in (None, 'lead'):
+        raise MatchNotFoundError(
+            f"HubSpotMatch id={match.id} not found.",
+            payload={'match_id': match.id},
+        )
+    lead = db.session.get(Lead, target_id)
+    if lead is None or not user_can_access_lead(lead):
+        raise MatchNotFoundError(
+            f"HubSpotMatch id={match.id} not found.",
+            payload={'match_id': match.id},
+        )
+
+
+def _dump_match_for_actor(match):
+    """Serialize a match without leaking another owner's internal record id."""
+    data = _match_schema.dump(match)
+    try:
+        _deny_inaccessible_match_target(match)
+    except MatchNotFoundError:
+        data['internal_record_id'] = None
+    return data
+
 
 # ---------------------------------------------------------------------------
 # Error handling decorator
@@ -127,6 +206,7 @@ def _parse_pagination(args):
 
 @hubspot_bp.route('/config', methods=['GET'])
 @handle_errors
+@require_auth
 def get_config():
     """Return the current HubSpot configuration with the token masked.
 
@@ -147,6 +227,8 @@ def get_config():
 
 @hubspot_bp.route('/config', methods=['POST'])
 @handle_errors
+@require_auth
+@require_admin
 def save_config():
     """Save or update the HubSpot API token, portal ID, and optional client secret.
 
@@ -191,6 +273,8 @@ def save_config():
 
 @hubspot_bp.route('/config/test', methods=['POST'])
 @handle_errors
+@require_auth
+@require_admin
 def test_config():
     """Test the stored HubSpot connection.
 
@@ -221,6 +305,8 @@ def test_config():
 
 @hubspot_bp.route('/import/trigger', methods=['POST'])
 @handle_errors
+@require_auth
+@require_admin
 def trigger_import():
     """Start a HubSpot import run.
 
@@ -250,6 +336,8 @@ def trigger_import():
 
 @hubspot_bp.route('/pipeline/run', methods=['POST'])
 @handle_errors
+@require_auth
+@require_admin
 def run_pipeline_now():
     """Manually trigger the post-import pipeline (matching → enrich → rescore).
 
@@ -282,6 +370,7 @@ def run_pipeline_now():
 
 @hubspot_bp.route('/import/runs', methods=['GET'])
 @handle_errors
+@require_auth
 def list_import_runs():
     """List all import runs, newest first (paginated).
 
@@ -304,6 +393,7 @@ def list_import_runs():
 
 @hubspot_bp.route('/import/runs/<int:run_id>', methods=['GET'])
 @handle_errors
+@require_auth
 def get_import_run(run_id):
     """Get a single import run by ID.
 
@@ -317,6 +407,7 @@ def get_import_run(run_id):
 
 @hubspot_bp.route('/import/<int:run_id>/progress', methods=['GET'])
 @handle_errors
+@require_auth
 def import_progress_stream(run_id):
     """SSE stream of import progress for a single run.
 
@@ -372,6 +463,7 @@ def import_progress_stream(run_id):
 
 @hubspot_bp.route('/pipeline/status', methods=['GET'])
 @handle_errors
+@require_auth
 def get_pipeline_status():
     """Return the current status of the post-import pipeline.
 
@@ -445,42 +537,50 @@ def get_pipeline_status():
 
 @hubspot_bp.route('/export/backup', methods=['POST'])
 @handle_errors
+@require_auth
+@require_admin
 def trigger_backup_export():
-    """Dispatch the ``generate_backup_export`` Celery task.
+    """Dispatch the ``generate_backup`` Celery task for the current user.
 
     Returns ``{task_id}`` so the client can poll task status if needed.
     """
     from celery import current_app as celery_app
 
-    result = celery_app.send_task('hubspot.generate_backup_export')
+    result = celery_app.send_task(
+        'hubspot.generate_backup',
+        args=[get_current_user_id()],
+    )
     return jsonify({'task_id': result.id}), 202
 
 
 @hubspot_bp.route('/export/backup/download', methods=['GET'])
 @handle_errors
+@require_auth
+@require_admin
 def download_backup_export():
-    """Download the most recent HubSpot backup export file.
-
-    Searches ``/tmp`` for files matching ``hubspot_backup_*.json`` and
-    returns the most recently modified one as a JSON file download.
+    """Download this user's most recent HubSpot backup export file.
 
     Returns 404 if no backup file exists yet.
     """
-    pattern = '/tmp/hubspot_backup_*.json'
-    matches = glob.glob(pattern)
+    from app.tasks.hubspot_tasks import backup_dir, list_user_backup_files
 
+    matches = list_user_backup_files(get_current_user_id())
     if not matches:
         return jsonify({'error': 'No backup file found. Run a backup export first.'}), 404
 
-    # Pick the most recently modified file
     latest_file = max(matches, key=os.path.getmtime)
-    filename = os.path.basename(latest_file)
+    allowed_root = os.path.realpath(backup_dir())
+    real_path = os.path.realpath(latest_file)
+    if real_path != allowed_root and not real_path.startswith(allowed_root + os.sep):
+        logger.error("Rejected backup path outside backup dir: %s", real_path)
+        return jsonify({'error': 'No backup file found. Run a backup export first.'}), 404
+    filename = os.path.basename(real_path)
 
     try:
-        with open(latest_file, 'r', encoding='utf-8') as fh:
+        with open(real_path, 'r', encoding='utf-8') as fh:
             content = fh.read()
     except OSError as exc:
-        logger.error("Failed to read backup file %s: %s", latest_file, exc)
+        logger.error("Failed to read backup file %s: %s", real_path, exc)
         return jsonify({'error': 'Failed to read backup file'}), 500
 
     return Response(
@@ -498,17 +598,18 @@ def download_backup_export():
 
 @hubspot_bp.route('/review-queue', methods=['GET'])
 @handle_errors
+@require_auth
 def list_review_queue():
     """List HubSpot match records pending human review.
 
-    Returns matches with confidence MEDIUM, LOW, or UNMATCHED and
-    status=pending.  Supports optional filtering by record type and
-    confidence level.
+    Returns pending matches of any confidence. HIGH unique PIN/email hits
+    stay pending until confirmed, so they must appear here or they stall
+    forever (the queue used to hide HIGH).
 
     Query parameters
     ----------------
     type : str (optional) — filter by hubspot_record_type (deal/contact/company)
-    confidence : str (optional) — filter by confidence (MEDIUM/LOW/UNMATCHED)
+    confidence : str (optional) — filter by confidence (HIGH/MEDIUM/LOW/UNMATCHED)
     page : int (default 1)
     per_page : int (default 20, max 100)
     """
@@ -521,7 +622,6 @@ def list_review_queue():
     confidence_filter = request.args.get('confidence')
 
     query = db.session.query(HubSpotMatch).filter(
-        HubSpotMatch.confidence.in_(['MEDIUM', 'LOW', 'UNMATCHED']),
         HubSpotMatch.status == 'pending',
     )
 
@@ -541,7 +641,6 @@ def list_review_queue():
 
     # Pending count across all filters (for badge display)
     pending_count = db.session.query(HubSpotMatch).filter(
-        HubSpotMatch.confidence.in_(['MEDIUM', 'LOW', 'UNMATCHED']),
         HubSpotMatch.status == 'pending',
     ).count()
 
@@ -592,7 +691,12 @@ def list_review_queue():
     def _serialize_match(m):
         data = _match_schema.dump(m)
         data['display_name'] = _get_display_name(m)
-        data['internal_display_name'] = _get_internal_display_name(m)
+        try:
+            _deny_inaccessible_match_target(m)
+            data['internal_display_name'] = _get_internal_display_name(m)
+        except MatchNotFoundError:
+            data['internal_display_name'] = None
+            data['internal_record_id'] = None
         return data
 
     return jsonify({
@@ -607,6 +711,7 @@ def list_review_queue():
 
 @hubspot_bp.route('/review-queue/<int:match_id>/confirm', methods=['POST'])
 @handle_errors
+@require_auth
 def confirm_match(match_id):
     """Confirm a HubSpot match, optionally overriding the internal record.
 
@@ -630,17 +735,21 @@ def confirm_match(match_id):
 
     data = request.json or {}
     internal_record_id = data.get('internal_record_id')
+    _deny_inaccessible_match_target(match, override_id=internal_record_id)
     if internal_record_id is not None:
         match.internal_record_id = internal_record_id
 
     match.status = 'confirmed'
+    from app.services.hubspot_matcher_service import HubSpotMatcherService
+    HubSpotMatcherService().apply_confirmed_match(match)
     db.session.commit()
 
-    return jsonify({'success': True, 'match': _match_schema.dump(match)}), 200
+    return jsonify({'success': True, 'match': _dump_match_for_actor(match)}), 200
 
 
 @hubspot_bp.route('/review-queue/<int:match_id>/reject', methods=['POST'])
 @handle_errors
+@require_auth
 def reject_match(match_id):
     """Reject a HubSpot match and optionally re-link to a different record.
 
@@ -662,17 +771,21 @@ def reject_match(match_id):
 
     data = request.json or {}
     internal_record_id = data.get('internal_record_id')
+    _deny_inaccessible_match_target(
+        match, override_id=internal_record_id, ignore_current=True,
+    )
     if internal_record_id is not None:
         match.internal_record_id = internal_record_id
 
     match.status = 'rejected'
     db.session.commit()
 
-    return jsonify({'success': True, 'match': _match_schema.dump(match)}), 200
+    return jsonify({'success': True, 'match': _dump_match_for_actor(match)}), 200
 
 
 @hubspot_bp.route('/review-queue/<int:match_id>/new-record', methods=['POST'])
 @handle_errors
+@require_auth
 def mark_match_as_new_record(match_id):
     """Mark a HubSpot match as confirmed with no existing internal record.
 
@@ -690,11 +803,13 @@ def mark_match_as_new_record(match_id):
             payload={'match_id': match_id},
         )
 
+    _deny_inaccessible_match_target(match, ignore_current=True)
+
     match.status = 'confirmed'
     match.internal_record_id = None
     db.session.commit()
 
-    return jsonify({'success': True, 'match': _match_schema.dump(match)}), 200
+    return jsonify({'success': True, 'match': _dump_match_for_actor(match)}), 200
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +818,7 @@ def mark_match_as_new_record(match_id):
 
 @hubspot_bp.route('/webhook-log', methods=['GET'])
 @handle_errors
+@require_auth
 def list_webhook_logs():
     """List recent HubSpot webhook log entries (paginated).
 
@@ -752,6 +868,7 @@ def list_webhook_logs():
 
 @hubspot_bp.route('/webhook-log/summary', methods=['GET'])
 @handle_errors
+@require_auth
 def get_webhook_log_summary():
     """Return a 24-hour summary of webhook log statuses.
 
@@ -765,6 +882,8 @@ def get_webhook_log_summary():
 
 @hubspot_bp.route('/webhook-log/<int:log_id>/retry', methods=['POST'])
 @handle_errors
+@require_auth
+@require_admin
 def retry_webhook_log(log_id):
     """Manually retry a failed webhook log entry.
 

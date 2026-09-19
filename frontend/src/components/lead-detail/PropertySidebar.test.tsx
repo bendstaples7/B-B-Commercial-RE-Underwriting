@@ -172,7 +172,7 @@ describe('PropertySidebar phone confidence', () => {
     expect(screen.getByTestId('phone-confidence-(206) 719-9119')).toBeVisible()
   })
 
-  it('labels flat owner name as Owner when contacts are empty', () => {
+  it('does not show a county name that is not a saved person', () => {
     renderSidebar(
       makePayload({
         contacts: [],
@@ -181,8 +181,8 @@ describe('PropertySidebar phone confidence', () => {
       }),
     )
 
-    expect(screen.getByTestId('sidebar-owner-name')).toHaveTextContent('Owner')
-    expect(screen.getByTestId('sidebar-owner-name')).toHaveTextContent('Joseph Kiferbaum')
+    expect(screen.queryByTestId('sidebar-owner-name')).not.toBeInTheDocument()
+    expect(screen.queryByText('Joseph Kiferbaum')).not.toBeInTheDocument()
   })
 
   it('prefers person Owner, shows Company org, and Also listed for address-like', () => {

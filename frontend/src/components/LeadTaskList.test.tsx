@@ -537,7 +537,7 @@ describe('LeadTaskList', () => {
       await user.type(screen.getByTestId('task-title-input'), 'Task with date')
       // Set due date via fireEvent since date inputs can be tricky with userEvent
       const { fireEvent } = await import('@testing-library/react')
-      fireEvent.change(screen.getByTestId('task-due-date-input'), {
+      fireEvent.change(screen.getByTestId('task-due-custom-date'), {
         target: { value: '2025-06-15' },
       })
       await user.click(screen.getByTestId('save-task-btn'))

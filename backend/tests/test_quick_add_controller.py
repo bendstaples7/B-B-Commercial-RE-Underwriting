@@ -490,5 +490,6 @@ class TestQuickAddActivityNoteBody:
                 '/api/leads/quick-add',
                 data=json.dumps({'property_street': '123 No Auth St'}),
                 content_type='application/json',
+                headers={'X-User-Id': ''},
             )
             assert response.status_code in (401, 403)

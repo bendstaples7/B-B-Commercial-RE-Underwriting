@@ -299,13 +299,22 @@ def _apply_pin_address(
     return street, city or None, state_code or 'IL'
 
 
-def _find_duplicate_lead(pin: Optional[str], street: str, city: str) -> Optional[int]:
+def _find_duplicate_lead(
+    pin: Optional[str],
+    street: str,
+    city: str,
+    *,
+    owner_user_id: str,
+) -> Optional[int]:
     if pin:
         normalized = normalize_pin_for_socrata(pin)
         dashed = format_pin_for_storage(pin)
         for candidate_pin in {pin, normalized, dashed}:
             lead = (
-                Property.query.filter(Property.county_assessor_pin == candidate_pin)
+                Property.query.filter(
+                    Property.county_assessor_pin == candidate_pin,
+                    Property.owner_user_id == owner_user_id,
+                )
                 .limit(1)
                 .first()
             )
@@ -317,6 +326,7 @@ def _find_duplicate_lead(pin: Optional[str], street: str, city: str) -> Optional
             query = Property.query.filter(
                 Property.property_state.in_(('IL', 'Illinois', 'il')),
                 Property.normalized_street == street_key,
+                Property.owner_user_id == owner_user_id,
             )
             if city:
                 query = query.filter(
@@ -595,7 +605,9 @@ def upsert_pin_stacked_candidates(
             summary['skipped_no_address'] += 1
             continue
 
-        duplicate_lead_id = _find_duplicate_lead(pin_storage, street, city)
+        duplicate_lead_id = _find_duplicate_lead(
+            pin_storage, street, city, owner_user_id=owner_user_id,
+        )
         status = 'duplicate' if duplicate_lead_id else 'pending'
         signal_payload = _signals_to_payload(merged)
         ext_key = _stack_external_key(pin_storage)

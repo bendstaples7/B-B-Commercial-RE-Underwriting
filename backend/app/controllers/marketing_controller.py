@@ -11,7 +11,7 @@ from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
 from app import db, limiter
-from app.api_utils import get_current_user_id
+from app.api_utils import get_current_user_id, current_user_is_admin, user_can_access_lead
 from app.models import Lead, MarketingList, MarketingListMember
 from app.services.marketing_manager import MarketingManager
 
@@ -24,6 +24,24 @@ manager = MarketingManager()
 DEFAULT_PAGE = 1
 DEFAULT_PER_PAGE = 25
 MAX_PER_PAGE = 100
+
+
+def _require_list_owner(ml):
+    """404 when the list is missing or belongs to another user."""
+    if ml is None:
+        return jsonify({
+            'error': 'Marketing list not found',
+            'message': 'Marketing list does not exist',
+        }), 404
+    if current_user_is_admin():
+        return None
+    user_id = get_current_user_id()
+    if not user_id or user_id == 'anonymous' or ml.user_id != user_id:
+        return jsonify({
+            'error': 'Marketing list not found',
+            'message': f'Marketing list {ml.id} does not exist',
+        }), 404
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -152,9 +170,16 @@ def list_marketing_lists():
 
     query = MarketingList.query
 
-    user_id = args.get('user_id')
-    if user_id:
-        query = query.filter(MarketingList.user_id == user_id)
+    if current_user_is_admin():
+        user_id = args.get('user_id')
+        if user_id:
+            query = query.filter(MarketingList.user_id == user_id)
+    else:
+        uid = get_current_user_id()
+        if not uid or uid == 'anonymous':
+            query = query.filter(MarketingList.id.in_([]))
+        else:
+            query = query.filter(MarketingList.user_id == uid)
 
     query = query.order_by(MarketingList.created_at.desc())
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
@@ -233,11 +258,9 @@ def rename_marketing_list(list_id):
     404 if list not found.
     """
     ml = db.session.get(MarketingList, list_id)
-    if not ml:
-        return jsonify({
-            'error': 'Marketing list not found',
-            'message': f'Marketing list {list_id} does not exist',
-        }), 404
+    denied = _require_list_owner(ml)
+    if denied is not None:
+        return denied
 
     data = request.get_json()
     if not data:
@@ -270,11 +293,9 @@ def delete_marketing_list(list_id):
     404 if list not found.
     """
     ml = db.session.get(MarketingList, list_id)
-    if not ml:
-        return jsonify({
-            'error': 'Marketing list not found',
-            'message': f'Marketing list {list_id} does not exist',
-        }), 404
+    denied = _require_list_owner(ml)
+    if denied is not None:
+        return denied
 
     list_name = ml.name
     manager.delete_list(list_id)
@@ -306,11 +327,9 @@ def get_list_members(list_id):
     404 if list not found.
     """
     ml = db.session.get(MarketingList, list_id)
-    if not ml:
-        return jsonify({
-            'error': 'Marketing list not found',
-            'message': f'Marketing list {list_id} does not exist',
-        }), 404
+    denied = _require_list_owner(ml)
+    if denied is not None:
+        return denied
 
     page, per_page = _parse_pagination(request.args)
 
@@ -343,11 +362,9 @@ def add_list_members(list_id):
     404 if list not found.
     """
     ml = db.session.get(MarketingList, list_id)
-    if not ml:
-        return jsonify({
-            'error': 'Marketing list not found',
-            'message': f'Marketing list {list_id} does not exist',
-        }), 404
+    denied = _require_list_owner(ml)
+    if denied is not None:
+        return denied
 
     data = request.get_json()
     if not data:
@@ -377,12 +394,20 @@ def add_list_members(list_id):
             'message': 'lead_ids must be a list of integers',
         }), 400
 
+    allowed = []
+    for lid in lead_ids:
+        lead = db.session.get(Lead, lid)
+        if lead is not None and user_can_access_lead(lead):
+            allowed.append(lid)
+    requested = len(lead_ids)
+    lead_ids = allowed
+
     added = manager.add_leads(list_id, lead_ids)
 
     return jsonify({
         'list_id': list_id,
         'leads_added': added,
-        'leads_requested': len(lead_ids),
+        'leads_requested': requested,
     }), 200
 
 
@@ -402,11 +427,9 @@ def remove_list_members(list_id):
     404 if list not found.
     """
     ml = db.session.get(MarketingList, list_id)
-    if not ml:
-        return jsonify({
-            'error': 'Marketing list not found',
-            'message': f'Marketing list {list_id} does not exist',
-        }), 404
+    denied = _require_list_owner(ml)
+    if denied is not None:
+        return denied
 
     data = request.get_json()
     if not data:
@@ -470,11 +493,9 @@ def update_member_status(list_id, lead_id):
     404 if list or membership not found.
     """
     ml = db.session.get(MarketingList, list_id)
-    if not ml:
-        return jsonify({
-            'error': 'Marketing list not found',
-            'message': f'Marketing list {list_id} does not exist',
-        }), 404
+    denied = _require_list_owner(ml)
+    if denied is not None:
+        return denied
 
     data = request.get_json()
     if not data:

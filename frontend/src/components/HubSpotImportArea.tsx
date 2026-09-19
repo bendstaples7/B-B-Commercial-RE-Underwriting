@@ -5,7 +5,7 @@
  *  1. Connection config form (masked token, save, test connection)
  *  2. "Read-Only Mode" badge (always visible when configured)
  *  3. Import trigger panel (object-type checkboxes + Start Import)
- *  4. SSE-driven progress per object type
+ *  4. Authenticated poll of import progress per object type
  *  5. Import history table
  *  6. Backup export section
  *  7. Review Queue badge (pending count)
@@ -13,7 +13,7 @@
  * Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 7.7, 7.8, 9.1, 9.4, 9.5,
  *               13.6, 19.4, 20.1
  */
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   Box,
   Typography,
@@ -58,7 +58,7 @@ import { useAuth } from '@/context/AuthContext'
 // Types
 // ---------------------------------------------------------------------------
 
-interface SseProgressEvent {
+interface ImportProgressEvent {
   object_type: string
   total_fetched: number
   created_count: number
@@ -70,7 +70,7 @@ interface SseProgressEvent {
 }
 
 interface ProgressState {
-  [objectType: string]: SseProgressEvent
+  [objectType: string]: ImportProgressEvent
 }
 
 // ---------------------------------------------------------------------------
@@ -119,10 +119,9 @@ export const HubSpotImportArea: React.FC = () => {
     companies: true,
     engagements: true,
   })
-  const [activeRunId, setActiveRunId] = useState<number | null>(null)
+  const [activeRunIds, setActiveRunIds] = useState<number[]>([])
   const [progress, setProgress] = useState<ProgressState>({})
   const [importError, setImportError] = useState<string | null>(null)
-  const sseRef = useRef<EventSource | null>(null)
 
   // ── Backup state ─────────────────────────────────────────────────────────
   const [backupTaskId, setBackupTaskId] = useState<string | null>(null)
@@ -147,7 +146,7 @@ export const HubSpotImportArea: React.FC = () => {
   } = useQuery({
     queryKey: ['hubspot', 'runs'],
     queryFn: () => hubSpotService.listImportRuns(1, 20),
-    refetchInterval: activeRunId ? 5000 : false,
+    refetchInterval: activeRunIds.length > 0 ? 5000 : false,
   })
 
   const {
@@ -185,9 +184,7 @@ export const HubSpotImportArea: React.FC = () => {
       return hubSpotService.triggerHubSpotImport(types)
     },
     onSuccess: (data) => {
-      // Backend returns run_ids array (one per object type). Track the first
-      // run ID for SSE progress — all runs share the same import session.
-      setActiveRunId(data.run_ids?.[0] ?? null)
+      setActiveRunIds(data.run_ids ?? [])
       setProgress({})
       setImportError(null)
       queryClient.invalidateQueries({ queryKey: ['hubspot', 'runs'] })
@@ -196,8 +193,7 @@ export const HubSpotImportArea: React.FC = () => {
   })
 
   const runPipelineMutation = useMutation({
-    mutationFn: () =>
-      fetch('/api/hubspot/pipeline/run', { method: 'POST' }).then((r) => r.json()),
+    mutationFn: () => hubSpotService.runHubSpotPipeline(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['hubspot', 'pipeline', 'status'] })
     },
@@ -212,46 +208,53 @@ export const HubSpotImportArea: React.FC = () => {
     onError: (err: Error) => setBackupError(err.message),
   })
 
-  // ── SSE progress stream ──────────────────────────────────────────────────
-
-  const closeSse = useCallback(() => {
-    if (sseRef.current) {
-      sseRef.current.close()
-      sseRef.current = null
-    }
-  }, [])
-
+  // Authenticated poll — EventSource cannot send a Bearer token.
+  const activeRunKey = activeRunIds.join(',')
   useEffect(() => {
-    if (!activeRunId) return
+    if (activeRunIds.length === 0) return
 
-    closeSse()
+    let cancelled = false
+    const terminal = new Set(['success', 'failed', 'partial'])
 
-    const es = new EventSource(`/api/hubspot/import/${activeRunId}/progress`)
-    sseRef.current = es
-
-    es.onmessage = (event) => {
+    const poll = async () => {
       try {
-        const data: SseProgressEvent = JSON.parse(event.data)
-        setProgress((prev) => ({ ...prev, [data.object_type]: data }))
-
-        // When all active types report a terminal status, stop polling
-        if (data.status === 'success' || data.status === 'failed' || data.status === 'partial') {
+        const runs = await Promise.all(
+          activeRunIds.map((id) => hubSpotService.getImportRun(id)),
+        )
+        if (cancelled) return
+        const next: ProgressState = {}
+        for (const run of runs) {
+          next[run.object_type] = {
+            object_type: run.object_type,
+            total_fetched: run.total_fetched,
+            created_count: run.created_count,
+            updated_count: run.updated_count,
+            error_count: run.error_count,
+            status: run.status,
+          }
+        }
+        setProgress(next)
+        if (runs.every((run) => terminal.has(run.status))) {
+          setActiveRunIds([])
           queryClient.invalidateQueries({ queryKey: ['hubspot', 'runs'] })
         }
       } catch {
-        // ignore malformed events
+        if (!cancelled) {
+          setActiveRunIds([])
+          queryClient.invalidateQueries({ queryKey: ['hubspot', 'runs'] })
+        }
       }
     }
 
-    es.onerror = () => {
-      // SSE connection closed (run finished or network error)
-      closeSse()
-      setActiveRunId(null)
-      queryClient.invalidateQueries({ queryKey: ['hubspot', 'runs'] })
+    void poll()
+    const timer = window.setInterval(() => {
+      void poll()
+    }, 2000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
     }
-
-    return () => closeSse()
-  }, [activeRunId, closeSse, queryClient])
+  }, [activeRunKey, activeRunIds, queryClient])
 
   // ── Backup download ──────────────────────────────────────────────────────
 
@@ -459,7 +462,7 @@ export const HubSpotImportArea: React.FC = () => {
                   onChange={(e) =>
                     setSelectedTypes((prev) => ({ ...prev, [type]: e.target.checked }))
                   }
-                  disabled={triggerImportMutation.isPending || !!activeRunId}
+                  disabled={triggerImportMutation.isPending || activeRunIds.length > 0}
                 />
               }
               label={type.charAt(0).toUpperCase() + type.slice(1)}
@@ -480,7 +483,7 @@ export const HubSpotImportArea: React.FC = () => {
           onClick={() => triggerImportMutation.mutate()}
           disabled={
             triggerImportMutation.isPending ||
-            !!activeRunId ||
+            activeRunIds.length > 0 ||
             !isConfigured ||
             !OBJECT_TYPES.some((t) => selectedTypes[t])
           }
@@ -501,7 +504,7 @@ export const HubSpotImportArea: React.FC = () => {
           </Alert>
         )}
 
-        {/* SSE-driven progress (Req 7.7, 7.8) */}
+        {/* Authenticated poll of import progress */}
         {Object.keys(progress).length > 0 && (
           <Box sx={{ mt: 3 }}>
             <Typography variant="subtitle2" gutterBottom>
@@ -653,6 +656,12 @@ export const HubSpotImportArea: React.FC = () => {
         {runPipelineMutation.isSuccess && (
           <Alert severity="success" sx={{ mb: 2 }}>
             Pipeline queued — matching, signal extraction, and rescoring will run shortly.
+          </Alert>
+        )}
+        {runPipelineMutation.isError && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {(runPipelineMutation.error as Error)?.message
+              ?? 'Could not queue the pipeline. Try again.'}
           </Alert>
         )}
 

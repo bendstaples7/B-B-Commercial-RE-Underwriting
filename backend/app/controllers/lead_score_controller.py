@@ -8,8 +8,8 @@ from functools import wraps
 
 from flask import Blueprint, jsonify, request
 
-from app import db, limiter
-from app.models.lead import Lead
+from app import limiter
+from app.api_utils import require_auth, load_authorized_lead, current_user_is_admin
 from app.models.lead_score import LeadScore
 from app.services.lead_scoring_engine import LeadScoringEngine
 
@@ -80,6 +80,7 @@ def _serialize_lead_score(score: LeadScore) -> dict:
 
 @lead_score_bp.route('/<int:lead_id>', methods=['GET'])
 @limiter.limit("600 per minute")
+@require_auth
 @handle_errors
 def get_lead_score(lead_id):
     """Get the latest score and full score history for a lead.
@@ -89,12 +90,9 @@ def get_lead_score(lead_id):
     200: { latest: LeadScoreRecord | null, history: LeadScoreRecord[] }
     404: Lead not found
     """
-    lead = db.session.get(Lead, lead_id)
-    if not lead:
-        return jsonify({
-            'error': 'Lead not found',
-            'message': f'Lead {lead_id} does not exist',
-        }), 404
+    lead, err = load_authorized_lead(lead_id)
+    if err is not None:
+        return err
 
     # Get all score records ordered by created_at desc
     score_records = (
@@ -125,6 +123,7 @@ def get_lead_score(lead_id):
 
 @lead_score_bp.route('/recalculate', methods=['POST'])
 @limiter.limit("10 per minute")
+@require_auth
 @handle_errors
 def recalculate_scores():
     """Recalculate lead score(s).
@@ -183,12 +182,9 @@ def recalculate_scores():
                 'message': 'lead_id must be an integer',
             }), 400
 
-        lead = db.session.get(Lead, lead_id)
-        if not lead:
-            return jsonify({
-                'error': 'Lead not found',
-                'message': f'Lead {lead_id} does not exist',
-            }), 404
+        lead, err = load_authorized_lead(lead_id)
+        if err is not None:
+            return err
 
         score = scoring_engine.recalculate_lead_score(lead)
         logger.info("Recalculated score for lead %d", lead_id)
@@ -198,6 +194,14 @@ def recalculate_scores():
             'message': f'Score recalculated for lead {lead_id}',
             'score': _serialize_lead_score(score),
         }), 200
+
+    # Source type / all-leads recalculation is admin-only (rewrites every matching row).
+    if source_type or recalculate_all:
+        if not current_user_is_admin():
+            return jsonify({
+                'error': 'Forbidden',
+                'message': 'Admin access required.',
+            }), 403
 
     # Source type recalculation
     if source_type:

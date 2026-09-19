@@ -528,15 +528,9 @@ def create_app(config_name='development'):
         """Populate g.user_id from Bearer JWT (required) or X-User-Id header (testing only)."""
         auth_header = _request.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
-            token = auth_header[7:]
-            try:
-                from app.services.auth_service import AuthService
-                claims = AuthService().verify_token(token)
-                g.user_id = claims['sub']
-                return  # Bearer token verified — done
-            except Exception:
-                # Invalid/expired token — fall through to anonymous
-                pass
+            from app.api_utils import bind_request_jwt_identity
+            bind_request_jwt_identity(auth_header[7:])
+            return
 
         if _is_testing:
             # In tests or when ALLOW_LEGACY_X_USER_ID=true, allow X-User-Id header
@@ -546,6 +540,69 @@ def create_app(config_name='development'):
             # In production/development, never trust the unauthenticated X-User-Id
             # header. No valid Bearer token means anonymous.
             g.user_id = 'anonymous'
+
+    @app.before_request
+    def enforce_api_auth():
+        """Reject anonymous /api callers except the explicit public allowlist."""
+        from app.api_utils import (
+            anonymous_api_unauthorized_response,
+            is_public_api_request,
+        )
+
+        if not _request.path.startswith('/api'):
+            return None
+        if is_public_api_request():
+            return None
+        user_id = getattr(g, 'user_id', None)
+        jwt_error = getattr(g, 'jwt_error', None)
+        if jwt_error:
+            import logging as _logging
+            from flask import jsonify as _jsonify
+            from app.api_utils import _user_id_for_log
+            _api_log = _logging.getLogger('app.api_utils')
+            if jwt_error == 'expired':
+                _api_log.warning(
+                    "auth_reject reason=token_expired path=%s",
+                    _request.path,
+                )
+                return _jsonify({'error': 'Token expired'}), 401
+            if jwt_error == 'setup_token':
+                _api_log.warning(
+                    "auth_reject reason=setup_token path=%s",
+                    _request.path,
+                )
+                return _jsonify({
+                    'error': 'Setup token cannot be used for authentication',
+                }), 401
+            if jwt_error == 'user_not_found':
+                _api_log.warning(
+                    "auth_reject reason=user_not_found path=%s user_id=%s",
+                    _request.path,
+                    _user_id_for_log(getattr(g, 'jwt_subject', None)),
+                )
+                return _jsonify({'error': 'Authentication required'}), 401
+            if jwt_error == 'inactive':
+                _api_log.warning(
+                    "auth_reject reason=user_inactive path=%s user_id=%s",
+                    _request.path,
+                    _user_id_for_log(getattr(g, 'jwt_subject', None)),
+                )
+                return _jsonify({'error': 'Authentication required'}), 401
+            _api_log.warning(
+                "auth_reject reason=token_invalid path=%s",
+                _request.path,
+            )
+            return _jsonify({'error': 'Invalid token'}), 401
+        if not user_id or user_id == 'anonymous':
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "auth_reject reason=anonymous_api path=%s method=%s",
+                _request.path,
+                _request.method,
+            )
+            return anonymous_api_unauthorized_response()
+        return None
+
     # Register error handlers
     from app.error_handlers import register_error_handlers
     register_error_handlers(app)
@@ -1085,7 +1142,7 @@ def create_app(config_name='development'):
                                 )
                                 # Rescore leads
                                 from app.services import LeadScoringEngine
-                                LeadScoringEngine().bulk_rescore('default')
+                                LeadScoringEngine().bulk_rescore('default', all_owners=True)
                                 flask_app.logger.info("Startup recovery: lead rescore complete.")
                             except Exception as exc:
                                 flask_app.logger.error(

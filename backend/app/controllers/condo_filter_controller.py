@@ -12,6 +12,7 @@ from marshmallow import ValidationError
 from app import db, limiter
 from app.models import AddressGroupAnalysis
 from app.schemas import CondoFilterResultsQuerySchema, CondoFilterOverrideSchema
+from app.api_utils import owned_lead_ids_for_current_user
 from app.services.condo_filter_service import CondoFilterService
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,9 @@ def run_analysis():
     JSON with summary counts by condo_risk_status and building_sale_possible,
     total address groups analyzed, and total properties processed.
     """
-    summary = condo_filter_service.run_analysis()
+    summary = condo_filter_service.run_analysis(
+        lead_id_scope=owned_lead_ids_for_current_user(),
+    )
     return jsonify(summary), 200
 
 
@@ -112,6 +115,7 @@ def get_results():
         filters=filters,
         page=params['page'],
         per_page=params['per_page'],
+        lead_id_scope=owned_lead_ids_for_current_user(),
     )
     return jsonify(results), 200
 
@@ -128,7 +132,10 @@ def get_detail(analysis_id):
 
     Returns 404 if the record does not exist.
     """
-    detail = condo_filter_service.get_detail(analysis_id)
+    detail = condo_filter_service.get_detail(
+        analysis_id,
+        lead_id_scope=owned_lead_ids_for_current_user(),
+    )
     if detail is None:
         return jsonify({
             'error': 'Not found',
@@ -173,7 +180,13 @@ def apply_override(analysis_id):
         status=validated['condo_risk_status'],
         building_sale=validated['building_sale_possible'],
         reason=validated['reason'],
+        lead_id_scope=owned_lead_ids_for_current_user(),
     )
+    if result is None:
+        return jsonify({
+            'error': 'Not found',
+            'message': f'Address group analysis {analysis_id} does not exist',
+        }), 404
     return jsonify(result), 200
 
 
@@ -197,7 +210,10 @@ def export_csv():
     if params.get('manually_reviewed') is not None:
         filters['manually_reviewed'] = params['manually_reviewed']
 
-    csv_content = condo_filter_service.export_csv(filters)
+    csv_content = condo_filter_service.export_csv(
+        filters,
+        lead_id_scope=owned_lead_ids_for_current_user(),
+    )
 
     return Response(
         csv_content,

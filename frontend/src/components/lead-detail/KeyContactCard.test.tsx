@@ -98,7 +98,21 @@ describe('formatKeyContactMailing', () => {
 
 describe('KeyContactCard', () => {
   it('keeps the contact name subordinate to the Key Contact section title', () => {
-    renderCard(basePayload({ phone_1: '3128060441' }), 'Gaston Padilla')
+    renderCard(
+      basePayload({
+        phone_1: '3128060441',
+        contacts: [{
+          id: 1,
+          first_name: 'Gaston',
+          last_name: 'Padilla',
+          role: 'owner',
+          is_primary: true,
+          phones: [],
+          emails: [],
+        }],
+      }),
+      'Gaston Padilla',
+    )
     expect(screen.getByRole('heading', { name: 'Key Contact' })).toBeInTheDocument()
     const name = screen.getByTestId('key-contact-name')
     expect(name).toHaveTextContent('Gaston Padilla')
@@ -117,6 +131,15 @@ describe('KeyContactCard', () => {
         mailing_zip: '60614',
         contacts_likely_prior_owner: true,
         contacts_stale_since: '2024-07-30',
+        contacts: [{
+          id: 1,
+          first_name: 'Prior',
+          last_name: 'Owner',
+          role: 'owner',
+          is_primary: true,
+          phones: [],
+          emails: [],
+        }],
       }),
       'Prior Owner',
     )
@@ -135,6 +158,15 @@ describe('KeyContactCard', () => {
         phone_1: '(312) 806-0441',
         email_1: '(708) 222-6620',
         email_2: 'ssuperman0018@yahoo.com',
+        contacts: [{
+          id: 1,
+          first_name: 'Sam',
+          last_name: 'Superman',
+          role: 'owner',
+          is_primary: true,
+          phones: [],
+          emails: [],
+        }],
       }),
     )
     expect(screen.getByTestId('key-contact-phone')).toHaveTextContent('(312) 806-0441')
@@ -171,6 +203,15 @@ describe('KeyContactCard', () => {
     renderCard(
       basePayload({
         phones: [{ id: 1, value: '(312) 806-0441', confidence_score: 85, label: 'mobile' }],
+        contacts: [{
+          id: 1,
+          first_name: 'Sam',
+          last_name: 'Owner',
+          role: 'owner',
+          is_primary: true,
+          phones: [],
+          emails: [],
+        }],
       }),
     )
     expect(screen.getByTestId('key-contact-phone')).toHaveTextContent('(312) 806-0441')
@@ -186,6 +227,15 @@ describe('KeyContactCard', () => {
         mailing_city: 'Orland Park',
         mailing_state: 'IL',
         mailing_zip: '60467',
+        contacts: [{
+          id: 1,
+          first_name: 'Sam',
+          last_name: 'Owner',
+          role: 'owner',
+          is_primary: true,
+          phones: [],
+          emails: [],
+        }],
       }),
     )
     expect(screen.getByTestId('key-contact-email-copy')).toBeInTheDocument()
@@ -315,7 +365,7 @@ describe('KeyContactCard', () => {
     expect(screen.queryByTestId('key-contact-edit-details-btn')).not.toBeInTheDocument()
   })
 
-  it('opens edit phone & details for a flat-only key contact', () => {
+  it('does not treat a county name as the key contact', () => {
     renderCard(
       basePayload({
         owner_first_name: 'Gregory',
@@ -325,20 +375,20 @@ describe('KeyContactCard', () => {
       }),
       'Gregory Shek',
     )
-    fireEvent.click(screen.getByTestId('key-contact-edit-details-btn'))
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
-    expect(screen.getByTestId('contact-phone-input-0')).toHaveValue('(312) 555-0199')
+    expect(screen.getByTestId('key-contact-name')).toHaveTextContent('No contact on file')
+    expect(screen.queryByTestId('key-contact-phone-edit')).not.toBeInTheDocument()
+    expect(screen.queryByText('Gregory Shek')).not.toBeInTheDocument()
   })
 
-  it('seeds flat channels when editing a linked key contact', async () => {
+  it('edits the phone on a linked key contact without opening a form', async () => {
     const user = userEvent.setup()
-    vi.mocked(contactService.getContact).mockResolvedValue({
+    vi.mocked(contactService.updateContact).mockResolvedValue({
       id: 88,
       first_name: 'Jane',
       last_name: 'Doe',
       role: 'owner',
-      role_description: 'Owner contact',
-      notes: 'Preserve this note',
+      role_description: null,
+      notes: null,
       phones: [{ id: 1, contact_id: 88, value: '555-9999', label: 'mobile' }],
       emails: [],
       created_at: null,
@@ -353,114 +403,21 @@ describe('KeyContactCard', () => {
           last_name: 'Doe',
           role: 'owner',
           is_primary: true,
-          phones: [{ value: '555-9999', label: 'mobile' }],
+          phones: [{ value: '(312) 555-0199', label: 'mobile' }],
           emails: [],
         }],
-        phones: [{ value: '(312) 555-0000', label: 'work' }],
+        phones: [{ value: '(312) 555-0199', label: 'mobile' }],
       }),
       'Jane Doe',
     )
 
-    await user.click(screen.getByTestId('key-contact-edit-details-btn'))
-
-    await waitFor(() => {
-      expect(contactService.getContact).toHaveBeenCalledWith(88)
-    })
-    await waitFor(() => {
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
-    })
-    expect(screen.getByRole('textbox', { name: /notes/i })).toHaveValue('Preserve this note')
-    expect(screen.getByDisplayValue('555-9999')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('(312) 555-0000')).toBeInTheDocument()
-  })
-
-  it('keeps edit closed and shows an error when linked contact details fail to load', async () => {
-    const user = userEvent.setup()
-    vi.mocked(contactService.getContact).mockRejectedValue(new Error('Network error'))
-
-    renderCard(
-      basePayload({
-        contacts: [{
-          id: 88,
-          first_name: 'Jane',
-          last_name: 'Doe',
-          role: 'owner',
-          is_primary: true,
-          phones: [{ value: '555-9999', label: 'mobile' }],
-          emails: [],
-        }],
-      }),
-      'Jane Doe',
-    )
-
-    await user.click(screen.getByTestId('key-contact-edit-details-btn'))
-
-    await waitFor(() => {
-      expect(contactService.getContact).toHaveBeenCalledWith(88)
-    })
+    await user.click(screen.getByTestId('key-contact-phone-edit'))
+    expect(screen.getByTestId('key-contact-phone-edit-input')).toHaveValue('(312) 555-0199')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    expect(
-      await screen.findByText('Could not load contact details. Please try again.'),
-    ).toBeInTheDocument()
+    expect(contactService.getContact).not.toHaveBeenCalled()
   })
 
-  it('clears a stale load error after a successful retry opens the editor', async () => {
-    const user = userEvent.setup()
-    vi.mocked(contactService.getContact)
-      .mockRejectedValueOnce(new Error('Network error'))
-      .mockResolvedValueOnce({
-        id: 88,
-        first_name: 'Jane',
-        last_name: 'Doe',
-        role: 'owner',
-        role_description: 'Owner contact',
-        notes: 'Loaded on retry',
-        phones: [{ id: 1, contact_id: 88, value: '555-9999', label: 'mobile' }],
-        emails: [],
-        created_at: null,
-        updated_at: null,
-      })
-
-    renderCard(
-      basePayload({
-        contacts: [{
-          id: 88,
-          first_name: 'Jane',
-          last_name: 'Doe',
-          role: 'owner',
-          is_primary: true,
-          phones: [{ value: '555-9999', label: 'mobile' }],
-          emails: [],
-        }],
-      }),
-      'Jane Doe',
-    )
-
-    await user.click(screen.getByTestId('key-contact-edit-details-btn'))
-    expect(
-      await screen.findByText('Could not load contact details. Please try again.'),
-    ).toBeInTheDocument()
-
-    await user.click(screen.getByTestId('key-contact-edit-details-btn'))
-
-    await waitFor(() => {
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
-    })
-    expect(screen.getByRole('textbox', { name: /notes/i })).toHaveValue('Loaded on retry')
-    await waitFor(() => {
-      expect(
-        screen.queryByText('Could not load contact details. Please try again.'),
-      ).not.toBeInTheDocument()
-    })
-  })
-
-  it('offers Clear from lead for flat owner names with no linked contact', async () => {
-    const user = userEvent.setup()
-    vi.mocked(contactService.clearOwnerPerson).mockResolvedValue({
-      cleared_slots: ['owner'],
-      unlinked_contact_id: null,
-      display_name: 'Gary Carlson',
-    })
+  it('does not offer Clear from lead for a name that is not a saved person', () => {
     renderCard(
       basePayload({
         owner_first_name: 'Gary',
@@ -469,23 +426,7 @@ describe('KeyContactCard', () => {
       }),
       'Gary Carlson',
     )
-    expect(screen.getByTestId('key-contact-clear-owner-btn')).toBeInTheDocument()
-    await user.click(screen.getByTestId('key-contact-clear-owner-btn'))
-    await user.click(screen.getByTestId('confirm-key-contact-clear-owner-btn'))
-    await waitFor(() => {
-      expect(contactService.clearOwnerPerson).toHaveBeenCalledWith(
-        634,
-        expect.objectContaining({
-          first_name: 'Gary',
-          last_name: 'Carlson',
-        }),
-      )
-    })
-    await waitFor(() => {
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    })
-    expect(
-      await screen.findByText('Gary Carlson cleared from this lead.'),
-    ).toBeInTheDocument()
+    expect(screen.getByTestId('key-contact-name')).toHaveTextContent('No contact on file')
+    expect(screen.queryByTestId('key-contact-clear-owner-btn')).not.toBeInTheDocument()
   })
 })

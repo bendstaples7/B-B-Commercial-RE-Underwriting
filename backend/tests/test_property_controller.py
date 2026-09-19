@@ -76,7 +76,7 @@ class TestLegacyRedirects:
 
     def test_legacy_list_redirect(self, client):
         """GET /api/leads/ returns 301 with Location pointing to /api/properties/."""
-        response = client.get("/api/leads/", follow_redirects=False)
+        response = client.get("/api/leads/", follow_redirects=False, headers=_AUTH_HEADERS)
         assert response.status_code == 301
         location = response.headers.get("Location", "")
         assert "/api/properties/" in location
@@ -87,21 +87,21 @@ class TestLegacyRedirects:
             prop = _create_property("200 Redirect Ave")
             prop_id = prop.id
 
-        response = client.get(f"/api/leads/{prop_id}", follow_redirects=False)
+        response = client.get(f"/api/leads/{prop_id}", follow_redirects=False, headers=_AUTH_HEADERS)
         assert response.status_code == 301
         location = response.headers.get("Location", "")
         assert f"/api/properties/{prop_id}" in location
 
     def test_legacy_list_redirect_preserves_query_params(self, client):
         """GET /api/leads/?city=Chicago redirects and preserves query parameters."""
-        response = client.get("/api/leads/?city=Chicago", follow_redirects=False)
+        response = client.get("/api/leads/?city=Chicago", follow_redirects=False, headers=_AUTH_HEADERS)
         assert response.status_code == 301
         location = response.headers.get("Location", "")
         assert "/api/properties/" in location
 
     def test_legacy_redirect_is_permanent(self, client):
         """The redirect status code is 301 (permanent), not 302 (temporary)."""
-        response = client.get("/api/leads/", follow_redirects=False)
+        response = client.get("/api/leads/", follow_redirects=False, headers=_AUTH_HEADERS)
         assert response.status_code == 301
 
 

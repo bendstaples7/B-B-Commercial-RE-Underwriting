@@ -24,7 +24,7 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timezone
 
-from sqlalchemy import or_
+from sqlalchemy import exists, or_
 
 from app import db
 from app.models.address_group_analysis import AddressGroupAnalysis
@@ -60,7 +60,24 @@ class CondoFilterService:
     # Analysis pipeline
     # ------------------------------------------------------------------
 
-    def run_analysis(self) -> dict:
+    def _visible_analysis_query(self, query, lead_id_scope):
+        """Hide groups that only contain leads the caller does not own.
+
+        Orphan rows (no linked leads) stay visible so fixture/unit records
+        still list. Admin passes ``lead_id_scope=None`` (no filter).
+        """
+        if lead_id_scope is None:
+            return query
+        has_any_lead = exists().where(Lead.condo_analysis_id == AddressGroupAnalysis.id)
+        if not lead_id_scope:
+            return query.filter(~has_any_lead)
+        has_owned_lead = exists().where(
+            Lead.condo_analysis_id == AddressGroupAnalysis.id,
+            Lead.id.in_(lead_id_scope),
+        )
+        return query.filter(or_(~has_any_lead, has_owned_lead))
+
+    def run_analysis(self, lead_id_scope=None) -> dict:
         """Run full condo filter analysis on all commercial/mixed-use leads.
 
         Steps:
@@ -78,12 +95,19 @@ class CondoFilterService:
             by_building_sale counts.
         """
         # Step 1: Query commercial and mixed-use leads
-        leads = Lead.query.filter(
+        query = Lead.query.filter(
             or_(
                 Lead.lead_category == 'commercial',
                 Lead.property_type.ilike('%mixed%'),
             )
-        ).all()
+        )
+        if lead_id_scope is not None:
+            if not lead_id_scope:
+                leads = []
+            else:
+                leads = query.filter(Lead.id.in_(lead_id_scope)).all()
+        else:
+            leads = query.all()
 
         logger.info("Condo filter analysis: found %d commercial/mixed-use leads", len(leads))
 
@@ -143,22 +167,33 @@ class CondoFilterService:
                 )
                 db.session.add(analysis)
 
-            # Update automated fields (preserve manual override fields)
-            analysis.property_count = metrics.property_count
-            analysis.pin_count = metrics.pin_count
-            analysis.owner_count = metrics.owner_count
-            analysis.has_unit_number = metrics.has_unit_number
-            analysis.has_condo_language = metrics.has_condo_language
-            analysis.missing_pin_count = metrics.missing_pin_count
-            analysis.missing_owner_count = metrics.missing_owner_count
-            analysis.condo_risk_status = result.condo_risk_status
-            analysis.building_sale_possible = result.building_sale_possible
-            analysis.analysis_details = {
-                'triggered_rules': result.triggered_rules,
-                'reason': result.reason,
-                'confidence': result.confidence,
-            }
-            analysis.analyzed_at = now
+            group_ids = {lead.id for lead in group_leads}
+            group_owners = {getattr(lead, 'owner_user_id', None) for lead in group_leads}
+            foreign_linked = False
+            if getattr(analysis, 'id', None) is not None:
+                for row in analysis.leads.all():
+                    if row.id in group_ids:
+                        continue
+                    if getattr(row, 'owner_user_id', None) not in group_owners:
+                        foreign_linked = True
+                        break
+
+            if not foreign_linked:
+                analysis.property_count = metrics.property_count
+                analysis.pin_count = metrics.pin_count
+                analysis.owner_count = metrics.owner_count
+                analysis.has_unit_number = metrics.has_unit_number
+                analysis.has_condo_language = metrics.has_condo_language
+                analysis.missing_pin_count = metrics.missing_pin_count
+                analysis.missing_owner_count = metrics.missing_owner_count
+                analysis.condo_risk_status = result.condo_risk_status
+                analysis.building_sale_possible = result.building_sale_possible
+                analysis.analysis_details = {
+                    'triggered_rules': result.triggered_rules,
+                    'reason': result.reason,
+                    'confidence': result.confidence,
+                }
+                analysis.analyzed_at = now
 
             # Flush to get the ID for new records
             db.session.flush()
@@ -238,7 +273,7 @@ class CondoFilterService:
     # Results retrieval
     # ------------------------------------------------------------------
 
-    def get_results(self, filters: dict, page: int, per_page: int) -> dict:
+    def get_results(self, filters: dict, page: int, per_page: int, lead_id_scope=None) -> dict:
         """Get paginated, filtered analysis results.
 
         Parameters
@@ -271,6 +306,7 @@ class CondoFilterService:
                 AddressGroupAnalysis.manually_reviewed == filters['manually_reviewed']
             )
 
+        query = self._visible_analysis_query(query, lead_id_scope)
         query = query.order_by(AddressGroupAnalysis.analyzed_at.desc())
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
 
@@ -288,7 +324,7 @@ class CondoFilterService:
     # Detail retrieval
     # ------------------------------------------------------------------
 
-    def get_detail(self, analysis_id: int) -> dict | None:
+    def get_detail(self, analysis_id: int, lead_id_scope=None) -> dict | None:
         """Get full detail for a single address group including linked leads.
 
         Parameters
@@ -305,6 +341,12 @@ class CondoFilterService:
         if analysis is None:
             return None
 
+        linked = analysis.leads.all()
+        if lead_id_scope is not None:
+            if linked and not any(lead.id in lead_id_scope for lead in linked):
+                return None
+            linked = [lead for lead in linked if lead.id in lead_id_scope]
+
         detail = self._serialize_analysis(analysis)
         detail['leads'] = [
             {
@@ -318,7 +360,7 @@ class CondoFilterService:
                 'property_type': lead.property_type,
                 'assessor_class': getattr(lead, 'assessor_class', None),
             }
-            for lead in analysis.leads.all()
+            for lead in linked
         ]
         return detail
 
@@ -332,7 +374,8 @@ class CondoFilterService:
         status: str,
         building_sale: str,
         reason: str,
-    ) -> dict:
+        lead_id_scope=None,
+    ) -> dict | None:
         """Apply manual override to an address group and cascade to linked leads.
 
         Parameters
@@ -352,6 +395,13 @@ class CondoFilterService:
             Updated analysis record with linked leads.
         """
         analysis = db.session.get(AddressGroupAnalysis, analysis_id)
+        if analysis is None:
+            return None
+
+        linked = analysis.leads.all()
+        if lead_id_scope is not None and linked:
+            if any(lead.id not in lead_id_scope for lead in linked):
+                return None
 
         # Update override fields on the analysis record itself
         analysis.manual_override_status = status
@@ -361,19 +411,19 @@ class CondoFilterService:
         analysis.building_sale_possible = building_sale
 
         # Cascade to linked leads
-        for lead in analysis.leads.all():
+        for lead in linked:
             lead.condo_risk_status = status
             lead.building_sale_possible = building_sale
 
         db.session.commit()
 
-        return self.get_detail(analysis_id)
+        return self.get_detail(analysis_id, lead_id_scope=lead_id_scope)
 
     # ------------------------------------------------------------------
     # CSV export
     # ------------------------------------------------------------------
 
-    def export_csv(self, filters: dict) -> str:
+    def export_csv(self, filters: dict, lead_id_scope=None) -> str:
         """Generate CSV content for filtered analysis results.
 
         Parameters
@@ -401,6 +451,7 @@ class CondoFilterService:
                 AddressGroupAnalysis.manually_reviewed == filters['manually_reviewed']
             )
 
+        query = self._visible_analysis_query(query, lead_id_scope)
         analyses = query.order_by(AddressGroupAnalysis.analyzed_at.desc()).all()
 
         output = io.StringIO()
@@ -425,6 +476,8 @@ class CondoFilterService:
         # Data rows
         for analysis in analyses:
             leads = analysis.leads.all()
+            if lead_id_scope is not None:
+                leads = [lead for lead in leads if lead.id in lead_id_scope]
 
             # Representative address: first lead's property_street
             representative_address = leads[0].property_street if leads else ''

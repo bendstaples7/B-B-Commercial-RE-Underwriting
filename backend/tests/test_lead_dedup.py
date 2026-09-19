@@ -147,7 +147,7 @@ class TestHubSpotAddressDisambiguation:
             svc = HubSpotMatcherService()
             match = svc.match_deal(deal)
 
-            assert match.status == 'confirmed'
+            assert match.status == 'pending'
             assert match.internal_record_id == jane.id
 
     def test_disambiguates_prefers_hubspot_confirmed_lead(self, app):
@@ -182,9 +182,40 @@ class TestHubSpotAddressDisambiguation:
             svc = HubSpotMatcherService()
             match = svc.match_deal(deal)
 
-            assert match.status == 'confirmed'
+            assert match.status == 'pending'
             assert match.internal_record_id == hubspot_lead.id
             assert sheets_lead.review_required is True
+
+    def test_ambiguous_address_does_not_flag_foreign_owner_review(self, app):
+        from unittest.mock import patch
+
+        with app.app_context():
+            mine = Lead(
+                property_street='90 Shared Ambiguous St',
+                owner_first_name='Pat',
+                owner_last_name='Owner',
+                owner_user_id='hs-importer',
+            )
+            theirs = Lead(
+                property_street='90 Shared Ambiguous Street',
+                owner_first_name='Pat',
+                owner_last_name='Owner',
+                owner_user_id='other-user',
+            )
+            db.session.add_all([mine, theirs])
+            db.session.commit()
+            their_id = theirs.id
+
+            deal = self._make_deal('deal-foreign-flag', '90 Shared Ambiguous St')
+            with patch.object(
+                HubSpotMatcherService,
+                '_hubspot_import_owner_user_id',
+                return_value='hs-importer',
+            ):
+                HubSpotMatcherService().match_deal(deal)
+
+            theirs = db.session.get(Lead, their_id)
+            assert theirs.review_required is not True
 
     def test_no_placeholder_when_normalized_match_exists(self, app):
         """Unmatched path should link to existing lead instead of creating placeholder."""

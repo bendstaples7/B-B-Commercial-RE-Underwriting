@@ -86,6 +86,34 @@ def test_bulk_rescore_can_isolate_one_bad_lead(app_ctx, monkeypatch):
     persist.assert_called_once()
 
 
+def test_bulk_rescore_skips_other_owners_unless_all_owners(app_ctx, monkeypatch):
+    from app.models.lead import Lead
+
+    mine = Lead(property_street='1 Mine St', owner_user_id='test-user')
+    theirs = Lead(property_street='2 Theirs St', owner_user_id='other-user')
+    db.session.add_all([mine, theirs])
+    db.session.commit()
+
+    engine = LeadScoringEngine()
+    persist = MagicMock()
+    monkeypatch.setattr(engine, 'compute', lambda *_args, **_kwargs: MagicMock())
+    monkeypatch.setattr(engine, 'persist', persist)
+    monkeypatch.setattr(
+        'app.services.lead_scoring_engine.rubric.batch_contact_reachability_scores',
+        lambda leads: {lead.id: None for lead in leads},
+    )
+    monkeypatch.setattr(engine, 'get_weights', lambda *_args, **_kwargs: MagicMock())
+
+    scoped = engine.bulk_rescore('test-user')
+    assert scoped == 1
+    persist.assert_called_once()
+    persist.reset_mock()
+
+    everyone = engine.bulk_rescore('test-user', all_owners=True)
+    assert everyone == 2
+    assert persist.call_count == 2
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

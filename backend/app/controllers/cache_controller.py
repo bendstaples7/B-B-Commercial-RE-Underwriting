@@ -9,6 +9,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
+from app.api_utils import require_auth, require_admin
 from app.schemas import DatasetStatusResponseSchema, SocrataSyncRequestSchema
 from app.services import CacheStatusService
 
@@ -64,6 +65,7 @@ def handle_errors(f):
 
 @cache_bp.route('/socrata/status', methods=['GET'])
 @handle_errors
+@require_auth
 def cache_status():
     """Return the current state of each Socrata cache table.
 
@@ -83,6 +85,8 @@ def cache_status():
 
 @cache_bp.route('/socrata/sync', methods=['POST'])
 @handle_errors
+@require_auth
+@require_admin
 def trigger_sync():
     """Enqueue a Socrata cache refresh task.
 

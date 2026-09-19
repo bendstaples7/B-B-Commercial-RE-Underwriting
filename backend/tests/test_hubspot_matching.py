@@ -151,6 +151,8 @@ class TestDealMatchConfidence:
                 f"Expected HIGH for PIN match, got {match.confidence}"
             )
             assert match.matching_criteria == "pin_match"
+            assert match.status == "pending"
+            assert match.internal_record_id == lead.id
 
             db.session.rollback()
 
@@ -541,4 +543,823 @@ class TestContactMatchConfidence:
             assert match.confidence == "HIGH"
             assert match.matching_criteria == "phone_match"
 
+            db.session.rollback()
+
+
+class TestAmbiguousPinMatch:
+    def test_duplicate_pin_stays_pending(self, app):
+        """Two leads with the same PIN must not auto-attach a HubSpot deal."""
+        with app.app_context():
+            pin = "123456789000"
+            lead_a = Lead(county_assessor_pin=pin, property_street="10 Pin A St")
+            lead_b = Lead(county_assessor_pin=pin, property_street="10 Pin B St")
+            db.session.add_all([lead_a, lead_b])
+            db.session.flush()
+
+            deal = _make_deal(
+                hubspot_id="dup-pin-deal",
+                pin=pin,
+                address="10 Somewhere Else",
+            )
+            db.session.add(deal)
+            db.session.flush()
+
+            match = HubSpotMatcherService().match_deal(deal, stage_label_map={})
+            db.session.flush()
+
+            assert match.confidence == "HIGH"
+            assert match.matching_criteria == "pin_match"
+            assert match.status == "pending"
+            assert match.internal_record_id is None
+
+            db.session.rollback()
+
+    def test_unique_pin_stays_pending_and_does_not_write_status(self, app):
+        """A 1:1 PIN hit must not confirm or copy HubSpot stage onto the lead."""
+        with app.app_context():
+            pin = "123456789111"
+            lead = Lead(
+                county_assessor_pin=pin,
+                property_street="10 Unique Pin St",
+                lead_status="skip_trace",
+                lead_score=18.0,
+            )
+            db.session.add(lead)
+            db.session.flush()
+            lead_id = lead.id
+
+            deal = HubSpotDeal(
+                hubspot_id="unique-pin-no-enrich",
+                raw_payload={
+                    "properties": {
+                        "county_assessor_pin": pin,
+                        "dealname": "999 Conflicting Blvd",
+                        "dealstage": "closedwon",
+                    },
+                },
+            )
+            db.session.add(deal)
+            db.session.flush()
+
+            match = HubSpotMatcherService().match_deal(
+                deal,
+                stage_label_map={"closedwon": "Deal Won"},
+            )
+            db.session.flush()
+
+            assert match.status == "pending"
+            assert match.confidence == "HIGH"
+            assert match.matching_criteria == "pin_match"
+            assert match.internal_record_id == lead_id
+            refreshed = db.session.get(Lead, lead_id)
+            assert refreshed.lead_status == "skip_trace"
+            assert refreshed.lead_score == 18.0
+            assert refreshed.property_street == "10 Unique Pin St"
+
+            db.session.rollback()
+
+    def test_confirming_unique_pin_then_copies_hubspot_stage(self, app):
+        """Pending unique PIN must not write; confirm is what applies HubSpot stage."""
+        with app.app_context():
+            pin = "123456789222"
+            lead = Lead(
+                county_assessor_pin=pin,
+                property_street="11 Unique Pin Confirm St",
+                lead_status="skip_trace",
+                lead_score=18.0,
+            )
+            db.session.add(lead)
+            db.session.flush()
+            lead_id = lead.id
+            deal = HubSpotDeal(
+                hubspot_id="unique-pin-confirm-enrich",
+                raw_payload={
+                    "properties": {
+                        "county_assessor_pin": pin,
+                        "dealname": "11 Unique Pin Confirm St",
+                        "dealstage": "closedwon",
+                    },
+                },
+            )
+            db.session.add(deal)
+            db.session.flush()
+            svc = HubSpotMatcherService()
+            match = svc.match_deal(
+                deal, stage_label_map={"closedwon": "Deal Won"},
+            )
+            db.session.flush()
+            assert match.status == "pending"
+            assert db.session.get(Lead, lead_id).lead_status == "skip_trace"
+
+            match.status = "confirmed"
+            svc.apply_confirmed_match(
+                match, stage_label_map={"closedwon": "Deal Won"},
+            )
+            db.session.flush()
+            assert db.session.get(Lead, lead_id).lead_status == "deal_won"
+            db.session.rollback()
+
+
+class TestDedupIdentityMatch:
+    def test_identity_fallback_stays_pending_and_does_not_enrich(self, app):
+        """Name+street identity hits must not auto-confirm or overwrite the lead."""
+        with app.app_context():
+            lead = Lead(
+                property_street='10 Identity St',
+                owner_first_name='Jane',
+                owner_last_name='Doe',
+                owner_user_id='other-user',
+                lead_score=12.0,
+            )
+            db.session.add(lead)
+            db.session.flush()
+            lead_id = lead.id
+            original_score = lead.lead_score
+
+            deal = HubSpotDeal(
+                hubspot_id='identity-fallback-deal',
+                raw_payload={
+                    'properties': {
+                        'dealname': '10 Identity St',
+                        'owner_first_name': 'Jane',
+                        'owner_last_name': 'Doe',
+                    },
+                },
+            )
+            db.session.add(deal)
+            db.session.flush()
+
+            with patch.object(
+                HubSpotMatcherService,
+                '_address_matches_for',
+                return_value=[],
+            ):
+                match = HubSpotMatcherService().match_deal(deal, stage_label_map={})
+            db.session.flush()
+
+            assert match.confidence == 'MEDIUM'
+            assert match.matching_criteria == 'address_match'
+            assert match.status == 'pending'
+            assert match.internal_record_id == lead_id
+            refreshed = db.session.get(Lead, lead_id)
+            assert refreshed.lead_score == original_score
+            assert refreshed.source is None or refreshed.source != 'hubspot_overwrite'
+
+            db.session.rollback()
+
+
+class TestAmbiguousContactPropertyMatch:
+    def test_email_match_with_two_properties_stays_unattached(self, app):
+        """A person linked to two leads must not auto-attach to whichever row comes first."""
+        from app.models.contact import Contact
+        from app.models.contact_email import ContactEmail
+        from app.models.property_contact import PropertyContact
+
+        with app.app_context():
+            lead_a = Lead(property_street='10 A St', owner_user_id='user-a')
+            lead_b = Lead(property_street='20 B St', owner_user_id='user-b')
+            db.session.add_all([lead_a, lead_b])
+            db.session.flush()
+
+            person = Contact(first_name='Pat', last_name='Owner')
+            db.session.add(person)
+            db.session.flush()
+            db.session.add(ContactEmail(
+                contact_id=person.id, value='pat@example.com', label='work',
+            ))
+            db.session.add_all([
+                PropertyContact(
+                    property_id=lead_a.id, contact_id=person.id,
+                    role='owner', is_primary=True,
+                ),
+                PropertyContact(
+                    property_id=lead_b.id, contact_id=person.id,
+                    role='owner', is_primary=False,
+                ),
+            ])
+            db.session.flush()
+
+            hs = _make_contact('ambig-email', 'pat@example.com', None, None, None)
+            db.session.add(hs)
+            db.session.flush()
+
+            match = HubSpotMatcherService().match_contact(hs)
+            db.session.flush()
+
+            assert match.confidence == 'HIGH'
+            assert match.matching_criteria == 'email_match'
+            assert match.status == 'pending'
+            assert match.internal_record_id is None
+
+            db.session.rollback()
+
+    def test_duplicate_lead_email_stays_unattached(self, app):
+        """Two leads sharing email_1 must not auto-attach a HubSpot contact."""
+        with app.app_context():
+            lead_a = Lead(
+                email_1='shared@example.com',
+                property_street='10 Shared A',
+                owner_user_id='user-a',
+            )
+            lead_b = Lead(
+                email_1='shared@example.com',
+                property_street='20 Shared B',
+                owner_user_id='user-b',
+            )
+            db.session.add_all([lead_a, lead_b])
+            db.session.flush()
+
+            hs = _make_contact('dup-email', 'shared@example.com', None, None, None)
+            db.session.add(hs)
+            db.session.flush()
+
+            match = HubSpotMatcherService().match_contact(hs)
+            db.session.flush()
+
+            assert match.confidence == 'HIGH'
+            assert match.matching_criteria == 'email_match'
+            assert match.status == 'pending'
+            assert match.internal_record_id is None
+
+            db.session.rollback()
+
+    def test_two_contacts_same_email_stays_unattached(self, app):
+        """Two people sharing an email, each on a different lead, stay unattached."""
+        from app.models.contact import Contact
+        from app.models.contact_email import ContactEmail
+        from app.models.property_contact import PropertyContact
+
+        with app.app_context():
+            lead_a = Lead(property_street='10 A St', owner_user_id='user-a')
+            lead_b = Lead(property_street='20 B St', owner_user_id='user-b')
+            db.session.add_all([lead_a, lead_b])
+            db.session.flush()
+
+            pat = Contact(first_name='Pat', last_name='A')
+            kim = Contact(first_name='Kim', last_name='B')
+            db.session.add_all([pat, kim])
+            db.session.flush()
+            db.session.add_all([
+                ContactEmail(contact_id=pat.id, value='shared2@example.com', label='work'),
+                ContactEmail(contact_id=kim.id, value='shared2@example.com', label='work'),
+                PropertyContact(
+                    property_id=lead_a.id, contact_id=pat.id,
+                    role='owner', is_primary=True,
+                ),
+                PropertyContact(
+                    property_id=lead_b.id, contact_id=kim.id,
+                    role='owner', is_primary=True,
+                ),
+            ])
+            db.session.flush()
+
+            hs = _make_contact('two-people-email', 'shared2@example.com', None, None, None)
+            db.session.add(hs)
+            db.session.flush()
+
+            match = HubSpotMatcherService().match_contact(hs)
+            db.session.flush()
+
+            assert match.confidence == 'HIGH'
+            assert match.matching_criteria == 'email_match'
+            assert match.status == 'pending'
+            assert match.internal_record_id is None
+
+            db.session.rollback()
+
+
+class TestHubSpotImportOwnership:
+    def test_unmatched_placeholder_gets_import_owner(self, app):
+        """New HubSpot leads must get an owner so queues can show them."""
+        with app.app_context():
+            deal = _make_deal(
+                hubspot_id='placeholder-owner-deal',
+                pin=None,
+                address='88 New HubSpot Ave',
+            )
+            db.session.add(deal)
+            db.session.flush()
+
+            with patch.object(
+                HubSpotMatcherService,
+                '_hubspot_import_owner_user_id',
+                return_value='importer-user',
+            ):
+                match = HubSpotMatcherService().match_deal(deal, stage_label_map={})
+            db.session.flush()
+
+            assert match.internal_record_type == 'lead'
+            lead = db.session.get(Lead, match.internal_record_id)
+            assert lead is not None
+            assert lead.source == 'hubspot_import'
+            assert lead.owner_user_id == 'importer-user'
+
+            db.session.rollback()
+
+    def test_unattended_import_does_not_assign_first_non_admin_user(self, app):
+        """Celery matching must not dump new leads onto whichever User row is first."""
+        from tests.conftest import seed_user
+
+        with app.app_context():
+            seed_user('first-user', is_admin=False, email='first-user@example.com')
+            with patch(
+                'app.services.cook_county_prospect_config.resolve_cook_county_prospect_owner_user_id',
+                side_effect=ValueError('unset'),
+            ):
+                assert HubSpotMatcherService._hubspot_import_owner_user_id() is None
+            db.session.rollback()
+
+    def test_unique_address_does_not_auto_confirm_foreign_owner(self, app):
+        """A 1:1 address hit on someone else's lead must not attach or write status."""
+        with app.app_context():
+            lead = Lead(
+                property_street='10 Foreign Ave',
+                owner_user_id='other-user',
+                lead_status='skip_trace',
+                lead_score=21.0,
+            )
+            db.session.add(lead)
+            db.session.flush()
+            lead_id = lead.id
+
+            deal = _make_deal(
+                hubspot_id='foreign-address-deal',
+                pin=None,
+                address='10 Foreign Ave',
+            )
+            db.session.add(deal)
+            db.session.flush()
+
+            with patch.object(
+                HubSpotMatcherService,
+                '_hubspot_import_owner_user_id',
+                return_value='importer-user',
+            ):
+                match = HubSpotMatcherService().match_deal(
+                    deal,
+                    stage_label_map={'closedwon': 'Deal Won'},
+                )
+            db.session.flush()
+
+            assert match.internal_record_id != lead_id
+            refreshed = db.session.get(Lead, lead_id)
+            assert refreshed.lead_status == 'skip_trace'
+            assert refreshed.lead_score == 21.0
+            assert refreshed.owner_user_id == 'other-user'
+            placeholder = db.session.get(Lead, match.internal_record_id)
+            assert placeholder is not None
+            assert placeholder.owner_user_id == 'importer-user'
+
+            db.session.rollback()
+
+    def test_unique_address_unattended_import_does_not_auto_confirm_owned_lead(self, app):
+        """Celery/unattended import must not copy HubSpot stage onto an owned lead."""
+        with app.app_context():
+            lead = Lead(
+                property_street='11 Owned Ave',
+                owner_user_id='other-user',
+                lead_status='skip_trace',
+                lead_score=19.0,
+            )
+            db.session.add(lead)
+            db.session.flush()
+            lead_id = lead.id
+
+            deal = _make_deal(
+                hubspot_id='unattended-address-deal',
+                pin=None,
+                address='11 Owned Ave',
+            )
+            db.session.add(deal)
+            db.session.flush()
+
+            with patch.object(
+                HubSpotMatcherService,
+                '_hubspot_import_owner_user_id',
+                return_value=None,
+            ):
+                match = HubSpotMatcherService().match_deal(
+                    deal,
+                    stage_label_map={'closedwon': 'Deal Won'},
+                )
+            db.session.flush()
+
+            assert match.status == 'pending'
+            assert match.internal_record_id != lead_id
+            refreshed = db.session.get(Lead, lead_id)
+            assert refreshed.lead_status == 'skip_trace'
+            assert refreshed.lead_score == 19.0
+            assert refreshed.owner_user_id == 'other-user'
+
+            db.session.rollback()
+
+    def test_unique_address_same_owner_still_auto_confirms(self, app):
+        """A 1:1 address hit on the importer's own lead may still auto-confirm."""
+        with app.app_context():
+            lead = Lead(
+                property_street='12 Own Ave',
+                owner_user_id='importer-user',
+                lead_status='skip_trace',
+                lead_score=22.0,
+            )
+            db.session.add(lead)
+            db.session.flush()
+            lead_id = lead.id
+
+            deal = _make_deal(
+                hubspot_id='own-address-deal',
+                pin=None,
+                address='12 Own Ave',
+            )
+            db.session.add(deal)
+            db.session.flush()
+
+            with patch.object(
+                HubSpotMatcherService,
+                '_hubspot_import_owner_user_id',
+                return_value='importer-user',
+            ):
+                match = HubSpotMatcherService().match_deal(
+                    deal,
+                    stage_label_map={'closedwon': 'Deal Won'},
+                )
+            db.session.flush()
+
+            assert match.status == 'confirmed'
+            assert match.internal_record_id == lead_id
+
+            db.session.rollback()
+
+    def test_unique_address_unowned_unattended_still_auto_confirms(self, app):
+        """Unowned unique address matches may auto-confirm even without an importer."""
+        with app.app_context():
+            lead = Lead(
+                property_street='13 Open Ave',
+                owner_user_id=None,
+                lead_status='skip_trace',
+                lead_score=11.0,
+            )
+            db.session.add(lead)
+            db.session.flush()
+            lead_id = lead.id
+
+            deal = _make_deal(
+                hubspot_id='unowned-address-deal',
+                pin=None,
+                address='13 Open Ave',
+            )
+            db.session.add(deal)
+            db.session.flush()
+
+            with patch.object(
+                HubSpotMatcherService,
+                '_hubspot_import_owner_user_id',
+                return_value=None,
+            ):
+                match = HubSpotMatcherService().match_deal(
+                    deal,
+                    stage_label_map={'closedwon': 'Deal Won'},
+                )
+            db.session.flush()
+
+            assert match.status == 'confirmed'
+            assert match.internal_record_id == lead_id
+
+            db.session.rollback()
+
+    def test_confirmed_match_is_not_retargeted_or_enriched_onto_new_pin_lead(self, app):
+        """A later unique PIN hit must not move a confirmed deal onto another lead."""
+        with app.app_context():
+            pin = '555666777888'
+            lead_a = Lead(
+                county_assessor_pin=pin,
+                property_street='20 Locked Ave',
+                owner_user_id='importer-user',
+                lead_status='skip_trace',
+                lead_score=30.0,
+            )
+            lead_b = Lead(
+                county_assessor_pin=None,
+                property_street='21 Other Ave',
+                owner_user_id='other-user',
+                lead_status='skip_trace',
+                lead_score=17.0,
+            )
+            db.session.add_all([lead_a, lead_b])
+            db.session.flush()
+            a_id = lead_a.id
+            b_id = lead_b.id
+
+            deal = HubSpotDeal(
+                hubspot_id='retarget-pin-deal',
+                raw_payload={
+                    'properties': {
+                        'county_assessor_pin': pin,
+                        'dealname': '20 Locked Ave',
+                        'dealstage': 'closedwon',
+                    },
+                },
+            )
+            db.session.add(deal)
+            db.session.flush()
+
+            svc = HubSpotMatcherService()
+            with patch.object(
+                HubSpotMatcherService,
+                '_hubspot_import_owner_user_id',
+                return_value='importer-user',
+            ):
+                match = svc.match_deal(deal, stage_label_map={'closedwon': 'Deal Won'})
+                db.session.flush()
+                assert match.status == 'pending'
+                assert match.internal_record_id == a_id
+                match.status = 'confirmed'
+                db.session.flush()
+
+                lead_a.county_assessor_pin = '000000000001'
+                lead_b.county_assessor_pin = pin
+                db.session.flush()
+
+                rematch = svc.match_deal(deal, stage_label_map={'closedwon': 'Deal Won'})
+            db.session.flush()
+
+            assert rematch.id == match.id
+            assert rematch.status == 'confirmed'
+            assert rematch.internal_record_id == a_id
+            other = db.session.get(Lead, b_id)
+            assert other.lead_status == 'skip_trace'
+            assert other.lead_score == 17.0
+
+            db.session.rollback()
+
+    def test_confirmed_unmatched_reimport_does_not_create_placeholder(self, app):
+        """A confirmed deal must not spawn a new lead when PIN/address no longer hit."""
+        with app.app_context():
+            pin = '111222333444'
+            lead = Lead(
+                county_assessor_pin=pin,
+                property_street='30 Locked St',
+                owner_user_id='importer-user',
+                lead_status='skip_trace',
+            )
+            db.session.add(lead)
+            db.session.flush()
+            lead_id = lead.id
+            lead_count = Lead.query.count()
+
+            deal = HubSpotDeal(
+                hubspot_id='orphan-placeholder-deal',
+                raw_payload={
+                    'properties': {
+                        'county_assessor_pin': pin,
+                        'dealname': '30 Locked St',
+                    },
+                },
+            )
+            db.session.add(deal)
+            db.session.flush()
+
+            svc = HubSpotMatcherService()
+            with patch.object(
+                HubSpotMatcherService,
+                '_hubspot_import_owner_user_id',
+                return_value='importer-user',
+            ):
+                match = svc.match_deal(deal)
+                db.session.flush()
+                match.status = 'confirmed'
+                db.session.flush()
+
+                deal.raw_payload = {
+                    'properties': {
+                        'county_assessor_pin': '000111222333',
+                        'dealname': '99 Nowhere Blvd',
+                    },
+                }
+                db.session.flush()
+
+                rematch = svc.match_deal(deal)
+            db.session.flush()
+
+            assert rematch.id == match.id
+            assert rematch.status == 'confirmed'
+            assert rematch.internal_record_id == lead_id
+            assert Lead.query.count() == lead_count
+
+            db.session.rollback()
+
+    def test_confirmed_person_match_does_not_enrich_lead_with_colliding_id(self, app):
+        """A confirmed HubSpot person must not treat Contact.id as a Lead PK."""
+        from app.models.contact import Contact
+        from app.models.hubspot_match import HubSpotMatch
+
+        with app.app_context():
+            person = Contact(first_name='Unmatched', last_name='Person')
+            lead = Lead(
+                property_street='99 Collision Ave',
+                owner_user_id='lead-owner',
+                owner_first_name=None,
+                phone_1=None,
+            )
+            db.session.add_all([person, lead])
+            db.session.flush()
+            assert person.id == lead.id
+
+            hs = _make_contact(
+                'orphan-person-hs',
+                'orphan@example.com',
+                None,
+                'HubFirst',
+                'HubLast',
+            )
+            db.session.add(hs)
+            db.session.flush()
+
+            frozen = HubSpotMatch(
+                hubspot_record_type='contact',
+                hubspot_id=hs.hubspot_id,
+                internal_record_type='contact',
+                internal_record_id=person.id,
+                confidence='UNMATCHED',
+                status='confirmed',
+            )
+            db.session.add(frozen)
+            db.session.flush()
+
+            svc = HubSpotMatcherService()
+            with patch(
+                'app.services.hubspot_writeback_service.hubspot_pull_enabled',
+                return_value=True,
+            ):
+                rematch = svc.match_contact(hs)
+                target = svc._lead_for_confirmed_match(frozen, lead)
+            db.session.flush()
+
+            assert rematch.id == frozen.id
+            assert rematch.internal_record_type == 'contact'
+            assert rematch.internal_record_id == person.id
+            assert target is None
+            refreshed = db.session.get(Lead, lead.id)
+            assert refreshed.owner_first_name is None
+            assert refreshed.phone_1 is None
+
+            db.session.rollback()
+
+
+class TestPinAndAddressOwnerScope:
+    def test_unique_pin_does_not_pending_link_foreign_lead(self, app):
+        with app.app_context():
+            pin = '998877665544'
+            theirs = Lead(
+                county_assessor_pin=pin,
+                property_street='82 Pin Guard St',
+                owner_user_id='other-user',
+            )
+            db.session.add(theirs)
+            db.session.flush()
+            their_id = theirs.id
+            deal = _make_deal(
+                hubspot_id='pin-foreign-deal',
+                pin=pin,
+                address='999 Unrelated Blvd',
+            )
+            db.session.add(deal)
+            db.session.flush()
+            with patch.object(
+                HubSpotMatcherService,
+                '_hubspot_import_owner_user_id',
+                return_value='hs-importer',
+            ):
+                match = HubSpotMatcherService().match_deal(deal, stage_label_map={})
+            assert match.internal_record_id != their_id
+            assert db.session.get(Lead, their_id).owner_user_id == 'other-user'
+            db.session.rollback()
+
+    def test_unique_pin_unattended_import_does_not_pending_link_owned_lead(self, app):
+        with app.app_context():
+            pin = '998877665533'
+            theirs = Lead(
+                county_assessor_pin=pin,
+                property_street='84 Unattended Pin St',
+                owner_user_id='other-user',
+            )
+            db.session.add(theirs)
+            db.session.flush()
+            their_id = theirs.id
+            deal = _make_deal(
+                hubspot_id='pin-unattended-deal',
+                pin=pin,
+                address='999 Unrelated Blvd',
+            )
+            db.session.add(deal)
+            db.session.flush()
+            with patch.object(
+                HubSpotMatcherService,
+                '_hubspot_import_owner_user_id',
+                return_value=None,
+            ):
+                match = HubSpotMatcherService().match_deal(deal, stage_label_map={})
+            assert match.internal_record_id != their_id
+            assert db.session.get(Lead, their_id).owner_user_id == 'other-user'
+            db.session.rollback()
+
+    def test_unique_address_does_not_pending_link_foreign_lead(self, app):
+        with app.app_context():
+            theirs = Lead(
+                property_street='83 Address Guard St',
+                owner_user_id='other-user',
+            )
+            db.session.add(theirs)
+            db.session.flush()
+            their_id = theirs.id
+            deal = _make_deal(
+                hubspot_id='address-foreign-deal',
+                pin=None,
+                address='83 Address Guard St',
+            )
+            db.session.add(deal)
+            db.session.flush()
+            with patch.object(
+                HubSpotMatcherService,
+                '_hubspot_import_owner_user_id',
+                return_value='hs-importer',
+            ):
+                match = HubSpotMatcherService().match_deal(deal, stage_label_map={})
+            assert match.internal_record_id != their_id
+            placeholder = db.session.get(Lead, match.internal_record_id)
+            assert placeholder is not None
+            assert placeholder.owner_user_id == 'hs-importer'
+            assert db.session.get(Lead, their_id).owner_user_id == 'other-user'
+            db.session.rollback()
+
+
+class TestIdentityMatchOwnerScope:
+    def test_does_not_pending_link_another_owners_lead(self, app):
+        with app.app_context():
+            theirs = Lead(
+                property_street='80 Identity Guard St',
+                owner_first_name='Pat',
+                owner_last_name='Owner',
+                owner_user_id='other-user',
+            )
+            db.session.add(theirs)
+            db.session.flush()
+            their_id = theirs.id
+            deal = HubSpotDeal(
+                hubspot_id='identity-foreign-deal',
+                raw_payload={'properties': {
+                    'dealname': '80 Identity Guard St',
+                    'owner_first_name': 'Pat',
+                    'owner_last_name': 'Owner',
+                }},
+            )
+            db.session.add(deal)
+            db.session.flush()
+            with patch.object(
+                HubSpotMatcherService, '_address_matches_for', return_value=[],
+            ), patch.object(
+                HubSpotMatcherService,
+                '_hubspot_import_owner_user_id',
+                return_value='hs-importer',
+            ):
+                match = HubSpotMatcherService().match_deal(deal)
+            assert match.internal_record_id != their_id
+            placeholder = db.session.get(Lead, match.internal_record_id)
+            assert placeholder is not None
+            assert placeholder.owner_user_id == 'hs-importer'
+            assert db.session.get(Lead, their_id).owner_user_id == 'other-user'
+            db.session.rollback()
+
+
+class TestContactMatchOwnerScope:
+    def test_unique_email_does_not_pending_link_foreign_lead(self, app):
+        with app.app_context():
+            theirs = Lead(
+                property_street='81 Email Guard St',
+                email_1='foreign.owner@example.com',
+                owner_user_id='other-user',
+            )
+            db.session.add(theirs)
+            db.session.flush()
+            their_id = theirs.id
+            hs = _make_contact(
+                hubspot_id='email-foreign-hs',
+                email='foreign.owner@example.com',
+                phone=None,
+                first_name='Pat',
+                last_name='Owner',
+            )
+            db.session.add(hs)
+            db.session.flush()
+            with patch.object(
+                HubSpotMatcherService,
+                '_hubspot_import_owner_user_id',
+                return_value='hs-importer',
+            ):
+                match = HubSpotMatcherService().match_contact(hs)
+            assert not (
+                match.internal_record_type == 'lead'
+                and match.internal_record_id == their_id
+            )
+            assert db.session.get(Lead, their_id).email_1 == 'foreign.owner@example.com'
             db.session.rollback()

@@ -7,7 +7,7 @@ from app.controllers.workflow_controller import WorkflowController
 from app.models.analysis_session import WorkflowStep
 from app.models.user import User
 from app.models.lead import Lead
-from app.api_utils import require_auth
+from app.api_utils import load_authorized_analysis_session, require_auth
 from app.schemas import (
     StartAnalysisSchema,
     PropertyFactsSchema,
@@ -163,6 +163,12 @@ def _spa_boot_client_ip() -> str:
     return remote_addr or 'unknown'
 
 
+def _health_probe_status(level: str, probe: str, exc: BaseException) -> str:
+    """Public health text — never interpolate exception strings (DSN/passwords)."""
+    logger.warning("health probe %s failed: %s", probe, exc, exc_info=True)
+    return f'{level}: {probe} probe failed'
+
+
 @api_bp.route('/spa-boot-failure', methods=['POST'])
 @limiter.limit('10 per minute', key_func=_spa_boot_client_ip)
 def spa_boot_failure():
@@ -303,7 +309,7 @@ def health_check():
         db.session.execute(db.text('SELECT 1'))
         checks['db_connectivity'] = 'ok'
     except Exception as e:
-        checks['db_connectivity'] = f'FAIL: {e}'
+        checks['db_connectivity'] = _health_probe_status('FAIL', 'db connectivity', e)
         degraded = True
 
     # ------------------------------------------------------------------
@@ -337,7 +343,7 @@ def health_check():
             )
             degraded = True
     except Exception as e:
-        checks['migration_head'] = f'FAIL: {e}'
+        checks['migration_head'] = _health_probe_status('FAIL', 'migration head', e)
         degraded = True
 
     # ------------------------------------------------------------------
@@ -356,7 +362,7 @@ def health_check():
             )
             # Warn but don't degrade — backfill runs in background on startup
     except Exception as e:
-        checks['action_engine'] = f'FAIL: {e}'
+        checks['action_engine'] = _health_probe_status('FAIL', 'action engine', e)
         degraded = True
 
     # ------------------------------------------------------------------
@@ -380,7 +386,7 @@ def health_check():
         else:
             checks['queue_counts'] = f'ok ({counts}; {_qc_elapsed:.2f}s)'
     except Exception as e:
-        checks['queue_counts'] = f'FAIL: {e}'
+        checks['queue_counts'] = _health_probe_status('FAIL', 'queue counts', e)
         degraded = True
 
     # ------------------------------------------------------------------
@@ -400,7 +406,7 @@ def health_check():
         else:
             checks['owner_mailing_heal'] = 'ok (0 candidates)'
     except Exception as e:
-        checks['owner_mailing_heal'] = f'WARN: mailing heal probe failed ({e})'
+        checks['owner_mailing_heal'] = _health_probe_status('WARN', 'mailing heal', e)
 
     # ------------------------------------------------------------------
     # Check 4a2: Geocode paid/quota circuit (WARN only)
@@ -424,7 +430,7 @@ def health_check():
                 f'{geo.get("monthly_soft_cap")} this month)'
             )
     except Exception as e:
-        checks['geocode_circuit'] = f'WARN: geocode circuit probe failed ({e})'
+        checks['geocode_circuit'] = _health_probe_status('WARN', 'geocode circuit', e)
 
     # ------------------------------------------------------------------
     # Check 4b: Host memory / Celery RSS (WARN only — do not 503)
@@ -437,7 +443,7 @@ def health_check():
         mem_health = evaluate_host_memory_health()
         checks['host_memory'] = mem_health['detail']
     except Exception as e:
-        checks['host_memory'] = f'WARN: memory probe failed ({e})'
+        checks['host_memory'] = _health_probe_status('WARN', 'host memory', e)
 
     # ------------------------------------------------------------------
     # Check 5: Lead visibility — optional env-gated user lead check
@@ -449,27 +455,20 @@ def health_check():
         else:
             user = User.query.filter_by(email_lower=lead_user_email.lower()).first()
             if user is None:
-                checks['lead_visibility'] = (
-                    f'WARN: user {lead_user_email} not found — '
-                    f'migration w2x3y4z5a6b7 may not have run'
-                )
+                checks['lead_visibility'] = 'WARN: configured health-check user not found'
             else:
                 lead_count = Lead.query.filter(
                     Lead.owner_user_id == user.user_id
                 ).count()
                 if lead_count == 0:
                     checks['lead_visibility'] = (
-                        f'FAIL: {lead_count} leads for {lead_user_email} '
-                        f'(user_id={user.user_id}). Leads with owner_user_id IS NULL '
-                        f'are invisible to non-admin users.'
+                        'FAIL: configured health-check user has no visible leads'
                     )
                     degraded = True
                 else:
-                    checks['lead_visibility'] = (
-                        f'ok ({lead_count} leads visible for {lead_user_email})'
-                    )
-    except Exception as e:
-        checks['lead_visibility'] = f'FAIL: {e}'
+                    checks['lead_visibility'] = f'ok ({lead_count} leads visible)'
+    except Exception:
+        checks['lead_visibility'] = 'FAIL: lead visibility probe failed'
         degraded = True
 
     # ------------------------------------------------------------------
@@ -487,7 +486,7 @@ def health_check():
         else:
             checks['redis'] = 'WARN: REDIS_URL not configured'
     except Exception as e:
-        checks['redis'] = f'WARN: Redis unreachable ({e})'
+        checks['redis'] = _health_probe_status('WARN', 'redis', e)
 
     try:
         from celery import current_app as celery_app  # noqa: PLC0415
@@ -502,7 +501,7 @@ def health_check():
                 'scheduled sync will not run until Celery is started'
             )
     except Exception as e:
-        checks['celery_worker'] = f'WARN: Celery check failed ({e})'
+        checks['celery_worker'] = _health_probe_status('WARN', 'celery worker', e)
 
     # ------------------------------------------------------------------
     # Check 7: Open Letter / mail queue schema
@@ -512,9 +511,8 @@ def health_check():
         db.session.execute(db.text('SELECT 1 FROM open_letter_config LIMIT 0'))
         checks['open_letter_schema'] = 'ok'
     except Exception as e:
-        checks['open_letter_schema'] = (
-            f'FAIL: mail_queue_items or open_letter_config missing ({e}). '
-            f'Run: flask db upgrade head'
+        checks['open_letter_schema'] = _health_probe_status(
+            'FAIL', 'open letter schema', e,
         )
         degraded = True
 
@@ -549,7 +547,9 @@ def health_check():
             )
             degraded = True
     except Exception as e:
-        checks['enrichment_catalog'] = f'FAIL: {e}'
+        checks['enrichment_catalog'] = _health_probe_status(
+            'FAIL', 'enrichment catalog', e,
+        )
         degraded = True
 
     status = 'degraded' if degraded else 'healthy'
@@ -629,6 +629,10 @@ def get_session_state(session_id):
             "scenarios": [...]
         }
     """
+    _session, denied = load_authorized_analysis_session(session_id)
+    if denied is not None:
+        return denied
+
     state = workflow_controller.get_session_state(session_id)
     
     return jsonify(state), 200
@@ -659,6 +663,10 @@ def advance_to_step(session_id, step_number):
     schema = AdvanceStepSchema()
     data = schema.load(request.get_json() or {})
     
+    _session, denied = load_authorized_analysis_session(session_id)
+    if denied is not None:
+        return denied
+
     # Convert step number to WorkflowStep enum
     try:
         target_step = WorkflowStep(step_number)
@@ -769,6 +777,10 @@ def update_step_data(session_id, step_number):
             "updated_at": "2024-01-01T00:00:00"
         }
     """
+    _session, denied = load_authorized_analysis_session(session_id)
+    if denied is not None:
+        return denied
+
     # Convert step number to WorkflowStep enum
     try:
         step = WorkflowStep(step_number)
@@ -820,6 +832,10 @@ def go_back_to_step(session_id, step_number):
             ...
         }
     """
+    _session, denied = load_authorized_analysis_session(session_id)
+    if denied is not None:
+        return denied
+
     # Convert step number to WorkflowStep enum
     try:
         target_step = WorkflowStep(step_number)
@@ -859,15 +875,9 @@ def generate_report(session_id):
             }
         }
     """
-    # Get session
-    from app.models import AnalysisSession
-    session = AnalysisSession.query.filter_by(session_id=session_id).first()
-    
-    if not session:
-        return jsonify({
-            'error': 'Session not found',
-            'message': f'Session {session_id} does not exist'
-        }), 404
+    session, denied = load_authorized_analysis_session(session_id)
+    if denied is not None:
+        return denied
     
     # Generate report
     report = report_generator.generate_report(session)
@@ -889,16 +899,10 @@ def export_to_excel(session_id):
     """
     from flask import send_file
     from io import BytesIO
-    from app.models import AnalysisSession
-    
-    # Get session
-    session = AnalysisSession.query.filter_by(session_id=session_id).first()
-    
-    if not session:
-        return jsonify({
-            'error': 'Session not found',
-            'message': f'Session {session_id} does not exist'
-        }), 404
+
+    session, denied = load_authorized_analysis_session(session_id)
+    if denied is not None:
+        return denied
     
     # Generate report first
     report = report_generator.generate_report(session)
@@ -935,20 +939,15 @@ def export_to_google_sheets(session_id):
             "spreadsheet_id": "..."
         }
     """
-    from app.models import AnalysisSession
-    
+    from app.api_utils import load_authorized_analysis_session
+
     # Validate request data
     schema = ExportGoogleSheetsSchema()
     data = schema.load(request.get_json())
-    
-    # Get session
-    session = AnalysisSession.query.filter_by(session_id=session_id).first()
-    
-    if not session:
-        return jsonify({
-            'error': 'Session not found',
-            'message': f'Session {session_id} does not exist'
-        }), 404
+
+    session, denied = load_authorized_analysis_session(session_id)
+    if denied is not None:
+        return denied
     
     # Generate report first
     report = report_generator.generate_report(session)
