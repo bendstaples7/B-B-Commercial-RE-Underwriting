@@ -1,4 +1,4 @@
-"""Parse HubSpot note/call free text into structured property facts.
+"""Parse HubSpot note/call/meeting free text into structured property facts.
 
 Assessor beds/baths on the lead are never overwritten. Note-derived unit counts
 and per-unit bed/bath mixes are stored on ``lead.note_property_facts`` and may
@@ -317,7 +317,7 @@ def note_property_facts_needs_timeline_heal(facts: Any) -> bool:
 
 
 def apply_note_facts_from_timeline(lead: Any) -> list[str]:
-    """Scan HubSpot note/call timeline entries and apply the richest parse.
+    """Scan HubSpot note/call/meeting timeline entries and apply the richest parse.
 
     When nothing parses, stores an empty sentinel so CC does not rescan forever.
     """

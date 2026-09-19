@@ -33,6 +33,7 @@ logger = logging.getLogger('backfill_hubspot_interactions_to_timeline')
 from app import create_app, db
 from app.models import (
     HubSpotEngagement,
+    HubSpotMatch,
     Interaction,
     InteractionAssociation,
     LeadTimelineEntry,
@@ -103,6 +104,37 @@ def _missing_count_for_lead(lead_id: int) -> int:
     return len(engagement_ids - existing)
 
 
+def _association_id_pairs(raw_payload: dict | None) -> set[tuple[str, str]]:
+    """HubSpot (record_type, id) pairs from an engagement associations block."""
+    assoc = (raw_payload or {}).get('associations') or {}
+    pairs: set[tuple[str, str]] = set()
+    for payload_key, record_type in (
+        ('dealIds', 'deal'),
+        ('contactIds', 'contact'),
+        ('companyIds', 'company'),
+    ):
+        for hs_id in assoc.get(payload_key) or []:
+            if hs_id is None or str(hs_id) == '':
+                continue
+            pairs.add((record_type, str(hs_id)))
+    return pairs
+
+
+def _confirmed_match_pairs_for_lead(lead_id: int) -> set[tuple[str, str]]:
+    return {
+        (row.hubspot_record_type, str(row.hubspot_id))
+        for row in (
+            db.session.query(HubSpotMatch.hubspot_record_type, HubSpotMatch.hubspot_id)
+            .filter(
+                HubSpotMatch.internal_record_type == 'lead',
+                HubSpotMatch.internal_record_id == lead_id,
+                HubSpotMatch.status == 'confirmed',
+            )
+            .all()
+        )
+    }
+
+
 def _meeting_engagements_missing_interactions(
     lead_id: int | None = None,
 ) -> list[HubSpotEngagement]:
@@ -123,23 +155,28 @@ def _meeting_engagements_missing_interactions(
         .filter(existing_interaction_ids.c.hubspot_engagement_id.is_(None))
         .order_by(HubSpotEngagement.id.asc())
     )
-    engagements = q.all()
     if lead_id is None:
-        return engagements
+        return q.all()
 
-    converter = HubSpotActivityConverterService()
-    filtered: list[HubSpotEngagement] = []
-    for engagement in engagements:
-        # Reuse the converter's match resolution so --lead-id dry-runs match apply.
-        associations = converter._resolve_associations(engagement)  # noqa: SLF001
-        if any(
-            assoc.get('target_type') == 'lead'
-            and assoc.get('target_id') is not None
-            and int(assoc['target_id']) == lead_id
-            for assoc in associations
-        ):
-            filtered.append(engagement)
-    return filtered
+    wanted = _confirmed_match_pairs_for_lead(lead_id)
+    if not wanted:
+        return []
+
+    from sqlalchemy import String, cast, or_
+
+    id_filters = [
+        cast(HubSpotEngagement.raw_payload, String).contains(hs_id)
+        for _, hs_id in wanted
+        if hs_id
+    ]
+    if id_filters:
+        q = q.filter(or_(*id_filters))
+
+    return [
+        engagement
+        for engagement in q.all()
+        if _association_id_pairs(engagement.raw_payload) & wanted
+    ]
 
 
 def convert_missing_meeting_interactions(lead_id: int | None = None) -> tuple[int, int]:
@@ -221,7 +258,6 @@ def main() -> None:
             print(f'Converted {converted} HubSpot meeting Interaction(s)', flush=True)
         if conversion_failures:
             print(f'Failed meeting conversions: {conversion_failures}', flush=True)
-            sys.exit(1)
 
         lead_ids = _lead_ids_with_bridgeable_interactions(args.lead_id)
         svc = HubSpotTimelineImportService()
@@ -229,10 +265,11 @@ def main() -> None:
         failed_ids = [lid for lid, count in results.items() if count < 0]
         created = sum(count for count in results.values() if count > 0)
         logger.info(
-            'Done (applied): leads=%s new_entries=%s failed=%s',
+            'Done (applied): leads=%s new_entries=%s failed=%s conversion_failures=%s',
             len(results),
             created,
             len(failed_ids),
+            conversion_failures,
         )
         print(
             f'Done (applied): leads={len(results)} new_entries={created} '
@@ -241,6 +278,7 @@ def main() -> None:
         )
         if failed_ids:
             print(f'Failed lead ids: {failed_ids[:50]}', flush=True)
+        if conversion_failures or failed_ids:
             sys.exit(1)
 
 

@@ -46,6 +46,19 @@ _CONTACT_EVENT_TYPES = frozenset({
     'email_logged', 'meeting_logged', 'sms_logged', 'voicemail_logged',
 })
 
+
+def _as_utc(occurred_at: datetime | None) -> datetime | None:
+    if occurred_at is None:
+        return None
+    if occurred_at.tzinfo is None:
+        return occurred_at.replace(tzinfo=timezone.utc)
+    return occurred_at.astimezone(timezone.utc)
+
+
+def _is_future_occurred_at(occurred_at: datetime | None, now: datetime) -> bool:
+    at = _as_utc(occurred_at)
+    return at is not None and at > now
+
 _DANGLING_END_WORDS = frozenset({
     'a', 'an', 'the', 'and', 'or', 'but', 'for', 'with', 'to', 'of', 'in',
     'on', 'at', 'by', 'from', 'as', 'was', 'were', 'is', 'are', 'be', 'been',
@@ -347,6 +360,7 @@ class LeadBriefingService:
             .all()
         )
 
+        now = datetime.now(timezone.utc)
         contact_activity: list[dict[str, Any]] = []
         other_activity: list[dict[str, Any]] = []
         for e in timeline:
@@ -359,26 +373,33 @@ class LeadBriefingService:
                 "source": e.source,
                 "summary": text[:220],
             }
-            if (e.event_type or '') in _CONTACT_EVENT_TYPES:
+            if (
+                (e.event_type or '') in _CONTACT_EVENT_TYPES
+                and not _is_future_occurred_at(e.occurred_at, now)
+            ):
                 contact_activity.append(row)
             else:
                 other_activity.append(row)
         # Prefer contact events so status/task noise does not crowd HubSpot calls/notes
         recent_activity = (contact_activity + other_activity)[:25]
 
-        now = datetime.now(timezone.utc)
         # Prefer a real contact event over admin/status timeline noise
         last = next(
             (
                 e for e in timeline
                 if (e.event_type or '') in _CONTACT_EVENT_TYPES
                 and self._entry_display_text(e)
+                and not _is_future_occurred_at(e.occurred_at, now)
             ),
             None,
         )
         if last is None:
             last = next(
-                (e for e in timeline if self._entry_display_text(e)),
+                (
+                    e for e in timeline
+                    if self._entry_display_text(e)
+                    and not _is_future_occurred_at(e.occurred_at, now)
+                ),
                 None,
             )
         last_at = last.occurred_at if last else None

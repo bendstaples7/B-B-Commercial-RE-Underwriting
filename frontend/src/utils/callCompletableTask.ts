@@ -175,7 +175,7 @@ export function findMeetingCompletableTask(tasks: LeadTask[]): LeadTask | null {
     (task) => isMeetingCompletableTask(task.task_type, task.title),
     (task) =>
       !NEVER_NOTE_EMAIL_COMPLETE.has((task.task_type || 'custom') as LeadTaskType)
-      && (task.task_type || 'custom') !== 'add_to_mail_batch',
+      && !isMailOrEmailOutreachTask(task.task_type, task.title),
   )
 }
 

@@ -75,7 +75,7 @@ class HubSpotActivityConverterService:
             engagement.raw_payload.get('engagement', {}).get('createdAt')
         )
 
-        associations = self._resolve_associations(engagement)
+        associations = self.associations_for_engagement(engagement)
         is_orphaned = len(associations) == 0
 
         interaction = Interaction(
@@ -130,7 +130,7 @@ class HubSpotActivityConverterService:
             engagement.raw_payload.get('engagement', {}).get('createdAt')
         )
 
-        associations = self._resolve_associations(engagement)
+        associations = self.associations_for_engagement(engagement)
         is_orphaned = len(associations) == 0
 
         interaction = Interaction(
@@ -187,7 +187,7 @@ class HubSpotActivityConverterService:
             engagement.raw_payload.get('engagement', {}).get('createdAt')
         )
 
-        associations = self._resolve_associations(engagement)
+        associations = self.associations_for_engagement(engagement)
         is_orphaned = len(associations) == 0
 
         interaction = Interaction(
@@ -236,7 +236,7 @@ class HubSpotActivityConverterService:
         body = self._extract_meeting_body(engagement.raw_payload)
         occurred_at = self._parse_meeting_occurred_at(engagement.raw_payload)
 
-        associations = self._resolve_associations(engagement)
+        associations = self.associations_for_engagement(engagement)
         is_orphaned = len(associations) == 0
 
         interaction = Interaction(
@@ -300,7 +300,7 @@ class HubSpotActivityConverterService:
         hs_status = (metadata.get('status') or '').upper()
         status = 'completed' if hs_status == 'COMPLETED' else 'open'
 
-        associations = self._resolve_associations(engagement)
+        associations = self.associations_for_engagement(engagement)
 
         task = Task(
             title=title,
@@ -758,6 +758,14 @@ class HubSpotActivityConverterService:
     # Private helpers (continued)                                          #
     # ------------------------------------------------------------------ #
 
+    def associations_for_engagement(self, engagement):
+        """Confirmed HubSpotMatch associations for an engagement payload.
+
+        Public wrapper around match resolution so ops scripts and convert
+        paths share the same mapping without reaching into a private method.
+        """
+        return self._resolve_associations(engagement)
+
     def _resolve_associations(self, engagement):
         """
         Look up confirmed HubSpotMatch records for each associated deal/contact/company ID
@@ -812,7 +820,7 @@ class HubSpotActivityConverterService:
         ).first()
         if engagement is None:
             return []
-        return self._resolve_associations(engagement)
+        return self.associations_for_engagement(engagement)
 
     @staticmethod
     def _extract_note_body(raw_payload):

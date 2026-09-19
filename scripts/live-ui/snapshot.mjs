@@ -145,6 +145,16 @@ async function main() {
       throw new Error(`Selector not visible: ${selector} (url=${page.url()})`)
     })
 
+    // Data-backed pages render MUI skeletons / *-skeleton testids while the
+    // command-center query is in flight. Wait for those to clear so the PNG
+    // is not a loading shell. Bounded: polling SSE pages may keep a spinner.
+    await page
+      .waitForFunction(
+        () => !document.querySelector('.MuiSkeleton-root, [data-testid$="-skeleton"]'),
+        { timeout: 15000 },
+      )
+      .catch(() => {})
+
     const metrics = await page.evaluate(collectMetricsFn(), selector)
     assertNotLoginWall(page.url(), metrics)
 

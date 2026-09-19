@@ -150,9 +150,13 @@ describe('findCompletableTaskForMode', () => {
   it('never auto-completes skip_trace_owner or mail batch from note', () => {
     const skip = [makeTask({ id: 1, title: 'Skip trace owner', task_type: 'skip_trace_owner' })]
     const mail = [makeTask({ id: 2, title: 'Add to mail', task_type: 'add_to_mail_batch' })]
+    const emailOnly = [makeTask({ id: 3, title: 'Email outreach', task_type: 'custom' })]
     expect(findCompletableTaskForMode('note', skip)).toBeNull()
     expect(findCompletableTaskForMode('note', mail)).toBeNull()
     expect(findCompletableTaskForMode('email', skip)).toBeNull()
     expect(findEmailCompletableTask(mail)?.id).toBe(2)
+    expect(findCompletableTaskForMode('meeting', skip)).toBeNull()
+    expect(findCompletableTaskForMode('meeting', mail)).toBeNull()
+    expect(findCompletableTaskForMode('meeting', emailOnly)).toBeNull()
   })
 })

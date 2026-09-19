@@ -454,9 +454,9 @@ class CallLogService:
         email_label: str | None = None,
         subject: str | None = None,
         sent_from_email: str | None = None,
-        activity_kind: str | None = None,
         complete_task_id: int | None = None,
         follow_up: dict | None = None,
+        activity_kind: str | None = None,
     ) -> LeadTimelineEntry:
         """Log a note, email, or meeting on a lead.
 
