@@ -886,9 +886,10 @@ export function SameAddressMergeBanner({
   }, [resetDialogState, saving])
 
   useEffect(() => {
+    if (!open) return
     if (removeId != null && removable.some((row) => row.id === removeId)) return
     selectRemoveId(removable[0]?.id ?? null)
-  }, [removable, removeId, selectRemoveId])
+  }, [open, removable, removeId, selectRemoveId])
 
   // Debounced lead search for the manual picker.
   useEffect(() => {
