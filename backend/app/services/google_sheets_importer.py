@@ -983,6 +983,7 @@ class GoogleSheetsImporter:
                 actor='google_sheets_importer',
                 commit=False,
             )
+            existing._sheets_import_was_created = False
             return existing
         else:
             # Create new lead
@@ -1034,6 +1035,7 @@ class GoogleSheetsImporter:
                     actor='google_sheets_importer',
                     commit=False,
                 )
+                existing._sheets_import_was_created = False
                 return existing
             try:
                 from app.services.contact_service import ContactService
@@ -1044,6 +1046,7 @@ class GoogleSheetsImporter:
                     "Contact upsert after sheets create failed for lead_id=%s: %s",
                     getattr(lead, 'id', None), exc,
                 )
+            lead._sheets_import_was_created = True
             return lead
 
     # ------------------------------------------------------------------
@@ -1249,6 +1252,7 @@ class GoogleSheetsImporter:
             error_log: list[dict] = []
             rows_imported = 0
             rows_skipped = 0
+            created_lead_ids: set[int] = set()
 
             for idx, raw_row in enumerate(data_rows, start=2):  # row 2 in sheet
                 # Build dict from positional values
@@ -1269,12 +1273,14 @@ class GoogleSheetsImporter:
                             result.cleaned_data['lead_category'] = lead_category
                         # Use a savepoint so a single row failure doesn't rollback prior rows
                         with db.session.begin_nested():
-                            self.upsert_lead(
+                            lead = self.upsert_lead(
                                 result.cleaned_data,
                                 import_job_id=job_id,
                                 data_source="google_sheets",
                                 owner_user_id=job.user_id,
                             )
+                            if getattr(lead, '_sheets_import_was_created', False):
+                                created_lead_ids.add(lead.id)
                         rows_imported += 1
                     except Exception as row_exc:
                         rows_skipped += 1
@@ -1342,7 +1348,10 @@ class GoogleSheetsImporter:
                         gis_no_connector += 1
                         continue
                     outcome = ingestion_svc._enrich_with_gis(
-                        lead, connector, job_id, is_creation=False,
+                        lead,
+                        connector,
+                        job_id,
+                        is_creation=lead.id in created_lead_ids,
                     )
                     if outcome.get('error'):
                         gis_errors += 1

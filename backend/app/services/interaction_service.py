@@ -97,7 +97,10 @@ class InteractionService:
             interaction_type=data.get('interaction_type', 'note'),
             body=body,
             occurred_at=occurred_at,
-            source='manual',
+            source=data.get('source', 'manual'),
+            hubspot_engagement_id=data.get('hubspot_engagement_id'),
+            raw_payload=data.get('raw_payload'),
+            is_orphaned=data.get('is_orphaned', False),
         )
         db.session.add(interaction)
         db.session.flush()  # populate interaction.id before creating associations
@@ -228,6 +231,7 @@ class InteractionService:
         page: int = 1,
         per_page: int = 20,
         lead_id_scope=None,
+        association_access_checker=None,
     ) -> tuple:
         """Return a paginated list of Interactions with optional filters.
 
@@ -235,6 +239,9 @@ class InteractionService:
             ``None`` — no owner filter (admin).
             empty set — return no rows.
             otherwise — only interactions associated with those lead ids.
+        ``association_access_checker``:
+            optional callable used to retain only interactions whose complete
+            association set is authorized for the caller.
         """
         filters = filters or {}
         if lead_id_scope is not None and not lead_id_scope:
@@ -274,8 +281,17 @@ class InteractionService:
 
         query = query.order_by(Interaction.occurred_at.desc())
 
-        total = query.count()
-        records = query.offset((page - 1) * per_page).limit(per_page).all()
+        if association_access_checker is not None:
+            accessible = [
+                interaction for interaction in query.all()
+                if association_access_checker(interaction)
+            ]
+            total = len(accessible)
+            start = (page - 1) * per_page
+            records = accessible[start:start + per_page]
+        else:
+            total = query.count()
+            records = query.offset((page - 1) * per_page).limit(per_page).all()
 
         return records, total
 

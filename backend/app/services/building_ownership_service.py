@@ -128,6 +128,13 @@ class BuildingOwnershipService:
                     break
 
         now = datetime.now(timezone.utc)
+        analysis_details = {
+            'triggered_rules': result.triggered_rules,
+            'reason': result.reason,
+            'confidence': result.confidence,
+            'assessor_pins': assessor_pins,
+            'tax_situs_street': (tax_situs_street or lead.assessor_aka_street),
+        }
         if not foreign_linked:
             analysis.property_count = 1
             analysis.pin_count = metrics.pin_count
@@ -139,13 +146,7 @@ class BuildingOwnershipService:
             if not (analysis.manually_reviewed and analysis.manual_override_status):
                 analysis.condo_risk_status = result.condo_risk_status
                 analysis.building_sale_possible = result.building_sale_possible
-            analysis.analysis_details = {
-                'triggered_rules': result.triggered_rules,
-                'reason': result.reason,
-                'confidence': result.confidence,
-                'assessor_pins': assessor_pins,
-                'tax_situs_street': (tax_situs_street or lead.assessor_aka_street),
-            }
+            analysis.analysis_details = analysis_details
             analysis.analyzed_at = now
         db.session.flush()
 
@@ -170,7 +171,7 @@ class BuildingOwnershipService:
             'county_assessor_pin': lead.county_assessor_pin,
             'assessor_aka_street': getattr(lead, 'assessor_aka_street', None),
             'recommended_action': recommended,
-            'analysis_details': analysis.analysis_details,
+            'analysis_details': analysis_details,
             'classification': {
                 'condo_risk_status': result.condo_risk_status,
                 'building_sale_possible': result.building_sale_possible,

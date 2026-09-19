@@ -271,6 +271,7 @@ class MarketingManager:
         list_id: int,
         page: int = 1,
         per_page: int = 25,
+        lead_access_checker=None,
     ) -> PaginatedResult:
         """Get paginated members of a marketing list.
 
@@ -307,9 +308,19 @@ class MarketingManager:
             .order_by(MarketingListMember.added_at.desc())
         )
 
-        total = query.count()
-        pages = max(1, (total + per_page - 1) // per_page)
-        items = query.offset((page - 1) * per_page).limit(per_page).all()
+        if lead_access_checker is not None:
+            accessible = [
+                member for member in query.all()
+                if lead_access_checker(member.lead)
+            ]
+            total = len(accessible)
+            pages = max(1, (total + per_page - 1) // per_page)
+            start = (page - 1) * per_page
+            items = accessible[start:start + per_page]
+        else:
+            total = query.count()
+            pages = max(1, (total + per_page - 1) // per_page)
+            items = query.offset((page - 1) * per_page).limit(per_page).all()
 
         return PaginatedResult(
             items=items,
@@ -387,6 +398,8 @@ class MarketingManager:
         name: str,
         user_id: str,
         filters: dict,
+        *,
+        owner_scoped: bool = True,
     ) -> MarketingList:
         """Create a marketing list populated with leads matching filters.
 
@@ -463,8 +476,8 @@ class MarketingManager:
         )
         query = query.filter(~Lead.id.in_(opted_out_lead_ids))
 
-        # Add matching leads to the new list (owner-scoped)
-        query = query.filter(Lead.owner_user_id == user_id)
+        if owner_scoped:
+            query = query.filter(Lead.owner_user_id == user_id)
 
         matching_leads = query.all()
         added = 0

@@ -299,6 +299,8 @@ class QuickAddService:
                 lead.deal_description = capture_description
             if manual_priority is not None and lead.manual_priority is None:
                 lead.manual_priority = manual_priority
+            from app.services.helpers.import_signal_fills import apply_import_signal_fills
+            apply_import_signal_fills(lead)
         else:
             lead = existing
             assert lead is not None

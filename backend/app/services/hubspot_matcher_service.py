@@ -135,7 +135,7 @@ class HubSpotMatcherService:
             return False
         import_owner = cls._hubspot_import_owner_user_id()
         if not import_owner:
-            return False
+            return True
         return lead_owner != import_owner
 
     @classmethod

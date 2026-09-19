@@ -12,6 +12,6 @@ def strip_invisible(value: str) -> str:
     """
     cleaned = ''.join(
         ch for ch in value
-        if not unicodedata.category(ch).startswith('C')
+        if ch in '\n\r\t' or not unicodedata.category(ch).startswith('C')
     )
     return cleaned.strip()

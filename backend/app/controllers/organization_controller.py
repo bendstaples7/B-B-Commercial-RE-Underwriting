@@ -155,14 +155,22 @@ def _require_exclusive_org_access(org) -> None:
         return
     from app import db
     from app.models.lead import Lead
+    from app.models.owner_organization_link import OwnerOrganizationLink
     from app.models.property_organization_link import PropertyOrganizationLink
 
-    links = PropertyOrganizationLink.query.filter_by(organization_id=org.id).all()
+    links = [
+        link.property_id
+        for link in PropertyOrganizationLink.query.filter_by(organization_id=org.id).all()
+    ]
+    links.extend(
+        link.owner_id
+        for link in OwnerOrganizationLink.query.filter_by(organization_id=org.id).all()
+    )
     if not links:
         _org_not_found(org.id)
     saw_owned = False
-    for link in links:
-        lead = db.session.get(Lead, link.property_id)
+    for lead_id in links:
+        lead = db.session.get(Lead, lead_id)
         if user_can_access_lead(lead):
             saw_owned = True
         elif lead is not None:
@@ -180,11 +188,17 @@ def _load_authorized_org(org_id: int, *, allow_unlinked: bool = False):
         _org_not_found(org_id)
     if allow_unlinked:
         from app.api_utils import current_user_is_admin
+        from app.models.owner_organization_link import OwnerOrganizationLink
         from app.models.property_organization_link import PropertyOrganizationLink
         if current_user_is_admin():
             return org
-        links = PropertyOrganizationLink.query.filter_by(organization_id=org.id).all()
-        if not links:
+        property_link = PropertyOrganizationLink.query.filter_by(
+            organization_id=org.id,
+        ).first()
+        owner_link = OwnerOrganizationLink.query.filter_by(
+            organization_id=org.id,
+        ).first()
+        if property_link is None and owner_link is None:
             return org
     _require_org_access(org)
     return org
@@ -446,7 +460,7 @@ def link_owner(org_id):
         'role': data.get('role'),
     })
 
-    _load_authorized_org(org_id)
+    _load_authorized_org(org_id, allow_unlinked=True)
     _lead, err = load_authorized_lead(link_data['owner_id'])
     if err is not None:
         return err

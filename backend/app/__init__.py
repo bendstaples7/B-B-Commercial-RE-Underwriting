@@ -527,7 +527,7 @@ def create_app(config_name='development'):
     def set_user_identity():
         """Populate g.user_id from Bearer JWT (required) or X-User-Id header (testing only)."""
         auth_header = _request.headers.get('Authorization', '')
-        if auth_header.startswith('Bearer '):
+        if auth_header.lower().startswith('bearer '):
             from app.api_utils import bind_request_jwt_identity
             bind_request_jwt_identity(auth_header[7:])
             return

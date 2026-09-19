@@ -179,7 +179,14 @@ class TaskService:
     # List
     # ------------------------------------------------------------------
 
-    def list(self, filters: dict = None, page: int = 1, per_page: int = 20, lead_id_scope=None):
+    def list(
+        self,
+        filters: dict = None,
+        page: int = 1,
+        per_page: int = 20,
+        lead_id_scope=None,
+        association_access_checker=None,
+    ):
         """Return a paginated, filtered list of Tasks.
 
         Supported filter keys:
@@ -194,6 +201,9 @@ class TaskService:
             ``None`` — no owner filter (admin).
             empty set — return no rows.
             otherwise — only tasks attached to those lead ids.
+        ``association_access_checker``:
+            optional callable that must return True for every task retained.
+            Used by scoped callers so list semantics match single-task access.
         """
         filters = filters or {}
         if lead_id_scope is not None and not lead_id_scope:
@@ -233,8 +243,18 @@ class TaskService:
                 )
             )
 
-        total = query.count()
-        tasks = query.order_by(Task.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+        query = query.order_by(Task.created_at.desc())
+        if association_access_checker is not None:
+            accessible = [
+                task for task in query.all()
+                if association_access_checker(task)
+            ]
+            total = len(accessible)
+            start = (page - 1) * per_page
+            tasks = accessible[start:start + per_page]
+        else:
+            total = query.count()
+            tasks = query.offset((page - 1) * per_page).limit(per_page).all()
 
         # Apply overdue check on every returned task (Requirement 3.6)
         for task in tasks:

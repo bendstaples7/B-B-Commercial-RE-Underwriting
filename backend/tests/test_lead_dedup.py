@@ -212,8 +212,9 @@ class TestHubSpotAddressDisambiguation:
                 '_hubspot_import_owner_user_id',
                 return_value='hs-importer',
             ):
-                HubSpotMatcherService().match_deal(deal)
+                match = HubSpotMatcherService().match_deal(deal)
 
+            assert match.internal_record_id == mine.id
             theirs = db.session.get(Lead, their_id)
             assert theirs.review_required is not True
 

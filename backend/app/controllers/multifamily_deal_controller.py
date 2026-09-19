@@ -86,11 +86,25 @@ def celery_job_id_for_deal(deal_id: int, kind: str) -> str:
     return f'deal{int(deal_id)}-{kind}-{uuid.uuid4().hex}'
 
 
-def celery_job_belongs_to_deal(job_id, deal_id: int) -> bool:
+def celery_job_belongs_to_deal(job_id, deal_id: int, kind: str | None = None) -> bool:
     """True when *job_id* was minted for *deal_id* by ``celery_job_id_for_deal``."""
     if not job_id or not isinstance(job_id, str):
         return False
-    return job_id.startswith(f'deal{int(deal_id)}-')
+    prefix = f'deal{int(deal_id)}-'
+    if kind is not None:
+        prefix = f'{prefix}{kind}-'
+        if not job_id.startswith(prefix):
+            return False
+        suffix = job_id[len(prefix):]
+        return len(suffix) == 32 and all(ch in '0123456789abcdef' for ch in suffix.lower())
+    if not job_id.startswith(prefix):
+        return False
+    remainder = job_id[len(prefix):]
+    parts = remainder.rsplit('-', 1)
+    if len(parts) != 2 or not parts[0]:
+        return False
+    suffix = parts[1]
+    return len(suffix) == 32 and all(ch in '0123456789abcdef' for ch in suffix.lower())
 
 
 # ---------------------------------------------------------------------------

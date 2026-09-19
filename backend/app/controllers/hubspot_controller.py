@@ -72,7 +72,7 @@ def _deny_inaccessible_match_target(match, override_id=None, *, ignore_current=F
         return
     else:
         target_id = match.internal_record_id
-    if not target_id:
+    if target_id is None:
         return
     if current_user_is_admin():
         return
@@ -85,12 +85,22 @@ def _deny_inaccessible_match_target(match, override_id=None, *, ignore_current=F
             payload={'match_id': match.id},
         )
     if record_type == 'organization':
+        from app.models.organization import Organization
+        from app.models.owner_organization_link import OwnerOrganizationLink
         from app.models.property_organization_link import PropertyOrganizationLink
+        if db.session.get(Organization, target_id) is None:
+            raise MatchNotFoundError(
+                f"HubSpotMatch id={match.id} not found.",
+                payload={'match_id': match.id},
+            )
         links = PropertyOrganizationLink.query.filter_by(
             organization_id=target_id,
         ).all()
+        owner_links = OwnerOrganizationLink.query.filter_by(
+            organization_id=target_id,
+        ).all()
         # Unlinked HubSpot company orgs are shared CRM; same as link-property.
-        if not links:
+        if not links and not owner_links:
             return
         if user_can_access_association_target('organization', target_id):
             return

@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 entity_resolution_bp = Blueprint('entity_resolution', __name__)
 _service = EntityResolutionService()
+MAX_BULK_ENTITY_RESOLUTION_LEADS = 500
 
 
 def _provider_error_response(exc: EntityLookupProviderNotConfiguredError):
@@ -147,13 +148,19 @@ def resolve_entity_bulk():
     if not isinstance(lead_ids, list) or not lead_ids:
         raise ValueError('lead_ids must be a non-empty list')
     lead_ids = [int(x) for x in lead_ids]
-    from app import db
+    if len(lead_ids) > MAX_BULK_ENTITY_RESOLUTION_LEADS:
+        raise ValueError(
+            f'lead_ids must contain at most {MAX_BULK_ENTITY_RESOLUTION_LEADS} items'
+        )
     from app.models.lead import Lead
-    allowed = []
-    for lid in lead_ids:
-        lead = db.session.get(Lead, lid)
-        if lead is not None and user_can_access_lead(lead):
-            allowed.append(lid)
+    leads_by_id = {
+        lead.id: lead
+        for lead in Lead.query.filter(Lead.id.in_(set(lead_ids))).all()
+    }
+    allowed = [
+        lid for lid in lead_ids
+        if lid in leads_by_id and user_can_access_lead(leads_by_id[lid])
+    ]
     lead_ids = allowed
     if not lead_ids:
         raise ValueError('lead_ids must be a non-empty list')

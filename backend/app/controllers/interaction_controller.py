@@ -21,8 +21,8 @@ from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
 from app.api_utils import (
+    current_user_is_admin,
     load_authorized_lead,
-    owned_lead_ids_for_current_user,
     user_can_access_association_target,
     user_can_access_association_targets,
 )
@@ -165,11 +165,15 @@ def _associations_from_interaction(interaction):
     try:
         return list(interaction.associations.all())
     except Exception:
-        return []
+        return None
+
+
+def _can_access_interaction(interaction) -> bool:
+    return user_can_access_association_targets(_associations_from_interaction(interaction))
 
 
 def _deny_if_cannot_access_interaction(interaction):
-    if not user_can_access_association_targets(_associations_from_interaction(interaction)):
+    if not _can_access_interaction(interaction):
         return _interaction_not_found(interaction.id)
     return None
 
@@ -224,7 +228,10 @@ def list_interactions():
         filters=filters,
         page=page,
         per_page=per_page,
-        lead_id_scope=owned_lead_ids_for_current_user(),
+        lead_id_scope=None,
+        association_access_checker=(
+            None if current_user_is_admin() else _can_access_interaction
+        ),
     )
 
     return jsonify({
@@ -252,6 +259,11 @@ def create_interaction():
     is_orphaned      : bool (optional, default False)
     """
     data = request.get_json(silent=True) or {}
+    data = dict(data)
+    data['source'] = 'manual'
+    data.pop('hubspot_engagement_id', None)
+    data.pop('raw_payload', None)
+    data.pop('is_orphaned', None)
     if not user_can_access_association_targets(data.get('associations')):
         return jsonify({
             'success': False,

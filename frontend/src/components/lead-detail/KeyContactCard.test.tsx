@@ -412,7 +412,16 @@ describe('KeyContactCard', () => {
     )
 
     await user.click(screen.getByTestId('key-contact-phone-edit'))
-    expect(screen.getByTestId('key-contact-phone-edit-input')).toHaveValue('(312) 555-0199')
+    const input = screen.getByTestId('key-contact-phone-edit-input')
+    expect(input).toHaveValue('(312) 555-0199')
+    await user.clear(input)
+    await user.type(input, '600-0001')
+    await user.click(screen.getByLabelText('Save phone'))
+    await waitFor(() => {
+      expect(contactService.updateContact).toHaveBeenCalledWith(88, {
+        phones: [{ value: '600-0001', label: 'mobile' }],
+      })
+    })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(contactService.getContact).not.toHaveBeenCalled()
   })

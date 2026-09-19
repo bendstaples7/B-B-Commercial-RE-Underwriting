@@ -235,7 +235,12 @@ def create_marketing_list():
     filter_criteria = data.get('filter_criteria')
 
     if filter_criteria and isinstance(filter_criteria, dict):
-        ml = manager.create_list_from_filters(name, user_id, filter_criteria)
+        ml = manager.create_list_from_filters(
+            name,
+            user_id,
+            filter_criteria,
+            owner_scoped=not current_user_is_admin(),
+        )
     else:
         ml = manager.create_list(name, user_id)
 
@@ -333,7 +338,12 @@ def get_list_members(list_id):
 
     page, per_page = _parse_pagination(request.args)
 
-    result = manager.get_list_members(list_id, page=page, per_page=per_page)
+    result = manager.get_list_members(
+        list_id,
+        page=page,
+        per_page=per_page,
+        lead_access_checker=None if current_user_is_admin() else user_can_access_lead,
+    )
 
     return jsonify({
         'list_id': list_id,
@@ -459,7 +469,13 @@ def remove_list_members(list_id):
             'message': 'lead_ids must be a list of integers',
         }), 400
 
-    removed = manager.remove_leads(list_id, lead_ids)
+    allowed = []
+    for lid in lead_ids:
+        lead = db.session.get(Lead, lid)
+        if lead is not None and user_can_access_lead(lead):
+            allowed.append(lid)
+
+    removed = manager.remove_leads(list_id, allowed)
 
     return jsonify({
         'list_id': list_id,
@@ -510,6 +526,13 @@ def update_member_status(list_id, lead_id):
             'error': 'Validation error',
             'message': 'status is required',
         }), 400
+
+    lead = db.session.get(Lead, lead_id)
+    if not user_can_access_lead(lead):
+        return jsonify({
+            'error': 'Marketing list member not found',
+            'message': f'Lead {lead_id} is not a member of marketing list {list_id}',
+        }), 404
 
     member = manager.update_outreach_status(list_id, lead_id, status)
 

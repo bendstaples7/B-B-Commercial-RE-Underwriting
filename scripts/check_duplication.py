@@ -415,7 +415,10 @@ def check_api_auth_fail_closed() -> list[str]:
     utils_text = api_utils.read_text(encoding="utf-8")
     if "PUBLIC_API_ROUTES" not in utils_text:
         errors.append("Missing PUBLIC_API_ROUTES allowlist in backend/app/api_utils.py")
-    if "POST', '/api/leads" in utils_text or 'POST", "/api/leads' in utils_text:
+    if re.search(
+        r"""['"](?:POST|PUT|PATCH|DELETE)['"]\s*,\s*['"]/api/leads(?:/|['"])""",
+        utils_text,
+    ):
         errors.append("PUBLIC_API_ROUTES must not include /api/leads mutations")
     test_path = ROOT / "backend" / "tests" / "test_api_auth_fail_closed.py"
     if not test_path.exists():

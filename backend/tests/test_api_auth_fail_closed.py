@@ -100,15 +100,15 @@ def test_anonymous_cannot_read_timeline_or_recommended_action(client):
     assert ra.status_code == 401
 
 
-def test_public_health_still_anonymous(client):
-    resp = client.get('/api/health')
+def test_public_health_still_anonymous(anon_client):
+    resp = anon_client.get('/api/health')
     assert resp.status_code in (200, 503)
     body = resp.get_json() or {}
     assert body.get('error') != 'Authentication required'
 
 
-def test_public_login_still_anonymous(client):
-    resp = client.post(
+def test_public_login_still_anonymous(anon_client):
+    resp = anon_client.post(
         '/api/auth/login',
         json={'email': 'nobody@example.com', 'password': 'wrong-password'},
     )

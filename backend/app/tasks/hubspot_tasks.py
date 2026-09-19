@@ -1845,7 +1845,9 @@ def run_rescore_leads_after_import(
 # ---------------------------------------------------------------------------
 
 _BACKUP_USER_RE = re.compile(r'[^A-Za-z0-9._-]+')
-_BACKUP_NAME_RE = re.compile(r'^hubspot_backup_[A-Za-z0-9._-]+_.+\.json$')
+_BACKUP_NAME_RE = re.compile(
+    r'^hubspot_backup_(?P<user>[A-Za-z0-9._-]+)_(?P<date>\d{8})_(?P<time>\d{6})\.json$'
+)
 
 
 def safe_backup_user_id(user_id: str | None) -> str:
@@ -1868,7 +1870,6 @@ def backup_basename(user_id: str | None, timestamp_str: str) -> str:
 def list_user_backup_files(user_id: str | None) -> list[str]:
     """Return backup files written for this user, newest-eligible via mtime."""
     safe = safe_backup_user_id(user_id)
-    prefix = f'hubspot_backup_{safe}_'
     directory = backup_dir()
     matches = []
     try:
@@ -1876,9 +1877,8 @@ def list_user_backup_files(user_id: str | None) -> list[str]:
     except OSError:
         return []
     for name in names:
-        if not name.startswith(prefix) or not name.endswith('.json'):
-            continue
-        if not _BACKUP_NAME_RE.match(name):
+        match = _BACKUP_NAME_RE.match(name)
+        if not match or match.group('user') != safe:
             continue
         matches.append(os.path.join(directory, name))
     return matches

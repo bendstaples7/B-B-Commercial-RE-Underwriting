@@ -217,32 +217,39 @@ export const HubSpotImportArea: React.FC = () => {
     const terminal = new Set(['success', 'failed', 'partial'])
 
     const poll = async () => {
-      try {
-        const runs = await Promise.all(
-          activeRunIds.map((id) => hubSpotService.getImportRun(id)),
-        )
-        if (cancelled) return
-        const next: ProgressState = {}
-        for (const run of runs) {
-          next[run.object_type] = {
-            object_type: run.object_type,
-            total_fetched: run.total_fetched,
-            created_count: run.created_count,
-            updated_count: run.updated_count,
-            error_count: run.error_count,
-            status: run.status,
+      const results = await Promise.allSettled(
+        activeRunIds.map((id) => hubSpotService.getImportRun(id)),
+      )
+      if (cancelled) return
+      const runs = results
+        .filter((result): result is PromiseFulfilledResult<HubSpotImportRun> => (
+          result.status === 'fulfilled'
+        ))
+        .map((result) => result.value)
+      if (runs.length > 0) {
+        setProgress((prev) => {
+          const next: ProgressState = { ...prev }
+          for (const run of runs) {
+            next[run.object_type] = {
+              object_type: run.object_type,
+              total_fetched: run.total_fetched,
+              created_count: run.created_count,
+              updated_count: run.updated_count,
+              error_count: run.error_count,
+              status: run.status,
+            }
           }
-        }
-        setProgress(next)
-        if (runs.every((run) => terminal.has(run.status))) {
-          setActiveRunIds([])
-          queryClient.invalidateQueries({ queryKey: ['hubspot', 'runs'] })
-        }
-      } catch {
-        if (!cancelled) {
-          setActiveRunIds([])
-          queryClient.invalidateQueries({ queryKey: ['hubspot', 'runs'] })
-        }
+          return next
+        })
+      }
+      if (results.some((result) => result.status === 'rejected')) {
+        setImportError('Temporary import status check failed. Retrying...')
+        return
+      }
+      setImportError(null)
+      if (runs.length === activeRunIds.length && runs.every((run) => terminal.has(run.status))) {
+        setActiveRunIds([])
+        queryClient.invalidateQueries({ queryKey: ['hubspot', 'runs'] })
       }
     }
 

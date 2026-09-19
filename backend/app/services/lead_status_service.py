@@ -372,6 +372,11 @@ def apply_lead_status_change(
         # Caller owns the transaction; sync after they commit.
         pass
 
-    if recompute_action and new_status not in TERMINAL_LEAD_STATUSES:
+    if recompute_action and new_status not in (
+        'do_not_contact',
+        'suppressed',
+        'deal_won',
+        'deal_lost',
+    ):
         from app.services.lead_refresh import refresh_lead_scoring
         refresh_lead_scoring(lead.id)

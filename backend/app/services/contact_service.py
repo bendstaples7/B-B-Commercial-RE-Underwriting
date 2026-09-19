@@ -479,7 +479,7 @@ class ContactService:
                 payload={'property_id': property_id, 'contact_id': contact_id},
             )
         contact = db.session.get(Contact, contact_id)
-        lead = db.session.get(Property, property_id)
+        lead = db.session.get(Property, property_id, with_for_update=True)
         cleared_slots: list[str] = []
         # Only active owner links own the flat owner_* fields. Unlinking a
         # spouse / attorney / former_owner with the same name must not wipe them.

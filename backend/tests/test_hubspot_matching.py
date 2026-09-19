@@ -693,6 +693,10 @@ class TestDedupIdentityMatch:
                 HubSpotMatcherService,
                 '_address_matches_for',
                 return_value=[],
+            ), patch.object(
+                HubSpotMatcherService,
+                '_hubspot_import_owner_user_id',
+                return_value='other-user',
             ):
                 match = HubSpotMatcherService().match_deal(deal, stage_label_map={})
             db.session.flush()

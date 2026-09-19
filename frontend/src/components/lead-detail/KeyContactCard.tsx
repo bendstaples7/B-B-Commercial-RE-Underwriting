@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import {
   Box,
   Button,
@@ -145,6 +145,38 @@ export function resolveKeyContactChannels(data: CommandCenterPayload): KeyContac
   return channels
 }
 
+function resolveContactChannels(contact: PropertyContactSummary | null): KeyContactChannel[] {
+  if (!contact) return []
+  const channels: KeyContactChannel[] = []
+  const seenPhones = new Set<string>()
+  for (const phone of contact.phones || []) {
+    const value = phone?.value?.trim()
+    if (!value || !looksLikePhoneNumber(value)) continue
+    const key = phoneKey(value)
+    if (seenPhones.has(key)) continue
+    seenPhones.add(key)
+    channels.push({ kind: 'phone', phone })
+  }
+  let foundEmail = false
+  for (const email of contact.emails || []) {
+    const value = email?.value?.trim()
+    if (!value) continue
+    if (looksLikePhoneNumber(value)) {
+      const key = phoneKey(value)
+      if (!seenPhones.has(key)) {
+        seenPhones.add(key)
+        channels.push({ kind: 'phone', phone: { value } })
+      }
+      continue
+    }
+    if (!foundEmail) {
+      foundEmail = true
+      channels.push({ kind: 'email', value })
+    }
+  }
+  return channels
+}
+
 function formatContactRole(contact: PropertyContactSummary): string {
   const role = (contact.role || 'owner').replace(/_/g, ' ')
   return role.replace(/\b\w/g, (c) => c.toUpperCase())
@@ -173,6 +205,7 @@ function FieldPencil({
   editTestId,
   inputTestId,
   onSave,
+  disabled = false,
   children,
 }: {
   value: string
@@ -180,11 +213,13 @@ function FieldPencil({
   editTestId: string
   inputTestId: string
   onSave: (next: string) => Promise<void>
+  disabled?: boolean
   children: ReactNode
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
   const [saving, setSaving] = useState(false)
+  const fieldLabel = ariaLabel.replace(/^Edit\s+/i, '')
 
   if (editing) {
     return (
@@ -204,8 +239,8 @@ function FieldPencil({
         <IconButton
           size="small"
           color="primary"
-          aria-label={`Save ${ariaLabel}`}
-          disabled={saving}
+          aria-label={`Save ${fieldLabel}`}
+          disabled={saving || disabled}
           onClick={() => {
             setSaving(true)
             void onSave(draft).then(
@@ -222,7 +257,7 @@ function FieldPencil({
         </IconButton>
         <IconButton
           size="small"
-          aria-label={`Cancel ${ariaLabel}`}
+          aria-label={`Cancel ${fieldLabel}`}
           disabled={saving}
           onClick={() => {
             setDraft(value)
@@ -243,6 +278,7 @@ function FieldPencil({
         size="small"
         aria-label={ariaLabel}
         data-testid={editTestId}
+        disabled={disabled}
         onClick={() => {
           setDraft(value)
           setEditing(true)
@@ -271,7 +307,21 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
     open: false,
     message: '',
   })
-  const editablePerson = primaryEditablePersonContact(commandCenterData.contacts)
+  const editablePersonFromData = primaryEditablePersonContact(commandCenterData.contacts)
+  const [savedContact, setSavedContact] = useState<Partial<PropertyContactSummary> | null>(null)
+  const [methodSaveInFlight, setMethodSaveInFlight] = useState(false)
+  useEffect(() => {
+    setSavedContact(null)
+  }, [editablePersonFromData?.id])
+  const editablePerson = editablePersonFromData && savedContact?.id === editablePersonFromData.id
+    ? {
+        ...editablePersonFromData,
+        first_name: savedContact.first_name ?? editablePersonFromData.first_name,
+        last_name: savedContact.last_name ?? editablePersonFromData.last_name,
+        phones: savedContact.phones ?? editablePersonFromData.phones,
+        emails: savedContact.emails ?? editablePersonFromData.emails,
+      }
+    : editablePersonFromData
   const extraPeople = additionalPeopleForKeyContact(commandCenterData.contacts)
   const personName = editablePerson ? contactDisplayName(editablePerson) : ''
   const orgName = (commandCenterData.organizations ?? [])
@@ -282,7 +332,10 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
     || (passedName && passedName === orgName ? orgName : '')
     || orgName
     || 'No contact on file'
-  const channels = editablePerson ? resolveKeyContactChannels(commandCenterData) : []
+  const contactChannels = resolveContactChannels(editablePerson)
+  const channels = editablePerson
+    ? (contactChannels.length > 0 ? contactChannels : resolveKeyContactChannels(commandCenterData))
+    : []
   const mailing = formatKeyContactMailing(commandCenterData)
   const phoneChannels = channels.filter(
     (c): c is Extract<KeyContactChannel, { kind: 'phone' }> => c.kind === 'phone',
@@ -310,7 +363,14 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
       throw new Error('No person to edit')
     }
     try {
-      await contactService.updateContact(editablePerson.id, extra)
+      const updated = await contactService.updateContact(editablePerson.id, extra)
+      setSavedContact({
+        id: updated.id,
+        first_name: updated.first_name,
+        last_name: updated.last_name,
+        phones: updated.phones,
+        emails: updated.emails,
+      })
       refreshContact()
       setSnackbar({ open: true, message: 'Saved.', severity: 'success' })
     } catch (err) {
@@ -328,17 +388,19 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
     const current = (editablePerson?.phones || [])
       .filter((p) => (p.value || '').trim())
       .map((p) => ({ value: p.value, label: toFormPhoneLabel(p.label) }))
+    const match = current.findIndex((p) => (
+      p.value === previous || phoneKey(p.value) === phoneKey(previous)
+    ))
     let phones = current
-    if (current.length === 0) {
-      phones = trimmed ? [{ value: trimmed, label: 'mobile' as const }] : []
-    } else {
-      const match = current.findIndex((p) => p.value === previous)
-      const target = match >= 0 ? match : 0
+    if (match >= 0) {
       phones = current
-        .map((p, i) => (i === target ? { ...p, value: trimmed } : p))
+        .map((p, i) => (i === match ? { ...p, value: trimmed } : p))
         .filter((p) => p.value.trim())
+    } else if (trimmed) {
+      phones = [...current, { value: trimmed, label: 'mobile' as const }]
     }
-    return savePerson({ phones })
+    setMethodSaveInFlight(true)
+    return savePerson({ phones }).finally(() => setMethodSaveInFlight(false))
   }
 
   const saveEmailValue = (previous: string, next: string) => {
@@ -346,17 +408,17 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
     const current = (editablePerson?.emails || [])
       .filter((e) => (e.value || '').trim())
       .map((e) => ({ value: e.value, label: toFormEmailLabel(e.label) }))
+    const match = current.findIndex((e) => e.value.toLowerCase() === previous.toLowerCase())
     let emails = current
-    if (current.length === 0) {
-      emails = trimmed ? [{ value: trimmed, label: 'personal' as const }] : []
-    } else {
-      const match = current.findIndex((e) => e.value.toLowerCase() === previous.toLowerCase())
-      const target = match >= 0 ? match : 0
+    if (match >= 0) {
       emails = current
-        .map((e, i) => (i === target ? { ...e, value: trimmed } : e))
+        .map((e, i) => (i === match ? { ...e, value: trimmed } : e))
         .filter((e) => e.value.trim())
+    } else if (trimmed) {
+      emails = [...current, { value: trimmed, label: 'personal' as const }]
     }
-    return savePerson({ emails })
+    setMethodSaveInFlight(true)
+    return savePerson({ emails }).finally(() => setMethodSaveInFlight(false))
   }
 
   const clearOwnerMutation = useMutation({
@@ -418,6 +480,7 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
               editTestId="key-contact-phone-edit"
               inputTestId="key-contact-phone-edit-input"
               onSave={(next) => savePhoneValue('', next)}
+              disabled={methodSaveInFlight}
             >
               <Typography sx={ccMetaSx} data-testid="key-contact-phone-empty">
                 No phone on file
@@ -449,6 +512,7 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
                 editTestId={idx === 0 ? 'key-contact-phone-edit' : `key-contact-phone-edit-${idx + 1}`}
                 inputTestId={idx === 0 ? 'key-contact-phone-edit-input' : `key-contact-phone-edit-input-${idx + 1}`}
                 onSave={(next) => savePhoneValue(ch.phone.value, next)}
+                disabled={methodSaveInFlight}
               >
                 {row}
               </FieldPencil>
@@ -463,6 +527,7 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
               editTestId="key-contact-email-edit"
               inputTestId="key-contact-email-edit-input"
               onSave={(next) => saveEmailValue('', next)}
+              disabled={methodSaveInFlight}
             >
               <Typography sx={ccMetaSx} data-testid="key-contact-email-empty">
                 No email on file
@@ -529,6 +594,7 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
                 editTestId={idx === 0 ? 'key-contact-email-edit' : `key-contact-email-edit-${idx + 1}`}
                 inputTestId={idx === 0 ? 'key-contact-email-edit-input' : `key-contact-email-edit-input-${idx + 1}`}
                 onSave={(next) => saveEmailValue(ch.value, next)}
+                disabled={methodSaveInFlight}
               >
                 {row}
               </FieldPencil>

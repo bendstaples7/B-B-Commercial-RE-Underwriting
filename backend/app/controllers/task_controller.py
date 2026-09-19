@@ -12,7 +12,7 @@ from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
 from app.api_utils import (
-    owned_lead_ids_for_current_user,
+    current_user_is_admin,
     user_can_access_association_target,
     user_can_access_association_targets,
 )
@@ -85,8 +85,8 @@ def _collect_task_lead_ids(task):
 
     A Task may reference a lead via its direct ``lead_id`` FK and/or via
     ``TaskAssociation`` rows with ``target_type='lead'``. Association loading is
-    best-effort: a failure to enumerate associations is logged and ignored so a
-    transient association-load error never blocks the caller.
+    best-effort here because this helper is only used after authorization for
+    refresh fan-out.
     """
     lead_ids = set()
     direct = getattr(task, 'lead_id', None)
@@ -115,15 +115,20 @@ def _associations_for_task_access(task):
         assocs = list(task.associations.all())
     except Exception:  # pragma: no cover — association load is best-effort
         logger.debug("Could not enumerate task associations for access check", exc_info=True)
+        return None
     direct = getattr(task, 'lead_id', None)
     if direct is not None:
         assocs = list(assocs) + [{'target_type': 'lead', 'target_id': direct}]
     return assocs
 
 
+def _can_access_task(task) -> bool:
+    return user_can_access_association_targets(_associations_for_task_access(task))
+
+
 def _deny_if_cannot_access_task(task):
     """Opaque 404 when the caller cannot access every target this task touches."""
-    if not user_can_access_association_targets(_associations_for_task_access(task)):
+    if not _can_access_task(task):
         return _task_not_found(task.id)
     return None
 
@@ -217,7 +222,8 @@ def list_tasks():
         filters=filters,
         page=page,
         per_page=per_page,
-        lead_id_scope=owned_lead_ids_for_current_user(),
+        lead_id_scope=None,
+        association_access_checker=None if current_user_is_admin() else _can_access_task,
     )
 
     return jsonify({
@@ -249,7 +255,7 @@ def create_task():
     assoc_schema = TaskAssociationSchema(many=True, partial=('task_id',))
     associations = assoc_schema.load(raw_associations) if raw_associations else []
     data['associations'] = associations
-    if associations and not user_can_access_association_targets(associations):
+    if not user_can_access_association_targets(associations):
         return jsonify({
             'error': 'Not found',
             'message': 'Not found',

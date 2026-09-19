@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 enrichment_bp = Blueprint('enrichment', __name__)
 
 connector = DataSourceConnector()
+MAX_BULK_ENRICH_LEADS = 500
 
 
 # ---------------------------------------------------------------------------
@@ -232,13 +233,20 @@ def bulk_enrich():
             'error': 'Validation error',
             'message': 'lead_ids must not be empty',
         }), 400
+    if len(lead_ids) > MAX_BULK_ENRICH_LEADS:
+        return jsonify({
+            'error': 'Validation error',
+            'message': f'lead_ids must contain at most {MAX_BULK_ENRICH_LEADS} items',
+        }), 400
 
-    allowed = []
-    for lid in lead_ids:
-        lead = db.session.get(Lead, lid)
-        if lead is not None and user_can_access_lead(lead):
-            allowed.append(lid)
-    lead_ids = allowed
+    leads_by_id = {
+        lead.id: lead
+        for lead in Lead.query.filter(Lead.id.in_(set(lead_ids))).all()
+    }
+    lead_ids = [
+        lid for lid in lead_ids
+        if lid in leads_by_id and user_can_access_lead(leads_by_id[lid])
+    ]
     if not lead_ids:
         return jsonify({
             'error': 'Validation error',

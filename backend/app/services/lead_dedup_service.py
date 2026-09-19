@@ -219,11 +219,23 @@ def find_lead_by_identity(
     q = _owner_name_filters(q, first, last)
     if owner_user_id:
         q = q.filter(Lead.owner_user_id == owner_user_id)
+    matches: list[Lead] = []
     for candidate in q:
         if streets_match_normalized(property_street, candidate.property_street):
             refresh_lead_dedup_fields(candidate)
-            return candidate
-    return None
+            matches.append(candidate)
+    if not matches:
+        return None
+    hit = matches[0]
+    if owner_user_id or not hit.owner_user_id:
+        return hit
+    if any(
+        other.owner_user_id
+        and other.owner_user_id != hit.owner_user_id
+        for other in matches[1:]
+    ):
+        return None
+    return hit
 
 
 def confirmed_hubspot_lead_ids() -> set[int]:
@@ -620,6 +632,8 @@ def _filter_owner_contact_methods(
     from app.services.phone_confidence_service import PhoneConfidenceService
 
     owner_links = PropertyContact.query.filter_by(property_id=lead_id, role='owner').all()
+    owner_lead = db.session.get(Lead, lead_id)
+    clone_creator = getattr(owner_lead, 'owner_user_id', None)
     owner_contact_ids: list[int] = []
     for link in owner_links:
         shared_elsewhere = PropertyContact.query.filter(
@@ -636,6 +650,7 @@ def _filter_owner_contact_methods(
                 notes=original.notes,
                 name_locked=original.name_locked,
                 keep_on_gis=original.keep_on_gis,
+                created_by_user_id=clone_creator,
             )
             db.session.add(clone)
             db.session.flush()

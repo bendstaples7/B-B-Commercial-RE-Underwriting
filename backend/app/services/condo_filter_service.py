@@ -151,14 +151,33 @@ class CondoFilterService:
         summary_by_building_sale: dict,
     ) -> None:
         """Process a batch of address groups."""
+        existing_by_address = {
+            analysis.normalized_address: analysis
+            for analysis in AddressGroupAnalysis.query.filter(
+                AddressGroupAnalysis.normalized_address.in_(
+                    [normalized_addr for normalized_addr, _group in batch]
+                )
+            ).all()
+        }
+        linked_by_analysis_id: dict[int, list[tuple[int, str | None]]] = defaultdict(list)
+        existing_ids = [
+            analysis.id for analysis in existing_by_address.values()
+            if analysis.id is not None
+        ]
+        if existing_ids:
+            for analysis_id, lead_id, owner_user_id in (
+                db.session.query(Lead.condo_analysis_id, Lead.id, Lead.owner_user_id)
+                .filter(Lead.condo_analysis_id.in_(existing_ids))
+                .all()
+            ):
+                linked_by_analysis_id[analysis_id].append((lead_id, owner_user_id))
+
         for normalized_addr, group_leads in batch:
             metrics = self._compute_metrics(group_leads)
             result = classify(metrics)
 
             # Look up existing record for upsert
-            analysis = AddressGroupAnalysis.query.filter_by(
-                normalized_address=normalized_addr
-            ).first()
+            analysis = existing_by_address.get(normalized_addr)
 
             if analysis is None:
                 analysis = AddressGroupAnalysis(
@@ -171,10 +190,10 @@ class CondoFilterService:
             group_owners = {getattr(lead, 'owner_user_id', None) for lead in group_leads}
             foreign_linked = False
             if getattr(analysis, 'id', None) is not None:
-                for row in analysis.leads.all():
-                    if row.id in group_ids:
+                for lead_id, owner_user_id in linked_by_analysis_id.get(analysis.id, []):
+                    if lead_id in group_ids:
                         continue
-                    if getattr(row, 'owner_user_id', None) not in group_owners:
+                    if owner_user_id not in group_owners:
                         foreign_linked = True
                         break
 
@@ -399,8 +418,8 @@ class CondoFilterService:
             return None
 
         linked = analysis.leads.all()
-        if lead_id_scope is not None and linked:
-            if any(lead.id not in lead_id_scope for lead in linked):
+        if lead_id_scope is not None:
+            if not linked or any(lead.id not in lead_id_scope for lead in linked):
                 return None
 
         # Update override fields on the analysis record itself

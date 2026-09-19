@@ -467,8 +467,8 @@ def health_check():
                     degraded = True
                 else:
                     checks['lead_visibility'] = f'ok ({lead_count} leads visible)'
-    except Exception:
-        checks['lead_visibility'] = 'FAIL: lead visibility probe failed'
+    except Exception as e:
+        checks['lead_visibility'] = _health_probe_status('FAIL', 'lead visibility', e)
         degraded = True
 
     # ------------------------------------------------------------------

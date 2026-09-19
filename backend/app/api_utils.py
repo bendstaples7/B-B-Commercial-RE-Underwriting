@@ -247,6 +247,12 @@ def require_auth(f):
         auth_header = request.headers.get('Authorization', '')
         auth_header_lower = auth_header.lower()
         if auth_header_lower.startswith('bearer '):
+            if (
+                not getattr(g, 'jwt_error', None)
+                and getattr(g, 'user_id', None)
+                and getattr(g, 'user_id', None) != 'anonymous'
+            ):
+                return f(*args, **kwargs)
             token = auth_header[7:]
             try:
                 claims = AuthService().verify_token(token)
@@ -508,17 +514,29 @@ def user_can_access_association_target(target_type: str, target_id: int) -> bool
 
     if target_type == 'organization':
         from app.models.lead import Lead
+        from app.models.owner_organization_link import OwnerOrganizationLink
         from app.models.organization import Organization
         from app.models.property_organization_link import PropertyOrganizationLink
 
         org = db.session.get(Organization, int(target_id))
         if org is None:
             return False
-        links = PropertyOrganizationLink.query.filter_by(organization_id=org.id).all()
+        links = [
+            ('property', link.property_id)
+            for link in PropertyOrganizationLink.query.filter_by(
+                organization_id=org.id,
+            ).all()
+        ]
+        links.extend(
+            ('owner', link.owner_id)
+            for link in OwnerOrganizationLink.query.filter_by(
+                organization_id=org.id,
+            ).all()
+        )
         if not links:
             return False
-        for link in links:
-            if user_can_access_lead(db.session.get(Lead, link.property_id)):
+        for _kind, lead_id in links:
+            if user_can_access_lead(db.session.get(Lead, lead_id)):
                 return True
         return False
 

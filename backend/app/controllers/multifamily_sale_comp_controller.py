@@ -191,7 +191,7 @@ def get_sale_comps_ai_job_status(deal_id, job_id):
     if resp is not None:
         return resp, status
 
-    if not celery_job_belongs_to_deal(job_id, deal_id):
+    if not celery_job_belongs_to_deal(job_id, deal_id, kind='sale'):
         return jsonify({'error': 'Not found'}), 404
 
     from celery_worker import celery
