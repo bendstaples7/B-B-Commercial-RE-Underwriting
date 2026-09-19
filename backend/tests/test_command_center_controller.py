@@ -1656,7 +1656,7 @@ class TestMergePreviewAndUnitGuard:
             ))
             db.session.add(LeadTimelineEntry(
                 lead_id=loser.id,
-                event_type='note_logged',
+                event_type='note_added',
                 occurred_at=datetime(2026, 5, 4, 15, 0, 0),
                 source='manual',
                 actor='test',
