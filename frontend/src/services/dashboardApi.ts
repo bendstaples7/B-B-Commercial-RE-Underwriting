@@ -3,7 +3,7 @@
  */
 import api from '@/services/api'
 
-export type ActivityMetric = 'calls' | 'mailers' | 'emails' | 'notes' | 'tasks'
+export type ActivityMetric = 'calls' | 'meetings' | 'mailers' | 'emails' | 'notes' | 'tasks'
 export type ActivityPeriod = 'week' | 'month'
 export type ActivityPeriodType = 'weekly' | 'monthly'
 
@@ -54,6 +54,7 @@ export interface UpsertGoalsResponse {
 
 export const METRIC_LABELS: Record<ActivityMetric, string> = {
   calls: 'Calls',
+  meetings: 'Meetings',
   mailers: 'Mailers',
   emails: 'Emails',
   notes: 'Notes',
@@ -62,6 +63,7 @@ export const METRIC_LABELS: Record<ActivityMetric, string> = {
 
 export const METRIC_KEYS: ActivityMetric[] = [
   'calls',
+  'meetings',
   'mailers',
   'emails',
   'notes',

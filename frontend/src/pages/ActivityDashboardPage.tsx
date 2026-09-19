@@ -391,6 +391,7 @@ export function ActivityDashboardPage() {
   const [goalError, setGoalError] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<Record<ActivityMetric, string>>({
     calls: '',
+    meetings: '',
     mailers: '',
     emails: '',
     notes: '',

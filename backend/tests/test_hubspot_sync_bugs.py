@@ -890,7 +890,7 @@ class TestMeetingEngagementConversion:
                         "id": 111073080718,
                         "type": "MEETING",
                         "createdAt": created_ms,
-                        "timestamp": start_ms,
+                        "timestamp": created_ms,
                         "bodyPreview": (
                             "had coffee with bob really ncie guy "
                             "follow up every once in a while"
@@ -924,6 +924,14 @@ class TestMeetingEngagementConversion:
             )
             assert result.interaction_type == 'meeting'
             assert result.is_orphaned is False
+            assoc = InteractionAssociation.query.filter_by(
+                interaction_id=result.id,
+                target_type='lead',
+                target_id=lead.id,
+            ).first()
+            assert assoc is not None, (
+                "Expected a lead association so the meeting appears in the timeline"
+            )
             assert 'coffee' in (result.body or '').lower()
             assert '<' not in result.body
             from datetime import datetime
@@ -941,6 +949,23 @@ class TestMeetingEngagementConversion:
             assert Interaction.query.filter_by(
                 hubspot_engagement_id="111073080718"
             ).count() == 1
+
+    def test_meeting_occurred_at_skips_unusable_start_time(self, app):
+        """Invalid startTime falls through to engagement.timestamp."""
+        with app.app_context():
+            start_ms = 1781119500000
+            created_ms = 1781551566511
+            parsed = HubSpotActivityConverterService._parse_meeting_occurred_at({
+                'metadata': {'startTime': 'not-a-timestamp'},
+                'engagement': {'timestamp': start_ms, 'createdAt': created_ms},
+            })
+            from datetime import datetime
+            assert parsed == datetime.utcfromtimestamp(start_ms / 1000.0)
+            zeroed = HubSpotActivityConverterService._parse_meeting_occurred_at({
+                'metadata': {'startTime': 0},
+                'engagement': {'timestamp': start_ms},
+            })
+            assert zeroed == datetime.utcfromtimestamp(start_ms / 1000.0)
 
     def test_backfill_script_converts_stored_meeting_engagements(self, app):
         """The operational backfill, not Alembic, converts stored meetings."""

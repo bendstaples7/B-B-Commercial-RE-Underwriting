@@ -864,9 +864,28 @@ class HubSpotActivityConverterService:
             engagement_obj.get('timestamp'),
             engagement_obj.get('createdAt'),
         ):
-            if value is not None:
-                return HubSpotActivityConverterService._parse_ms_timestamp(value)
+            parsed = HubSpotActivityConverterService._usable_ms_timestamp(value)
+            if parsed is not None:
+                return parsed
         return datetime.utcnow()
+
+    @staticmethod
+    def _usable_ms_timestamp(value):
+        """Parse a HubSpot millisecond epoch, or None when the value is unusable."""
+        if value is None or isinstance(value, (dict, list, bool)):
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        try:
+            ms = int(float(value))
+        except (ValueError, TypeError, OverflowError):
+            return None
+        if ms <= 0:
+            return None
+        try:
+            return datetime.utcfromtimestamp(ms / 1000.0)
+        except (ValueError, TypeError, OSError, OverflowError):
+            return None
 
     @staticmethod
     def _extract_email_body(metadata):

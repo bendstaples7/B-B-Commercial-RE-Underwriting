@@ -212,6 +212,21 @@ class HubSpotTimelineImportService:
                 .all()
             )
 
+        meeting_ids = [
+            str(activity.get('id', ''))
+            for activity in hubspot_activities
+            if activity.get('id') and str(activity.get('type', '')).upper() == 'MEETING'
+        ]
+        if meeting_ids:
+            LeadTimelineEntry.query.filter(
+                LeadTimelineEntry.hubspot_activity_id.in_(meeting_ids),
+                LeadTimelineEntry.event_type == 'hubspot_note',
+                LeadTimelineEntry.is_deleted.is_(False),
+            ).update(
+                {LeadTimelineEntry.event_type: 'hubspot_meeting'},
+                synchronize_session=False,
+            )
+
         new_entries_count = 0
         recent_new_entries = 0
         latest_deal_stage = None

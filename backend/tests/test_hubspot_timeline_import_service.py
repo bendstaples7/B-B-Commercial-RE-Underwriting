@@ -237,6 +237,38 @@ def test_import_maps_meeting_type_to_hubspot_meeting_event(app):
         assert 'coffee' in (entry.summary or '').lower()
 
 
+def test_import_retypes_legacy_meeting_hubspot_note(app):
+    """Meetings previously stored as hubspot_note are relabeled on re-import."""
+    from app.models import LeadTimelineEntry
+
+    with app.app_context():
+        from app import db
+        from datetime import datetime, timezone
+
+        lead = _make_lead(app, '3c Legacy Meeting Note St')
+        db.session.add(LeadTimelineEntry(
+            lead_id=lead.id,
+            event_type='hubspot_note',
+            occurred_at=datetime.now(timezone.utc),
+            source='hubspot',
+            actor='HubSpot',
+            summary='had coffee with bob',
+            hubspot_activity_id='hs-mtg-legacy',
+        ))
+        db.session.commit()
+
+        svc = HubSpotTimelineImportService()
+        svc.import_activities_for_lead(
+            lead.id,
+            [_make_activity('hs-mtg-legacy', 'MEETING', 'had coffee with bob')],
+        )
+
+        entry = LeadTimelineEntry.query.filter_by(
+            lead_id=lead.id, hubspot_activity_id='hs-mtg-legacy'
+        ).one()
+        assert entry.event_type == 'hubspot_meeting'
+
+
 # ---------------------------------------------------------------------------
 # Re-importing same activities creates zero new entries
 # ---------------------------------------------------------------------------

@@ -20,6 +20,8 @@ from app.models.user_activity_goal import (
 # Timeline event_type → dashboard metric key
 EVENT_TO_METRIC = {
     'call_logged': 'calls',
+    'meeting_logged': 'meetings',
+    'hubspot_meeting': 'meetings',
     'mail_sent': 'mailers',
     'email_logged': 'emails',
     'note_added': 'notes',

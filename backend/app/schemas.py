@@ -1639,17 +1639,6 @@ class LeadTaskSnoozeSchema(RequestSchema):
 
 # ── Actionable Lead Command Center — Timeline Schemas ─────────────────────
 
-VALID_TIMELINE_EVENT_TYPES = [
-    'note_added', 'email_logged', 'call_logged', 'meeting_logged', 'task_created', 'task_completed',
-    'task_snoozed', 'recommended_action_changed', 'status_changed',
-    'hubspot_note', 'hubspot_call', 'hubspot_meeting', 'hubspot_task', 'hubspot_deal_stage',
-    'property_analysis_completed', 'lead_imported',
-    'category_changed', 'leads_merged', 'property_overview_changed',
-]
-
-VALID_TIMELINE_SOURCES = ['manual', 'system', 'hubspot']
-
-
 class LeadTimelineEntrySchema(Schema):
     """Serialization schema for a LeadTimelineEntry (response)."""
     id = fields.Integer(dump_only=True)

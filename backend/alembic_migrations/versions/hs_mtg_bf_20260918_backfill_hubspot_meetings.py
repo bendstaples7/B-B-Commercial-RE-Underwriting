@@ -55,7 +55,7 @@ _MEETING_ENGAGEMENTS = """
                     he.raw_payload #>> '{metadata,startTime}',
                     he.raw_payload #>> '{engagement,timestamp}',
                     he.raw_payload #>> '{engagement,createdAt}'
-                ) ~ '^[0-9]+(\\.[0-9]+)?$'
+                ) ~ '^[1-9][0-9]*(\\.[0-9]+)?$'
                 THEN (
                     to_timestamp(
                         (
@@ -69,6 +69,7 @@ _MEETING_ENGAGEMENTS = """
                 )
                 ELSE NULL
             END,
+            he.first_imported_at,
             timezone('utc', now())
         ) AS occurred_at
     FROM hubspot_engagements he
@@ -167,6 +168,14 @@ def upgrade():
          AND hm.status = 'confirmed'
          AND hm.internal_record_id IS NOT NULL
          AND hm.internal_record_type IN ('lead', 'organization', 'contact')
+         AND (
+             (hm.internal_record_type = 'lead'
+              AND EXISTS (SELECT 1 FROM leads l WHERE l.id = hm.internal_record_id))
+             OR (hm.internal_record_type = 'organization'
+              AND EXISTS (SELECT 1 FROM organizations o WHERE o.id = hm.internal_record_id))
+             OR (hm.internal_record_type = 'contact'
+              AND EXISTS (SELECT 1 FROM contacts c WHERE c.id = hm.internal_record_id))
+         )
         WHERE upper(he.engagement_type) = 'MEETING'
           AND NOT EXISTS (
               SELECT 1
@@ -243,12 +252,27 @@ def upgrade():
         WHERE upper(he.engagement_type) = 'MEETING'
           AND i.source = 'hubspot_import'
           AND i.hubspot_engagement_id IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM leads l WHERE l.id = ia.target_id
+          )
           AND NOT EXISTS (
               SELECT 1
               FROM lead_timeline_entries e
               WHERE e.hubspot_activity_id = i.hubspot_engagement_id
           )
         ORDER BY i.hubspot_engagement_id, ia.target_id
+        """
+    )
+
+    # Meetings imported as hubspot_note before MEETING had its own event type.
+    op.execute(
+        """
+        UPDATE lead_timeline_entries e
+        SET event_type = 'hubspot_meeting'
+        FROM hubspot_engagements he
+        WHERE e.hubspot_activity_id = he.hubspot_id
+          AND upper(he.engagement_type) = 'MEETING'
+          AND e.event_type = 'hubspot_note'
         """
     )
 

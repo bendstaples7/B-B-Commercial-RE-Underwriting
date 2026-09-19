@@ -180,6 +180,8 @@ _KNOWN_REVISIONS = frozenset({
     'hs_mtg_bf_20260918',
     # Native Action Center Log Meeting
     'mtg_log_20260918',
+    # Activity dashboard meetings metric
+    'act_mtg_20260919',
 })
 
 
