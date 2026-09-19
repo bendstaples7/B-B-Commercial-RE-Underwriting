@@ -815,11 +815,8 @@ class TestTaskInteractionOrgIdor:
                 'associations': [{'target_type': 'lead', 'target_id': lead_id}],
             },
         )
-        assert note.status_code == 201
-        note_body = note.get_json()
-        assert note_body.get('hubspot_engagement_id') in (None, '')
-        assert note_body.get('source') == 'manual'
-        assert note_body.get('is_orphaned') in (False, None)
+        assert note.status_code == 400
+        assert 'HubSpot provenance fields' in note.get_json()['error']['message']
 
         task = client.post(
             '/api/tasks/',

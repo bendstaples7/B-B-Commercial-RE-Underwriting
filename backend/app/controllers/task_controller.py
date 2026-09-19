@@ -253,7 +253,13 @@ def create_task():
     source       : str  manual/hubspot_import (default: manual)
     associations : list of {target_type, target_id} (optional)
     """
-    body = dict(request.json or {})
+    body = request.json or {}
+    if not isinstance(body, dict):
+        return jsonify({
+            'error': 'InvalidRequest',
+            'message': 'Request body must be a JSON object.',
+        }), 400
+    body = dict(body)
     raw_associations = body.pop('associations', [])
     body['source'] = 'manual'
     body.pop('hubspot_task_id', None)

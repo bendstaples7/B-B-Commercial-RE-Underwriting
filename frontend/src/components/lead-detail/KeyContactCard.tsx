@@ -407,6 +407,10 @@ export function KeyContactCard({ name, commandCenterData, sticky = false }: KeyC
 
   const savePhoneValue = (previous: string, next: string) => {
     const trimmed = next.trim()
+    if (trimmed && !looksLikePhoneNumber(trimmed)) {
+      setSnackbar({ open: true, message: 'Enter a valid phone number.', severity: 'error' })
+      return Promise.reject(new Error('Enter a valid phone number.'))
+    }
     const current = (editablePerson?.phones || [])
       .filter((p) => (p.value || '').trim())
       .map((p) => ({ value: p.value, label: toFormPhoneLabel(p.label) }))

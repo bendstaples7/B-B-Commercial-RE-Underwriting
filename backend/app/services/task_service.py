@@ -13,6 +13,11 @@ from app.exceptions import TaskValidationError, ResourceNotFoundError
 from app.services.helpers.text import strip_invisible as _strip_invisible
 
 
+def _strip_title(value: str) -> str:
+    """Task titles are one-line labels; bodies keep multiline text."""
+    return ' '.join(_strip_invisible(value).split())
+
+
 class TaskService:
     """Service class for creating, updating, completing, deleting, and querying Tasks."""
 
@@ -42,7 +47,8 @@ class TaskService:
             TaskValidationError: if title is absent or whitespace-only.
         """
         title = data.get('title', '')
-        if not title or not _strip_invisible(title):
+        cleaned_title = _strip_title(title)
+        if not title or not cleaned_title:
             raise TaskValidationError(
                 "Task title is required and cannot be empty.",
                 field='title',
@@ -50,7 +56,7 @@ class TaskService:
             )
 
         task = Task(
-            title=_strip_invisible(title),
+            title=cleaned_title,
             body=data.get('body'),
             due_date=data.get('due_date'),
             status=data.get('status', 'open'),
@@ -96,13 +102,14 @@ class TaskService:
 
         if 'title' in data:
             title = data['title']
-            if not title or not _strip_invisible(title):
+            cleaned_title = _strip_title(title)
+            if not title or not cleaned_title:
                 raise TaskValidationError(
                     "Task title cannot be set to an empty value.",
                     field='title',
                     value=title,
                 )
-            task.title = _strip_invisible(title)
+            task.title = cleaned_title
 
         updatable = ('body', 'due_date', 'status', 'priority')
         for field in updatable:

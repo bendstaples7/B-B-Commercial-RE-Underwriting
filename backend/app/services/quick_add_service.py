@@ -294,6 +294,7 @@ class QuickAddService:
                 owner_user_id=user_id,
             )
             lead.deal_source = resolved_deal_source
+            lead.lead_status = QUICK_ADD_STATUS
             if capture_description and not (lead.deal_description or '').strip():
                 lead.deal_description = capture_description
             if manual_priority is not None and lead.manual_priority is None:

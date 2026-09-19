@@ -173,6 +173,8 @@ def _require_exclusive_org_access(org) -> None:
         lead = db.session.get(Lead, lead_id)
         if user_can_access_lead(lead):
             saw_owned = True
+        elif lead is not None and getattr(lead, 'owner_user_id', None) is None:
+            continue
         elif lead is not None:
             _org_not_found(org.id)
     if not saw_owned:

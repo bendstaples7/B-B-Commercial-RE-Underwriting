@@ -307,7 +307,10 @@ class InteractionService:
                     ~InteractionAssociation.target_type.in_(('lead', 'organization', 'contact')),
                 ),
             ).correlate(Interaction).exists()
-            query = query.filter(~inaccessible_assoc)
+            any_assoc = db.session.query(InteractionAssociation.id).filter(
+                InteractionAssociation.interaction_id == Interaction.id,
+            ).correlate(Interaction).exists()
+            query = query.filter(any_assoc, ~inaccessible_assoc)
 
         query = query.order_by(Interaction.occurred_at.desc())
 

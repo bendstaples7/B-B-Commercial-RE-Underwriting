@@ -1151,7 +1151,7 @@ def create_app(config_name='development'):
                                 )
                                 # Rescore leads
                                 from app.services import LeadScoringEngine
-                                LeadScoringEngine().bulk_rescore('default', all_owners=True)
+                                LeadScoringEngine().bulk_rescore('default')
                                 flask_app.logger.info("Startup recovery: lead rescore complete.")
                             except Exception as exc:
                                 flask_app.logger.error(

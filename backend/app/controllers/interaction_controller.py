@@ -255,18 +255,33 @@ def create_interaction():
     body             : str (required, non-empty)
     occurred_at      : ISO datetime (required)
     associations     : list of {target_type, target_id} (at least one required)
-    source           : str (optional, default 'manual')
-    hubspot_engagement_id : str (optional)
-    raw_payload      : dict (optional)
-    is_orphaned      : bool (optional, default False)
+    source           : must be omitted or 'manual'
     """
     data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({
+            'success': False,
+            'error': {
+                'message': 'Request body must be a JSON object.',
+                'status_code': 400,
+            },
+        }), 400
+    if (
+        data.get('source') not in (None, 'manual')
+        or 'hubspot_engagement_id' in data
+        or 'raw_payload' in data
+        or 'is_orphaned' in data
+    ):
+        return jsonify({
+            'success': False,
+            'error': {
+                'message': 'HubSpot provenance fields are not accepted on manual interactions.',
+                'status_code': 400,
+            },
+        }), 400
     data = dict(data)
     data['source'] = 'manual'
-    data.pop('hubspot_engagement_id', None)
-    data.pop('raw_payload', None)
-    data.pop('is_orphaned', None)
-    if not user_can_access_association_targets(data.get('associations')):
+    if data.get('associations') is not None and not user_can_access_association_targets(data.get('associations')):
         return jsonify({
             'success': False,
             'error': {

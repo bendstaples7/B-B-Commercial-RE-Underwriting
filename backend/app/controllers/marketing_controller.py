@@ -24,6 +24,7 @@ manager = MarketingManager()
 DEFAULT_PAGE = 1
 DEFAULT_PER_PAGE = 25
 MAX_PER_PAGE = 100
+MAX_BULK_MARKETING_LEADS = 1000
 
 
 def _require_list_owner(ml):
@@ -403,12 +404,22 @@ def add_list_members(list_id):
             'error': 'Validation error',
             'message': 'lead_ids must be a list of integers',
         }), 400
+    if len(lead_ids) > MAX_BULK_MARKETING_LEADS:
+        return jsonify({
+            'error': 'Validation error',
+            'message': f'lead_ids must contain at most {MAX_BULK_MARKETING_LEADS} items',
+        }), 400
 
-    allowed = []
-    for lid in lead_ids:
-        lead = db.session.get(Lead, lid)
-        if lead is not None and user_can_access_lead(lead):
-            allowed.append(lid)
+    if current_user_is_admin():
+        allowed = lead_ids
+    else:
+        uid = get_current_user_id()
+        allowed_rows = Lead.query.with_entities(Lead.id).filter(
+            Lead.id.in_(set(lead_ids)),
+            Lead.owner_user_id == uid,
+        ).all()
+        allowed_set = {row[0] for row in allowed_rows}
+        allowed = [lid for lid in lead_ids if lid in allowed_set]
     requested = len(lead_ids)
     lead_ids = allowed
 
@@ -468,12 +479,22 @@ def remove_list_members(list_id):
             'error': 'Validation error',
             'message': 'lead_ids must be a list of integers',
         }), 400
+    if len(lead_ids) > MAX_BULK_MARKETING_LEADS:
+        return jsonify({
+            'error': 'Validation error',
+            'message': f'lead_ids must contain at most {MAX_BULK_MARKETING_LEADS} items',
+        }), 400
 
-    allowed = []
-    for lid in lead_ids:
-        lead = db.session.get(Lead, lid)
-        if lead is not None and user_can_access_lead(lead):
-            allowed.append(lid)
+    if current_user_is_admin():
+        allowed = lead_ids
+    else:
+        uid = get_current_user_id()
+        allowed_rows = Lead.query.with_entities(Lead.id).filter(
+            Lead.id.in_(set(lead_ids)),
+            Lead.owner_user_id == uid,
+        ).all()
+        allowed_set = {row[0] for row in allowed_rows}
+        allowed = [lid for lid in lead_ids if lid in allowed_set]
 
     removed = manager.remove_leads(list_id, allowed)
 

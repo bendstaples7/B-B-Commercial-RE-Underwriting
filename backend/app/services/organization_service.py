@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 AUDITABLE_FIELDS = ('name', 'org_type', 'status', 'notes', 'source', 'hubspot_company_id')
 
 
+def _strip_single_line(value: str) -> str:
+    """Sanitize names/titles while keeping multiline bodies supported elsewhere."""
+    return ' '.join(_strip_invisible(value).split())
+
+
 class OrganizationService:
     """Service class for all Organization-related operations.
 
@@ -61,7 +66,7 @@ class OrganizationService:
         OrganizationValidationError
             If ``name`` is missing or empty.
         """
-        name = _strip_invisible(data.get('name') or '')
+        name = _strip_single_line(data.get('name') or '')
         if not name:
             raise OrganizationValidationError(
                 "Organization name must not be empty.",
@@ -126,7 +131,7 @@ class OrganizationService:
 
         # Validate name if provided
         if 'name' in data:
-            name = _strip_invisible(data['name'] or '')
+            name = _strip_single_line(data['name'] or '')
             if not name:
                 raise OrganizationValidationError(
                     "Organization name must not be empty.",

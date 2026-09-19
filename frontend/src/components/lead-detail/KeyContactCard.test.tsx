@@ -389,7 +389,7 @@ describe('KeyContactCard', () => {
       role: 'owner',
       role_description: null,
       notes: null,
-      phones: [{ id: 1, contact_id: 88, value: '600-0001', label: 'mobile' }],
+      phones: [{ id: 1, contact_id: 88, value: '(312) 600-0001', label: 'mobile' }],
       emails: [],
       created_at: null,
       updated_at: null,
@@ -415,11 +415,11 @@ describe('KeyContactCard', () => {
     const input = screen.getByTestId('key-contact-phone-edit-input')
     expect(input).toHaveValue('(312) 555-0199')
     await user.clear(input)
-    await user.type(input, '600-0001')
+    await user.type(input, '(312) 600-0001')
     await user.click(screen.getByLabelText('Save phone'))
     await waitFor(() => {
       expect(contactService.updateContact).toHaveBeenCalledWith(88, {
-        phones: [{ value: '600-0001', label: 'mobile' }],
+        phones: [{ value: '(312) 600-0001', label: 'mobile' }],
       })
     })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
@@ -448,11 +448,39 @@ describe('KeyContactCard', () => {
 
     await user.click(screen.getByTestId('key-contact-phone-edit'))
     await user.clear(screen.getByTestId('key-contact-phone-edit-input'))
-    await user.type(screen.getByTestId('key-contact-phone-edit-input'), '600-0001')
+    await user.type(screen.getByTestId('key-contact-phone-edit-input'), '(312) 600-0001')
     await user.click(screen.getByLabelText('Save phone'))
 
     expect(await screen.findByText('Could not update phone')).toBeInTheDocument()
     expect(screen.getByTestId('key-contact-phone-edit-input')).toBeInTheDocument()
+  })
+
+  it('rejects invalid inline phone values before saving', async () => {
+    const user = userEvent.setup()
+
+    renderCard(
+      basePayload({
+        contacts: [{
+          id: 88,
+          first_name: 'Jane',
+          last_name: 'Doe',
+          role: 'owner',
+          is_primary: true,
+          phones: [{ value: '(312) 555-0199', label: 'mobile' }],
+          emails: [],
+        }],
+        phones: [{ value: '(312) 555-0199', label: 'mobile' }],
+      }),
+      'Jane Doe',
+    )
+
+    await user.click(screen.getByTestId('key-contact-phone-edit'))
+    await user.clear(screen.getByTestId('key-contact-phone-edit-input'))
+    await user.type(screen.getByTestId('key-contact-phone-edit-input'), 'not a phone')
+    await user.click(screen.getByLabelText('Save phone'))
+
+    expect(await screen.findByText('Enter a valid phone number.')).toBeInTheDocument()
+    expect(contactService.updateContact).not.toHaveBeenCalled()
   })
 
   it('clears a linked key contact from the lead', async () => {
