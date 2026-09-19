@@ -16,6 +16,7 @@ Contains all 13 Hypothesis property-based tests covering:
   - Property 13: Owner-name filter returns exactly matching properties (Req 11.1, 11.2)
 """
 import uuid
+from unittest.mock import patch
 
 import pytest
 import sqlalchemy as sa
@@ -32,6 +33,15 @@ from app.services.hubspot_matcher_service import HubSpotMatcherService
 from app.models.hubspot_contact import HubSpotContact
 
 _AUTH_HEADERS = {"X-User-Id": "test-user"}
+
+
+def _match_contact_as_test_importer(hs_contact: HubSpotContact):
+    with patch.object(
+        HubSpotMatcherService,
+        '_hubspot_import_owner_user_id',
+        return_value='test-user',
+    ):
+        return HubSpotMatcherService().match_contact(hs_contact)
 
 # Import the migration helper from the migration test module
 from tests.test_migration_contact import run_migration_logic
@@ -789,8 +799,7 @@ def test_hubspot_matching_targets_contact_records(
         db.session.commit()
 
         # Run the matcher
-        svc = HubSpotMatcherService()
-        match = svc.match_contact(hs_contact)
+        match = _match_contact_as_test_importer(hs_contact)
         db.session.commit()
 
         assert match.confidence == "HIGH", (
@@ -856,7 +865,7 @@ def test_unmatched_hubspot_contacts_create_new_contact_records(app, first_name, 
         db.session.commit()
 
         svc = HubSpotMatcherService()
-        svc.match_contact(hs_contact)
+        _match_contact_as_test_importer(hs_contact)
         db.session.commit()
 
         count_after = Contact.query.count()
@@ -934,7 +943,7 @@ def test_matching_never_deletes_existing_contact_records(app, num_existing, hs_f
         db.session.commit()
 
         svc = HubSpotMatcherService()
-        svc.match_contact(hs_contact)
+        _match_contact_as_test_importer(hs_contact)
         db.session.commit()
 
         count_after = Contact.query.count()

@@ -11,6 +11,7 @@ Covers:
   - HubSpot matcher end-to-end: email match, phone match, name+property match
 """
 import pytest
+from unittest.mock import patch
 
 from app import db
 from app.models.lead import Lead
@@ -70,6 +71,15 @@ def _make_hubspot_contact(hubspot_id: str, **props) -> HubSpotContact:
     db.session.add(hc)
     db.session.commit()
     return hc
+
+
+def _match_contact_as_test_importer(hc: HubSpotContact):
+    with patch.object(
+        HubSpotMatcherService,
+        '_hubspot_import_owner_user_id',
+        return_value='test-user',
+    ):
+        return HubSpotMatcherService().match_contact(hc)
 
 
 # ---------------------------------------------------------------------------
@@ -445,8 +455,7 @@ class TestHubSpotMatcherEndToEnd:
                 lastname="Matcher",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.confidence == "HIGH"
@@ -469,8 +478,7 @@ class TestHubSpotMatcherEndToEnd:
                 email="caseemail@example.com",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.confidence == "HIGH"
@@ -492,8 +500,7 @@ class TestHubSpotMatcherEndToEnd:
                 phone="3125557890",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.confidence == "HIGH"
@@ -515,8 +522,7 @@ class TestHubSpotMatcherEndToEnd:
                 phone="(773) 555-1234",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.confidence == "HIGH"
@@ -537,8 +543,7 @@ class TestHubSpotMatcherEndToEnd:
                 lastname="NameLast",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.confidence == "MEDIUM"
@@ -559,8 +564,7 @@ class TestHubSpotMatcherEndToEnd:
                 lastname="lastname",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.confidence == "MEDIUM"
@@ -586,8 +590,7 @@ class TestHubSpotMatcherEndToEnd:
                 lastname="Test",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.confidence == "HIGH"
@@ -606,8 +609,7 @@ class TestHubSpotMatcherEndToEnd:
                 lastname="New",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             final_count = Contact.query.count()
@@ -635,8 +637,7 @@ class TestHubSpotMatcherEndToEnd:
                 email="correct@example.com",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.internal_record_id == prop_a.id
