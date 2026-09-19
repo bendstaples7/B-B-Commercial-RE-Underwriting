@@ -21,7 +21,7 @@ import type { SxProps, Theme } from '@mui/material/styles'
 import { useQuery } from '@tanstack/react-query'
 import type { LeadTask, LeadTimelineEntry } from '@/types'
 import { contactService } from '@/services/api'
-import { LogActivityForm, type LogCallSavedMeta } from '@/components/LogActivityForm'
+import { LogActivityForm, type LogCallSavedMeta, type LogActivityTaskEdit } from '@/components/LogActivityForm'
 
 export type ActivityLogType = 'note' | 'call' | 'email'
 
@@ -31,6 +31,8 @@ const TITLES: Record<ActivityLogType, string> = {
   email: 'Log Email',
 }
 
+export type { LogActivityTaskEdit }
+
 export interface LogActivityModalProps {
   open: boolean
   activityType: ActivityLogType | null
@@ -38,12 +40,15 @@ export interface LogActivityModalProps {
   openTasks?: LeadTask[]
   /** Digits from recommended outreach dial target (fallback when task title has none). */
   preferredPhoneDigits?: string | null
+  /** Open the overlay to edit an existing task (prefilled note / phone / date). */
+  editTask?: LogActivityTaskEdit | null
   onClose: () => void
   onSaved: (
     entry: LeadTimelineEntry,
     activityType: ActivityLogType,
     meta?: LogCallSavedMeta,
   ) => void
+  onTaskUpdated?: (task: LeadTask) => void
 }
 
 interface PanelOffset {
@@ -82,8 +87,10 @@ export function LogActivityModal({
   leadId,
   openTasks = [],
   preferredPhoneDigits = null,
+  editTask = null,
   onClose,
   onSaved,
+  onTaskUpdated,
 }: LogActivityModalProps) {
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
@@ -95,12 +102,12 @@ export function LogActivityModal({
   // Log Call only: include former owners so dialed / HubSpot-primary phones
   // that GIS archived under a rename still appear (matches outreach SQL).
   // Log Email keeps active contacts only.
-  const includeFormerOwners = activityType === 'call'
+  const includeFormerOwners = activityType === 'call' || Boolean(editTask)
   const { data: contacts = [], isLoading: contactsLoading } = useQuery({
     queryKey: ['propertyContacts', leadId, { includeFormerOwners }],
     queryFn: () =>
       contactService.getPropertyContacts(leadId, { includeFormerOwners }),
-    enabled: open && activityType != null && activityType !== 'note',
+    enabled: open && activityType != null && (activityType !== 'note' || Boolean(editTask)),
   })
 
   // Reset dock when panel closes or switches activity / lead.
@@ -245,7 +252,9 @@ export function LogActivityModal({
       scroll="paper"
       aria-labelledby="log-activity-dialog-title"
       aria-modal={false}
-      data-testid={`log-activity-modal-${activityType}`}
+      data-testid={
+        editTask ? 'log-activity-modal-edit-task' : `log-activity-modal-${activityType}`
+      }
       sx={{
         pointerEvents: 'none',
         '& .MuiDialog-container': {
@@ -282,7 +291,7 @@ export function LogActivityModal({
           <DragIndicatorIcon fontSize="small" color="action" aria-hidden />
         )}
         <Box component="span" sx={{ flex: 1, minWidth: 0 }}>
-          {TITLES[activityType]}
+          {editTask ? 'Edit Task' : TITLES[activityType]}
         </Box>
         {!isMobile && (offset.x !== 0 || offset.y !== 0) && (
           <IconButton
@@ -308,14 +317,16 @@ export function LogActivityModal({
       </DialogTitle>
       <DialogContent dividers sx={contentSx}>
         <LogActivityForm
-          key={activityType}
+          key={editTask ? `edit-task-${editTask.task.id}` : activityType}
           mode={activityType}
           leadId={leadId}
           contacts={contacts}
           contactsLoading={contactsLoading}
           openTasks={openTasks}
           preferredPhoneDigits={preferredPhoneDigits}
+          editTask={editTask}
           onSaved={handleSaved}
+          onTaskUpdated={onTaskUpdated}
           onCancel={onClose}
         />
       </DialogContent>

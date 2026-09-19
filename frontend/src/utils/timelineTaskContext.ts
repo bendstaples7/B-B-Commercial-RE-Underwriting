@@ -7,6 +7,7 @@ export interface TaskActivityContext {
   body: string
   contactName?: string
   eventType: string
+  phoneNumber?: string
 }
 
 function getContextBody(entry: LeadTimelineEntry): string {
@@ -17,6 +18,12 @@ function getContextBody(entry: LeadTimelineEntry): string {
   const body = entry.metadata?.body
   if (typeof body === 'string' && body.trim()) return body.trim()
   return entry.summary?.trim() ?? ''
+}
+
+function getContextPhone(entry: LeadTimelineEntry): string | undefined {
+  const phone = entry.metadata?.phone_number
+  if (typeof phone === 'string' && phone.trim()) return phone.trim()
+  return undefined
 }
 
 /** Find the most recent activity that created this follow-up task. */
@@ -30,12 +37,13 @@ export function findActivityContextForTask(
     const followUpId = entry.metadata?.follow_up_task_id
     if (followUpId == null || Number(followUpId) !== Number(taskId)) continue
     const body = getContextBody(entry)
-    if (!body) continue
+    const phoneNumber = getContextPhone(entry)
+    if (!body && !phoneNumber) continue
     const contactName =
       typeof entry.metadata?.contact_name === 'string'
         ? entry.metadata.contact_name
         : undefined
-    return { body, contactName, eventType: entry.event_type }
+    return { body, contactName, eventType: entry.event_type, phoneNumber }
   }
   return null
 }
