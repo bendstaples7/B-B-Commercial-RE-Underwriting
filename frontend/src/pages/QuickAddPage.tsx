@@ -529,9 +529,9 @@ export function QuickAddPage() {
     <Box
       component="form"
       onSubmit={handleSubmit}
-      sx={{ maxWidth: 480, mx: 'auto', pb: 4 }}
+      sx={{ width: '100%', pb: 4, cursor: 'auto' }}
     >
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2, maxWidth: 720 }}>
         {intro}
       </Typography>
 
@@ -547,6 +547,20 @@ export function QuickAddPage() {
         </Alert>
       )}
 
+      <Box
+        data-testid="quick-add-layout"
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1.15fr) minmax(320px, 0.85fr)' },
+          columnGap: { md: 5 },
+          rowGap: 3,
+          alignItems: 'start',
+        }}
+      >
+      <Box data-testid="quick-add-property-fields" sx={{ minWidth: 0, cursor: 'auto' }}>
+      <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5 }}>
+        Property
+      </Typography>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <MyLocationIcon
           fontSize="small"
@@ -733,8 +747,60 @@ export function QuickAddPage() {
         </Box>
       )}
 
-      <Box sx={{ mb: 2 }}>
-        <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+      <CaptureSourceFields
+        source={dealSource}
+        onSourceChange={setDealSource}
+        context={context}
+        onContextChange={setContext}
+        sourceLabelId="quick-add-deal-source-label"
+        contextPlaceholder="Why this property stood out…"
+      />
+
+      <TextField
+        label="Date identified"
+        type="date"
+        value={dateIdentified}
+        onChange={(e) => setDateIdentified(e.target.value)}
+        fullWidth
+        required
+        sx={{ mb: 2 }}
+        InputLabelProps={{ shrink: true }}
+        helperText="When you found this property (defaults to today)"
+        inputProps={{ 'aria-label': 'Date identified' }}
+      />
+
+      <TextField
+        label="Notes"
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        fullWidth
+        multiline
+        minRows={4}
+        sx={{ mb: 2, caretColor: 'text.primary' }}
+        placeholder="Anything else to remember"
+        inputProps={{ 'aria-label': 'Notes' }}
+      />
+
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+        Priority
+      </Typography>
+      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+        {PRIORITY_OPTIONS.map((opt) => (
+          <Chip
+            key={opt.value}
+            label={opt.label}
+            clickable
+            color={priority === opt.value ? 'primary' : 'default'}
+            variant={priority === opt.value ? 'filled' : 'outlined'}
+            onClick={() => setPriority(priority === opt.value ? null : opt.value)}
+            sx={{ cursor: 'pointer' }}
+          />
+        ))}
+      </Box>
+      </Box>
+
+      <Box data-testid="quick-add-people" sx={{ minWidth: 0, cursor: 'auto' }}>
+        <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 0.5 }}>
           People
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
@@ -794,54 +860,54 @@ export function QuickAddPage() {
                 sx={{ caretColor: 'text.primary' }}
               />
             </Box>
-            <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
-              <InputLabel id={`quick-add-person-role-${index}`}>Role</InputLabel>
-              <Select
-                labelId={`quick-add-person-role-${index}`}
-                label="Role"
-                value={person.role}
+            <Box sx={{ display: 'flex', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
+              <FormControl size="small" sx={{ minWidth: 160, flex: '1 1 160px' }}>
+                <InputLabel id={`quick-add-person-role-${index}`}>Role</InputLabel>
+                <Select
+                  labelId={`quick-add-person-role-${index}`}
+                  label="Role"
+                  value={person.role}
+                  onChange={(event) => {
+                    const value = event.target.value as ContactRole
+                    setPeople((current) => current.map((row) => (
+                      row.key === person.key ? { ...row, role: value } : row
+                    )))
+                  }}
+                >
+                  {CONTACT_ROLE_OPTIONS.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      {option.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <TextField
+                label="Phone"
+                value={person.phone}
                 onChange={(event) => {
-                  const value = event.target.value as ContactRole
+                  const value = event.target.value
                   setPeople((current) => current.map((row) => (
-                    row.key === person.key ? { ...row, role: value } : row
+                    row.key === person.key ? { ...row, phone: value } : row
                   )))
                 }}
-              >
-                {CONTACT_ROLE_OPTIONS.map((option) => (
-                  <MenuItem key={option.value} value={option.value}>
-                    {option.label}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <TextField
-              label="Phone"
-              value={person.phone}
-              onChange={(event) => {
-                const value = event.target.value
-                setPeople((current) => current.map((row) => (
-                  row.key === person.key ? { ...row, phone: value } : row
-                )))
-              }}
-              fullWidth
-              size="small"
-              sx={{ mb: 1.5, caretColor: 'text.primary' }}
-              inputProps={{ 'aria-label': `Phone ${index + 1}` }}
-            />
-            <TextField
-              label="Email"
-              value={person.email}
-              onChange={(event) => {
-                const value = event.target.value
-                setPeople((current) => current.map((row) => (
-                  row.key === person.key ? { ...row, email: value } : row
-                )))
-              }}
-              fullWidth
-              size="small"
-              sx={{ caretColor: 'text.primary' }}
-              inputProps={{ 'aria-label': `Email ${index + 1}` }}
-            />
+                size="small"
+                sx={{ flex: '1 1 180px', caretColor: 'text.primary' }}
+                inputProps={{ 'aria-label': `Phone ${index + 1}` }}
+              />
+              <TextField
+                label="Email"
+                value={person.email}
+                onChange={(event) => {
+                  const value = event.target.value
+                  setPeople((current) => current.map((row) => (
+                    row.key === person.key ? { ...row, email: value } : row
+                  )))
+                }}
+                size="small"
+                sx={{ flex: '1 1 180px', caretColor: 'text.primary' }}
+                inputProps={{ 'aria-label': `Email ${index + 1}` }}
+              />
+            </Box>
           </Paper>
         ))}
         <Button
@@ -854,64 +920,15 @@ export function QuickAddPage() {
           Add a person
         </Button>
       </Box>
-
-      <CaptureSourceFields
-        source={dealSource}
-        onSourceChange={setDealSource}
-        context={context}
-        onContextChange={setContext}
-        sourceLabelId="quick-add-deal-source-label"
-        contextPlaceholder="Why this property stood out…"
-      />
-
-      <TextField
-        label="Date identified"
-        type="date"
-        value={dateIdentified}
-        onChange={(e) => setDateIdentified(e.target.value)}
-        fullWidth
-        required
-        sx={{ mb: 2 }}
-        InputLabelProps={{ shrink: true }}
-        helperText="When you found this property (defaults to today)"
-        inputProps={{ 'aria-label': 'Date identified' }}
-      />
-
-      <TextField
-        label="Notes"
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-        fullWidth
-        multiline
-        minRows={3}
-        sx={{ mb: 2, caretColor: 'text.primary' }}
-        placeholder="Anything else to remember"
-        inputProps={{ 'aria-label': 'Notes' }}
-      />
-
-      <Typography variant="subtitle2" sx={{ mb: 1 }}>
-        Priority
-      </Typography>
-      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 3 }}>
-        {PRIORITY_OPTIONS.map((opt) => (
-          <Chip
-            key={opt.value}
-            label={opt.label}
-            clickable
-            color={priority === opt.value ? 'primary' : 'default'}
-            variant={priority === opt.value ? 'filled' : 'outlined'}
-            onClick={() => setPriority(priority === opt.value ? null : opt.value)}
-          />
-        ))}
       </Box>
 
       <Button
         type="submit"
         variant="contained"
         size="large"
-        fullWidth
         disabled={quickAddMutation.isPending}
         startIcon={quickAddMutation.isPending ? <CircularProgress size={18} color="inherit" /> : undefined}
+        sx={{ mt: 3, minWidth: { md: 280 }, cursor: 'pointer' }}
       >
         {quickAddMutation.isPending ? 'Saving…' : 'Save to Skip Trace'}
       </Button>
@@ -949,7 +966,7 @@ export function QuickAddPage() {
           <CloseIcon />
         </IconButton>
       </DialogTitle>
-      <DialogContent dividers sx={{ pt: 2 }}>
+      <DialogContent dividers sx={{ pt: 2.5, px: { xs: 2, md: 4 }, cursor: 'auto' }}>
         {formBody}
       </DialogContent>
     </Dialog>

@@ -258,6 +258,11 @@ describe('QuickAddPage deprioritized matches', () => {
     renderPage()
 
     expect(screen.getByRole('heading', { name: 'Quick Add' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Source')).toBeInTheDocument()
+    expect(screen.getByLabelText('Why are you adding this')).toBeInTheDocument()
+    expect(screen.getByLabelText('Date identified')).toBeInTheDocument()
+    expect(screen.getByLabelText('Notes')).toBeInTheDocument()
+    expect(screen.getByText('Priority')).toBeInTheDocument()
     expect(screen.queryByTestId('quick-add-kind')).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Add lead' })).not.toBeInTheDocument()
 
