@@ -43,6 +43,13 @@ vi.mock('@/services/openLetterApi', () => ({
   },
 }))
 
+vi.mock('@/services/contactApi', () => ({
+  contactService: {
+    createContact: vi.fn(),
+    linkContactToProperty: vi.fn(),
+  },
+}))
+
 const { navigateMock } = vi.hoisted(() => ({
   navigateMock: vi.fn(),
 }))
@@ -58,6 +65,7 @@ vi.mock('react-router-dom', async () => {
 import { leadService } from '@/services/leadApi'
 import { commandCenterService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
+import { contactService } from '@/services/contactApi'
 
 const theme = createTheme()
 
@@ -241,19 +249,25 @@ describe('QuickAddPage deprioritized matches', () => {
     })
   })
 
-  it('keeps property and lead on one quick add form', async () => {
+  it('links every person on the same form and does not offer a lead tab', async () => {
     vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
-    renderPage(['/quick-add?kind=property'])
+    vi.mocked(contactService.createContact)
+      .mockResolvedValueOnce({ id: 11 } as never)
+      .mockResolvedValueOnce({ id: 12 } as never)
+    vi.mocked(contactService.linkContactToProperty).mockResolvedValue({} as never)
+    renderPage()
 
     expect(screen.getByRole('heading', { name: 'Quick Add' })).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Add property' })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('quick-add-kind')).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Add lead' })).not.toBeInTheDocument()
-    expect(screen.getByTestId('quick-add-kind-property')).toHaveAttribute('aria-pressed', 'true')
 
-    fireEvent.click(screen.getByTestId('quick-add-kind-lead'))
-    expect(screen.getByRole('heading', { name: 'Quick Add' })).toBeInTheDocument()
-    expect(screen.getByTestId('quick-add-kind-lead')).toHaveAttribute('aria-pressed', 'true')
-
+    fireEvent.click(screen.getByTestId('quick-add-add-person'))
+    fireEvent.change(screen.getByLabelText('First name 1'), { target: { value: 'Ada' } })
+    fireEvent.change(screen.getByLabelText('Last name 1'), { target: { value: 'Lovelace' } })
+    fireEvent.change(screen.getByLabelText('Phone 1'), { target: { value: '312-555-0100' } })
+    fireEvent.click(screen.getByTestId('quick-add-add-person'))
+    fireEvent.change(screen.getByLabelText('First name 2'), { target: { value: 'Grace' } })
+    fireEvent.change(screen.getByLabelText('Email 2'), { target: { value: 'grace@example.com' } })
     fireEvent.change(screen.getByLabelText('Why are you adding this'), {
       target: { value: 'Broker sent the address' },
     })
@@ -266,16 +280,41 @@ describe('QuickAddPage deprioritized matches', () => {
       expect(leadService.quickAdd).toHaveBeenCalledWith(
         expect.objectContaining({
           capture_kind: 'lead',
-          deal_source: 'Referral',
+          deal_source: 'Driving For Dollars',
           context: 'Broker sent the address',
           note: 'Call after 5',
         }),
       )
     })
+    expect(contactService.createContact).toHaveBeenCalledTimes(2)
+    expect(contactService.createContact).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        first_name: 'Ada',
+        last_name: 'Lovelace',
+        phones: [{ value: '312-555-0100', label: 'mobile' }],
+        source: 'Driving For Dollars',
+        capture_context: 'Broker sent the address',
+      }),
+    )
+    expect(contactService.linkContactToProperty).toHaveBeenNthCalledWith(
+      1,
+      99,
+      expect.objectContaining({ contact_id: 11, is_primary: true }),
+    )
+    expect(contactService.linkContactToProperty).toHaveBeenNthCalledWith(
+      2,
+      99,
+      expect.objectContaining({ contact_id: 12, is_primary: false }),
+    )
   })
 
-  it('does not show the property or lead toggle on the phone quick add', () => {
+  it('does not save a person row that has no name', () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
     renderPage()
-    expect(screen.queryByTestId('quick-add-kind')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('quick-add-add-person'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save to Skip Trace' }))
+    expect(screen.getByText(/first or last name/i)).toBeInTheDocument()
+    expect(leadService.quickAdd).not.toHaveBeenCalled()
   })
 })

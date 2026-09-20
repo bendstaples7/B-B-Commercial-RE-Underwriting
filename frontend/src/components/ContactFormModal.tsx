@@ -38,7 +38,7 @@ import type {
 // Constants
 // ---------------------------------------------------------------------------
 
-const CONTACT_ROLE_OPTIONS: { value: ContactRole; label: string }[] = [
+export const CONTACT_ROLE_OPTIONS: { value: ContactRole; label: string }[] = [
   { value: 'owner', label: 'Owner' },
   { value: 'property_manager', label: 'Property Manager' },
   { value: 'attorney', label: 'Attorney' },

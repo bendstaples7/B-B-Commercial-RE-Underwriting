@@ -3,7 +3,7 @@
  * Creates a Skip Trace lead and queues HubSpot deal push.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link as RouterLink, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link as RouterLink, useNavigate } from 'react-router-dom'
 import {
   Alert,
   Box,
@@ -13,18 +13,21 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
+  FormControl,
   IconButton,
+  InputLabel,
   List,
   ListItem,
   ListItemButton,
   ListItemText,
+  MenuItem,
   Paper,
+  Select,
   TextField,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import MyLocationIcon from '@mui/icons-material/MyLocation'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
@@ -34,12 +37,28 @@ import { useGoogleMapsLoaded } from '@/context/GoogleMapsContext'
 import { leadService } from '@/services/leadApi'
 import { commandCenterService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
-import type { QuickAddPayload, QuickAddResponse } from '@/types'
+import type { ContactRole, QuickAddPayload, QuickAddResponse } from '@/types'
 import { QUICK_ADD_DEAL_SOURCES } from '@/types'
 import { formatDateOnly } from '@/utils/formatters'
 import { CaptureSourceFields } from '@/components/CaptureSourceFields'
+import { CONTACT_ROLE_OPTIONS } from '@/components/ContactFormModal'
+import { contactService } from '@/services/contactApi'
 
 type Priority = 'high' | 'medium' | 'low'
+
+type CapturePerson = {
+  key: string
+  firstName: string
+  lastName: string
+  role: ContactRole
+  phone: string
+  email: string
+}
+
+type SavedQuickAdd = QuickAddResponse & {
+  peopleSaved: number
+  peopleWarning: string | null
+}
 
 const PRIORITY_OPTIONS: { value: Priority; label: string }[] = [
   { value: 'high', label: 'High' },
@@ -93,9 +112,6 @@ function hubspotSuccessMessage(result: QuickAddResponse): string | null {
 
 export function QuickAddPage() {
   const navigate = useNavigate()
-  const [searchParams, setSearchParams] = useSearchParams()
-  const kindParam = searchParams.get('kind')
-  const captureKind = kindParam === 'lead' || kindParam === 'property' ? kindParam : null
   const queryClient = useQueryClient()
   const mapsLoaded = useGoogleMapsLoaded()
   const suggestionsRef = useRef<HTMLUListElement>(null)
@@ -104,9 +120,7 @@ export function QuickAddPage() {
   const [note, setNote] = useState('')
   const [context, setContext] = useState('')
   const [priority, setPriority] = useState<Priority | null>(null)
-  const [dealSource, setDealSource] = useState<string>(
-    captureKind === 'lead' ? 'Referral' : QUICK_ADD_DEAL_SOURCES[0],
-  )
+  const [dealSource, setDealSource] = useState<string>(QUICK_ADD_DEAL_SOURCES[0])
   const [dateIdentified, setDateIdentified] = useState(todayIsoDate)
   const [addressError, setAddressError] = useState('')
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
@@ -119,7 +133,10 @@ export function QuickAddPage() {
   }>({ city: null, state: null, zip: null })
   // Bumped on every Places selection so older getDetails callbacks are ignored.
   const placesRequestIdRef = useRef(0)
-  const [successResult, setSuccessResult] = useState<QuickAddResponse | null>(null)
+  const personSeq = useRef(0)
+  const [people, setPeople] = useState<CapturePerson[]>([])
+  const [peopleError, setPeopleError] = useState('')
+  const [successResult, setSuccessResult] = useState<SavedQuickAdd | null>(null)
   const [existingActionFeedback, setExistingActionFeedback] = useState<{
     severity: 'success' | 'warning' | 'error'
     message: string
@@ -204,7 +221,49 @@ export function QuickAddPage() {
   }, [mapsLoaded, coords])
 
   const quickAddMutation = useMutation({
-    mutationFn: (payload: QuickAddPayload) => leadService.quickAdd(payload),
+    mutationFn: async ({
+      quickAdd,
+      people: peopleToSave,
+    }: {
+      quickAdd: QuickAddPayload
+      people: CapturePerson[]
+    }): Promise<SavedQuickAdd> => {
+      const result = await leadService.quickAdd(quickAdd)
+      let peopleSaved = 0
+      const failures: string[] = []
+      for (const [index, person] of peopleToSave.entries()) {
+        const label = [person.firstName, person.lastName].filter(Boolean).join(' ') || 'Contact'
+        try {
+          const created = await contactService.createContact({
+            first_name: person.firstName.trim() || null,
+            last_name: person.lastName.trim() || null,
+            role: person.role,
+            source: quickAdd.deal_source ?? null,
+            capture_context: quickAdd.context ?? null,
+            phones: person.phone.trim()
+              ? [{ value: person.phone.trim(), label: 'mobile' }]
+              : [],
+            emails: person.email.trim()
+              ? [{ value: person.email.trim(), label: 'personal' }]
+              : [],
+          })
+          await contactService.linkContactToProperty(result.lead_id, {
+            contact_id: created.id,
+            role: person.role,
+            is_primary: index === 0,
+          })
+          peopleSaved += 1
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Could not save contact'
+          failures.push(`${label}: ${message}`)
+        }
+      }
+      return {
+        ...result,
+        peopleSaved,
+        peopleWarning: failures.length ? failures.join(' ') : null,
+      }
+    },
     onSuccess: (result) => {
       setSuccessResult(result)
     },
@@ -346,21 +405,35 @@ export function QuickAddPage() {
       setAddressError('Property address is required')
       return
     }
+    const incompletePerson = people.some(
+      (person) => !person.firstName.trim() && !person.lastName.trim(),
+    )
+    if (incompletePerson) {
+      setPeopleError('Each person needs a first or last name, or remove them.')
+      return
+    }
     setAddressError('')
+    setPeopleError('')
+    const namedPeople = people.filter(
+      (person) => person.firstName.trim() || person.lastName.trim(),
+    )
     quickAddMutation.mutate({
-      property_street: street,
-      note: note.trim() || null,
-      context: context.trim() || null,
-      capture_kind: captureKind,
-      priority,
-      deal_source: dealSource,
-      date_identified: dateIdentified || todayIsoDate(),
-      capture_latitude: coords?.lat ?? null,
-      capture_longitude: coords?.lng ?? null,
-      capture_location_label: gpsLabel,
-      property_city: parsedAddress.city,
-      property_state: parsedAddress.state,
-      property_zip: parsedAddress.zip,
+      quickAdd: {
+        property_street: street,
+        note: note.trim() || null,
+        context: context.trim() || null,
+        capture_kind: namedPeople.length ? 'lead' : null,
+        priority,
+        deal_source: dealSource,
+        date_identified: dateIdentified || todayIsoDate(),
+        capture_latitude: coords?.lat ?? null,
+        capture_longitude: coords?.lng ?? null,
+        capture_location_label: gpsLabel,
+        property_city: parsedAddress.city,
+        property_state: parsedAddress.state,
+        property_zip: parsedAddress.zip,
+      },
+      people: namedPeople,
     })
   }
 
@@ -369,8 +442,10 @@ export function QuickAddPage() {
     setNote('')
     setContext('')
     setPriority(null)
-    setDealSource(captureKind === 'lead' ? 'Referral' : QUICK_ADD_DEAL_SOURCES[0])
+    setDealSource(QUICK_ADD_DEAL_SOURCES[0])
     setDateIdentified(todayIsoDate())
+    setPeople([])
+    setPeopleError('')
     setSuccessResult(null)
     setExistingActionFeedback(null)
     setAddressError('')
@@ -396,20 +471,19 @@ export function QuickAddPage() {
     navigate('/kanban')
   }
 
-  const dialogTitle = 'Quick Add'
-  const intro = captureKind
-    ? 'Add a property or a lead on this form. Include the source, why you are adding it, and any notes.'
-    : 'Capture a walk-by address. Include the source, why it stood out, and any notes. We will add it to Skip Trace and create a HubSpot deal.'
-
-  const selectCaptureKind = (next: 'property' | 'lead') => {
-    if (next === captureKind) return
-    setDealSource((current) => {
-      const previousDefault = captureKind === 'lead' ? 'Referral' : QUICK_ADD_DEAL_SOURCES[0]
-      if (current !== previousDefault) return current
-      return next === 'lead' ? 'Referral' : QUICK_ADD_DEAL_SOURCES[0]
-    })
-    setSearchParams({ kind: next }, { replace: true })
+  const addPerson = () => {
+    const key = `person-${personSeq.current}`
+    personSeq.current += 1
+    setPeople((current) => [
+      ...current,
+      { key, firstName: '', lastName: '', role: 'owner', phone: '', email: '' },
+    ])
+    setPeopleError('')
   }
+
+  const intro = 'Save an address you are interested in. Add the people you already know — one property can have more than one — plus where it came from and why.'
+
+  const dialogTitle = 'Quick Add'
 
   const formBody =
     successResult !== null ? (
@@ -426,8 +500,16 @@ export function QuickAddPage() {
                 {successResult.created
                   ? 'Added to Skip Trace.'
                   : 'This address was already in the system. Walk-by notes were appended without changing the pipeline stage.'}
+                {successResult.peopleSaved > 0
+                  ? ` ${successResult.peopleSaved === 1 ? '1 person' : `${successResult.peopleSaved} people`} saved on this property.`
+                  : ''}
                 {hubspotMessage ? ` ${hubspotMessage}` : ' HubSpot write-back is disabled in this environment.'}
               </Typography>
+              {successResult.peopleWarning && (
+                <Alert severity="warning" sx={{ mb: 2, textAlign: 'left' }}>
+                  {successResult.peopleWarning}
+                </Alert>
+              )}
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 <Button variant="contained" component={RouterLink} to={`/leads/${successResult.lead_id}`}>
                   View lead
@@ -453,27 +535,10 @@ export function QuickAddPage() {
         {intro}
       </Typography>
 
-      {captureKind && (
-        <ToggleButtonGroup
-          exclusive
-          fullWidth
-          size="small"
-          color="primary"
-          value={captureKind}
-          onChange={(_, next: 'property' | 'lead' | null) => {
-            if (next) selectCaptureKind(next)
-          }}
-          aria-label="Property or lead"
-          data-testid="quick-add-kind"
-          sx={{ mb: 2 }}
-        >
-          <ToggleButton value="property" data-testid="quick-add-kind-property" sx={{ cursor: 'pointer' }}>
-            Property
-          </ToggleButton>
-          <ToggleButton value="lead" data-testid="quick-add-kind-lead" sx={{ cursor: 'pointer' }}>
-            Lead
-          </ToggleButton>
-        </ToggleButtonGroup>
+      {peopleError && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {peopleError}
+        </Alert>
       )}
 
       {quickAddMutation.isError && (
@@ -668,17 +733,132 @@ export function QuickAddPage() {
         </Box>
       )}
 
+      <Box sx={{ mb: 2 }}>
+        <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+          People
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          Add everyone you know for this address. Leave this empty if you only have the property.
+        </Typography>
+        {people.map((person, index) => (
+          <Paper
+            key={person.key}
+            variant="outlined"
+            data-testid={`quick-add-person-${index}`}
+            sx={{ p: 1.5, mb: 1.5, cursor: 'auto' }}
+          >
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+              <Typography variant="body2" fontWeight={600}>
+                Person {index + 1}
+              </Typography>
+              <IconButton
+                aria-label={`Remove person ${index + 1}`}
+                data-testid={`quick-add-remove-person-${index}`}
+                onClick={() => setPeople((current) => current.filter((row) => row.key !== person.key))}
+                size="small"
+                sx={{ cursor: 'pointer' }}
+              >
+                <DeleteOutlineIcon fontSize="small" />
+              </IconButton>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1, mb: 1.5 }}>
+              <TextField
+                label="First name"
+                value={person.firstName}
+                onChange={(event) => {
+                  const value = event.target.value
+                  setPeople((current) => current.map((row) => (
+                    row.key === person.key ? { ...row, firstName: value } : row
+                  )))
+                }}
+                fullWidth
+                size="small"
+                inputProps={{ 'aria-label': `First name ${index + 1}` }}
+                sx={{ caretColor: 'text.primary' }}
+              />
+              <TextField
+                label="Last name"
+                value={person.lastName}
+                onChange={(event) => {
+                  const value = event.target.value
+                  setPeople((current) => current.map((row) => (
+                    row.key === person.key ? { ...row, lastName: value } : row
+                  )))
+                }}
+                fullWidth
+                size="small"
+                inputProps={{ 'aria-label': `Last name ${index + 1}` }}
+                sx={{ caretColor: 'text.primary' }}
+              />
+            </Box>
+            <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
+              <InputLabel id={`quick-add-person-role-${index}`}>Role</InputLabel>
+              <Select
+                labelId={`quick-add-person-role-${index}`}
+                label="Role"
+                value={person.role}
+                onChange={(event) => {
+                  const value = event.target.value as ContactRole
+                  setPeople((current) => current.map((row) => (
+                    row.key === person.key ? { ...row, role: value } : row
+                  )))
+                }}
+              >
+                {CONTACT_ROLE_OPTIONS.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <TextField
+              label="Phone"
+              value={person.phone}
+              onChange={(event) => {
+                const value = event.target.value
+                setPeople((current) => current.map((row) => (
+                  row.key === person.key ? { ...row, phone: value } : row
+                )))
+              }}
+              fullWidth
+              size="small"
+              sx={{ mb: 1.5, caretColor: 'text.primary' }}
+              inputProps={{ 'aria-label': `Phone ${index + 1}` }}
+            />
+            <TextField
+              label="Email"
+              value={person.email}
+              onChange={(event) => {
+                const value = event.target.value
+                setPeople((current) => current.map((row) => (
+                  row.key === person.key ? { ...row, email: value } : row
+                )))
+              }}
+              fullWidth
+              size="small"
+              sx={{ caretColor: 'text.primary' }}
+              inputProps={{ 'aria-label': `Email ${index + 1}` }}
+            />
+          </Paper>
+        ))}
+        <Button
+          type="button"
+          variant="outlined"
+          onClick={addPerson}
+          data-testid="quick-add-add-person"
+          sx={{ cursor: 'pointer' }}
+        >
+          Add a person
+        </Button>
+      </Box>
+
       <CaptureSourceFields
         source={dealSource}
         onSourceChange={setDealSource}
         context={context}
         onContextChange={setContext}
         sourceLabelId="quick-add-deal-source-label"
-        contextPlaceholder={
-          captureKind === 'lead'
-            ? 'Who sent this, or what made it a lead…'
-            : 'Why this property stood out…'
-        }
+        contextPlaceholder="Why this property stood out…"
       />
 
       <TextField
