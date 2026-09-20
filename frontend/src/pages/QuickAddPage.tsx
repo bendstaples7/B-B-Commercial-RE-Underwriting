@@ -754,7 +754,10 @@ export function QuickAddPage() {
               <IconButton
                 aria-label={`Remove person ${index + 1}`}
                 data-testid={`quick-add-remove-person-${index}`}
-                onClick={() => setPeople((current) => current.filter((row) => row.key !== person.key))}
+                onClick={() => {
+                  setPeople((current) => current.filter((row) => row.key !== person.key))
+                  setPeopleError('')
+                }}
                 size="small"
                 sx={{ cursor: 'pointer' }}
               >
