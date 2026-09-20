@@ -14,13 +14,14 @@ function renderButton() {
 }
 
 describe('HeaderQuickAddButton', () => {
-  it('opens property, lead, and contact capture from the header plus', async () => {
+  it('opens property-or-lead and contact capture from the header plus', async () => {
     const user = userEvent.setup()
     renderButton()
 
     await user.click(screen.getByTestId('header-add-button'))
-    expect(screen.getByTestId('header-add-property')).toBeInTheDocument()
-    expect(screen.getByTestId('header-add-lead')).toBeInTheDocument()
+    expect(screen.getByTestId('header-add-property-or-lead')).toBeInTheDocument()
+    expect(screen.queryByTestId('header-add-property')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('header-add-lead')).not.toBeInTheDocument()
     expect(screen.getByTestId('header-add-contact')).toBeInTheDocument()
 
     await user.click(screen.getByTestId('header-add-contact'))

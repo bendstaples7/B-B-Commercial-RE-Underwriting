@@ -20,6 +20,8 @@ import {
   ListItemText,
   Paper,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
@@ -91,7 +93,7 @@ function hubspotSuccessMessage(result: QuickAddResponse): string | null {
 
 export function QuickAddPage() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const kindParam = searchParams.get('kind')
   const captureKind = kindParam === 'lead' || kindParam === 'property' ? kindParam : null
   const queryClient = useQueryClient()
@@ -394,16 +396,20 @@ export function QuickAddPage() {
     navigate('/kanban')
   }
 
-  const dialogTitle = captureKind === 'lead'
-    ? 'Add lead'
-    : captureKind === 'property'
-      ? 'Add property'
-      : 'Quick Add'
-  const intro = captureKind === 'lead'
-    ? 'Add a lead to the pipeline. Include where it came from, why it matters, and any notes.'
-    : captureKind === 'property'
-      ? 'Capture a property you are interested in. Include the source, why it stood out, and any notes.'
-      : 'Capture a walk-by address. Include the source, why it stood out, and any notes. We will add it to Skip Trace and create a HubSpot deal.'
+  const dialogTitle = 'Quick Add'
+  const intro = captureKind
+    ? 'Add a property or a lead on this form. Include the source, why you are adding it, and any notes.'
+    : 'Capture a walk-by address. Include the source, why it stood out, and any notes. We will add it to Skip Trace and create a HubSpot deal.'
+
+  const selectCaptureKind = (next: 'property' | 'lead') => {
+    if (next === captureKind) return
+    setDealSource((current) => {
+      const previousDefault = captureKind === 'lead' ? 'Referral' : QUICK_ADD_DEAL_SOURCES[0]
+      if (current !== previousDefault) return current
+      return next === 'lead' ? 'Referral' : QUICK_ADD_DEAL_SOURCES[0]
+    })
+    setSearchParams({ kind: next }, { replace: true })
+  }
 
   const formBody =
     successResult !== null ? (
@@ -446,6 +452,29 @@ export function QuickAddPage() {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         {intro}
       </Typography>
+
+      {captureKind && (
+        <ToggleButtonGroup
+          exclusive
+          fullWidth
+          size="small"
+          color="primary"
+          value={captureKind}
+          onChange={(_, next: 'property' | 'lead' | null) => {
+            if (next) selectCaptureKind(next)
+          }}
+          aria-label="Property or lead"
+          data-testid="quick-add-kind"
+          sx={{ mb: 2 }}
+        >
+          <ToggleButton value="property" data-testid="quick-add-kind-property" sx={{ cursor: 'pointer' }}>
+            Property
+          </ToggleButton>
+          <ToggleButton value="lead" data-testid="quick-add-kind-lead" sx={{ cursor: 'pointer' }}>
+            Lead
+          </ToggleButton>
+        </ToggleButtonGroup>
+      )}
 
       {quickAddMutation.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>

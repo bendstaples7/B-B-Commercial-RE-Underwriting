@@ -1,6 +1,6 @@
 /**
  * Desktop header plus — opens the same capture flows as the phone Quick Add FAB.
- * Property and lead reuse QuickAddPage; contact reuses ContactFormModal.
+ * Property and lead share one QuickAddPage; contact reuses ContactFormModal.
  */
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -29,9 +29,9 @@ export function HeaderQuickAddButton() {
 
   const closeMenu = () => setAnchorEl(null)
 
-  const openCapture = (kind: 'property' | 'lead') => {
+  const openPropertyOrLead = () => {
     closeMenu()
-    navigate(`/quick-add?kind=${kind}`)
+    navigate('/quick-add?kind=property')
   }
 
   return (
@@ -57,21 +57,12 @@ export function HeaderQuickAddButton() {
         MenuListProps={{ 'aria-label': 'Add' }}
       >
         <MenuItem
-          data-testid="header-add-property"
-          onClick={() => openCapture('property')}
+          data-testid="header-add-property-or-lead"
+          onClick={openPropertyOrLead}
         >
           <ListItemText
-            primary="Property"
-            secondary="An address you are interested in"
-          />
-        </MenuItem>
-        <MenuItem
-          data-testid="header-add-lead"
-          onClick={() => openCapture('lead')}
-        >
-          <ListItemText
-            primary="Lead"
-            secondary="A pipeline lead, with source and why"
+            primary="Property or lead"
+            secondary="An address, with source and why"
           />
         </MenuItem>
         <MenuItem

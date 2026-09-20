@@ -241,11 +241,19 @@ describe('QuickAddPage deprioritized matches', () => {
     })
   })
 
-  it('sends source, why, and notes for a lead capture', async () => {
+  it('keeps property and lead on one quick add form', async () => {
     vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
-    renderPage(['/quick-add?kind=lead'])
+    renderPage(['/quick-add?kind=property'])
 
-    expect(screen.getByRole('heading', { name: 'Add lead' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Quick Add' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Add property' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Add lead' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('quick-add-kind-property')).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(screen.getByTestId('quick-add-kind-lead'))
+    expect(screen.getByRole('heading', { name: 'Quick Add' })).toBeInTheDocument()
+    expect(screen.getByTestId('quick-add-kind-lead')).toHaveAttribute('aria-pressed', 'true')
+
     fireEvent.change(screen.getByLabelText('Why are you adding this'), {
       target: { value: 'Broker sent the address' },
     })
@@ -264,5 +272,10 @@ describe('QuickAddPage deprioritized matches', () => {
         }),
       )
     })
+  })
+
+  it('does not show the property or lead toggle on the phone quick add', () => {
+    renderPage()
+    expect(screen.queryByTestId('quick-add-kind')).not.toBeInTheDocument()
   })
 })
