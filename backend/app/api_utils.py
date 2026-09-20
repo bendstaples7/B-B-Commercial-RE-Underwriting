@@ -50,6 +50,46 @@ from flask import g, jsonify, request
 
 logger = logging.getLogger(__name__)
 
+# Fail-closed public allowlist for /api. Everything else requires a real user_id
+# (JWT in prod/dev; X-User-Id only in the testing config).
+PUBLIC_API_ROUTES = frozenset({
+    ('GET', '/api/health'),
+    ('GET', '/api/health/runtime'),
+    ('GET', '/api/spa-version'),
+    ('GET', '/api/version'),
+    ('GET', '/api/openapi.json'),
+    ('POST', '/api/auth/login'),
+    ('POST', '/api/auth/set-password'),
+    ('POST', '/api/hubspot/webhook'),
+    ('POST', '/api/spa-boot-failure'),
+})
+
+
+def is_public_api_request(method: str | None = None, path: str | None = None) -> bool:
+    """Return True when this /api request is allowed without a user session."""
+    verb = (method or request.method or '').upper()
+    if verb == 'OPTIONS':
+        return True
+    if verb == 'HEAD':
+        verb = 'GET'
+    raw_path = path if path is not None else (request.path or '')
+    if not raw_path.startswith('/api'):
+        return True
+    normalized = raw_path.rstrip('/') or '/'
+    if (verb, raw_path) in PUBLIC_API_ROUTES:
+        return True
+    if (verb, normalized) in PUBLIC_API_ROUTES:
+        return True
+    # Allowlist entries are stored without a trailing slash.
+    if not raw_path.endswith('/') and (verb, raw_path + '/') in PUBLIC_API_ROUTES:
+        return True
+    return False
+
+
+def anonymous_api_unauthorized_response():
+    """JSON 401 used by the global /api identity gate."""
+    return jsonify({'error': 'Authentication required'}), 401
+
 
 def get_current_user_id() -> str:
     """Return the authenticated user ID for the current request.
@@ -122,6 +162,48 @@ def _user_id_for_log(value) -> str:
         return 'invalid'
 
 
+def bind_request_jwt_identity(token: str) -> None:
+    """Populate ``g.user_id`` / ``g.is_admin`` from a Bearer JWT.
+
+    Setup tokens, missing users, and deactivated accounts are anonymous.
+    Failures set ``g.jwt_error`` so ``enforce_api_auth`` can reject the
+    request — except a setup token on a public route (set-password).
+    """
+    from app.models.user import User
+    from app.services.auth_service import AuthService
+
+    g.user_id = 'anonymous'
+    try:
+        claims = AuthService().verify_token(token)
+    except jwt.ExpiredSignatureError:
+        g.jwt_error = 'expired'
+        return
+    except jwt.InvalidTokenError:
+        g.jwt_error = 'invalid'
+        return
+    except Exception:
+        g.jwt_error = 'invalid'
+        return
+
+    if claims.get('setup_required') is True:
+        if not is_public_api_request():
+            g.jwt_error = 'setup_token'
+        return
+
+    subject = claims.get('sub')
+    user = User.query.filter_by(user_id=subject).first() if subject else None
+    if user is None:
+        g.jwt_error = 'user_not_found'
+        g.jwt_subject = subject
+        return
+    if not user.is_active:
+        g.jwt_error = 'inactive'
+        g.jwt_subject = user.user_id
+        return
+    g.user_id = user.user_id
+    g.is_admin = bool(user.is_admin)
+
+
 def require_auth(f):
     """Decorator that verifies a Bearer JWT and populates ``g.user_id``.
 
@@ -167,6 +249,12 @@ def require_auth(f):
         auth_header = request.headers.get('Authorization', '')
         auth_header_lower = auth_header.lower()
         if auth_header_lower.startswith('bearer '):
+            if (
+                not getattr(g, 'jwt_error', None)
+                and getattr(g, 'user_id', None)
+                and getattr(g, 'user_id', None) != 'anonymous'
+            ):
+                return f(*args, **kwargs)
             token = auth_header[7:]
             try:
                 claims = AuthService().verify_token(token)
@@ -221,7 +309,8 @@ def require_auth(f):
             # Legacy fallback — only accepted when ALLOW_LEGACY_X_USER_ID is
             # explicitly enabled (non-production environments only).
             g.user_id = request.headers.get('X-User-Id')
-            g.is_admin = False
+            header_user = User.query.filter_by(user_id=g.user_id).first()
+            g.is_admin = bool(header_user and header_user.is_admin)
         else:
             logger.warning(
                 "auth_reject reason=missing_auth path=%s",
@@ -268,6 +357,304 @@ def require_admin(f):
             }), 403
         return f(*args, **kwargs)
     return decorated
+
+
+def current_user_is_admin() -> bool:
+    """Return True when the authenticated caller is an admin.
+
+    Prefers ``g.is_admin`` from ``require_auth``. Falls back to a User row
+    lookup for legacy/test paths. Fail closed on any error.
+    """
+    try:
+        is_admin = getattr(g, 'is_admin', None)
+        if is_admin is not None:
+            return bool(is_admin)
+        user_id = getattr(g, 'user_id', None)
+        if not user_id or user_id == 'anonymous':
+            return False
+        from app.models.user import User
+        user = User.query.filter_by(user_id=user_id).first()
+        return bool(user and user.is_admin)
+    except Exception:
+        return False
+
+
+def user_can_access_lead(lead) -> bool:
+    """True when the caller may read/mutate this lead (owner or admin)."""
+    if lead is None:
+        return False
+    if current_user_is_admin():
+        return True
+    current_user_id = getattr(g, 'user_id', None)
+    if not current_user_id or current_user_id == 'anonymous':
+        return False
+    return lead.owner_user_id == current_user_id
+
+
+def lead_not_found_response(lead_id: int):
+    """Opaque 404 used for missing leads and owner-denied IDOR."""
+    return jsonify({
+        'error': 'Not found',
+        'message': f'Lead {lead_id} not found',
+    }), 404
+
+
+def load_authorized_lead(lead_id: int):
+    """Load a lead the caller may access, or return ``(None, 404 response)``."""
+    from app import db
+    from app.models.lead import Lead
+
+    lead = db.session.get(Lead, lead_id)
+    if lead is None or not user_can_access_lead(lead):
+        return None, lead_not_found_response(lead_id)
+    return lead, None
+
+
+def user_can_access_analysis_session(session) -> bool:
+    """True when the caller owns this analysis session or is admin."""
+    if session is None:
+        return False
+    if current_user_is_admin():
+        return True
+    current_user_id = getattr(g, 'user_id', None)
+    if not current_user_id or current_user_id == 'anonymous':
+        return False
+    return session.user_id == current_user_id
+
+
+def analysis_session_not_found_response(session_id: str):
+    """Opaque 404 used for missing sessions and owner-denied IDOR."""
+    return jsonify({
+        'error': 'Session not found',
+        'message': f'Session {session_id} not found',
+    }), 404
+
+
+def load_authorized_analysis_session(session_id: str):
+    """Load an analysis session the caller may access, or return ``(None, 404)``."""
+    from app.models.analysis_session import AnalysisSession
+
+    session = AnalysisSession.query.filter_by(session_id=session_id).first()
+    if session is None or not user_can_access_analysis_session(session):
+        return None, analysis_session_not_found_response(session_id)
+    return session, None
+
+
+def owned_lead_ids_for_current_user() -> set[int] | None:
+    """Lead ids the caller may see.
+
+    ``None`` means admin (no owner filter). An empty set means a non-admin
+    with no owned leads.
+    """
+    if current_user_is_admin():
+        return None
+    current_user_id = getattr(g, 'user_id', None)
+    if not current_user_id or current_user_id == 'anonymous':
+        return set()
+    from app.models.lead import Lead
+
+    return {
+        row[0]
+        for row in Lead.query.with_entities(Lead.id)
+        .filter(Lead.owner_user_id == current_user_id)
+        .all()
+    }
+
+
+def accessible_association_target_ids_for_current_user() -> dict[str, set[int]] | None:
+    """Association target ids visible to the current caller, or None for admin."""
+    if current_user_is_admin():
+        return None
+    lead_ids = owned_lead_ids_for_current_user() or set()
+    current_user_id = getattr(g, 'user_id', None)
+    if not current_user_id or current_user_id == 'anonymous':
+        return {'lead': set(), 'organization': set(), 'contact': set()}
+    from app.models.contact import Contact
+    from app.models.owner_organization_link import OwnerOrganizationLink
+    from app.models.property_contact import PropertyContact
+    from app.models.property_organization_link import PropertyOrganizationLink
+
+    organization_ids = set()
+    contact_ids = set()
+    if lead_ids:
+        organization_ids.update(
+            row[0]
+            for row in PropertyOrganizationLink.query.with_entities(
+                PropertyOrganizationLink.organization_id,
+            )
+            .filter(PropertyOrganizationLink.property_id.in_(lead_ids))
+            .all()
+        )
+        organization_ids.update(
+            row[0]
+            for row in OwnerOrganizationLink.query.with_entities(
+                OwnerOrganizationLink.organization_id,
+            )
+            .filter(OwnerOrganizationLink.owner_id.in_(lead_ids))
+            .all()
+        )
+        contact_ids.update(
+            row[0]
+            for row in PropertyContact.query.with_entities(PropertyContact.contact_id)
+            .filter(PropertyContact.property_id.in_(lead_ids))
+            .all()
+        )
+
+    contact_ids.update(
+        row[0]
+        for row in Contact.query.with_entities(Contact.id)
+        .filter(Contact.created_by_user_id == current_user_id)
+        .filter(~Contact.property_contacts.any())
+        .all()
+    )
+    return {
+        'lead': set(lead_ids),
+        'organization': organization_ids,
+        'contact': contact_ids,
+    }
+
+
+def apply_association_access_scope_filter(
+    query,
+    *,
+    parent_model,
+    association_model,
+    parent_fk_column,
+    association_access_scope: dict[str, set[int]],
+    direct_lead_column=None,
+):
+    """Restrict a query to rows whose complete association set is accessible."""
+    from sqlalchemy import and_, or_
+    from app import db
+
+    lead_ids = association_access_scope.get('lead', set())
+    organization_ids = association_access_scope.get('organization', set())
+    contact_ids = association_access_scope.get('contact', set())
+    supported_types = tuple(getattr(association_model.target_type.type, 'enums', ()) or ())
+    type_scopes = {
+        'lead': lead_ids,
+        'organization': organization_ids,
+        'contact': contact_ids,
+    }
+    inaccessible_predicates = [
+        and_(
+            association_model.target_type == target_type,
+            ~association_model.target_id.in_(type_scopes[target_type]),
+        )
+        for target_type in supported_types
+        if target_type in type_scopes
+    ]
+    inaccessible_predicates.append(~association_model.target_type.in_(supported_types))
+    inaccessible_assoc = db.session.query(association_model.id).filter(
+        parent_fk_column == parent_model.id,
+        or_(*inaccessible_predicates),
+    ).correlate(parent_model).exists()
+    any_assoc = db.session.query(association_model.id).filter(
+        parent_fk_column == parent_model.id,
+    ).correlate(parent_model).exists()
+    query = query.filter(~inaccessible_assoc)
+    if direct_lead_column is None:
+        return query.filter(any_assoc)
+    return query.filter(
+        or_(direct_lead_column.is_(None), direct_lead_column.in_(lead_ids)),
+        or_(direct_lead_column.in_(lead_ids), any_assoc),
+    )
+
+
+def _association_pairs(associations):
+    """Normalize association dicts or ORM rows to ``(target_type, target_id)``.
+
+    Returns ``None`` when any target_id cannot be parsed (caller must deny).
+    """
+    pairs = []
+    for assoc in associations or []:
+        if isinstance(assoc, dict):
+            target_type = assoc.get('target_type')
+            target_id = assoc.get('target_id')
+        else:
+            target_type = getattr(assoc, 'target_type', None)
+            target_id = getattr(assoc, 'target_id', None)
+        if not target_type or target_id is None:
+            return None
+        try:
+            pairs.append((str(target_type), int(target_id)))
+        except (TypeError, ValueError):
+            return None
+    return pairs
+
+
+def user_can_access_association_target(target_type: str, target_id: int) -> bool:
+    """True when the caller may attach to / read this association target."""
+    if current_user_is_admin():
+        return True
+    from app import db
+
+    if target_type == 'lead':
+        from app.models.lead import Lead
+
+        return user_can_access_lead(db.session.get(Lead, int(target_id)))
+
+    if target_type == 'organization':
+        from app.models.lead import Lead
+        from app.models.owner_organization_link import OwnerOrganizationLink
+        from app.models.organization import Organization
+        from app.models.property_organization_link import PropertyOrganizationLink
+
+        org = db.session.get(Organization, int(target_id))
+        if org is None:
+            return False
+        links = [
+            ('property', link.property_id)
+            for link in PropertyOrganizationLink.query.filter_by(
+                organization_id=org.id,
+            ).all()
+        ]
+        links.extend(
+            ('owner', link.owner_id)
+            for link in OwnerOrganizationLink.query.filter_by(
+                organization_id=org.id,
+            ).all()
+        )
+        if not links:
+            return False
+        for _kind, lead_id in links:
+            if user_can_access_lead(db.session.get(Lead, lead_id)):
+                return True
+        return False
+
+    if target_type == 'contact':
+        from app.models.contact import Contact
+        from app.models.lead import Lead
+
+        contact = db.session.get(Contact, int(target_id))
+        if contact is None:
+            return False
+        links = list(contact.property_contacts.all())
+        if not links:
+            actor = getattr(g, 'user_id', None)
+            created_by = getattr(contact, 'created_by_user_id', None)
+            return bool(
+                actor and actor != 'anonymous' and created_by and created_by == actor
+            )
+        for pc in links:
+            if user_can_access_lead(db.session.get(Lead, pc.property_id)):
+                return True
+        return False
+
+    return False
+
+
+def user_can_access_association_targets(associations) -> bool:
+    """True when every association target is accessible.
+
+    An empty list is denied for non-admins (fail closed).
+    """
+    if current_user_is_admin():
+        return True
+    pairs = _association_pairs(associations)
+    if not pairs:
+        return False
+    return all(user_can_access_association_target(kind, tid) for kind, tid in pairs)
 
 
 # ---------------------------------------------------------------------------

@@ -322,9 +322,6 @@ export function RecommendedActionPanel({
   ) : mailIneligibleReason === 'mail_cadence' ? (
     <Alert severity="warning" sx={{ mb: 2 }} data-testid="mail-cadence-hold">
       Mailed recently.
-      {mailEligibleDate
-        ? ` Next mail on ${formatDateOnly(mailEligibleDate)}.`
-        : ' Next mail after the quarterly rematch date.'}
     </Alert>
   ) : null
 

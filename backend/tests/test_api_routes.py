@@ -6,6 +6,26 @@ from app.models import AnalysisSession, WorkflowStep, PropertyFacts, PropertyTyp
 from app import db
 
 
+_AUTH = {'X-User-Id': 'user123'}
+
+
+@pytest.fixture
+def client(app):
+    """Analysis routes require a user; health stays public even with this header."""
+    test_client = app.test_client()
+    original_open = test_client.open
+
+    def open_with_identity(*args, **kwargs):
+        headers = dict(kwargs.get('headers') or {})
+        if 'Authorization' not in headers and 'X-User-Id' not in headers:
+            headers['X-User-Id'] = 'user123'
+            kwargs['headers'] = headers
+        return original_open(*args, **kwargs)
+
+    test_client.open = open_with_identity
+    return test_client
+
+
 class TestHealthCheck:
     """Tests for health check endpoint."""
     
@@ -228,7 +248,7 @@ class TestGetSessionState:
         """Test retrieving non-existent session fails."""
         response = client.get('/api/analysis/nonexistent-session')
         
-        assert response.status_code == 400
+        assert response.status_code == 404
         data = json.loads(response.data)
         assert 'error' in data
 

@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from functools import wraps
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, g
 from marshmallow import ValidationError
 
 from app import db, limiter
@@ -20,6 +20,14 @@ logger = logging.getLogger(__name__)
 import_bp = Blueprint('imports', __name__)
 
 importer = GoogleSheetsImporter()
+
+
+def _oauth_user_id() -> str:
+    """Google OAuth tokens are keyed by the authenticated session user."""
+    user_id = getattr(g, 'user_id', None)
+    if not user_id or user_id == 'anonymous':
+        return 'anonymous'
+    return user_id
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +139,7 @@ def _enqueue_import_task(job_id: int, lead_category: str = 'residential') -> Non
 @import_bp.route('/auth', methods=['POST'])
 @limiter.limit("10 per minute")
 @handle_errors
+@require_auth
 def authenticate():
     """Authenticate with Google OAuth2.
 
@@ -156,7 +165,8 @@ def authenticate():
         }), 400
 
     # Unwrap if the frontend wrapped in a ``credentials`` key
-    credentials = data.get('credentials', data)
+    credentials = dict(data.get('credentials', data) or {})
+    credentials['user_id'] = _oauth_user_id()
 
     # If there is already an auth_code or refresh_token, go straight to
     # the token-exchange / validation path.
@@ -211,13 +221,14 @@ def authenticate():
         'message': 'Authorization required',
         'auth_url': auth_url,
         'redirect_uri': redirect_uri,
-        'user_id': credentials.get('user_id', 'default'),
+        'user_id': _oauth_user_id(),
     }), 200
 
 
 @import_bp.route('/sheets', methods=['GET'])
 @limiter.limit("20 per minute")
 @handle_errors
+@require_auth
 def list_sheets():
     """List available sheets from a Google Spreadsheet.
 
@@ -237,7 +248,7 @@ def list_sheets():
             'message': 'spreadsheet_id query parameter is required',
         }), 400
 
-    user_id = request.args.get('user_id', 'default')
+    user_id = _oauth_user_id()
     token = OAuthToken.query.filter_by(user_id=user_id).first()
     if not token:
         return jsonify({
@@ -264,6 +275,7 @@ def list_sheets():
 @import_bp.route('/headers', methods=['GET'])
 @limiter.limit("20 per minute")
 @handle_errors
+@require_auth
 def read_headers():
     """Read headers from a selected sheet.
 
@@ -291,7 +303,7 @@ def read_headers():
             'message': 'sheet_name query parameter is required',
         }), 400
 
-    user_id = request.args.get('user_id', 'default')
+    user_id = _oauth_user_id()
     token = OAuthToken.query.filter_by(user_id=user_id).first()
     if not token:
         return jsonify({
@@ -313,6 +325,7 @@ def read_headers():
 @import_bp.route('/mapping', methods=['POST'])
 @limiter.limit("20 per minute")
 @handle_errors
+@require_auth
 def save_mapping():
     """Save or update a field mapping for a spreadsheet/sheet combination.
 
@@ -405,6 +418,7 @@ def save_mapping():
 @import_bp.route('/start', methods=['POST'])
 @limiter.limit("5 per minute")
 @handle_errors
+@require_auth
 def start_import():
     """Create an ImportJob and enqueue the Celery import task.
 
@@ -446,6 +460,7 @@ def start_import():
 
     # Check for an active import on the same spreadsheet
     active_job = ImportJob.query.filter(
+        ImportJob.user_id == user_id,
         ImportJob.spreadsheet_id == spreadsheet_id,
         ImportJob.status.in_(['pending', 'in_progress']),
     ).first()
@@ -582,6 +597,7 @@ def list_import_jobs():
 
 
 @import_bp.route('/jobs/<int:job_id>', methods=['GET'])
+@require_auth
 @limiter.limit("30 per minute")
 @handle_errors
 def get_import_job(job_id):
@@ -598,6 +614,12 @@ def get_import_job(job_id):
             'error': 'Import job not found',
             'message': f'Import job {job_id} does not exist',
         }), 404
+    from app.api_utils import current_user_is_admin
+    if not current_user_is_admin() and job.user_id != _oauth_user_id():
+        return jsonify({
+            'error': 'Import job not found',
+            'message': f'Import job {job_id} does not exist',
+        }), 404
 
     return jsonify(_serialize_import_job(job)), 200
 
@@ -605,6 +627,7 @@ def get_import_job(job_id):
 @import_bp.route('/jobs/<int:job_id>/rerun', methods=['POST'])
 @limiter.limit("5 per minute")
 @handle_errors
+@require_auth
 def rerun_import(job_id):
     """Re-run a previous import using the same spreadsheet and field mapping.
 
@@ -623,9 +646,16 @@ def rerun_import(job_id):
             'error': 'Import job not found',
             'message': f'Import job {job_id} does not exist',
         }), 404
+    from app.api_utils import current_user_is_admin
+    if not current_user_is_admin() and original_job.user_id != _oauth_user_id():
+        return jsonify({
+            'error': 'Import job not found',
+            'message': f'Import job {job_id} does not exist',
+        }), 404
 
     # Check for an active import on the same spreadsheet
     active_job = ImportJob.query.filter(
+        ImportJob.user_id == original_job.user_id,
         ImportJob.spreadsheet_id == original_job.spreadsheet_id,
         ImportJob.status.in_(['pending', 'in_progress']),
     ).first()

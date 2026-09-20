@@ -214,3 +214,18 @@ class TestProspectQueueAreaFilter:
         assert rows[0].id == south.id
         assert stats['hidden_outside_area'] == 1
         assert count_pending_candidates('user-1') == 1
+
+
+class TestProspectSyncAdminGate:
+    def test_non_admin_cannot_trigger_feed_sync(self, app):
+        from unittest.mock import patch
+        from tests.conftest import seed_user, wrap_test_client_with_user
+
+        seed_user('plain-user', is_admin=False)
+        client = wrap_test_client_with_user(app.test_client(), user_id='plain-user')
+        with patch(
+            'app.services.cook_county_prospect_feed_service.sync_all_prospect_feeds',
+        ) as sync:
+            response = client.post('/api/prospects/sync')
+        assert response.status_code == 403
+        sync.assert_not_called()

@@ -300,18 +300,8 @@ class CallLogService:
 
         db.session.add(lead)
 
-        # Inbound or answered contact ends the quarterly mail rematch loop.
-        if direction == 'inbound' or outcome == 'answered':
-            from app.services.mail_task_lifecycle_service import cancel_mail_rematch_tasks
-            cancel_mail_rematch_tasks(
-                lead_id,
-                actor=actor,
-                reason=(
-                    'inbound_call'
-                    if direction == 'inbound'
-                    else 'answered_call'
-                ),
-            )
+        # A call does not cancel mail tasks. The owner can still want a
+        # later mailer after they talk to us.
 
         summary = _build_call_summary(
             outcome, duration_minutes, notes, contact_name, phone_number, phone_label,
@@ -376,6 +366,7 @@ class CallLogService:
                 "PhoneConfidenceService.update_from_call failed for lead %s: %s",
                 lead_id, exc, exc_info=True,
             )
+            db.session.rollback()
 
         if complete_task_id is not None or follow_up:
             from app.services.lead_task_service import LeadTaskService

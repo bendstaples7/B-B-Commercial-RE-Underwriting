@@ -10,7 +10,12 @@ import logging
 from flask import Blueprint, jsonify, request
 
 from app import db, limiter
-from app.controllers.multifamily_deal_controller import handle_errors, get_user_id
+from app.controllers.multifamily_deal_controller import (
+    handle_errors,
+    get_user_id,
+    celery_job_id_for_deal,
+    celery_job_belongs_to_deal,
+)
 from app.schemas import SaleCompCreateSchema
 from app.services.multifamily.deal_service import DealService
 from app.services.multifamily.sale_comp_service import SaleCompService
@@ -86,7 +91,10 @@ def fetch_sale_comps_ai(deal_id):
         # Option 2: enqueue Celery task, return job_id immediately
         from celery_worker import fetch_sale_comps_ai_task
         user_id = get_user_id()
-        task = fetch_sale_comps_ai_task.apply_async(args=[deal_id, user_id])
+        task = fetch_sale_comps_ai_task.apply_async(
+            args=[deal_id, user_id],
+            task_id=celery_job_id_for_deal(deal_id, 'sale'),
+        )
         return jsonify({'job_id': task.id, 'status': 'pending'}), 202
 
     # Option 1: synchronous inline execution
@@ -182,6 +190,9 @@ def get_sale_comps_ai_job_status(deal_id, job_id):
     resp, status = _check_deal_access(deal_id)
     if resp is not None:
         return resp, status
+
+    if not celery_job_belongs_to_deal(job_id, deal_id, kind='sale'):
+        return jsonify({'error': 'Not found'}), 404
 
     from celery_worker import celery
     result = celery.AsyncResult(job_id)

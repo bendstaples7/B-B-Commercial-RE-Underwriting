@@ -22,6 +22,7 @@ class TimelineService:
         subtype: str = None,
         date_from=None,
         date_to=None,
+        association_access_scope=None,
     ) -> list:
         """
         Return a unified, reverse-chronological list of timeline entry dicts.
@@ -79,6 +80,15 @@ class TimelineService:
                 interactions = interactions.filter(
                     Interaction.occurred_at <= date_to
                 )
+            if association_access_scope is not None:
+                from app.api_utils import apply_association_access_scope_filter
+                interactions = apply_association_access_scope_filter(
+                    interactions,
+                    parent_model=Interaction,
+                    association_model=InteractionAssociation,
+                    parent_fk_column=InteractionAssociation.interaction_id,
+                    association_access_scope=association_access_scope,
+                )
 
             for interaction in interactions.all():
                 entries.append({
@@ -108,6 +118,16 @@ class TimelineService:
 
             if subtype is not None:
                 tasks = tasks.filter(Task.status == subtype)
+            if association_access_scope is not None:
+                from app.api_utils import apply_association_access_scope_filter
+                tasks = apply_association_access_scope_filter(
+                    tasks,
+                    parent_model=Task,
+                    association_model=TaskAssociation,
+                    parent_fk_column=TaskAssociation.task_id,
+                    association_access_scope=association_access_scope,
+                    direct_lead_column=Task.lead_id,
+                )
 
             for task in tasks.all():
                 # Use due_date if present, otherwise fall back to created_at

@@ -14,7 +14,7 @@ Entry points (called by the decorated wrappers in celery_worker.py):
   run_convert_hubspot_activities(run_id)
   run_extract_hubspot_signals(run_id)
   run_rescore_leads_after_import(user_id)
-  run_generate_backup_export()
+  run_generate_backup_export(user_id)
 
 Requirements: 7.6, 7.7, 7.8, 8.1, 8.2, 8.3, 8.4, 8.6, 9.4, 20.2, 20.3
 """
@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import tempfile
 import time
 from datetime import datetime
@@ -986,7 +988,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         )
         for match in confirmed_deal_matches:
             try:
-                lead = Lead.query.get(match.internal_record_id)
+                lead = matcher._lead_for_confirmed_match(match)
                 if lead is None:
                     continue
                 deal = None
@@ -1027,7 +1029,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         )
         for match in confirmed_contact_matches:
             try:
-                lead = Lead.query.get(match.internal_record_id)
+                lead = matcher._lead_for_confirmed_match(match)
                 contact = None
                 if _contact_sync is not None:
                     contact = _contact_sync.refresh_contact_from_api(match.hubspot_id)
@@ -1064,7 +1066,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         # property instead of being NULL.
         for match in confirmed_deal_matches:
             try:
-                lead = Lead.query.get(match.internal_record_id)
+                lead = matcher._lead_for_confirmed_match(match)
                 deal = HubSpotDeal.query.filter_by(
                     hubspot_id=match.hubspot_id
                 ).first()
@@ -1176,10 +1178,11 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                         hubspot_record_type='deal',
                         hubspot_id=did,
                         status='confirmed',
+                        internal_record_type='lead',
                     ).filter(HubSpotMatch.internal_record_id.isnot(None)).first()
                     if deal_match is None:
                         continue
-                    lead = Lead.query.get(deal_match.internal_record_id)
+                    lead = matcher._lead_for_confirmed_match(deal_match)
                     if lead is None:
                         continue
                     # Enrich the lead and link the contact
@@ -1813,12 +1816,12 @@ def run_rescore_leads_after_import(
         scoring_changed = scoring_code_changed_since_last_run()
 
         if force_full:
-            rescored = engine.bulk_rescore(user_id)
+            rescored = engine.bulk_rescore(user_id, all_owners=True)
         elif scoring_changed:
             logger.info(
                 "run_rescore_leads_after_import: scoring code changed — full rescore fallback",
             )
-            rescored = engine.bulk_rescore(user_id)
+            rescored = engine.bulk_rescore(user_id, all_owners=True)
         elif affected:
             rescored = engine.bulk_rescore(user_id, lead_ids=affected)
         else:
@@ -1841,16 +1844,52 @@ def run_rescore_leads_after_import(
 # Task 9: generate_backup_export
 # ---------------------------------------------------------------------------
 
-def run_generate_backup_export() -> str:
+_BACKUP_USER_RE = re.compile(r'[^A-Za-z0-9._-]+')
+_BACKUP_NAME_RE = re.compile(
+    r'^hubspot_backup_(?P<user>[A-Za-z0-9._-]+)_(?P<date>\d{8})_'
+    r'(?P<time>\d{6})(?:_[A-Za-z0-9]+)?\.json$'
+)
+
+
+def safe_backup_user_id(user_id: str | None) -> str:
+    """Keep backup filenames free of path separators and glob metacharacters."""
+    raw = (user_id or 'anonymous').strip() or 'anonymous'
+    cleaned = _BACKUP_USER_RE.sub('_', raw)[:64]
+    return cleaned or 'anonymous'
+
+
+def backup_dir() -> str:
+    path = os.path.join(tempfile.gettempdir(), 'hubspot_backups')
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    return path
+
+
+def backup_basename(user_id: str | None, timestamp_str: str) -> str:
+    return f'hubspot_backup_{safe_backup_user_id(user_id)}_{timestamp_str}.json'
+
+
+def list_user_backup_files(user_id: str | None) -> list[str]:
+    """Return backup files written for this user, newest-eligible via mtime."""
+    safe = safe_backup_user_id(user_id)
+    directory = backup_dir()
+    matches = []
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return []
+    for name in names:
+        match = _BACKUP_NAME_RE.match(name)
+        if not match or match.group('user') != safe:
+            continue
+        matches.append(os.path.join(directory, name))
+    return matches
+
+
+def run_generate_backup_export(user_id: str = 'system') -> str:
     """Serialize all raw HubSpot tables to JSON and write to a temp file.
 
-    Produces a JSON file at /tmp/hubspot_backup_{timestamp}.json containing:
-      - metadata: export timestamp, record counts per table
-      - deals: list of all HubSpotDeal records
-      - contacts: list of all HubSpotContact records
-      - companies: list of all HubSpotCompany records
-      - engagements: list of all HubSpotEngagement records
-      - import_runs: list of all HubSpotImportRun records
+    Writes ``hubspot_backup_{user}_{timestamp}.json`` under a dedicated temp
+    directory so download can only serve that caller's files.
 
     Returns the path to the generated file.
 
@@ -1950,18 +1989,20 @@ def run_generate_backup_export() -> str:
             'import_runs': [_serialize_run(r) for r in import_runs],
         }
 
-        # Write to a deterministic temp path so the controller can locate it
         timestamp_str = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-        output_path = f'/tmp/hubspot_backup_{timestamp_str}.json'
+        output_path = os.path.join(
+            backup_dir(),
+            backup_basename(user_id, timestamp_str),
+        )
 
         try:
             with open(output_path, 'w', encoding='utf-8') as fh:
                 json.dump(payload, fh, indent=2, default=str)
         except OSError:
-            # Fall back to a system-assigned temp file if /tmp is not writable
-            import os
             fd, output_path = tempfile.mkstemp(
-                prefix='hubspot_backup_', suffix='.json'
+                prefix=f'hubspot_backup_{safe_backup_user_id(user_id)}_{timestamp_str}_',
+                suffix='.json',
+                dir=backup_dir(),
             )
             with os.fdopen(fd, 'w', encoding='utf-8') as fh:
                 json.dump(payload, fh, indent=2, default=str)

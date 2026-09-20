@@ -209,6 +209,9 @@ def approve_candidate(
 
     if candidate.duplicate_lead_id:
         lead = db.session.get(Property, candidate.duplicate_lead_id)
+        if lead is None or lead.owner_user_id != lead_owner_id:
+            candidate.duplicate_lead_id = None
+            lead = None
         if lead:
             if candidate.signals:
                 MotivationSignalService().apply_prospect_signals_to_lead(candidate.signals, lead)
@@ -253,7 +256,9 @@ def approve_candidate(
 
     connector = ingestion._gis_connector_for_lead(lead)
     if connector:
-        ingestion._enrich_with_gis(lead, connector, job.id)
+        ingestion._enrich_with_gis(
+            lead, connector, job.id, is_creation=is_creation,
+        )
 
     ingestion._set_skip_trace_flag(lead, is_creation)
     ingestion._set_review_required_flag(lead, is_creation)

@@ -405,6 +405,38 @@ def check_cook_county_sale_date_resolver_structure() -> list[str]:
     return errors
 
 
+def check_api_auth_fail_closed() -> list[str]:
+    """Forbid shipping /api without the global anonymous-reject gate."""
+    errors: list[str] = []
+    init_py = ROOT / "backend" / "app" / "__init__.py"
+    api_utils = ROOT / "backend" / "app" / "api_utils.py"
+    init_text = init_py.read_text(encoding="utf-8") if init_py.exists() else ""
+    if not re.search(r"@app\.before_request\s+def\s+enforce_api_auth\b", init_text):
+        errors.append("Missing enforce_api_auth in backend/app/__init__.py")
+    utils_text = api_utils.read_text(encoding="utf-8") if api_utils.exists() else ""
+    if "PUBLIC_API_ROUTES" not in utils_text:
+        errors.append("Missing PUBLIC_API_ROUTES allowlist in backend/app/api_utils.py")
+    if re.search(
+        r"""['"](?:POST|PUT|PATCH|DELETE)['"]\s*,\s*['"]/api/leads(?:/|['"])""",
+        utils_text,
+    ):
+        errors.append("PUBLIC_API_ROUTES must not include /api/leads mutations")
+    test_path = ROOT / "backend" / "tests" / "test_api_auth_fail_closed.py"
+    if not test_path.exists():
+        errors.append("Missing backend/tests/test_api_auth_fail_closed.py")
+    else:
+        test_text = test_path.read_text(encoding="utf-8")
+        if "test_every_non_public_api_rule_rejects_anonymous" not in test_text:
+            errors.append(
+                "test_api_auth_fail_closed.py must walk url_map for anonymous 401s"
+            )
+        if "test_anonymous_cannot_mark_do_not_contact" not in test_text:
+            errors.append(
+                "test_api_auth_fail_closed.py must cover anonymous do-not-contact"
+            )
+    return errors
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check for structural duplication")
     parser.add_argument("--base", default="origin/main", help="Unused; reserved for diff checks")
@@ -421,6 +453,7 @@ def main() -> None:
     errors.extend(check_queue_advance_bleed_regression_test())
     errors.extend(check_dial_target_contract())
     errors.extend(check_cook_county_sale_date_resolver_structure())
+    errors.extend(check_api_auth_fail_closed())
 
     if errors:
         _fail(errors)

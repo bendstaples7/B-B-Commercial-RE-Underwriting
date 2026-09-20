@@ -10,10 +10,11 @@ Requirements: 9.1, 9.2, 9.6, 1.7
 import logging
 from functools import wraps
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
 from app import db, limiter
+from app.api_utils import current_user_is_admin, get_current_user_id, require_auth
 
 logger = logging.getLogger(__name__)
 
@@ -114,12 +115,27 @@ def _serialize_import_job(job) -> dict:
 
 
 def _get_caller_user_id() -> str:
-    """Resolve the authenticated caller from g.user_id (set by before_request).
+    """Resolve the authenticated caller from request identity (JWT / test header)."""
+    return get_current_user_id()
 
-    Falls back to 'anonymous' when no X-User-Id header was provided.
-    The set_user_identity() before_request hook in app/__init__.py populates g.user_id.
-    """
-    return getattr(g, 'user_id', 'anonymous')
+
+def _job_not_found(job_id: int):
+    return jsonify({
+        'error': {
+            'message': f'Import job {job_id} not found',
+        }
+    }), 404
+
+
+def _require_job_owner(job, job_id: int):
+    """404 when the job is missing or belongs to another non-admin user."""
+    if job is None:
+        return _job_not_found(job_id)
+    if current_user_is_admin():
+        return None
+    if job.user_id != _get_caller_user_id():
+        return _job_not_found(job_id)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +163,7 @@ def ingest_foreclosure():
     data = request.get_json(silent=True) or {}
     validated = _validate_ingestion_body(data)
 
-    owner_user_id = validated['owner_user_id']
+    owner_user_id = _get_caller_user_id()
     records = validated['records']
 
     service = _build_service()
@@ -175,7 +191,7 @@ def ingest_long_owned():
     data = request.get_json(silent=True) or {}
     validated = _validate_ingestion_body(data)
 
-    owner_user_id = validated['owner_user_id']
+    owner_user_id = _get_caller_user_id()
     records = validated['records']
 
     service = _build_service()
@@ -203,7 +219,7 @@ def ingest_absentee_owner():
     data = request.get_json(silent=True) or {}
     validated = _validate_ingestion_body(data)
 
-    owner_user_id = validated['owner_user_id']
+    owner_user_id = _get_caller_user_id()
     records = validated['records']
 
     service = _build_service()
@@ -231,7 +247,7 @@ def ingest_tax_distress():
     data = request.get_json(silent=True) or {}
     validated = _validate_ingestion_body(data)
 
-    owner_user_id = validated['owner_user_id']
+    owner_user_id = _get_caller_user_id()
     records = validated['records']
 
     service = _build_service()
@@ -263,8 +279,10 @@ def upload_csv():
 
     # Validate owner_user_id query param (Req 6.8)
     schema = CSVUploadQuerySchema()
-    query_data = schema.load(request.args.to_dict())
-    owner_user_id = query_data['owner_user_id']
+    # Keep validating the query param for existing clients; ownership is
+    # always the authenticated caller, never the query string.
+    schema.load(request.args.to_dict())
+    owner_user_id = _get_caller_user_id()
 
     # Check file presence
     if 'file' not in request.files:
@@ -361,6 +379,7 @@ def upload_csv():
 # ---------------------------------------------------------------------------
 
 @ingestion_bp.route('/jobs/<int:job_id>', methods=['GET'])
+@require_auth
 @limiter.limit("60 per minute")
 @handle_errors
 def get_import_job(job_id: int):
@@ -372,16 +391,13 @@ def get_import_job(job_id: int):
     Returns
     -------
     200 with serialized ImportJob.
-    404 if job not found.
+    404 if job not found or owned by another user.
     """
     from app.models.import_job import ImportJob
 
     job = db.session.get(ImportJob, job_id)
-    if not job:
-        return jsonify({
-            'error': {
-                'message': f'Import job {job_id} not found',
-            }
-        }), 404
+    denied = _require_job_owner(job, job_id)
+    if denied is not None:
+        return denied
 
     return jsonify(_serialize_import_job(job)), 200

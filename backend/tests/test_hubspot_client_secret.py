@@ -13,6 +13,7 @@ from app import create_app, db
 from app.models.hubspot_config import HubSpotConfig
 from app.services.hubspot_client_service import HubSpotClientService
 from app.exceptions import ExternalServiceError
+from tests.conftest import wrap_test_client_with_user
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +51,17 @@ def app_ctx(fernet_key):
 
     with application.app_context():
         db.create_all()
+        from app.models.user import User
+        db.session.add(User(
+            user_id='test-user',
+            email='test-user@test.com',
+            email_lower='test-user@test.com',
+            password_hash='x',
+            display_name='Test Admin',
+            is_active=True,
+            is_admin=True,
+        ))
+        db.session.commit()
         yield application
         db.session.remove()
         db.drop_all()
@@ -60,7 +72,7 @@ def app_ctx(fernet_key):
 
 @pytest.fixture
 def client(app_ctx):
-    return app_ctx.test_client()
+    return wrap_test_client_with_user(app_ctx.test_client())
 
 
 @pytest.fixture
@@ -214,6 +226,51 @@ class TestSaveConfigEncryptsSecret:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['has_client_secret'] is False
+
+    def test_non_admin_cannot_save_config(self, client, app_ctx):
+        from app.models.user import User
+
+        with app_ctx.app_context():
+            db.session.add(User(
+                user_id='other-user',
+                email='other-user@test.com',
+                email_lower='other-user@test.com',
+                password_hash='x',
+                display_name='Other',
+                is_active=True,
+                is_admin=False,
+            ))
+            db.session.commit()
+        resp = client.post(
+            '/api/hubspot/config',
+            json={'token': 'stolen-token'},
+            headers={'X-User-Id': 'other-user'},
+        )
+        assert resp.status_code == 403
+        with app_ctx.app_context():
+            assert HubSpotConfig.query.count() == 0
+
+    def test_non_admin_cannot_trigger_hubspot_import_or_pipeline(self, client, app_ctx):
+        from app.models.user import User
+
+        with app_ctx.app_context():
+            db.session.add(User(
+                user_id='other-user',
+                email='other-user@test.com',
+                email_lower='other-user@test.com',
+                password_hash='x',
+                display_name='Other',
+                is_active=True,
+                is_admin=False,
+            ))
+            db.session.commit()
+        headers = {'X-User-Id': 'other-user'}
+        assert client.post(
+            '/api/hubspot/import/trigger', json={}, headers=headers,
+        ).status_code == 403
+        assert client.post(
+            '/api/hubspot/pipeline/run', json={}, headers=headers,
+        ).status_code == 403
 
 
 # ---------------------------------------------------------------------------

@@ -73,6 +73,132 @@ class HubSpotMatcherService:
         match = svc.match_deal(hubspot_deal_record)
     """
 
+    @staticmethod
+    def _hubspot_import_owner_user_id() -> str | None:
+        """Owner for leads created by HubSpot matching.
+
+        New leads with a null owner are hidden from non-admin queues after
+        owner scoping. Prefer the signed-in importer, then the same default
+        owner as other unattended ingest.
+        """
+        try:
+            from flask import g, has_request_context
+
+            if has_request_context():
+                uid = getattr(g, 'user_id', None)
+                if uid and uid != 'anonymous':
+                    return str(uid)
+        except Exception:
+            pass
+        try:
+            from app.services.cook_county_prospect_config import (
+                resolve_cook_county_prospect_owner_user_id,
+            )
+
+            return resolve_cook_county_prospect_owner_user_id()
+        except Exception:
+            pass
+        try:
+            from app.models.user import User
+
+            admin = User.query.filter_by(is_admin=True).first()
+            if admin and admin.user_id:
+                return admin.user_id
+        except Exception:
+            pass
+        return None
+
+    @classmethod
+    def _can_auto_confirm_lead(cls, lead) -> bool:
+        """Do not auto-confirm/enrich a lead owned by a different user.
+
+        Unowned leads may still auto-confirm. An unattended import with no
+        resolved importer must not write onto someone else's owned lead.
+        """
+        if lead is None:
+            return False
+        lead_owner = getattr(lead, 'owner_user_id', None)
+        if not lead_owner:
+            return True
+        import_owner = cls._hubspot_import_owner_user_id()
+        if not import_owner:
+            return False
+        return lead_owner == import_owner
+
+    @classmethod
+    def _is_foreign_owned_lead(cls, lead) -> bool:
+        """True when the importer is known and *lead* belongs to someone else."""
+        if lead is None:
+            return False
+        lead_owner = getattr(lead, 'owner_user_id', None)
+        if not lead_owner:
+            return False
+        import_owner = cls._hubspot_import_owner_user_id()
+        if not import_owner:
+            return True
+        return lead_owner != import_owner
+
+    @classmethod
+    def _importer_visible_leads(cls, leads):
+        """Keep unowned leads and leads owned by the known HubSpot importer.
+
+        When the importer is unknown, owned leads are dropped so unattended
+        matching cannot pending-link someone else's record.
+        """
+        return [lead for lead in leads if cls._can_auto_confirm_lead(lead)]
+
+    def _contact_match_if_owned(self, contact, lead, *, confidence: str, criteria: str):
+        """Pending-link a HubSpot contact onto *lead* unless another user owns it."""
+        if lead is None or HubSpotMatcherService._is_foreign_owned_lead(lead):
+            return None
+        match = self._upsert_match(
+            hubspot_record_type="contact",
+            hubspot_id=contact.hubspot_id,
+            internal_record_type="lead",
+            internal_record_id=lead.id,
+            confidence=confidence,
+            matching_criteria=criteria,
+        )
+        self._enrich_contact_if_confirmed(match, lead, contact)
+        return match
+
+    @staticmethod
+    def _frozen_match(record_type: str, hubspot_id: str):
+        """Return a confirmed/rejected match that must not be retargeted."""
+        existing = HubSpotMatch.query.filter_by(
+            hubspot_record_type=record_type,
+            hubspot_id=hubspot_id,
+        ).first()
+        if existing is not None and existing.status in ('confirmed', 'rejected'):
+            return existing
+        return None
+
+    @staticmethod
+    def _unique_property_id_for_contacts(contact_ids: list[int]) -> int | None:
+        """Return the sole linked lead id across contacts, or None if missing/ambiguous."""
+        ids: list[int] = []
+        for cid in dict.fromkeys(contact_ids):
+            ids.extend(
+                row.property_id
+                for row in PropertyContact.query.filter_by(contact_id=cid).all()
+                if row.property_id is not None
+            )
+        unique = list(dict.fromkeys(ids))
+        if len(unique) != 1:
+            if len(unique) > 1:
+                logger.warning(
+                    "HubSpot contact match: contacts %s linked to %d properties — pending review",
+                    list(dict.fromkeys(contact_ids)),
+                    len(unique),
+                )
+            return None
+        return unique[0]
+
+    @staticmethod
+    def _unique_linked_property_id(contact_id: int) -> int | None:
+        """Return the sole linked lead id, or None when missing or ambiguous."""
+        return HubSpotMatcherService._unique_property_id_for_contacts([contact_id])
+
     # ------------------------------------------------------------------
     # Static normalisation helpers
     # ------------------------------------------------------------------
@@ -550,6 +676,7 @@ class HubSpotMatcherService:
                         first_name=hs_first,
                         last_name=hs_last,
                         role="owner",
+                        created_by_user_id=getattr(lead, "owner_user_id", None),
                     )
                     db.session.add(existing_contact)
                     db.session.flush()
@@ -577,6 +704,61 @@ class HubSpotMatcherService:
             lead.id, updated_fields,
         )
         return updated_fields
+
+    def _lead_for_confirmed_match(self, match, lead=None):
+        """Return the lead locked on a confirmed match, ignoring a mismatched hint.
+
+        Contact/company matches reuse the same integer id space as leads. Treating
+        ``internal_record_id`` as a Lead PK unless ``internal_record_type`` is
+        ``lead`` would enrich the wrong property.
+        """
+        if match is None or match.status != "confirmed":
+            return None
+        if getattr(match, 'internal_record_type', None) != 'lead':
+            return None
+        target_id = match.internal_record_id
+        if not target_id:
+            return None
+        if lead is not None and getattr(lead, 'id', None) == target_id:
+            return lead
+        return Lead.query.get(target_id)
+
+    def _enrich_deal_if_confirmed(self, match, lead, deal, stage_label_map=None):
+        """Copy HubSpot deal fields onto the locked confirmed lead only.
+
+        Pending matches must not write stage/status — reject cannot undo those.
+        A later PIN/address hit must not enrich a different lead than the match.
+        """
+        target = self._lead_for_confirmed_match(match, lead)
+        if target is None or deal is None:
+            return
+        enriched = self.enrich_lead_from_deal(target, deal, stage_label_map)
+        if enriched:
+            logger.debug(
+                "Deal %s enriched Lead %s fields: %s",
+                getattr(deal, "hubspot_id", None),
+                target.id,
+                enriched,
+            )
+
+    def _enrich_contact_if_confirmed(self, match, lead, contact):
+        """Copy HubSpot contact fields onto the locked confirmed lead only."""
+        target = self._lead_for_confirmed_match(match, lead)
+        if target is None or contact is None:
+            return
+        self.enrich_lead_from_contact(target, contact)
+
+    def apply_confirmed_match(self, match, stage_label_map=None) -> None:
+        """Copy HubSpot fields onto the locked lead after a human confirms the match."""
+        if match is None or match.status != 'confirmed':
+            return
+        if match.hubspot_record_type == 'deal':
+            deal = HubSpotDeal.query.filter_by(hubspot_id=match.hubspot_id).first()
+            self._enrich_deal_if_confirmed(match, None, deal, stage_label_map)
+            return
+        if match.hubspot_record_type == 'contact':
+            contact = HubSpotContact.query.filter_by(hubspot_id=match.hubspot_id).first()
+            self._enrich_contact_if_confirmed(match, None, contact)
 
     # ------------------------------------------------------------------
     # HubSpot contact → lead mailing / Address 2
@@ -837,6 +1019,14 @@ class HubSpotMatcherService:
             except Exception as _exc:
                 logger.debug("match_deal: could not fetch stage labels: %s", _exc)
 
+        frozen = HubSpotMatcherService._frozen_match('deal', deal.hubspot_id)
+        if frozen is not None:
+            locked = None
+            if frozen.internal_record_type == 'lead' and frozen.internal_record_id:
+                locked = Lead.query.get(frozen.internal_record_id)
+            self._enrich_deal_if_confirmed(frozen, locked, deal, stage_label_map)
+            return frozen
+
         # --- 1. PIN match ---------------------------------------------------
         pin = (
             props.get("county_assessor_pin")
@@ -845,8 +1035,25 @@ class HubSpotMatcherService:
         ).strip()
 
         if pin:
-            lead = Lead.query.filter_by(county_assessor_pin=pin).first()
-            if lead:
+            pin_leads = HubSpotMatcherService._importer_visible_leads(
+                Lead.query.filter_by(county_assessor_pin=pin).all(),
+            )
+            if len(pin_leads) > 1:
+                logger.warning(
+                    "Deal %s PIN '%s' matched %d leads — pending review",
+                    deal.hubspot_id, pin, len(pin_leads),
+                )
+                return self._upsert_match(
+                    hubspot_record_type="deal",
+                    hubspot_id=deal.hubspot_id,
+                    internal_record_type="lead",
+                    internal_record_id=None,
+                    confidence="HIGH",
+                    matching_criteria="pin_match",
+                    status="pending",
+                )
+            if pin_leads:
+                lead = pin_leads[0]
                 logger.debug(
                     "Deal %s matched Lead %s via PIN '%s'",
                     deal.hubspot_id, lead.id, pin,
@@ -858,10 +1065,9 @@ class HubSpotMatcherService:
                     internal_record_id=lead.id,
                     confidence="HIGH",
                     matching_criteria="pin_match",
+                    status="pending",
                 )
-                enriched = self.enrich_lead_from_deal(lead, deal, stage_label_map)
-                if enriched:
-                    logger.debug("Deal %s enriched Lead %s fields: %s", deal.hubspot_id, lead.id, enriched)
+                self._enrich_deal_if_confirmed(match, lead, deal, stage_label_map)
                 return match
 
         # --- 2. Normalised address match ------------------------------------
@@ -873,13 +1079,18 @@ class HubSpotMatcherService:
 
         if raw_address:
             norm_address = HubSpotMatcherService.normalize_address(raw_address)
-            address_matches = HubSpotMatcherService._address_matches_for(raw_address)
+            address_matches = HubSpotMatcherService._importer_visible_leads(
+                HubSpotMatcherService._address_matches_for(raw_address),
+            )
 
             if address_matches:
                 from app.services.lead_merge_utils import pick_best_lead_for_deal
 
                 confirmed_ids = HubSpotMatcherService._confirmed_hubspot_lead_ids()
-                auto_confirm = len(address_matches) == 1
+                auto_confirm = (
+                    len(address_matches) == 1
+                    and HubSpotMatcherService._can_auto_confirm_lead(address_matches[0])
+                )
                 if auto_confirm:
                     lead = address_matches[0]
                 else:
@@ -887,11 +1098,12 @@ class HubSpotMatcherService:
                         address_matches, confirmed_ids, props,
                     )
                     for candidate in address_matches:
-                        if candidate.id != lead.id:
+                        if candidate.id == lead.id:
+                            continue
+                        if HubSpotMatcherService._can_auto_confirm_lead(candidate):
                             candidate.review_required = True
-                    auto_confirm = True
                     logger.debug(
-                        "Deal %s address '%s' matched %d leads — disambiguated to Lead %s",
+                        "Deal %s address '%s' matched %d leads — suggested Lead %s, pending review",
                         deal.hubspot_id, norm_address, len(address_matches), lead.id,
                     )
 
@@ -909,12 +1121,7 @@ class HubSpotMatcherService:
                         matching_criteria="address_match",
                         status="confirmed",
                     )
-                    enriched = self.enrich_lead_from_deal(lead, deal, stage_label_map)
-                    if enriched:
-                        logger.debug(
-                            "Deal %s enriched Lead %s fields: %s",
-                            deal.hubspot_id, lead.id, enriched,
-                        )
+                    self._enrich_deal_if_confirmed(match, lead, deal, stage_label_map)
                 else:
                     logger.debug(
                         "Deal %s address '%s' matched %d leads — ambiguous, requires manual review",
@@ -924,7 +1131,7 @@ class HubSpotMatcherService:
                         hubspot_record_type="deal",
                         hubspot_id=deal.hubspot_id,
                         internal_record_type="lead",
-                        internal_record_id=None,
+                        internal_record_id=lead.id,
                         confidence="MEDIUM",
                         matching_criteria="address_match",
                         status="pending",
@@ -946,31 +1153,29 @@ class HubSpotMatcherService:
                 owner_last_name=owner_last,
                 property_street=raw_address,
             )
+            if existing is not None and HubSpotMatcherService._is_foreign_owned_lead(
+                existing,
+            ):
+                existing = None
             if existing:
                 logger.debug(
                     "Deal %s linked to existing Lead %s via dedup identity (no placeholder)",
                     deal.hubspot_id, existing.id,
                 )
-                match = self._upsert_match(
+                return self._upsert_match(
                     hubspot_record_type="deal",
                     hubspot_id=deal.hubspot_id,
                     internal_record_type="lead",
                     internal_record_id=existing.id,
                     confidence="MEDIUM",
                     matching_criteria="address_match",
-                    status="confirmed",
+                    status="pending",
                 )
-                enriched = self.enrich_lead_from_deal(existing, deal, stage_label_map)
-                if enriched:
-                    logger.debug(
-                        "Deal %s enriched Lead %s fields: %s",
-                        deal.hubspot_id, existing.id, enriched,
-                    )
-                return match
 
             placeholder = Lead(
                 property_street=raw_address,
                 source="hubspot_import",
+                owner_user_id=HubSpotMatcherService._hubspot_import_owner_user_id(),
             )
             # Prefer structured deal address props when HubSpot provides them.
             deal_city = _first_hubspot_prop(props, "city", "hs_city")
@@ -1033,6 +1238,14 @@ class HubSpotMatcherService:
 
         Returns the created/updated :class:`HubSpotMatch` record.
         """
+        frozen = HubSpotMatcherService._frozen_match('contact', contact.hubspot_id)
+        if frozen is not None:
+            locked = None
+            if frozen.internal_record_type == 'lead' and frozen.internal_record_id:
+                locked = Lead.query.get(frozen.internal_record_id)
+            self._enrich_contact_if_confirmed(frozen, locked, contact)
+            return frozen
+
         props = (contact.raw_payload or {}).get("properties", {})
 
         email = (props.get("email") or "").strip().lower()
@@ -1044,106 +1257,131 @@ class HubSpotMatcherService:
         # --- 1. Email match -------------------------------------------------
         if email:
             # First check ContactEmail table (normalized contacts)
-            contact_email = ContactEmail.query.filter(
+            contact_emails = ContactEmail.query.filter(
                 db.func.lower(ContactEmail.value) == email
-            ).first()
-            if contact_email:
-                matched_contact = contact_email.contact
-                # Find the property linked to this contact via PropertyContact
-                pc = PropertyContact.query.filter_by(
-                    contact_id=matched_contact.id
-                ).first()
-                property_id = pc.property_id if pc else None
-                logger.debug(
-                    "Contact %s matched Contact %s via email '%s' (property_id=%s)",
-                    contact.hubspot_id, matched_contact.id, email, property_id,
+            ).all()
+            if contact_emails:
+                property_id = HubSpotMatcherService._unique_property_id_for_contacts(
+                    [row.contact_id for row in contact_emails],
                 )
-                match = self._upsert_match(
+                logger.debug(
+                    "Contact %s matched via email '%s' (property_id=%s)",
+                    contact.hubspot_id, email, property_id,
+                )
+                if not property_id:
+                    return self._upsert_match(
+                        hubspot_record_type="contact",
+                        hubspot_id=contact.hubspot_id,
+                        internal_record_type="lead",
+                        internal_record_id=None,
+                        confidence="HIGH",
+                        matching_criteria="email_match",
+                    )
+                attached = self._contact_match_if_owned(
+                    contact, Lead.query.get(property_id),
+                    confidence="HIGH", criteria="email_match",
+                )
+                if attached:
+                    return attached
+
+            # Also check Lead.email_1 directly (denormalized storage).
+            email_leads = Lead.query.filter(
+                db.func.lower(Lead.email_1) == email
+            ).all()
+            if len(email_leads) > 1:
+                logger.warning(
+                    "Contact %s email '%s' matched %d leads — pending review",
+                    contact.hubspot_id, email, len(email_leads),
+                )
+                return self._upsert_match(
                     hubspot_record_type="contact",
                     hubspot_id=contact.hubspot_id,
                     internal_record_type="lead",
-                    internal_record_id=property_id,
+                    internal_record_id=None,
                     confidence="HIGH",
                     matching_criteria="email_match",
+                    status="pending",
                 )
-                if property_id:
-                    lead = Lead.query.get(property_id)
-                    if lead:
-                        self.enrich_lead_from_contact(lead, contact)
-                return match
-
-            # Also check Lead.email_1 directly (denormalized storage).
-            # Tiebreaker: most recently updated lead wins; fall back to highest id.
-            lead_by_email = Lead.query.filter(
-                db.func.lower(Lead.email_1) == email
-            ).order_by(Lead.updated_at.desc().nullslast(), Lead.id.desc()).first()
+            lead_by_email = email_leads[0] if email_leads else None
             if lead_by_email:
                 logger.debug(
                     "Contact %s matched Lead %s via email_1 '%s'",
                     contact.hubspot_id, lead_by_email.id, email,
                 )
-                match = self._upsert_match(
-                    hubspot_record_type="contact",
-                    hubspot_id=contact.hubspot_id,
-                    internal_record_type="lead",
-                    internal_record_id=lead_by_email.id,
-                    confidence="HIGH",
-                    matching_criteria="email_match",
+                attached = self._contact_match_if_owned(
+                    contact, lead_by_email,
+                    confidence="HIGH", criteria="email_match",
                 )
-                self.enrich_lead_from_contact(lead_by_email, contact)
-                return match
+                if attached:
+                    return attached
 
         # --- 2. Phone match (digits only) -----------------------------------
         if phone_digits:
             # Fetch all ContactPhone records and normalize digits in Python
             # (avoids DB-level regex; acceptable for typical dataset sizes)
             all_phones = ContactPhone.query.all()
-            for cp in all_phones:
-                if HubSpotMatcherService.normalize_phone(cp.value) == phone_digits:
-                    matched_contact = cp.contact
-                    pc = PropertyContact.query.filter_by(
-                        contact_id=matched_contact.id
-                    ).first()
-                    property_id = pc.property_id if pc else None
-                    logger.debug(
-                        "Contact %s matched Contact %s via phone '%s' (property_id=%s)",
-                        contact.hubspot_id, matched_contact.id, phone_digits, property_id,
-                    )
-                    match = self._upsert_match(
+            matching_phones = [
+                cp for cp in all_phones
+                if HubSpotMatcherService.normalize_phone(cp.value) == phone_digits
+            ]
+            if matching_phones:
+                property_id = HubSpotMatcherService._unique_property_id_for_contacts(
+                    [cp.contact_id for cp in matching_phones],
+                )
+                logger.debug(
+                    "Contact %s matched via phone '%s' (property_id=%s)",
+                    contact.hubspot_id, phone_digits, property_id,
+                )
+                if not property_id:
+                    return self._upsert_match(
                         hubspot_record_type="contact",
                         hubspot_id=contact.hubspot_id,
                         internal_record_type="lead",
-                        internal_record_id=property_id,
+                        internal_record_id=None,
                         confidence="HIGH",
                         matching_criteria="phone_match",
                     )
-                    if property_id:
-                        lead = Lead.query.get(property_id)
-                        if lead:
-                            self.enrich_lead_from_contact(lead, contact)
-                    return match
+                attached = self._contact_match_if_owned(
+                    contact, Lead.query.get(property_id),
+                    confidence="HIGH", criteria="phone_match",
+                )
+                if attached:
+                    return attached
 
             # Also check Lead.phone_1 directly (denormalized storage).
             # Tiebreaker: most recently updated lead wins; fall back to highest id.
             all_leads_with_phone = Lead.query.filter(
                 Lead.phone_1.isnot(None)
             ).order_by(Lead.updated_at.desc().nullslast(), Lead.id.desc()).all()
-            for lead in all_leads_with_phone:
-                if HubSpotMatcherService.normalize_phone(lead.phone_1) == phone_digits:
-                    logger.debug(
-                        "Contact %s matched Lead %s via phone_1 '%s'",
-                        contact.hubspot_id, lead.id, phone_digits,
-                    )
-                    match = self._upsert_match(
-                        hubspot_record_type="contact",
-                        hubspot_id=contact.hubspot_id,
-                        internal_record_type="lead",
-                        internal_record_id=lead.id,
-                        confidence="HIGH",
-                        matching_criteria="phone_match",
-                    )
-                    self.enrich_lead_from_contact(lead, contact)
-                    return match
+            phone_leads = [
+                lead for lead in all_leads_with_phone
+                if HubSpotMatcherService.normalize_phone(lead.phone_1) == phone_digits
+            ]
+            if len(phone_leads) > 1:
+                logger.warning(
+                    "Contact %s phone matched %d leads — pending review",
+                    contact.hubspot_id, len(phone_leads),
+                )
+                return self._upsert_match(
+                    hubspot_record_type="contact",
+                    hubspot_id=contact.hubspot_id,
+                    internal_record_type="lead",
+                    internal_record_id=None,
+                    confidence="HIGH",
+                    matching_criteria="phone_match",
+                    status="pending",
+                )
+            if phone_leads:
+                lead = phone_leads[0]
+                logger.debug(
+                    "Contact %s matched Lead %s via phone_1 '%s'",
+                    contact.hubspot_id, lead.id, phone_digits,
+                )
+                attached = self._contact_match_if_owned(
+                    contact, lead, confidence="HIGH", criteria="phone_match",
+                )
+                if attached:
+                    return attached
 
         # --- 3. Name + property match ---------------------------------------
         if first_name and last_name:
@@ -1159,54 +1397,65 @@ class HubSpotMatcherService:
                 .first()
             )
             if name_match:
-                pc = PropertyContact.query.filter_by(
-                    contact_id=name_match.id
-                ).first()
-                property_id = pc.property_id if pc else None
+                property_id = HubSpotMatcherService._unique_linked_property_id(
+                    name_match.id,
+                )
                 logger.debug(
                     "Contact %s matched Contact %s via name '%s %s' (property_id=%s)",
                     contact.hubspot_id, name_match.id, first_name, last_name, property_id,
                 )
-                match = self._upsert_match(
-                    hubspot_record_type="contact",
-                    hubspot_id=contact.hubspot_id,
-                    internal_record_type="lead",
-                    internal_record_id=property_id,
-                    confidence="MEDIUM",
-                    matching_criteria="name_property_match",
+                if not property_id:
+                    return self._upsert_match(
+                        hubspot_record_type="contact",
+                        hubspot_id=contact.hubspot_id,
+                        internal_record_type="lead",
+                        internal_record_id=None,
+                        confidence="MEDIUM",
+                        matching_criteria="name_property_match",
+                    )
+                attached = self._contact_match_if_owned(
+                    contact, Lead.query.get(property_id),
+                    confidence="MEDIUM", criteria="name_property_match",
                 )
-                if property_id:
-                    lead = Lead.query.get(property_id)
-                    if lead:
-                        self.enrich_lead_from_contact(lead, contact)
-                return match
+                if attached:
+                    return attached
 
             # Also check Lead.owner_first_name / owner_last_name directly.
             # Tiebreaker: most recently updated lead wins; fall back to highest id.
-            lead_by_name = (
+            name_leads = (
                 Lead.query
                 .filter(
                     db.func.lower(Lead.owner_first_name) == first_name.lower(),
                     db.func.lower(Lead.owner_last_name) == last_name.lower(),
                 )
-                .order_by(Lead.updated_at.desc().nullslast(), Lead.id.desc())
-                .first()
+                .all()
             )
+            if len(name_leads) > 1:
+                logger.warning(
+                    "Contact %s name '%s %s' matched %d leads — pending review",
+                    contact.hubspot_id, first_name, last_name, len(name_leads),
+                )
+                return self._upsert_match(
+                    hubspot_record_type="contact",
+                    hubspot_id=contact.hubspot_id,
+                    internal_record_type="lead",
+                    internal_record_id=None,
+                    confidence="MEDIUM",
+                    matching_criteria="name_property_match",
+                    status="pending",
+                )
+            lead_by_name = name_leads[0] if name_leads else None
             if lead_by_name:
                 logger.debug(
                     "Contact %s matched Lead %s via owner name '%s %s'",
                     contact.hubspot_id, lead_by_name.id, first_name, last_name,
                 )
-                match = self._upsert_match(
-                    hubspot_record_type="contact",
-                    hubspot_id=contact.hubspot_id,
-                    internal_record_type="lead",
-                    internal_record_id=lead_by_name.id,
-                    confidence="MEDIUM",
-                    matching_criteria="name_property_match",
+                attached = self._contact_match_if_owned(
+                    contact, lead_by_name,
+                    confidence="MEDIUM", criteria="name_property_match",
                 )
-                self.enrich_lead_from_contact(lead_by_name, contact)
-                return match
+                if attached:
+                    return attached
 
         # --- 4. No match — create a new Contact record and auto-confirm ----
         # Check if we already have a match for this contact (idempotency guard)
@@ -1230,13 +1479,17 @@ class HubSpotMatcherService:
             first_name=first_name or None,
             last_name=last_name or None,
             role="owner",
+            created_by_user_id=HubSpotMatcherService._hubspot_import_owner_user_id(),
         )
         db.session.add(new_contact)
         db.session.flush()
 
         # Create a placeholder Lead so the contact has a property anchor,
         # then link them via PropertyContact (role=owner).
-        placeholder_lead = Lead(source="hubspot_import")
+        placeholder_lead = Lead(
+            source="hubspot_import",
+            owner_user_id=HubSpotMatcherService._hubspot_import_owner_user_id(),
+        )
         db.session.add(placeholder_lead)
         db.session.flush()
 
@@ -1273,6 +1526,10 @@ class HubSpotMatcherService:
 
         Returns the created/updated :class:`HubSpotMatch` record.
         """
+        frozen = HubSpotMatcherService._frozen_match('company', company.hubspot_id)
+        if frozen is not None:
+            return frozen
+
         props = (company.raw_payload or {}).get("properties", {})
         raw_name = (props.get("name") or "").strip()
         norm_name = HubSpotMatcherService.normalize_company_name(raw_name)
@@ -1363,12 +1620,17 @@ class HubSpotMatcherService:
         ).first()
 
         if existing:
+            # Confirmed/rejected links are frozen. A later unique PIN or
+            # address hit must not retarget (and then enrich) a different lead.
+            if existing.status in ('confirmed', 'rejected'):
+                existing.updated_at = datetime.utcnow()
+                db.session.flush()
+                return existing
             existing.internal_record_type = internal_record_type
             existing.internal_record_id = internal_record_id
             existing.confidence = confidence
             existing.matching_criteria = matching_criteria
-            # Only upgrade status — never downgrade a confirmed/rejected match
-            if existing.status == "pending" and status != "pending":
+            if status != "pending":
                 existing.status = status
             existing.updated_at = datetime.utcnow()
             db.session.flush()

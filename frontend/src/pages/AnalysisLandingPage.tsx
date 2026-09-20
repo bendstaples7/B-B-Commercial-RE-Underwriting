@@ -46,7 +46,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import usePlacesAutocomplete from 'use-places-autocomplete'
 import UploadFileIcon from '@mui/icons-material/UploadFile'
-import { multifamilyService } from '@/services/api'
+import { analysisService, multifamilyService } from '@/services/api'
 import type { DealCreatePayload, DealSummary } from '@/types'
 import { useGoogleMapsLoaded } from '@/context/GoogleMapsContext'
 import { formatDate } from '@/utils/formatters'
@@ -140,36 +140,22 @@ function NewAnalysisDialog({ open, onClose }: NewAnalysisDialogProps) {
   // Create a single-family ARV session and navigate to it
   const createSingleFamilyMutation = useMutation({
     mutationFn: async ({ address, coords }: { address: string; coords?: { lat: number; lng: number } }) => {
-      const userId = localStorage.getItem('user_id') || 'default'
-      const response = await fetch('/api/analysis/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          address,
-          user_id: userId,
-          ...(coords ? { latitude: coords.lat, longitude: coords.lng } : {}),
-        }),
-      })
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}))
-        throw new Error(err?.error?.message || err?.message || 'Failed to start analysis')
-      }
-      return response.json()
+      return analysisService.startAnalysis(address, coords?.lat, coords?.lng)
     },
     onSuccess: (data) => {
       // Seed the React Query cache with the start response so AnalysisRoute
       // can immediately show the pre-fetched Cook County property facts without
       // a second round-trip to the backend.
-      queryClient.setQueryData(['session', data.session_id], {
-        session_id: data.session_id,
+      queryClient.setQueryData(['session', data.sessionId], {
+        session_id: data.sessionId,
         current_step: 'PROPERTY_FACTS',
         loading: false,
-        subject_property: data.property_facts ?? null,
+        subject_property: data.propertyFacts ?? null,
         step_results: {},
         completed_steps: [],
       })
       handleClose()
-      navigate(`/analysis/arv/${data.session_id}`)
+      navigate(`/analysis/arv/${data.sessionId}`)
     },
   })
 

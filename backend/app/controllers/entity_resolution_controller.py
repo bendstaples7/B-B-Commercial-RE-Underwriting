@@ -11,7 +11,7 @@ import logging
 
 from flask import Blueprint, g, jsonify, request
 
-from app.api_utils import require_auth
+from app.api_utils import require_auth, load_authorized_lead, user_can_access_lead
 from app.controllers.decorators import handle_errors
 from app.exceptions import ResourceNotFoundError
 from app.services.entity_lookup import EntityLookupProviderNotConfiguredError
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 entity_resolution_bp = Blueprint('entity_resolution', __name__)
 _service = EntityResolutionService()
+MAX_BULK_ENTITY_RESOLUTION_LEADS = 500
 
 
 def _provider_error_response(exc: EntityLookupProviderNotConfiguredError):
@@ -54,6 +55,9 @@ def _json_bool(body: dict, key: str, *, default: bool) -> bool:
 @handle_errors
 def get_entity_resolution_status(lead_id: int):
     """Return entity-resolution status for a lead."""
+    _lead, err = load_authorized_lead(lead_id)
+    if err is not None:
+        return err
     try:
         return jsonify(_service.get_status(lead_id)), 200
     except ResourceNotFoundError as exc:
@@ -83,6 +87,11 @@ def resolve_entity(lead_id: int):
         raise ValueError(
             "action must be one of: resolve, research_nonprofit, mark_nonprofit"
         )
+
+    _lead, err = load_authorized_lead(lead_id)
+    if err is not None:
+        return err
+
     action = action_raw.strip().lower() or 'resolve'
     if action not in ('resolve', 'research_nonprofit', 'mark_nonprofit'):
         raise ValueError(
@@ -139,6 +148,22 @@ def resolve_entity_bulk():
     if not isinstance(lead_ids, list) or not lead_ids:
         raise ValueError('lead_ids must be a non-empty list')
     lead_ids = [int(x) for x in lead_ids]
+    if len(lead_ids) > MAX_BULK_ENTITY_RESOLUTION_LEADS:
+        raise ValueError(
+            f'lead_ids must contain at most {MAX_BULK_ENTITY_RESOLUTION_LEADS} items'
+        )
+    from app.models.lead import Lead
+    leads_by_id = {
+        lead.id: lead
+        for lead in Lead.query.filter(Lead.id.in_(set(lead_ids))).all()
+    }
+    allowed = [
+        lid for lid in lead_ids
+        if lid in leads_by_id and user_can_access_lead(leads_by_id[lid])
+    ]
+    lead_ids = allowed
+    if not lead_ids:
+        raise ValueError('lead_ids must be a non-empty list')
     dry_run = _json_bool(body, 'dry_run', default=False)
     use_async = _json_bool(body, 'async', default=True) and not dry_run
 

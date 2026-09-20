@@ -9,7 +9,6 @@ Implements all operations required by Requirements 2.1–2.4, 2.6:
   - get_timeline — delegate to TimelineService
 """
 import logging
-import unicodedata
 from datetime import datetime
 from typing import Optional
 
@@ -17,22 +16,10 @@ from app import db
 from app.models.interaction import Interaction
 from app.models.interaction_association import InteractionAssociation
 from app.exceptions import InteractionValidationError, ResourceNotFoundError
+from app.services.helpers.text import strip_invisible as _strip_invisible
 from app.services.timeline_service import TimelineService
 
 logger = logging.getLogger(__name__)
-
-
-def _strip_invisible(value: str) -> str:
-    """Strip all Unicode whitespace and control characters from *value*.
-
-    Stricter than ``str.strip()`` — handles Unicode Zs (space separators) and
-    Cc (control characters) so inputs like '\\x7f' are treated as empty.
-    """
-    cleaned = ''.join(
-        ch for ch in value
-        if not (unicodedata.category(ch).startswith('C') or unicodedata.category(ch) == 'Zs')
-    )
-    return cleaned.strip()
 
 
 class InteractionService:
@@ -243,29 +230,22 @@ class InteractionService:
         filters: Optional[dict] = None,
         page: int = 1,
         per_page: int = 20,
+        lead_id_scope=None,
+        association_access_scope=None,
     ) -> tuple:
         """Return a paginated list of Interactions with optional filters.
 
-        Supported filter keys:
-        - ``target_type`` (str): filter by association target_type
-        - ``target_id`` (int): filter by association target_id (requires target_type)
-        - ``interaction_type`` (str): exact match on interaction_type
-        - ``source`` (str): exact match on source
-
-        Parameters
-        ----------
-        filters : dict or None
-        page : int
-            1-based page number.
-        per_page : int
-            Number of records per page.
-
-        Returns
-        -------
-        tuple[list[Interaction], int]
-            A 2-tuple of (records for this page, total matching count).
+        ``lead_id_scope``:
+            ``None`` — no owner filter (admin).
+            empty set — return no rows.
+            otherwise — only interactions associated with those lead ids.
+        ``association_access_scope``:
+            optional mapping of accessible target ids by association type.
+            Applied in SQL before pagination for scoped callers.
         """
         filters = filters or {}
+        if lead_id_scope is not None and not lead_id_scope:
+            return [], 0
         query = db.session.query(Interaction)
 
         # Join on InteractionAssociation when filtering by target
@@ -292,6 +272,23 @@ class InteractionService:
         if filters.get('source'):
             query = query.filter(Interaction.source == filters['source'])
 
+        if lead_id_scope is not None:
+            scoped = db.session.query(InteractionAssociation.interaction_id).filter(
+                InteractionAssociation.target_type == 'lead',
+                InteractionAssociation.target_id.in_(lead_id_scope),
+            )
+            query = query.filter(Interaction.id.in_(scoped))
+
+        if association_access_scope is not None:
+            from app.api_utils import apply_association_access_scope_filter
+            query = apply_association_access_scope_filter(
+                query,
+                parent_model=Interaction,
+                association_model=InteractionAssociation,
+                parent_fk_column=InteractionAssociation.interaction_id,
+                association_access_scope=association_access_scope,
+            )
+
         query = query.order_by(Interaction.occurred_at.desc())
 
         total = query.count()
@@ -308,6 +305,7 @@ class InteractionService:
         target_type: str,
         target_id: int,
         filters: Optional[dict] = None,
+        association_access_scope=None,
     ) -> list:
         """Return a unified timeline for a target by delegating to TimelineService.
 
@@ -334,6 +332,7 @@ class InteractionService:
             subtype=filters.get('subtype'),
             date_from=filters.get('date_from'),
             date_to=filters.get('date_to'),
+            association_access_scope=association_access_scope,
         )
 
     # ------------------------------------------------------------------

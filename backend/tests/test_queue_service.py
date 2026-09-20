@@ -1207,3 +1207,50 @@ def test_mail_candidates_consolidates_same_person(app):
         assert [r['id'] for r in rows] == [a.id]
         assert rows[0]['property_count'] == 2
         assert svc.count_mail_candidates('test-owner') == 1
+
+
+def test_shared_status_writer_deprioritize_cancels_open_tasks(app):
+    """Kanban/bulk park must cancel chores the same way Command Center park does."""
+    from app.models import LeadTask
+    from app.services.lead_status_service import apply_lead_status_change
+
+    with app.app_context():
+        from app import db
+        lead = _make_lead(app, '90 Park St', lead_status='mailing_no_contact_made')
+        task = LeadTask(
+            lead_id=lead.id,
+            task_type='call_owner_today',
+            title='Call owner',
+            status='open',
+            created_by='test',
+        )
+        db.session.add(task)
+        db.session.commit()
+        apply_lead_status_change(lead, 'deprioritize', actor='test', recompute_action=False)
+        db.session.refresh(task)
+        assert task.status == 'cancelled'
+        assert lead.lead_status == 'deprioritize'
+        assert lead.recommended_action is None
+
+
+def test_shared_status_writer_deal_won_cancels_open_tasks(app):
+    """Closed deals must not leave open chores on Today's Action."""
+    from app.models import LeadTask
+    from app.services.lead_status_service import apply_lead_status_change
+
+    with app.app_context():
+        from app import db
+        lead = _make_lead(app, '91 Won St', lead_status='offer_delivered')
+        task = LeadTask(
+            lead_id=lead.id,
+            task_type='call_owner_today',
+            title='Call owner',
+            status='open',
+            created_by='test',
+        )
+        db.session.add(task)
+        db.session.commit()
+        apply_lead_status_change(lead, 'deal_won', actor='test', recompute_action=False)
+        db.session.refresh(task)
+        assert task.status == 'cancelled'
+        assert lead.lead_status == 'deal_won'

@@ -560,6 +560,30 @@ class TestSiblingAbsorbAndSoftMerge:
             siblings = find_building_owner_siblings(husk)
             assert [s.id for s in siblings] == [twin.id]
 
+    def test_siblings_do_not_cross_crm_assignee(self, app):
+        """Auto-merge must not absorb a lead owned by a different user."""
+        from app.services.lead_dedup_service import find_building_owner_siblings
+
+        with app.app_context():
+            mine = Lead(
+                property_street='2834 N Drake Ave',
+                owner_first_name='Francisco',
+                owner_last_name='R Solis',
+                owner_user_id='user-a',
+                lead_status='mailing_no_contact_made',
+            )
+            theirs = Lead(
+                property_street='2834 N Drake Ave 1r',
+                owner_first_name='Francisco',
+                owner_last_name='R Solis',
+                owner_user_id='user-b',
+                lead_status='mailing_no_contact_made',
+            )
+            db.session.add_all([mine, theirs])
+            db.session.commit()
+
+            assert find_building_owner_siblings(mine) == []
+
     def test_merge_loser_into_winner_api_helper(self, app):
         from app.services.lead_dedup_service import merge_loser_into_winner
 
@@ -603,6 +627,7 @@ class TestSiblingAbsorbAndSoftMerge:
             assert refreshed.review_reason is None
 
     def test_merge_loser_into_winner_allows_building_husk_vs_unit(self, app):
+
         from app.services.lead_dedup_service import merge_loser_into_winner
 
         with app.app_context():
@@ -675,6 +700,36 @@ class TestSiblingAbsorbAndSoftMerge:
                 assert db.session.get(Lead, sentinel.id) is sentinel
             finally:
                 db.session.rollback()
+
+    def test_merge_loser_rejects_different_owners(self, app):
+        from app.services.lead_dedup_service import merge_loser_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='100 Soft Merge St',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                owner_user_id='user-a',
+            )
+            loser = Lead(
+                property_street='100 Soft Merge Street',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                owner_user_id='user-b',
+            )
+            db.session.add_all([winner, loser])
+            db.session.commit()
+            loser_id = loser.id
+            try:
+                merge_loser_into_winner(
+                    winner.id, loser.id, changed_by='test', commit=False,
+                )
+                assert False, 'expected cross-owner merge to fail'
+            except ValueError as exc:
+                assert 'owned by different users' in str(exc)
+            assert db.session.get(Lead, loser_id) is not None
+
+
 
     def test_merge_prefers_unit_street_onto_bare_winner(self, app):
         from app.services.lead_dedup_service import merge_lead_into_winner
@@ -1033,7 +1088,7 @@ class TestSameBuildingBannerAndAdditivePeople:
 
             assert same_address_lead_summaries(lead) == []
 
-    def test_cluster_preview_hides_people_names_for_other_assignees(self, app):
+    def test_cluster_preview_omits_other_assignees(self, app):
         from app.services.contact_service import ContactService
         from app.services.lead_dedup_service import cluster_preview_for_lead
 
@@ -1083,7 +1138,7 @@ class TestSameBuildingBannerAndAdditivePeople:
             assert preview is not None
             members = {row['id']: row for row in preview['members']}
             assert members[same_scope.id]['people_names'] == ['Visible Owner']
-            assert members[other_scope.id]['people_names'] == []
+            assert other_scope.id not in members
 
     def test_merge_keeps_edwin_and_unions_yoko_phones(self, app):
         from app.models.contact_phone import ContactPhone
@@ -1640,6 +1695,42 @@ class TestSameBuildingBannerAndAdditivePeople:
             assert refreshed.property_type is None
             assert refreshed.lead_category_locked is True
 
+    def test_merge_reattaches_task_instead_of_deleting_on_unique_clash(self, app):
+        from app.models.lead_task import LeadTask
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            winner = Lead(property_street='10 Clash St')
+            loser = Lead(property_street='10 Clash St')
+            db.session.add_all([winner, loser])
+            db.session.flush()
+            winner_task = LeadTask(
+                title='Winner HubSpot task',
+                task_type='custom',
+                hubspot_task_id='hs-same-id',
+                lead_id=winner.id,
+            )
+            loser_task = LeadTask(
+                title='Loser unique notes',
+                task_type='custom',
+                hubspot_task_id='hs-same-id',
+                lead_id=loser.id,
+            )
+            db.session.add_all([winner_task, loser_task])
+            db.session.commit()
+            loser_task_id = loser_task.id
+            winner_task_id = winner_task.id
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ):
+                merge_lead_into_winner(winner, loser, changed_by='test')
+                db.session.commit()
+            assert db.session.get(LeadTask, winner_task_id) is not None
+            leftover = db.session.get(LeadTask, loser_task_id)
+            assert leftover is not None
+            assert leftover.lead_id == winner.id
+            assert leftover.title == 'Loser unique notes'
+
 
 def _install_prod_dedup_indexes() -> None:
     """The partial owner+street and owner+PIN indexes exist on Postgres, not create_all."""
@@ -1801,3 +1892,4 @@ class TestMergeUnderDedupUniqueIndexes:
             finally:
                 db.session.rollback()
                 _drop_prod_dedup_indexes()
+

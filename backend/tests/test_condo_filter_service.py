@@ -12,6 +12,12 @@ from datetime import datetime, timezone
 from app import db
 from app.models.lead import Lead
 from app.models.address_group_analysis import AddressGroupAnalysis
+from tests.conftest import wrap_test_client_with_user
+
+
+@pytest.fixture
+def client(app):
+    return wrap_test_client_with_user(app.test_client())
 
 
 # ---------------------------------------------------------------------------
@@ -30,6 +36,7 @@ def _create_commercial_lead(app, address, pin=None, owner_first='Owner', owner_l
         'property_type': 'commercial',
         'lead_category': 'commercial',
         'county_assessor_pin': pin,
+        'owner_user_id': 'test-user',
         'mailing_city': 'Chicago',
         'mailing_state': 'IL',
         'mailing_zip': '60601',
@@ -113,6 +120,40 @@ class TestRunAnalysis:
         data = json.loads(resp.data)
         assert data['total_groups'] == 1
         assert data['total_properties'] == 2
+
+    def test_scoped_analyze_does_not_overwrite_shared_analysis(self, client, app):
+        """Owner-scoped analyze must not rewrite a building shared with another user."""
+        with app.app_context():
+            analysis = _create_analysis_record(
+                '62 shared filter st',
+                condo_risk_status='likely_condo',
+                building_sale_possible='no',
+                analysis_details={'reason': 'theirs'},
+            )
+            mine = _create_commercial_lead(
+                app, '62 Shared Filter St Unit 1', pin='PIN-MINE',
+            )
+            theirs = _create_commercial_lead(
+                app, '62 Shared Filter St Unit 2', pin='PIN-THEIRS',
+                owner_user_id='other-user',
+            )
+            mine.condo_analysis_id = analysis.id
+            theirs.condo_analysis_id = analysis.id
+            mine.condo_risk_status = 'likely_condo'
+            theirs.condo_risk_status = 'likely_condo'
+            db.session.commit()
+            analysis_id = analysis.id
+            their_id = theirs.id
+
+        resp = client.post('/api/condo-filter/analyze')
+        assert resp.status_code == 200
+        with app.app_context():
+            analysis = db.session.get(AddressGroupAnalysis, analysis_id)
+            theirs = db.session.get(Lead, their_id)
+            assert analysis.condo_risk_status == 'likely_condo'
+            assert analysis.building_sale_possible == 'no'
+            assert analysis.analysis_details == {'reason': 'theirs'}
+            assert theirs.condo_risk_status == 'likely_condo'
 
     def test_analyze_skips_null_property_street(self, client, app):
         """Leads with null property_street are skipped."""

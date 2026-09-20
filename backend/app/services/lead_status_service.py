@@ -6,6 +6,7 @@ import logging
 
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry
+from app.services.action_eligibility import TERMINAL_LEAD_STATUSES
 
 logger = logging.getLogger(__name__)
 _HEAL_CANDIDATE_ID_CHUNK_SIZE = 1000
@@ -63,6 +64,31 @@ def _sync_cancelled_hubspot_tasks(hubspot_task_ids: set[str]) -> None:
             exc,
             exc_info=True,
         )
+
+
+def _sync_cancelled_hubspot_tasks_after_commit(hubspot_task_ids: set[str]) -> None:
+    """Queue HubSpot completion sync until the caller-owned transaction commits."""
+    if not hubspot_task_ids:
+        return
+    from sqlalchemy import event
+
+    session = db.session()
+    pending = session.info.setdefault('pending_hubspot_completion_sync_ids', set())
+    pending.update(str(task_id) for task_id in hubspot_task_ids if task_id)
+    if session.info.get('hubspot_completion_sync_listener_registered'):
+        return
+    session.info['hubspot_completion_sync_listener_registered'] = True
+
+    @event.listens_for(session, 'after_commit', once=True)
+    def _after_commit(committed_session):  # pragma: no cover - SQLAlchemy event glue
+        ids = committed_session.info.pop('pending_hubspot_completion_sync_ids', set())
+        committed_session.info.pop('hubspot_completion_sync_listener_registered', None)
+        _sync_cancelled_hubspot_tasks(set(ids))
+
+    @event.listens_for(session, 'after_rollback', once=True)
+    def _after_rollback(rolled_back_session):  # pragma: no cover - SQLAlchemy event glue
+        rolled_back_session.info.pop('pending_hubspot_completion_sync_ids', None)
+        rolled_back_session.info.pop('hubspot_completion_sync_listener_registered', None)
 
 
 def lead_has_active_outreach_work(lead_id: int) -> bool:
@@ -305,7 +331,7 @@ def apply_lead_status_change(
     if new_status == old_status:
         # Idempotent bulk DNC/suppress must still clear leftover open tasks /
         # rematch mirrors when the lead is already in that terminal status.
-        if new_status in ('do_not_contact', 'suppressed'):
+        if new_status in TERMINAL_LEAD_STATUSES:
             lead.recommended_action = None
             cancelled_hubspot_ids = _cancel_tasks_for_terminal_status(
                 lead.id,
@@ -313,8 +339,11 @@ def apply_lead_status_change(
                 status=new_status,
             )
             db.session.add(lead)
-            db.session.commit()
-            _sync_cancelled_hubspot_tasks(cancelled_hubspot_ids)
+            if commit:
+                db.session.commit()
+                _sync_cancelled_hubspot_tasks(cancelled_hubspot_ids)
+            else:
+                _sync_cancelled_hubspot_tasks_after_commit(cancelled_hubspot_ids)
             return
         # Do not force needs_skip_trace mid recent-sale hold.
         if new_status == 'skip_trace' and not lead.needs_skip_trace:
@@ -334,19 +363,12 @@ def apply_lead_status_change(
         if SkipTraceEnqueue._find_open_future_recent_sale_hold(lead.id) is None:
             lead.needs_skip_trace = True
 
-    if new_status == 'do_not_contact':
+    if new_status in TERMINAL_LEAD_STATUSES:
         lead.recommended_action = None
         cancelled_hubspot_ids = _cancel_tasks_for_terminal_status(
             lead.id,
             actor=actor,
-            status='do_not_contact',
-        )
-    elif new_status == 'suppressed':
-        lead.recommended_action = None
-        cancelled_hubspot_ids = _cancel_tasks_for_terminal_status(
-            lead.id,
-            actor=actor,
-            status='suppressed',
+            status=new_status,
         )
     else:
         cancelled_hubspot_ids: set[str] = set()
@@ -375,9 +397,13 @@ def apply_lead_status_change(
         db.session.commit()
         _sync_cancelled_hubspot_tasks(cancelled_hubspot_ids)
     elif cancelled_hubspot_ids:
-        # Caller owns the transaction; sync after they commit.
-        pass
+        _sync_cancelled_hubspot_tasks_after_commit(cancelled_hubspot_ids)
 
-    if recompute_action and new_status not in ('do_not_contact', 'suppressed'):
+    if recompute_action and new_status not in (
+        'do_not_contact',
+        'suppressed',
+        'deal_won',
+        'deal_lost',
+    ):
         from app.services.lead_refresh import refresh_lead_scoring
         refresh_lead_scoring(lead.id)

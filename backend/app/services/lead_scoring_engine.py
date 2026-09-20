@@ -1124,8 +1124,13 @@ class LeadScoringEngine:
         *,
         continue_on_error: bool = False,
         failure_ids: Optional[list[int]] = None,
+        all_owners: bool = False,
     ) -> int:
-        """Refresh live scores in batches, optionally isolating bad lead rows."""
+        """Refresh live scores in batches, optionally isolating bad lead rows.
+
+        With ``lead_ids`` omitted, only that user's leads are rescored unless
+        ``all_owners=True`` (admin/pipeline/full-database jobs).
+        """
         rescored = 0
         pending_commits = 0
         weights_by_user: dict[str, ScoringWeights] = {}
@@ -1215,10 +1220,10 @@ class LeadScoringEngine:
             else:
                 offset = 0
                 while True:
-                    leads = (
-                        _lead_query().order_by(Lead.id)
-                        .offset(offset).limit(BULK_RESCORE_BATCH_SIZE).all()
-                    )
+                    query = _lead_query().order_by(Lead.id)
+                    if not all_owners:
+                        query = query.filter(Lead.owner_user_id == user_id)
+                    leads = query.offset(offset).limit(BULK_RESCORE_BATCH_SIZE).all()
                     if not leads:
                         break
                     _prepare_weights(leads)
@@ -1239,7 +1244,7 @@ class LeadScoringEngine:
     def bulk_recompute_actions(self, lead_ids: list[int] | None = None) -> int:
         """Re-score leads (score + action are unified)."""
         if lead_ids is None:
-            return self.bulk_rescore('default')
+            return self.bulk_rescore('default', all_owners=True)
         return self.bulk_rescore('default', lead_ids=lead_ids)
 
     @staticmethod

@@ -28,6 +28,22 @@ def _encrypt(raw: str, fernet_key: str) -> str:
     return f.encrypt(raw.encode()).decode()
 
 
+def _seed_admin(user_id='test-user'):
+    from app.models.user import User
+    if User.query.filter_by(user_id=user_id).first():
+        return
+    db.session.add(User(
+        user_id=user_id,
+        email=f'{user_id}@example.com',
+        email_lower=f'{user_id}@example.com',
+        password_hash='x',
+        display_name='Admin',
+        is_active=True,
+        is_admin=True,
+    ))
+    db.session.commit()
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -61,6 +77,7 @@ def log_app(fernet_key):
         )
         db.session.add(config)
         db.session.commit()
+        _seed_admin()
 
         yield application
 
@@ -73,7 +90,18 @@ def log_app(fernet_key):
 
 @pytest.fixture
 def log_client(log_app):
-    return log_app.test_client()
+    test_client = log_app.test_client()
+    original_open = test_client.open
+
+    def open_with_identity(*args, **kwargs):
+        headers = dict(kwargs.get('headers') or {})
+        if 'Authorization' not in headers and 'X-User-Id' not in headers:
+            headers['X-User-Id'] = 'test-user'
+            kwargs['headers'] = headers
+        return original_open(*args, **kwargs)
+
+    test_client.open = open_with_identity
+    return test_client
 
 
 def _create_log(app, object_type='deal', object_id='1', status='processed',
@@ -287,6 +315,32 @@ class TestRetryWebhookLog:
         assert resp.status_code == 400
 
 
+    def test_non_admin_cannot_retry(self, log_app, log_client):
+        from app.models.user import User
+
+        log_id = _create_log(log_app, object_type='deal', object_id='405', status='failed')
+        with log_app.app_context():
+            db.session.add(User(
+                user_id='plain-user',
+                email='plain-user@example.com',
+                email_lower='plain-user@example.com',
+                password_hash='x',
+                display_name='Plain',
+                is_active=True,
+                is_admin=False,
+            ))
+            db.session.commit()
+        mock_task = MagicMock()
+        mock_task.delay = MagicMock()
+        with patch('celery_worker.process_webhook_event', mock_task):
+            resp = log_client.post(
+                f'/api/hubspot/webhook-log/{log_id}/retry',
+                headers={'X-User-Id': 'plain-user'},
+            )
+        assert resp.status_code == 403
+        mock_task.delay.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # GET /api/hubspot/config — has_client_secret
 # ---------------------------------------------------------------------------
@@ -325,7 +379,7 @@ class TestGetConfigHasClientSecret:
             db.session.commit()
 
             client = application.test_client()
-            resp = client.get('/api/hubspot/config')
+            resp = client.get('/api/hubspot/config', headers={'X-User-Id': 'test-user'})
             assert resp.status_code == 200
 
             data = resp.get_json()
@@ -367,6 +421,7 @@ class TestSaveConfigClientSecret:
 
         with application.app_context():
             db.create_all()
+            _seed_admin()
 
             client = application.test_client()
             resp = client.post(
@@ -375,6 +430,7 @@ class TestSaveConfigClientSecret:
                     'token': 'pat-na1-test-token',
                     'client_secret': 'my-webhook-secret',
                 },
+                headers={'X-User-Id': 'test-user'},
             )
             assert resp.status_code == 200
 
@@ -410,11 +466,13 @@ class TestSaveConfigClientSecret:
 
         with application.app_context():
             db.create_all()
+            _seed_admin()
 
             client = application.test_client()
             resp = client.post(
                 '/api/hubspot/config',
                 json={'token': 'pat-na1-test-token'},
+                headers={'X-User-Id': 'test-user'},
             )
             assert resp.status_code == 200
 
@@ -439,6 +497,7 @@ class TestSaveConfigClientSecret:
 
         with application.app_context():
             db.create_all()
+            _seed_admin()
 
             client = application.test_client()
             resp = client.post(
@@ -447,6 +506,7 @@ class TestSaveConfigClientSecret:
                     'token': 'pat-na1-test-token',
                     'client_secret': 'super-secret-value',
                 },
+                headers={'X-User-Id': 'test-user'},
             )
             assert resp.status_code == 200
 

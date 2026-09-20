@@ -492,3 +492,63 @@ class TestProspectFeedStatus:
         assert 'chicago_api_configured' in status
         assert len(status['feeds']) == 2
         assert status['feeds'][0]['feed_name'] == 'annual_tax_sale'
+
+
+class TestProspectDuplicateOwnerScope:
+    def test_find_duplicate_ignores_other_users_lead(self, app, db_session):
+        from app.models.lead import Lead
+        from app.services.cook_county_prospect_feed_service import _find_duplicate_lead
+
+        theirs = Lead(
+            property_street='10 Prospect Dup St',
+            property_city='Chicago',
+            property_state='IL',
+            county_assessor_pin='14-28-400-008-0000',
+            owner_user_id='other-user',
+        )
+        db_session.add(theirs)
+        db_session.commit()
+
+        assert _find_duplicate_lead(
+            '14-28-400-008-0000',
+            '10 Prospect Dup St',
+            'Chicago',
+            owner_user_id='user-1',
+        ) is None
+
+    def test_approve_does_not_write_foreign_duplicate_lead(self, app, db_session):
+        from app.models.lead import Lead
+
+        theirs = Lead(
+            property_street='11 Prospect Dup St',
+            property_city='Chicago',
+            property_state='IL',
+            owner_user_id='other-user',
+            lead_score=9.0,
+        )
+        db_session.add(theirs)
+        db_session.flush()
+        candidate = ProspectCandidate(
+            owner_user_id='user-1',
+            pin='14-28-400-009-0000',
+            property_street='11 Prospect Dup St',
+            property_city='Chicago',
+            property_state='IL',
+            primary_signal_type='TAX_ANNUAL_SALE',
+            motivation_score=15.0,
+            source_feed='annual_tax_sale',
+            external_key='annual_tax_sale:foreign-dup',
+            status='duplicate',
+            duplicate_lead_id=theirs.id,
+        )
+        db_session.add(candidate)
+        db_session.commit()
+        their_id = theirs.id
+        original_score = theirs.lead_score
+
+        result = approve_candidate(candidate.id, 'user-1', reviewer_id='user-1')
+        assert result['lead_id'] != their_id
+        refreshed = db_session.get(Lead, their_id)
+        assert refreshed.lead_score == original_score
+        db_session.refresh(candidate)
+        assert candidate.duplicate_lead_id is None

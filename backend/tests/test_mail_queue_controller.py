@@ -70,7 +70,7 @@ class TestGetMailQueue:
 
     def test_requires_auth(self, client, app):
         with app.app_context():
-            response = client.get('/api/mail-queue/')
+            response = client.get('/api/mail-queue/', headers={'X-User-Id': ''})
             assert response.status_code == 401
 
     def test_queued_item_appears_in_response(self, client, app):

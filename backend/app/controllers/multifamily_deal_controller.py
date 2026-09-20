@@ -6,6 +6,7 @@ soft-deleting multifamily Deals, as well as linking Deals to Leads.
 Requirements: 1.1-1.8, 14.1-14.3
 """
 import logging
+import uuid
 from functools import wraps
 
 from flask import Blueprint, jsonify, request
@@ -78,6 +79,32 @@ def get_user_id() -> str:
     """
     from app.api_utils import get_current_user_id
     return get_current_user_id()
+
+
+def celery_job_id_for_deal(deal_id: int, kind: str) -> str:
+    """Celery task id that can only be polled against this deal."""
+    return f'deal{int(deal_id)}-{kind}-{uuid.uuid4().hex}'
+
+
+def celery_job_belongs_to_deal(job_id, deal_id: int, kind: str | None = None) -> bool:
+    """True when *job_id* was minted for *deal_id* by ``celery_job_id_for_deal``."""
+    if not job_id or not isinstance(job_id, str):
+        return False
+    prefix = f'deal{int(deal_id)}-'
+    if kind is not None:
+        prefix = f'{prefix}{kind}-'
+        if not job_id.startswith(prefix):
+            return False
+        suffix = job_id[len(prefix):]
+        return len(suffix) == 32 and all(ch in '0123456789abcdef' for ch in suffix.lower())
+    if not job_id.startswith(prefix):
+        return False
+    remainder = job_id[len(prefix):]
+    parts = remainder.rsplit('-', 1)
+    if len(parts) != 2 or not parts[0]:
+        return False
+    suffix = parts[1]
+    return len(suffix) == 32 and all(ch in '0123456789abcdef' for ch in suffix.lower())
 
 
 # ---------------------------------------------------------------------------

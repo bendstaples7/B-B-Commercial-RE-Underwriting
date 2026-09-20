@@ -520,13 +520,14 @@ class TestUpdateScoringWeights:
             content_type='application/json',
             headers={'X-User-Id': ''},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 401
 
     def test_update_weights_no_body(self, client, app):
         """Returns 400 when request body is empty."""
         resp = client.put(
             '/api/properties/scoring/weights',
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 400
 
@@ -541,6 +542,7 @@ class TestUpdateScoringWeights:
                 bathrooms=2.0,
                 square_footage=1500,
                 phone_1='555-1234',
+                owner_user_id='user1',
             )
 
         payload = {
@@ -559,6 +561,45 @@ class TestUpdateScoringWeights:
         )
         data = json.loads(resp.data)
         assert data['leads_rescored'] >= 1
+
+    def test_update_weights_does_not_rescore_other_users_leads(self, client, app):
+        """Weight updates only rescore the caller's leads."""
+        with app.app_context():
+            mine = _create_lead(
+                app,
+                property_street='10 Mine Score St',
+                owner_user_id='user1',
+                lead_score=40.0,
+            )
+            theirs = _create_lead(
+                app,
+                property_street='20 Their Score St',
+                owner_user_id='other-user',
+                lead_score=41.0,
+            )
+            mine_id = mine.id
+            their_id = theirs.id
+            their_score = theirs.lead_score
+
+        payload = {
+            'property_characteristics_weight': 0.25,
+            'data_completeness_weight': 0.20,
+            'owner_situation_weight': 0.25,
+            'location_desirability_weight': 0.10,
+            'data_enrichment_weight': 0.20,
+        }
+        resp = client.put(
+            '/api/properties/scoring/weights',
+            data=json.dumps(payload),
+            content_type='application/json',
+            headers={'X-User-Id': 'user1'},
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()['leads_rescored'] >= 1
+        with app.app_context():
+            still_theirs = db.session.get(Lead, their_id)
+            assert still_theirs.lead_score == their_score
+            assert db.session.get(Lead, mine_id) is not None
 
 
 class TestCalibrateScoringWeights:

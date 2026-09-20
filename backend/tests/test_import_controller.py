@@ -1,12 +1,18 @@
 """Integration tests for Import API endpoints."""
 import json
 import pytest
-from datetime import datetime
+from datetime import datetime, date
 from unittest.mock import patch, MagicMock
 
 from app import db
 from app.models import ImportJob, FieldMapping, OAuthToken, Lead
 from app.services.google_sheets_importer import AuthResult, SheetInfo
+from tests.conftest import wrap_test_client_with_user
+
+
+@pytest.fixture
+def client(app):
+    return wrap_test_client_with_user(app.test_client(), user_id='user1')
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +411,37 @@ class TestStartImport:
         )
         assert resp.status_code == 409
 
+    @patch('app.controllers.import_controller._enqueue_import_task')
+    def test_start_import_does_not_block_on_other_users_job(
+        self, mock_enqueue, client, app,
+    ):
+        """Another user's in-progress import must not 409 or leak their job id."""
+        with app.app_context():
+            _create_oauth_token('user1')
+            fm = _create_field_mapping('user1', 'sheet123', 'Sheet1')
+            foreign = _create_import_job(
+                'other-user', 'sheet123', 'Sheet1',
+                status='in_progress',
+            )
+            foreign_id = foreign.id
+
+        payload = {
+            'user_id': 'user1',
+            'spreadsheet_id': 'sheet123',
+            'sheet_name': 'Sheet1',
+        }
+        resp = client.post(
+            '/api/leads/import/start',
+            data=json.dumps(payload),
+            content_type='application/json',
+            headers={'X-User-Id': 'user1'},
+        )
+        assert resp.status_code == 201
+        data = json.loads(resp.data)
+        assert data['id'] != foreign_id
+        assert data['user_id'] == 'user1'
+        mock_enqueue.assert_called_once()
+
     def test_start_import_no_body(self, client, app):
         """Returns 400 when request body is empty."""
         resp = client.post(
@@ -509,6 +546,7 @@ class TestGetImportJob:
         """Returns full job details."""
         with app.app_context():
             job = _create_import_job(
+                'user1',
                 error_log=[{'row': 3, 'errors': ['Missing required field: owner_name']}],
             )
             job_id = job.id
@@ -522,6 +560,21 @@ class TestGetImportJob:
         assert data['rows_skipped'] == 2
         assert len(data['error_log']) == 1
         assert data['error_log'][0]['row'] == 3
+
+    def test_get_foreign_job_not_found(self, client, app):
+        """Another user's Sheets import job is not readable."""
+        with app.app_context():
+            job = _create_import_job(
+                'other-user',
+                error_log=[{'row': 1, 'errors': ['secret']}],
+            )
+            job_id = job.id
+
+        resp = client.get(f'/api/leads/import/jobs/{job_id}')
+        assert resp.status_code == 404
+        data = json.loads(resp.data)
+        assert data['error'] == 'Import job not found'
+        assert 'error_log' not in data
 
     def test_get_job_not_found(self, client, app):
         """Returns 404 for non-existent job."""
@@ -599,3 +652,173 @@ class TestRerunImport:
 
         resp = client.post(f'/api/leads/import/jobs/{original_id}/rerun')
         assert resp.status_code == 401
+
+
+class TestImportProtectedFields:
+    def test_validate_row_drops_score_and_owner_mapping(self, app):
+        from app.services.google_sheets_importer import GoogleSheetsImporter
+
+        with app.app_context():
+            result = GoogleSheetsImporter().validate_row(
+                {
+                    'Address': '10 Import Guard St',
+                    'Score': '99',
+                    'Owner': 'other-user',
+                    'Status': 'deal_won',
+                },
+                {
+                    'Address': 'property_street',
+                    'Score': 'lead_score',
+                    'Owner': 'owner_user_id',
+                    'Status': 'lead_status',
+                },
+            )
+            assert result.valid is True
+            assert result.cleaned_data.get('property_street') == '10 Import Guard St'
+            assert 'lead_score' not in result.cleaned_data
+            assert 'owner_user_id' not in result.cleaned_data
+            assert 'lead_status' not in result.cleaned_data
+
+    def test_validate_row_drops_mail_and_skip_trace_pipeline_mapping(self, app):
+        from app.services.google_sheets_importer import GoogleSheetsImporter
+
+        with app.app_context():
+            result = GoogleSheetsImporter().validate_row(
+                {
+                    'Address': '11 Pipeline Guard St',
+                    'Mail next': 'TRUE',
+                    'Skip': 'yes',
+                    'History': '[{"sent": true}]',
+                    'Tracer': 'Acme Skip',
+                    'Traced': '2024-01-15',
+                },
+                {
+                    'Address': 'property_street',
+                    'Mail next': 'up_next_to_mail',
+                    'Skip': 'needs_skip_trace',
+                    'History': 'mailer_history',
+                    'Tracer': 'skip_tracer',
+                    'Traced': 'date_skip_traced',
+                },
+            )
+            assert result.valid is True
+            assert result.cleaned_data.get('property_street') == '11 Pipeline Guard St'
+            assert 'up_next_to_mail' not in result.cleaned_data
+            assert 'needs_skip_trace' not in result.cleaned_data
+            assert 'mailer_history' not in result.cleaned_data
+            assert 'skip_tracer' not in result.cleaned_data
+            assert 'date_skip_traced' not in result.cleaned_data
+
+    def test_update_lead_fields_skips_pipeline_columns(self, app):
+        from app.services.google_sheets_importer import GoogleSheetsImporter
+
+        with app.app_context():
+            lead = Lead(
+                property_street='12 Pipeline Guard Ave',
+                owner_user_id='importer-user',
+                up_next_to_mail=False,
+                needs_skip_trace=False,
+            )
+            db.session.add(lead)
+            db.session.flush()
+            GoogleSheetsImporter()._update_lead_fields(
+                lead,
+                {
+                    'property_street': '12 Pipeline Guard Ave',
+                    'up_next_to_mail': True,
+                    'needs_skip_trace': True,
+                    'mailer_history': [{'sent': True}],
+                    'skip_tracer': 'Acme Skip',
+                    'date_skip_traced': date(2024, 1, 15),
+                    'notes': 'from sheet',
+                },
+                changed_by='importer-user',
+            )
+            assert lead.up_next_to_mail is not True
+            assert lead.needs_skip_trace is not True
+            assert lead.mailer_history != [{'sent': True}]
+            assert lead.skip_tracer != 'Acme Skip'
+            assert lead.date_skip_traced is None
+            assert lead.notes == 'from sheet'
+
+    def test_update_lead_fields_skips_locked_category(self, app):
+        from app.services.google_sheets_importer import GoogleSheetsImporter
+
+        with app.app_context():
+            lead = Lead(
+                property_street='14 Category Lock St',
+                owner_user_id='importer-user',
+                lead_category='residential',
+                lead_category_locked=True,
+                property_type=None,
+                units=12,
+            )
+            db.session.add(lead)
+            db.session.flush()
+            GoogleSheetsImporter()._update_lead_fields(
+                lead,
+                {
+                    'lead_category': 'commercial',
+                    'property_type': 'multi_family',
+                    'notes': 'from sheet',
+                },
+                changed_by='importer-user',
+            )
+            assert lead.lead_category == 'residential'
+            assert lead.property_type is None
+            assert lead.notes == 'from sheet'
+
+    def test_update_lead_fields_skips_locked_owner_names(self, app):
+        from app.models.contact import Contact
+        from app.models.property_contact import PropertyContact
+        from app.services.google_sheets_importer import GoogleSheetsImporter
+
+        with app.app_context():
+            lead = Lead(
+                property_street='15 Name Lock St',
+                owner_user_id='importer-user',
+                owner_first_name='Gilberto',
+                owner_last_name='Olivier',
+            )
+            db.session.add(lead)
+            db.session.flush()
+            contact = Contact(
+                first_name='Gilberto', last_name='Olivier', name_locked=True,
+            )
+            db.session.add(contact)
+            db.session.flush()
+            db.session.add(PropertyContact(
+                property_id=lead.id,
+                contact_id=contact.id,
+                role='owner',
+                is_primary=True,
+            ))
+            db.session.flush()
+            GoogleSheetsImporter()._update_lead_fields(
+                lead,
+                {
+                    'owner_first_name': 'HILBERTO',
+                    'owner_last_name': 'OLIVIER JR',
+                    'notes': 'from sheet',
+                },
+                changed_by='importer-user',
+            )
+            assert lead.owner_first_name == 'Gilberto'
+            assert lead.owner_last_name == 'Olivier'
+            assert lead.notes == 'from sheet'
+
+    def test_new_lead_keeps_job_owner_when_sheet_maps_owner_user_id(self, app):
+        from app.services.google_sheets_importer import GoogleSheetsImporter
+
+        with app.app_context():
+            importer = GoogleSheetsImporter()
+            lead = Lead(property_street='placeholder')
+            lead.owner_user_id = 'importer-user'
+            importer._set_lead_fields(lead, {
+                'property_street': '20 Owner Guard Ave',
+                'owner_user_id': 'attacker',
+                'lead_score': 88.0,
+            })
+            assert lead.property_street == '20 Owner Guard Ave'
+            assert lead.owner_user_id == 'importer-user'
+            assert lead.lead_score is None or lead.lead_score != 88.0

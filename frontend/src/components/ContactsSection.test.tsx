@@ -184,28 +184,17 @@ describe('ContactsSection', () => {
     expect(screen.queryByText(/No companies linked yet/i)).not.toBeInTheDocument()
   })
 
-  it('calls linkContactToProperty when Set as Primary is clicked', async () => {
+  it('does not ask to mark a person as primary', async () => {
     vi.mocked(contactService.getPropertyContacts).mockResolvedValue([
       mockPrimaryContact,
       mockSecondaryContact,
     ])
-    vi.mocked(contactService.linkContactToProperty).mockResolvedValue({
-      ...mockSecondaryContact,
-      is_primary: true,
-    })
 
     render(<ContactsSection propertyId={PROPERTY_ID} />)
 
     await waitFor(() => expect(screen.getByText('Bob Jones')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: /set as primary/i }))
-
-    await waitFor(() => {
-      expect(contactService.linkContactToProperty).toHaveBeenCalledWith(PROPERTY_ID, {
-        contact_id: mockSecondaryContact.id,
-        role: mockSecondaryContact.property_contact_role,
-        is_primary: true,
-      })
-    })
+    expect(screen.queryByRole('button', { name: /set as primary/i })).not.toBeInTheDocument()
+    expect(screen.queryByText('Primary')).not.toBeInTheDocument()
   })
 
   it('opens ContactFormModal from Add Contact', async () => {
@@ -492,7 +481,7 @@ describe('ContactsSection', () => {
     })
   })
 
-  it('shows flat key-contact person under People when only companies are linked', async () => {
+  it('does not list a county name that is not a saved person', async () => {
     vi.mocked(contactService.getPropertyContacts).mockResolvedValue([])
 
     render(
@@ -519,65 +508,10 @@ describe('ContactsSection', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByText('Gregory Shek')).toBeInTheDocument()
-      expect(screen.getByText(/On file — not linked yet/i)).toBeInTheDocument()
+      expect(screen.getByText('Shek Holdings LLC')).toBeInTheDocument()
+      expect(screen.getByText(/No people linked yet/i)).toBeInTheDocument()
     })
-    expect(screen.getByTestId('materialize-unlinked-person-btn')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByTestId('materialize-unlinked-person-btn'))
-    await waitFor(() => {
-      expect(screen.getByTestId('contact-form-modal')).toBeInTheDocument()
-    })
-    const calls = contactFormModalSpy.mock.calls
-    const props = calls[calls.length - 1][0]
-    expect(props).toMatchObject({
-      linkAsPrimary: true,
-      initialMode: 'link',
-      initialLinkQuery: 'Gregory Shek',
-    })
-    expect(props.initialValues).toMatchObject({
-      firstName: 'Gregory',
-      lastName: 'Shek',
-      phones: [{ value: '(312) 555-0199', label: 'work' }],
-    })
-  })
-
-  it('clears an unlinked flat owner from the lead', async () => {
-    vi.mocked(contactService.getPropertyContacts).mockResolvedValue([])
-    vi.mocked(contactService.clearOwnerPerson).mockResolvedValue({
-      cleared_slots: ['owner'],
-      unlinked_contact_id: null,
-      display_name: 'Gregory Shek',
-    })
-
-    render(
-      <ContactsSection
-        propertyId={PROPERTY_ID}
-        commandCenterData={
-          {
-            id: PROPERTY_ID,
-            owner_first_name: 'Gregory',
-            owner_last_name: 'Shek',
-            phones: [] as CommandCenterPayload['phones'],
-            organizations: [] as CommandCenterPayload['organizations'],
-          } as CommandCenterPayload
-        }
-      />,
-    )
-
-    await waitFor(() => {
-      expect(screen.getByTestId('clear-unlinked-person-btn')).toBeInTheDocument()
-    })
-    fireEvent.click(screen.getByTestId('clear-unlinked-person-btn'))
-    fireEvent.click(screen.getByTestId('confirm-clear-unlinked-person-btn'))
-    await waitFor(() => {
-      expect(contactService.clearOwnerPerson).toHaveBeenCalledWith(
-        PROPERTY_ID,
-        expect.objectContaining({
-          first_name: 'Gregory',
-          last_name: 'Shek',
-        }),
-      )
-    })
+    expect(screen.queryByText('Gregory Shek')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('materialize-unlinked-person-btn')).not.toBeInTheDocument()
   })
 })

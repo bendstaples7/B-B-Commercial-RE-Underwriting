@@ -37,17 +37,13 @@ import {
   personIdentityKey,
   personIdentityKeyFromFullName,
   splitDisplayName,
-  unlinkedPeopleFromLead,
-  type UnlinkedLeadPerson,
 } from '@/utils/propertyContacts'
 import { ContactNameInlineEdit } from '@/components/ContactNameInlineEdit'
 import { PhoneList } from '@/components/PhoneRow'
 import type {
   CommandCenterPayload,
   ContactRole,
-  EmailLabel,
   EntityResolutionStatus,
-  PhoneLabel,
   PropertyContact,
   PropertyOrganizationSummary,
 } from '@/types'
@@ -145,8 +141,6 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
 
   const [removeDialogOpen, setRemoveDialogOpen] = useState(false)
   const [contactToRemove, setContactToRemove] = useState<PropertyContact | null>(null)
-  const [clearUnlinkedDialogOpen, setClearUnlinkedDialogOpen] = useState(false)
-  const [unlinkedToClear, setUnlinkedToClear] = useState<UnlinkedLeadPerson | null>(null)
 
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
@@ -282,29 +276,6 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
     return Array.from(byKey.values())
   }, [contacts])
   const contactsLoadedSuccessfully = contacts !== undefined && !fetchError
-
-  const unlinkedPeople = useMemo(
-    () =>
-      unlinkedPeopleFromLead(contacts, {
-        ownerFirst: cc?.owner_first_name,
-        ownerLast: cc?.owner_last_name,
-        owner2First: cc?.owner_2_first_name,
-        owner2Last: cc?.owner_2_last_name,
-        organizations: organizations,
-        phones: cc?.phones,
-        emails: cc?.emails,
-      }),
-    [
-      contacts,
-      cc?.owner_first_name,
-      cc?.owner_last_name,
-      cc?.owner_2_first_name,
-      cc?.owner_2_last_name,
-      organizations,
-      cc?.phones,
-      cc?.emails,
-    ],
-  )
 
   const leftoverEntityContacts = useMemo(
     () => (contacts ?? []).filter((c) => isEntityContactName(c)),
@@ -512,21 +483,6 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
     onError: (err: Error) => showError(err.message || 'Failed to add company.'),
   })
 
-  const setPrimaryMutation = useMutation({
-    mutationFn: (contact: PropertyContact) =>
-      contactService.linkContactToProperty(propertyId, {
-        contact_id: contact.id,
-        role: contact.property_contact_role,
-        is_primary: true,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['propertyContacts', propertyId] })
-      queryClient.invalidateQueries({ queryKey: ['commandCenter', propertyId] })
-      showSuccess('Contact set as primary.')
-    },
-    onError: (err: Error) => showError(err.message || 'Failed to set primary contact.'),
-  })
-
   const removeMutation = useMutation({
     mutationFn: (contactId: number) =>
       contactService.unlinkContactFromProperty(propertyId, contactId),
@@ -536,23 +492,6 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
       showSuccess('Contact removed.')
     },
     onError: (err: Error) => showError(err.message || 'Failed to remove contact.'),
-  })
-
-  const clearUnlinkedMutation = useMutation({
-    mutationFn: (person: UnlinkedLeadPerson) =>
-      contactService.clearOwnerPerson(propertyId, {
-        first_name: person.first_name,
-        last_name: person.last_name,
-        reason: 'cleared_from_contacts',
-      }),
-    onSuccess: (result) => {
-      setClearUnlinkedDialogOpen(false)
-      setUnlinkedToClear(null)
-      queryClient.invalidateQueries({ queryKey: ['propertyContacts', propertyId] })
-      queryClient.invalidateQueries({ queryKey: ['commandCenter', propertyId] })
-      showSuccess(`${result.display_name} cleared from this lead.`)
-    },
-    onError: (err: Error) => showError(err.message || 'Failed to clear owner from lead.'),
   })
 
   const saveNameMutation = useMutation({
@@ -823,98 +762,20 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
         </Alert>
       )}
 
-      {!isLoading && !fetchError && peopleContacts.length === 0 && unlinkedPeople.length === 0 && (
+      {!isLoading && !fetchError && peopleContacts.length === 0 && (
         <Typography variant="body2" color="text.secondary">
           No people linked yet. Use Add Contact to create or link one.
         </Typography>
       )}
 
-      {!isLoading && !fetchError && (peopleContacts.length > 0 || unlinkedPeople.length > 0) && (
+      {!isLoading && !fetchError && peopleContacts.length > 0 && (
         <List disablePadding data-testid="people-list">
-          {unlinkedPeople.map((person, index) => {
-            const fullName =
-              [person.first_name, person.last_name].filter(Boolean).join(' ') || '(No name)'
-            const sourceLabel =
-              person.source === 'resolved_person'
-                ? 'From company research'
-                : 'On file — not linked yet'
-            return (
-              <React.Fragment key={person.key}>
-                {index > 0 && <Divider />}
-                <ListItem
-                  sx={{ flexDirection: 'column', alignItems: 'stretch', py: 1.25 }}
-                  data-testid={`unlinked-person-row-${person.key}`}
-                >
-                  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, width: '100%' }}>
-                    <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                        <Typography sx={{ ...ccRowTitleSx, fontWeight: 500 }}>{fullName}</Typography>
-                        <Chip size="small" label={sourceLabel} variant="outlined" color="warning" />
-                      </Box>
-                      {person.phones?.length ? (
-                        <PhoneList phones={person.phones} showLabel dense={false} />
-                      ) : null}
-                      {person.emails?.map((email) => (
-                        <Typography key={email.value} variant="body2" color="text.secondary">
-                          {email.value}
-                        </Typography>
-                      ))}
-                    </Box>
-                  </Box>
-                  <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
-                    <Button
-                      size="small"
-                      variant="contained"
-                      onClick={() => {
-                        const fullName = [person.first_name, person.last_name].filter(Boolean).join(' ')
-                        setEditingContact(undefined)
-                        setCreateInitialValues({
-                          firstName: person.first_name ?? '',
-                          lastName: person.last_name ?? '',
-                          phones: person.phones.map((p) => ({
-                            value: p.value,
-                            label: p.label as PhoneLabel | undefined,
-                          })),
-                          emails: person.emails.map((e) => ({
-                            value: e.value,
-                            label: e.label as EmailLabel | undefined,
-                          })),
-                        })
-                        setInitialFormMode('link')
-                        setInitialLinkQuery(fullName)
-                        setLinkAsPrimary(contactsLoadedSuccessfully && peopleContacts.length === 0)
-                        setFormOpen(true)
-                      }}
-                      data-testid="materialize-unlinked-person-btn"
-                    >
-                      Save as contact
-                    </Button>
-                    {person.source === 'flat_owner' && (
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        color="error"
-                        onClick={() => {
-                          setUnlinkedToClear(person)
-                          setClearUnlinkedDialogOpen(true)
-                        }}
-                        disabled={clearUnlinkedMutation.isPending}
-                        data-testid="clear-unlinked-person-btn"
-                      >
-                        Clear from lead
-                      </Button>
-                    )}
-                  </Box>
-                </ListItem>
-              </React.Fragment>
-            )
-          })}
           {peopleContacts.map((contact, index) => {
             const fullName =
               [contact.first_name, contact.last_name].filter(Boolean).join(' ') || '(No name)'
             return (
               <React.Fragment key={contact.id}>
-                {(index > 0 || unlinkedPeople.length > 0) && <Divider />}
+                {index > 0 && <Divider />}
                 <ListItem
                   sx={{ flexDirection: 'column', alignItems: 'stretch', py: 1.25 }}
                   data-testid={`person-row-${contact.id}`}
@@ -926,15 +787,11 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
                             contactId={contact.id}
                             displayName={fullName}
                             leadId={propertyId}
-                            isPrimary={Boolean(contact.is_primary)}
                             inputTestId="person-name-edit-input"
                             editButtonTestId="edit-person-name-btn"
-                            titleSx={{ fontWeight: contact.is_primary ? 500 : 400 }}
+                            titleSx={{ fontWeight: index === 0 ? 500 : 400 }}
                             rootSx={{ width: 'auto', maxWidth: '100%' }}
                           />
-                          {contact.is_primary && (
-                            <Chip size="small" label="Primary" color="primary" />
-                          )}
                           {contact.property_contact_role && (
                             <Chip
                               size="small"
@@ -974,16 +831,6 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
                       </Box>
                     </Box>
                   <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
-                    {!contact.is_primary && (
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        onClick={() => setPrimaryMutation.mutate(contact)}
-                        disabled={setPrimaryMutation.isPending}
-                      >
-                        Set as Primary
-                      </Button>
-                    )}
                     <Button
                       size="small"
                       variant="outlined"
@@ -1066,48 +913,6 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
             }}
           >
             Remove
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog
-        open={clearUnlinkedDialogOpen}
-        onClose={() => {
-          setClearUnlinkedDialogOpen(false)
-          setUnlinkedToClear(null)
-        }}
-      >
-        <DialogTitle>Clear owner from lead?</DialogTitle>
-        <DialogContent>
-          <Typography>
-            Remove{' '}
-            {unlinkedToClear
-              ? [unlinkedToClear.first_name, unlinkedToClear.last_name].filter(Boolean).join(' ')
-              : 'this person'}{' '}
-            from this lead&apos;s owner fields. Use this when the person is deceased, sold, or
-            otherwise no longer the owner. You can then Move to Skip Trace to find the current
-            owner.
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button
-            onClick={() => {
-              setClearUnlinkedDialogOpen(false)
-              setUnlinkedToClear(null)
-            }}
-          >
-            Cancel
-          </Button>
-          <Button
-            color="error"
-            variant="contained"
-            data-testid="confirm-clear-unlinked-person-btn"
-            disabled={clearUnlinkedMutation.isPending}
-            onClick={() => {
-              if (unlinkedToClear) clearUnlinkedMutation.mutate(unlinkedToClear)
-            }}
-          >
-            Clear from lead
           </Button>
         </DialogActions>
       </Dialog>
