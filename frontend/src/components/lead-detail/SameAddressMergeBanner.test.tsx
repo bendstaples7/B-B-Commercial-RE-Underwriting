@@ -294,6 +294,45 @@ describe('SameAddressMergeBanner', () => {
     expect(screen.getByTestId('same-address-merge-incoming-empty')).toBeInTheDocument()
   })
 
+  it('opens with both leads when the address only adds a trailing unit', async () => {
+    const user = userEvent.setup()
+    vi.mocked(commandCenterService.getMergeContext).mockResolvedValue({
+      sibling_ids: [200],
+      leads: [
+        {
+          id: 100,
+          property_street: '4451 N Albany Ave Apt 1',
+          owner_display_name: 'Samuel Marconi',
+          people_names: ['Samuel Marconi'],
+          activity: { total: 0, calls: 0, notes: 0, emails: 0, mail: 0 },
+        },
+        {
+          id: 200,
+          property_street: '4451 N Albany Ave',
+          owner_display_name: 'Samuel Marconi',
+          people_names: ['Samuel Marconi'],
+          activity: { total: 0, calls: 0, notes: 0, emails: 0, mail: 0 },
+        },
+      ],
+    })
+    render(
+      <MemoryRouter>
+        <ManualMergeHarness
+          leadId={100}
+          currentOwnerLabel="Samuel Marconi"
+          currentPeopleNames={['Samuel Marconi']}
+          onMerged={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('same-address-merge-open'))
+    expect(await screen.findByTestId('same-address-merge-facts-200')).toBeInTheDocument()
+    expect(screen.getByTestId('same-address-merge-facts-100')).toBeInTheDocument()
+    expect(screen.getByTestId('same-address-merge-row-property')).toHaveTextContent('Apt 1')
+    expect(screen.getByTestId('same-address-merge-street-diff')).toHaveTextContent('Apt 1')
+    expect(screen.queryByTestId('same-address-merge-incoming-empty')).not.toBeInTheDocument()
+  })
+
   it('when winner differs from current lead, onMerged still runs (navigate owned by helper)', async () => {
     const user = userEvent.setup()
     const navigate = vi.fn()

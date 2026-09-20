@@ -679,6 +679,21 @@ function searchHitLabel(item: SearchResultItem): string {
   return street ? `${owner} — ${street} (#${item.id})` : `${owner} (#${item.id})`
 }
 
+/** Extra tail when one street is the other plus a unit ("Apt 1", "#1", "1"). */
+function trailingAddressDifference(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): string | null {
+  const a = (left || '').trim()
+  const b = (right || '').trim()
+  if (!a || !b || a.toLowerCase() === b.toLowerCase()) return null
+  const shorter = a.length <= b.length ? a : b
+  const longer = a.length <= b.length ? b : a
+  if (!longer.toLowerCase().startsWith(shorter.toLowerCase())) return null
+  const extra = longer.slice(shorter.length).replace(/^[\s,.#-]+/, '').trim()
+  return extra || null
+}
+
 function LeadFactGrid({
   row,
   ready,
@@ -754,6 +769,7 @@ export function SameAddressMergeBanner({
   const [pasteLookupPending, setPasteLookupPending] = useState(false)
   const [validatedOtherId, setValidatedOtherId] = useState<number | null>(null)
   const [decisionById, setDecisionById] = useState<Record<number, SameAddressLeadSummary>>({})
+  const [discoveredSiblings, setDiscoveredSiblings] = useState<SameAddressLeadSummary[]>([])
   const [contextLoading, setContextLoading] = useState(false)
   const [contextError, setContextError] = useState<string | null>(null)
   const [pickOverride, setPickOverride] = useState<Record<string, FieldPick>>({})
@@ -815,8 +831,12 @@ export function SameAddressMergeBanner({
     if (pastePreview && !rows.some((row) => row.id === pastePreview.id)) {
       rows.push(pastePreview)
     }
+    for (const sibling of discoveredSiblings) {
+      if (!sibling?.id || sibling.id === leadId) continue
+      if (!rows.some((row) => row.id === sibling.id)) rows.push(sibling)
+    }
     return rows
-  }, [currentOwnerLabel, currentPeopleNames, leadId, pastePreview, twins])
+  }, [currentOwnerLabel, currentPeopleNames, discoveredSiblings, leadId, pastePreview, twins])
 
   const removable = useMemo(
     () => options.filter((row) => row.id !== winnerId),
@@ -835,6 +855,10 @@ export function SameAddressMergeBanner({
     ? incomingView
     : null
   const compareReady = Boolean(primaryView?.activity && compareIncoming?.activity)
+  const streetDiff = trailingAddressDifference(
+    primaryView?.property_street,
+    compareIncoming?.property_street,
+  )
 
   const resolvedRows = useMemo(() => {
     if (!primaryView || !compareIncoming) return []
@@ -874,6 +898,7 @@ export function SameAddressMergeBanner({
     setPastePreview(null)
     setPasteError(null)
     setValidatedOtherId(null)
+    setDiscoveredSiblings([])
     setDecisionById({})
     setContextLoading(false)
     setContextError(null)
@@ -898,7 +923,7 @@ export function SameAddressMergeBanner({
       .filter((id) => Number.isInteger(id) && id > 0)
     setContextLoading(true)
     setContextError(null)
-    let pending: Promise<{ leads: SameAddressLeadSummary[] }>
+    let pending: Promise<{ leads: SameAddressLeadSummary[]; sibling_ids?: number[] }>
     try {
       pending = Promise.resolve(commandCenterService.getMergeContext(leadId, ids))
     } catch {
@@ -910,7 +935,10 @@ export function SameAddressMergeBanner({
     void pending
       .then((res) => {
         if (contextRequestId.current !== requestId) return
-        rememberDecision(res?.leads ?? [])
+        const leads = res?.leads ?? []
+        const siblingIds = new Set(res?.sibling_ids ?? [])
+        rememberDecision(leads)
+        setDiscoveredSiblings(leads.filter((row) => siblingIds.has(row.id) && row.id !== leadId))
         setContextLoading(false)
       })
       .catch(() => {
@@ -1204,7 +1232,7 @@ export function SameAddressMergeBanner({
         <DialogTitle id="same-address-merge-title">Combine these records</DialogTitle>
         <DialogContent sx={{ cursor: 'auto' }}>
           <Typography variant="body2" sx={{ mb: 1.5 }}>
-            {hasTwins
+            {hasTwins || discoveredSiblings.length > 0
               ? 'Choose which record is primary. The other one is removed. People, phones, activities, and tasks move onto the primary. If two rows are the same person they become one person with all phone numbers.'
               : 'Find the other lead for this same building (search or lead number). Choose which record is primary; the other is removed. People, phones, activities, and tasks move onto the primary. If two rows are the same person they become one person with all phone numbers.'}
           </Typography>
@@ -1376,6 +1404,15 @@ export function SameAddressMergeBanner({
               onChange={(event) => handleWinnerChange(Number(event.target.value))}
             >
               <Box data-testid="same-address-merge-compare" sx={{ cursor: 'auto' }}>
+                {streetDiff ? (
+                  <Typography
+                    variant="body2"
+                    data-testid="same-address-merge-street-diff"
+                    sx={{ mb: 1 }}
+                  >
+                    Same building. The addresses differ by {streetDiff}.
+                  </Typography>
+                ) : null}
                 {!compareIncoming || !primaryView ? (
                   <Box
                     sx={{
@@ -1427,7 +1464,9 @@ export function SameAddressMergeBanner({
                         Merges in
                       </Typography>
                       <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                        Search for the other lead. Its property, source, and activities will show here.
+                        {contextLoading
+                          ? 'Loading the other record at this building…'
+                          : 'Search for the other lead. Its property, source, and activities will show here.'}
                       </Typography>
                     </Box>
                   </Box>

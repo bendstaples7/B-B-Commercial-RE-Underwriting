@@ -87,6 +87,34 @@ def _collapse_cardinal_after_house(norm: str) -> str:
     return norm
 
 
+_TRAILING_UNIT_KEY_RE = re.compile(r'\s+\d+[A-Z]?$', re.IGNORECASE)
+
+
+def building_lookup_keys(street: Optional[str]) -> list[str]:
+    """Building keys to scan, including a copy with a trailing unit number removed.
+
+    ``4451 N Albany Ave #1`` can still be stored as ``4451 N ALBANY AVENUE 1``.
+    Looking up only that longer key misses ``4451 N ALBANY``, so the merge
+    dialog opens with no other lead. Search the shorter building key too.
+    """
+    key = dedup_street_key(street)
+    if not key:
+        return []
+    keys: list[str] = []
+
+    def add(value: str) -> None:
+        text = (value or '').strip()
+        if text and text not in keys:
+            keys.append(text)
+
+    add(key)
+    shorter = _TRAILING_UNIT_KEY_RE.sub('', key).strip()
+    if shorter and shorter != key:
+        add(shorter)
+        add(dedup_street_key(shorter))
+    return keys
+
+
 def _expand_abbreviated_range_end(start: str, end: str) -> str:
     """Expand ``1867-69`` → ``1869`` when the end token is a short suffix."""
     if len(end) >= len(start):

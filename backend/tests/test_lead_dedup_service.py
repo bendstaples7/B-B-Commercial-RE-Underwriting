@@ -23,6 +23,8 @@ class TestDedupStreetKey:
 
     def test_abbreviation_variants_share_key(self):
         assert dedup_street_key('4263 W Montrose') == dedup_street_key('4263 W Montrose Ave Apt 1')
+        assert dedup_street_key('4451 N Albany Ave') == dedup_street_key('4451 N Albany Ave #1')
+        assert dedup_street_key('4451 N Albany Ave') == dedup_street_key('4451 N Albany Ave 1')
 
     def test_places_full_address_shares_key_with_street(self):
         assert dedup_street_key('4903 N Hermitage') == dedup_street_key(
@@ -857,6 +859,33 @@ class TestSameBuildingBannerAndAdditivePeople:
             from_husk = {item.id for item in find_same_building_leads(husk)}
             assert unit.id in from_husk
             assert other_unit.id in from_husk
+
+    def test_find_same_building_from_hash_unit_finds_husk(self, app):
+        """A trailing #1 must not hide the building record."""
+        from app.services.lead_dedup_service import (
+            find_same_building_leads,
+            refresh_lead_dedup_fields,
+        )
+
+        with app.app_context():
+            numbered = Lead(
+                property_street='4451 N Albany Ave #1',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            husk = Lead(
+                property_street='4451 N Albany Ave',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            db.session.add_all([numbered, husk])
+            refresh_lead_dedup_fields(husk)
+            # Stale index still ends in the unit number.
+            numbered.normalized_street = '4451 N ALBANY AVENUE 1'
+            db.session.commit()
+
+            found = {item.id for item in find_same_building_leads(numbered)}
+            assert husk.id in found
 
     def test_same_address_summaries_default_to_current_lead_owner_scope(self, app):
         from app.services.lead_dedup_service import (

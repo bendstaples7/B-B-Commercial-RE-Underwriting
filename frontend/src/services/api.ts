@@ -1369,7 +1369,7 @@ export const commandCenterService = {
   getMergeContext: (
     leadId: number,
     otherIds: number[],
-  ): Promise<{ leads: SameAddressLeadSummary[] }> =>
+  ): Promise<{ leads: SameAddressLeadSummary[]; sibling_ids?: number[] }> =>
     api.get(`/leads/${leadId}/merge-context`, {
       params: {
         ids: otherIds.filter((id) => id !== leadId).join(','),

@@ -12,6 +12,7 @@ from app import db
 from app.models.hubspot_match import HubSpotMatch
 from app.models.lead import Lead, LeadAuditTrail
 from app.services.lead_merge_utils import (
+    building_lookup_keys,
     dedup_street_key,
     legacy_glued_house_range_key,
     merge_mailer_history,
@@ -1042,12 +1043,13 @@ def find_same_building_leads(
         base_query = base_query.filter(Lead.owner_user_id == owner_user_id)
 
     key = dedup_street_key(street)
+    lookup_keys = building_lookup_keys(street)
     if key:
         found: dict[int, Lead] = {}
-        street_predicates = [
-            Lead.normalized_street == key,
-            Lead.normalized_street.ilike(f'{key} %'),
-        ]
+        street_predicates = []
+        for lookup_key in lookup_keys:
+            street_predicates.append(Lead.normalized_street == lookup_key)
+            street_predicates.append(Lead.normalized_street.ilike(f'{lookup_key} %'))
         # Pre-fix rows may still store glued dual house numbers ("18671869…").
         legacy_glued = legacy_glued_house_range_key(street)
         if legacy_glued and legacy_glued != key:
