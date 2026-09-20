@@ -242,8 +242,7 @@ class TestProperty19NoOverwriteProtectedFields:
 
     def test_address_match_disambiguates_when_multiple_leads_share_address(self, app) -> None:
         """When multiple leads share the same normalised address the matcher
-        picks the best candidate (HubSpot match / stage / contact data) instead
-        of leaving the deal pending and creating a placeholder.
+        suggests the best candidate but leaves the match pending for review.
 
         # Feature: hubspot-crm-migration, Property 19
         **Validates: Requirements 22.1, 22.2**
@@ -268,11 +267,11 @@ class TestProperty19NoOverwriteProtectedFields:
             db.session.flush()
 
             assert match.confidence == "MEDIUM"
-            assert match.status == "confirmed", (
-                f"Expected 'confirmed' after disambiguation, got '{match.status}'"
+            assert match.status == "pending", (
+                f"Expected 'pending' when more than one lead shares the address, got '{match.status}'"
             )
             assert match.internal_record_id == lead_a.id, (
-                "Lower id wins when stage/HubSpot/contact data are tied"
+                "Lower id is suggested when stage/HubSpot/contact data are tied"
             )
             assert lead_b.review_required is True
 

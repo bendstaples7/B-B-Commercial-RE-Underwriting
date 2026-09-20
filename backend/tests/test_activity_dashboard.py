@@ -267,13 +267,14 @@ class TestActivityDashboardService:
 
 class TestDashboardApi:
     def test_get_activity_requires_auth(self, client):
-        resp = client.get('/api/dashboard/activity')
+        resp = client.get('/api/dashboard/activity', headers={'X-User-Id': ''})
         assert resp.status_code == 401
 
     def test_put_goals_requires_auth(self, client):
         resp = client.put(
             '/api/dashboard/goals',
             json={'period_type': 'weekly', 'targets': {'calls': 1}},
+            headers={'X-User-Id': ''},
         )
         assert resp.status_code == 401
 

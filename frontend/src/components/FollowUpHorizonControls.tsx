@@ -45,6 +45,8 @@ export interface FollowUpHorizonControlsProps {
   compact?: boolean
   /** `list` = vertical radios with due dates (Log Call split panel). */
   variant?: FollowUpHorizonVariant
+  /** Label on the typed/picked date field. */
+  dateLabel?: string
 }
 
 function presetTestSuffix(value: FollowUpPreset): string {
@@ -152,17 +154,19 @@ function CustomDateField({
   customDueDate,
   error,
   onCustomDueDateChange,
+  dateLabel = 'Follow-up date',
 }: {
   testIdPrefix: string
   customDueDate: string
   error?: string | null
   onCustomDueDateChange: (value: string) => void
+  dateLabel?: string
 }) {
   return (
     <TextField
       type="date"
       size="small"
-      label="Follow-up date"
+      label={dateLabel}
       value={customDueDate}
       onChange={(e) => onCustomDueDateChange(e.target.value)}
       error={!!error}
@@ -170,7 +174,10 @@ function CustomDateField({
       InputLabelProps={{ shrink: true }}
       fullWidth
       sx={{ mt: 0.75 }}
-      inputProps={{ 'data-testid': `${testIdPrefix}-custom-date` }}
+      inputProps={{
+        'data-testid': `${testIdPrefix}-custom-date`,
+        style: { cursor: 'text' },
+      }}
     />
   )
 }
@@ -182,6 +189,7 @@ function ListVariant({
   onPresetChange,
   onCustomDueDateChange,
   testIdPrefix,
+  dateLabel = 'Follow-up date',
 }: {
   preset: FollowUpPreset
   customDueDate: string
@@ -189,6 +197,7 @@ function ListVariant({
   onPresetChange: (preset: FollowUpPreset) => void
   onCustomDueDateChange: (value: string) => void
   testIdPrefix: string
+  dateLabel?: string
 }) {
   return (
     <Box sx={{ width: '100%', minWidth: 0 }}>
@@ -265,6 +274,7 @@ function ListVariant({
           customDueDate={customDueDate}
           error={error}
           onCustomDueDateChange={onCustomDueDateChange}
+          dateLabel={dateLabel}
         />
       )}
       {error && preset !== 'custom' && (
@@ -285,6 +295,7 @@ export function FollowUpHorizonControls({
   testIdPrefix = 'follow-up',
   compact = false,
   variant = 'buttons',
+  dateLabel = 'Follow-up date',
 }: FollowUpHorizonControlsProps) {
   if (variant === 'list') {
     return (
@@ -295,6 +306,7 @@ export function FollowUpHorizonControls({
         onPresetChange={onPresetChange}
         onCustomDueDateChange={onCustomDueDateChange}
         testIdPrefix={testIdPrefix}
+        dateLabel={dateLabel}
       />
     )
   }

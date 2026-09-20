@@ -2,6 +2,12 @@
 import pytest
 from datetime import datetime
 from app.models.analysis_session import WorkflowStep
+from tests.conftest import wrap_test_client_with_user
+
+
+@pytest.fixture
+def client(app):
+    return wrap_test_client_with_user(app.test_client(), user_id='user123')
 
 
 def test_database_seeding(seeded_app):

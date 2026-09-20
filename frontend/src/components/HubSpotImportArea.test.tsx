@@ -10,7 +10,7 @@
  * - Read-Only Mode badge visible when config present
  * - Review Queue badge shows pending count
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import { HubSpotImportArea } from './HubSpotImportArea'
@@ -36,6 +36,7 @@ vi.mock('@/services/api', () => ({
     triggerBackupExport: vi.fn(),
     downloadBackupExport: vi.fn(),
     getPipelineStatus: vi.fn(),
+    runHubSpotPipeline: vi.fn(),
     getWebhookLog: vi.fn(),
     getWebhookLogSummary: vi.fn(),
     retryWebhookEvent: vi.fn(),
@@ -47,38 +48,20 @@ vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({ user: { is_admin: true } }),
 }))
 
-// ---------------------------------------------------------------------------
-// Mock EventSource for SSE tests
-// ---------------------------------------------------------------------------
-
-class MockEventSource {
-  static instances: MockEventSource[] = []
-  url: string
-  onmessage: ((event: MessageEvent) => void) | null = null
-  onerror: ((event: Event) => void) | null = null
-  readyState = 1
-
-  constructor(url: string) {
-    this.url = url
-    MockEventSource.instances.push(this)
-  }
-
-  close() {
-    this.readyState = 2
-  }
-
-  // Helper to simulate receiving a message
-  simulateMessage(data: object) {
-    if (this.onmessage) {
-      this.onmessage({ data: JSON.stringify(data) } as MessageEvent)
-    }
-  }
-
-  // Helper to simulate an error
-  simulateError() {
-    if (this.onerror) {
-      this.onerror(new Event('error'))
-    }
+function mockImportRun(
+  overrides: Partial<HubSpotImportRun> & Pick<HubSpotImportRun, 'id' | 'object_type'>,
+): HubSpotImportRun {
+  return {
+    status: 'running',
+    start_time: '2024-01-01T10:00:00Z',
+    end_time: null,
+    total_fetched: 0,
+    created_count: 0,
+    updated_count: 0,
+    skipped_count: 0,
+    error_count: 0,
+    error_message: null,
+    ...overrides,
   }
 }
 
@@ -130,9 +113,6 @@ const user = userEvent.setup({ pointerEventsCheck: 0 })
 
 beforeEach(() => {
   vi.clearAllMocks()
-  MockEventSource.instances = []
-  // @ts-ignore
-  global.EventSource = MockEventSource
 
   // Default: no config, empty runs, empty review queue
   vi.mocked(hubSpotService.getHubSpotConfig).mockRejectedValue(new Error('Not configured'))
@@ -142,6 +122,7 @@ beforeEach(() => {
     page: 1,
     per_page: 20,
   })
+  vi.mocked(hubSpotService.getImportRun).mockRejectedValue(new Error('not found'))
   vi.mocked(hubSpotService.getReviewQueue).mockResolvedValue({
     matches: [],
     total: 0,
@@ -171,11 +152,6 @@ beforeEach(() => {
     deduplicated_count: 0,
     last_synced_at: null,
   })
-})
-
-afterEach(() => {
-  // @ts-ignore
-  delete global.EventSource
 })
 
 // ---------------------------------------------------------------------------
@@ -370,6 +346,17 @@ describe('HubSpotImportArea', () => {
         run_ids: [44],
         status: 'running',
       })
+      vi.mocked(hubSpotService.getImportRun).mockResolvedValue(
+        mockImportRun({
+          id: 44,
+          object_type: 'deals',
+          total_fetched: 100,
+          created_count: 50,
+          updated_count: 10,
+          error_count: 0,
+          status: 'running',
+        }),
+      )
 
       render(<HubSpotImportArea />)
 
@@ -379,20 +366,8 @@ describe('HubSpotImportArea', () => {
 
       await user.click(screen.getByLabelText('Start HubSpot import'))
 
-      // Simulate SSE progress event
       await waitFor(() => {
-        expect(MockEventSource.instances.length).toBeGreaterThan(0)
-      })
-
-      const es = MockEventSource.instances[MockEventSource.instances.length - 1]
-      es.simulateMessage({
-        object_type: 'deals',
-        total_fetched: 100,
-        created_count: 50,
-        updated_count: 10,
-        error_count: 0,
-        status: 'running',
-        percent: 60,
+        expect(hubSpotService.getImportRun).toHaveBeenCalledWith(44)
       })
 
       await waitFor(() => {
@@ -402,11 +377,34 @@ describe('HubSpotImportArea', () => {
   })
 
   describe('progress display', () => {
-    it('updates progress bar per object type from SSE events', async () => {
+    it('updates progress bar per object type from authenticated run polling', async () => {
       vi.mocked(hubSpotService.getHubSpotConfig).mockResolvedValue(mockConfig)
       vi.mocked(hubSpotService.triggerHubSpotImport).mockResolvedValue({
-        run_ids: [45],
+        run_ids: [45, 46],
         status: 'running',
+      })
+      vi.mocked(hubSpotService.getImportRun).mockImplementation(async (id: number) => {
+        if (id === 45) {
+          return mockImportRun({
+            id: 45,
+            object_type: 'deals',
+            total_fetched: 200,
+            created_count: 100,
+            updated_count: 50,
+            error_count: 0,
+            status: 'running',
+          })
+        }
+        return mockImportRun({
+          id: 46,
+          object_type: 'contacts',
+          total_fetched: 50,
+          created_count: 25,
+          updated_count: 5,
+          error_count: 0,
+          skipped_count: 20,
+          status: 'success',
+        })
       })
 
       render(<HubSpotImportArea />)
@@ -418,39 +416,11 @@ describe('HubSpotImportArea', () => {
       await user.click(screen.getByLabelText('Start HubSpot import'))
 
       await waitFor(() => {
-        expect(MockEventSource.instances.length).toBeGreaterThan(0)
-      })
-
-      const es = MockEventSource.instances[MockEventSource.instances.length - 1]
-
-      // Simulate progress for deals
-      es.simulateMessage({
-        object_type: 'deals',
-        total_fetched: 200,
-        created_count: 100,
-        updated_count: 50,
-        error_count: 0,
-        status: 'running',
-        percent: 75,
-      })
-
-      await waitFor(() => {
         expect(screen.getByLabelText('deals import progress 75%')).toBeInTheDocument()
       })
 
-      // Simulate progress for contacts
-      es.simulateMessage({
-        object_type: 'contacts',
-        total_fetched: 50,
-        created_count: 25,
-        updated_count: 5,
-        error_count: 0,
-        status: 'success',
-        percent: 100,
-      })
-
       await waitFor(() => {
-        expect(screen.getByLabelText('contacts import progress 100%')).toBeInTheDocument()
+        expect(screen.getByLabelText('contacts import progress 60%')).toBeInTheDocument()
       })
     })
   })

@@ -10,6 +10,7 @@ from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
 from app import db, limiter
+from app.api_utils import load_authorized_lead, user_can_access_lead
 from app.models import Lead, DataSource, EnrichmentRecord
 from app.services.data_source_connector import DataSourceConnector
 
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 enrichment_bp = Blueprint('enrichment', __name__)
 
 connector = DataSourceConnector()
+MAX_BULK_ENRICH_LEADS = 500
 
 
 # ---------------------------------------------------------------------------
@@ -149,12 +151,9 @@ def enrich_lead(lead_id):
     200 with the enrichment record.
     404 if lead or data source not found.
     """
-    lead = db.session.get(Lead, lead_id)
-    if not lead:
-        return jsonify({
-            'error': 'Lead not found',
-            'message': f'Lead {lead_id} does not exist',
-        }), 404
+    lead, err = load_authorized_lead(lead_id)
+    if err is not None:
+        return err
 
     data = request.get_json()
     if not data:
@@ -230,6 +229,25 @@ def bulk_enrich():
         }), 400
 
     if len(lead_ids) == 0:
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'lead_ids must not be empty',
+        }), 400
+    if len(lead_ids) > MAX_BULK_ENRICH_LEADS:
+        return jsonify({
+            'error': 'Validation error',
+            'message': f'lead_ids must contain at most {MAX_BULK_ENRICH_LEADS} items',
+        }), 400
+
+    leads_by_id = {
+        lead.id: lead
+        for lead in Lead.query.filter(Lead.id.in_(set(lead_ids))).all()
+    }
+    lead_ids = [
+        lid for lid in lead_ids
+        if lid in leads_by_id and user_can_access_lead(leads_by_id[lid])
+    ]
+    if not lead_ids:
         return jsonify({
             'error': 'Validation error',
             'message': 'lead_ids must not be empty',

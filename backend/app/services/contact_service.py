@@ -7,7 +7,6 @@ Implements all operations required by the property-contact-model spec:
   - batch_owner_display_for_leads (queue / list display)
 """
 import logging
-import unicodedata
 
 import sqlalchemy.exc
 
@@ -20,10 +19,26 @@ from app.models.lead import Property
 from app.exceptions import ResourceNotFoundError, ConflictError, ValidationException
 from app.services.contact_backfill import phone_digits, split_phone_field, split_email_field
 from app.services.helpers.sql_like import escape_like_pattern
+from app.services.helpers.text import strip_invisible as _strip_invisible
 
 from sqlalchemy.orm import selectinload
 
 logger = logging.getLogger(__name__)
+
+
+def _split_jammed_person_name(
+    first_name: str | None,
+    last_name: str | None,
+) -> tuple[str | None, str | None]:
+    """Turn ``CYNTHIA V MUNGERSON`` in the first-name slot into first + last."""
+    first = (first_name or '').strip() or None
+    last = (last_name or '').strip() or None
+    if first and not last and ' ' in first:
+        parts = first.split()
+        if len(parts) >= 2:
+            return ' '.join(parts[:-1]), parts[-1]
+    return first, last
+
 
 # Manual contact form / API creates treat typed-in numbers as confirmed.
 MANUAL_PHONE_CONFIDENCE = 90
@@ -46,17 +61,12 @@ def _request_actor() -> str:
     return 'anonymous'
 
 
-def _strip_invisible(value: str) -> str:
-    """Strip all Unicode whitespace and control characters from *value*.
-
-    Mirrors the helper used in OrganizationService so that validation is
-    consistent across the codebase.
-    """
-    cleaned = ''.join(
-        ch for ch in value
-        if not (unicodedata.category(ch).startswith('C') or unicodedata.category(ch) == 'Zs')
-    )
-    return cleaned.strip()
+def _creating_user_id(explicit: str | None = None) -> str | None:
+    """Persistable creator id — never 'anonymous' or client-supplied spoof."""
+    actor = (explicit or _request_actor() or '').strip()
+    if not actor or actor == 'anonymous':
+        return None
+    return actor
 
 
 class ContactService:
@@ -102,6 +112,7 @@ class ContactService:
             role_description=data.get('role_description'),
             notes=data.get('notes'),
             keep_on_gis=bool(data.get('keep_on_gis', False)),
+            created_by_user_id=_creating_user_id(),
         )
         db.session.add(contact)
         db.session.flush()  # populate contact.id before inserting children
@@ -468,7 +479,7 @@ class ContactService:
                 payload={'property_id': property_id, 'contact_id': contact_id},
             )
         contact = db.session.get(Contact, contact_id)
-        lead = db.session.get(Property, property_id)
+        lead = db.session.get(Property, property_id, with_for_update=True)
         cleared_slots: list[str] = []
         # Only active owner links own the flat owner_* fields. Unlinking a
         # spouse / attorney / former_owner with the same name must not wipe them.
@@ -739,12 +750,16 @@ class ContactService:
         *,
         limit: int = 20,
         exclude_property_id: int | None = None,
+        lead_id_scope=None,
+        created_by_user_id: str | None = None,
     ) -> list[Contact]:
         """Search contacts by first/last name for linking to a property.
 
         Matching is case-insensitive substring on ``first_name``, ``last_name``,
         or the concatenated full name. Results are ordered by last name, then
         first name. Optionally exclude contacts already linked to a property.
+        When ``lead_id_scope`` is a set (non-admin), unlinked rows are limited
+        to contacts created by the current user.
         """
         q = _strip_invisible(query or '')
         if len(q) < 2:
@@ -785,6 +800,31 @@ class ContactService:
                 .filter(PropertyContact.property_id == exclude_property_id)
             )
             stmt = stmt.filter(~Contact.id.in_(linked_ids))
+
+        if lead_id_scope is not None:
+            from flask import g
+            actor = created_by_user_id or getattr(g, 'user_id', None)
+            if actor == 'anonymous':
+                actor = None
+            clauses = []
+            if lead_id_scope:
+                linked_to_owned = (
+                    db.session.query(PropertyContact.contact_id)
+                    .filter(PropertyContact.property_id.in_(lead_id_scope))
+                )
+                clauses.append(Contact.id.in_(linked_to_owned))
+            if actor:
+                unlinked = ~Contact.id.in_(
+                    db.session.query(PropertyContact.contact_id)
+                )
+                clauses.append(db.and_(
+                    unlinked,
+                    Contact.created_by_user_id == actor,
+                ))
+            if not clauses:
+                stmt = stmt.filter(db.false())
+            else:
+                stmt = stmt.filter(db.or_(*clauses))
 
         return (
             stmt
@@ -865,6 +905,78 @@ class ContactService:
         )
         rows = sorted(rows, key=lambda pair: (not pair[1].is_primary, pair[1].id))
         return [self.serialize_contact_summary(contact, pc) for contact, pc in rows]
+
+    def ensure_key_contact_linked(self, property_id: int) -> bool:
+        """Link the lead's owner name as a contact when no person is linked yet.
+
+        Key Contact can show a name stored only on the lead. Log Call only
+        lists linked contacts, so this creates the missing person. It does
+        not replace or archive anyone already linked, and it skips company
+        names and names that look like a street address.
+        """
+        from app.services.plugins.owner_name_utils import (
+            collect_flat_owner_people,
+            is_address_like_contact,
+            is_entity_contact,
+        )
+        from app.services.scoring_rubric import contacts_untrusted
+
+        lead = db.session.get(Property, property_id)
+        if lead is None or contacts_untrusted(lead):
+            return False
+
+        existing = (
+            db.session.query(Contact, PropertyContact)
+            .join(PropertyContact, PropertyContact.contact_id == Contact.id)
+            .filter(PropertyContact.property_id == property_id)
+            .filter(PropertyContact.role != 'former_owner')
+            .all()
+        )
+        for contact, _link in existing:
+            if is_address_like_contact(contact.first_name, contact.last_name):
+                continue
+            if is_entity_contact(contact.first_name, contact.last_name):
+                continue
+            if (contact.first_name or '').strip() or (contact.last_name or '').strip():
+                return False
+
+        people: list[tuple[str | None, str | None]] = []
+        for first_name, last_name in collect_flat_owner_people(lead):
+            first_name, last_name = _split_jammed_person_name(first_name, last_name)
+            if is_address_like_contact(first_name, last_name):
+                continue
+            if is_entity_contact(first_name, last_name):
+                continue
+            if not ((first_name or '').strip() or (last_name or '').strip()):
+                continue
+            people.append((first_name, last_name))
+        if not people:
+            return False
+
+        owner_user_id = getattr(lead, 'owner_user_id', None)
+        primary_contact: Contact | None = None
+        for index, (first_name, last_name) in enumerate(people):
+            contact, _link = self._upsert_named_owner(
+                property_id,
+                first_name,
+                last_name,
+                is_primary=index == 0,
+                owner_user_id=owner_user_id,
+            )
+            if index == 0:
+                primary_contact = contact
+        if primary_contact is not None:
+            self._attach_flat_phones_emails(
+                primary_contact,
+                lead,
+                phone_source='flat_backfill',
+            )
+        db.session.commit()
+        logger.info(
+            'Linked flat owner as key contact on property_id=%s',
+            property_id,
+        )
+        return True
 
     # ------------------------------------------------------------------
     # Upsert from flat lead owners (Sheets / GIS / backfill)
@@ -1679,10 +1791,14 @@ class ContactService:
                 property_id=property_id, is_primary=True,
             ).update({'is_primary': False})
 
+        lead = db.session.get(Property, property_id)
         contact = Contact(
             first_name=first_name,
             last_name=last_name,
             role='owner',
+            created_by_user_id=_creating_user_id(
+                getattr(lead, 'owner_user_id', None) if lead is not None else None
+            ),
         )
         db.session.add(contact)
         db.session.flush()
@@ -2463,11 +2579,17 @@ class ContactService:
                     ensure_due_today_call_task,
                 )
                 ensure_due_today_call_task(lead, actor='heal_same_person_owners')
-        if refresh_scoring:
-            from app.services.lead_refresh import refresh_lead_scoring
-            refresh_lead_scoring(property_id)
         if commit:
             db.session.commit()
+        if refresh_scoring:
+            if not commit:
+                logger.warning(
+                    'heal_same_person_owner_cluster skip scoring until caller commits property_id=%s',
+                    property_id,
+                )
+            else:
+                from app.services.lead_refresh import refresh_lead_scoring
+                refresh_lead_scoring(property_id)
         return {
             'kept': keep_contact.id,
             'demoted': [contact.id for contact, _link in demote],

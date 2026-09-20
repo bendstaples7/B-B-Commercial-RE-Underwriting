@@ -5,7 +5,10 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timezone
 
+from flask import has_request_context
+
 from app import db
+from app.api_utils import owned_lead_ids_for_current_user
 from app.models.address_group_analysis import AddressGroupAnalysis
 from app.models.lead import Lead
 from app.models.parcel_universe_cache import ParcelUniverseCache
@@ -20,6 +23,13 @@ from app.services.helpers.unit_detector import has_unit_marker
 from app.services.lead_refresh import refresh_lead_scoring
 
 logger = logging.getLogger(__name__)
+
+
+def _http_lead_scope() -> set[int] | None:
+    """Owner filter on HTTP; unscoped for Celery / scripts (no request)."""
+    if not has_request_context():
+        return None
+    return owned_lead_ids_for_current_user()
 
 
 class BuildingOwnershipService:
@@ -107,25 +117,37 @@ class BuildingOwnershipService:
             analysis = AddressGroupAnalysis(normalized_address=normalized, source_type='commercial')
             db.session.add(analysis)
 
+        this_owner = getattr(lead, 'owner_user_id', None)
+        foreign_linked = False
+        if getattr(analysis, 'id', None) is not None:
+            for row in analysis.leads.all():
+                if row.id == lead.id:
+                    continue
+                if getattr(row, 'owner_user_id', None) != this_owner:
+                    foreign_linked = True
+                    break
+
         now = datetime.now(timezone.utc)
-        analysis.property_count = 1
-        analysis.pin_count = metrics.pin_count
-        analysis.owner_count = metrics.owner_count
-        analysis.has_unit_number = metrics.has_unit_number
-        analysis.has_condo_language = metrics.has_condo_language
-        analysis.missing_pin_count = metrics.missing_pin_count
-        analysis.missing_owner_count = metrics.missing_owner_count
-        if not (analysis.manually_reviewed and analysis.manual_override_status):
-            analysis.condo_risk_status = result.condo_risk_status
-            analysis.building_sale_possible = result.building_sale_possible
-        analysis.analysis_details = {
+        analysis_details = {
             'triggered_rules': result.triggered_rules,
             'reason': result.reason,
             'confidence': result.confidence,
             'assessor_pins': assessor_pins,
             'tax_situs_street': (tax_situs_street or lead.assessor_aka_street),
         }
-        analysis.analyzed_at = now
+        if not foreign_linked:
+            analysis.property_count = 1
+            analysis.pin_count = metrics.pin_count
+            analysis.owner_count = metrics.owner_count
+            analysis.has_unit_number = metrics.has_unit_number
+            analysis.has_condo_language = metrics.has_condo_language
+            analysis.missing_pin_count = metrics.missing_pin_count
+            analysis.missing_owner_count = metrics.missing_owner_count
+            if not (analysis.manually_reviewed and analysis.manual_override_status):
+                analysis.condo_risk_status = result.condo_risk_status
+                analysis.building_sale_possible = result.building_sale_possible
+            analysis.analysis_details = analysis_details
+            analysis.analyzed_at = now
         db.session.flush()
 
         if not (analysis.manually_reviewed and analysis.manual_override_status):
@@ -149,7 +171,7 @@ class BuildingOwnershipService:
             'county_assessor_pin': lead.county_assessor_pin,
             'assessor_aka_street': getattr(lead, 'assessor_aka_street', None),
             'recommended_action': recommended,
-            'analysis_details': analysis.analysis_details,
+            'analysis_details': analysis_details,
             'classification': {
                 'condo_risk_status': result.condo_risk_status,
                 'building_sale_possible': result.building_sale_possible,
@@ -163,7 +185,10 @@ class BuildingOwnershipService:
         lead = db.session.get(Lead, lead_id)
         if lead is None or not lead.condo_analysis_id:
             return None
-        detail = self._condo_filter.get_detail(lead.condo_analysis_id)
+        detail = self._condo_filter.get_detail(
+            lead.condo_analysis_id,
+            lead_id_scope=_http_lead_scope(),
+        )
         if detail is None:
             return None
         detail['lead_id'] = lead_id
@@ -182,9 +207,15 @@ class BuildingOwnershipService:
             raise ValueError(f'Lead {lead_id} not found')
         if not lead.condo_analysis_id:
             raise ValueError('Lead has no building ownership analysis')
-        self._condo_filter.apply_override(
-            lead.condo_analysis_id, status, building_sale, reason,
+        result = self._condo_filter.apply_override(
+            lead.condo_analysis_id,
+            status,
+            building_sale,
+            reason,
+            lead_id_scope=_http_lead_scope(),
         )
+        if result is None:
+            return {}
         refresh_lead_scoring(lead_id)
         return self.get_for_lead(lead_id) or {}
 

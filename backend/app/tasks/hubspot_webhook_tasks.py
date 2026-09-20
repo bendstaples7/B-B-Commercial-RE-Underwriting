@@ -611,11 +611,11 @@ def run_handle_association_event(
                 hubspot_record_type='deal',
                 hubspot_id=deal_id_str,
                 status='confirmed',
+                internal_record_type='lead',
             ).filter(HubSpotMatch.internal_record_id.isnot(None)).first()
 
             if deal_match:
-                from app.models.lead import Lead
-                lead = Lead.query.get(deal_match.internal_record_id)
+                lead = matcher._lead_for_confirmed_match(deal_match)
                 hs_contact = HubSpotContact.query.filter_by(hubspot_id=contact_id_str).first()
 
                 if lead and hs_contact:

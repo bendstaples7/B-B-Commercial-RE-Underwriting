@@ -28,7 +28,6 @@ import ApartmentIcon from '@mui/icons-material/Apartment'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import { multifamilyService } from '@/services/api'
 import { leadService } from '@/services/leadApi'
-import { formatPhoneNumber } from '@/utils/phone'
 import {
   formatDate,
   formatDateTime,
@@ -303,7 +302,7 @@ export function LeadDetailTabPanel({
                       : contactsLikelyPriorOwner
                         ? 'Past owner'
                         : 'Owner'
-                const title = `${roleLabel} ${idx + 1}${contact.is_primary ? ' (Primary)' : ''}`
+                const title = `${roleLabel} ${idx + 1}`
                 return (
                   <Box key={contact.id}>
                     {fieldGroup(
@@ -340,27 +339,13 @@ export function LeadDetailTabPanel({
             </>
           ) : (
             <>
-              {fieldGroup(
-                contactsLikelyPriorOwner ? 'Past owner' : 'Owner',
-                [
-                  ['First Name', leadData.owner_first_name],
-                  ['Last Name', leadData.owner_last_name],
-                  ['Owner 2', [leadData.owner_2_first_name, leadData.owner_2_last_name].filter(Boolean).join(' ') || null],
-                  ['Ownership Type', leadData.ownership_type],
-                ],
-                contactsLikelyPriorOwner ? 'info-past-owner-contact' : 'info-owner-contact',
-              )}
-              {fieldGroup(
-                contactsLikelyPriorOwner ? 'Past owner contact' : 'Contact Information',
-                [
-                  ['Phone 1', leadData.phone_1 ? formatPhoneNumber(leadData.phone_1) : null],
-                  ['Phone 2', leadData.phone_2 ? formatPhoneNumber(leadData.phone_2) : null],
-                  ['Phone 3', leadData.phone_3 ? formatPhoneNumber(leadData.phone_3) : null],
-                  ['Email 1', leadData.email_1],
-                  ['Email 2', leadData.email_2],
-                  ...mailingFields,
-                ],
-              )}
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }} data-testid="info-no-people">
+                No people on this lead yet.
+              </Typography>
+              {fieldGroup('Mailing', mailingFields)}
+              {fieldGroup('Ownership', [
+                ['Ownership Type', leadData.ownership_type],
+              ])}
             </>
           )}
           {fieldGroup('Property Details', [

@@ -293,6 +293,14 @@ class QuickAddService:
                 data_source=QUICK_ADD_DATA_SOURCE,
                 owner_user_id=user_id,
             )
+            lead.deal_source = resolved_deal_source
+            lead.lead_status = QUICK_ADD_STATUS
+            if capture_description and not (lead.deal_description or '').strip():
+                lead.deal_description = capture_description
+            if manual_priority is not None and lead.manual_priority is None:
+                lead.manual_priority = manual_priority
+            from app.services.helpers.import_signal_fills import apply_import_signal_fills
+            apply_import_signal_fills(lead)
         else:
             lead = existing
             assert lead is not None
@@ -316,6 +324,8 @@ class QuickAddService:
                 lead.manual_priority = manual_priority
             lead.owner_user_id = user_id
             lead.updated_at = datetime.utcnow()
+            from app.services.helpers.import_signal_fills import apply_import_signal_fills
+            apply_import_signal_fills(lead)
 
         from app.services.property_address_service import complete_property_address
         # GIS already attempted above when allowed — avoid a second Cook lookup.

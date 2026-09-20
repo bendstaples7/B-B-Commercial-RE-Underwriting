@@ -4,6 +4,7 @@ from typing import Optional
 
 from flask import Blueprint, g, jsonify, request
 
+from app.api_utils import require_auth, require_admin
 from app.controllers.decorators import handle_errors
 from app.services.cook_county_prospect_config import motivation_pct
 from app.services.prospect_area_filter_service import (
@@ -141,6 +142,8 @@ def put_area_filter_config():
 
 @prospect_bp.route('/sync', methods=['POST'])
 @handle_errors
+@require_auth
+@require_admin
 def sync_feeds():
     """Pull Cook County prospect feeds now (same job as nightly Celery task)."""
     user_id = _user_id()

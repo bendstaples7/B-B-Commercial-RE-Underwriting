@@ -824,7 +824,7 @@ def test_search_single_char_returns_400(client):
 
 def test_search_unauthenticated_returns_401(client):
     """GET /api/search without auth header returns 401."""
-    response = client.get('/api/search?q=test')
+    response = client.get('/api/search?q=test', headers={'X-User-Id': ''})
     assert response.status_code == 401
 
 

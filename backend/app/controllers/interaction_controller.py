@@ -20,6 +20,13 @@ from functools import wraps
 from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
+from app.api_utils import (
+    accessible_association_target_ids_for_current_user,
+    current_user_is_admin,
+    load_authorized_lead,
+    user_can_access_association_target,
+    user_can_access_association_targets,
+)
 from app.exceptions import RealEstateAnalysisException
 from app.services.interaction_service import InteractionService
 
@@ -145,6 +152,33 @@ def _parse_pagination(args):
     return page, per_page
 
 
+def _interaction_not_found(interaction_id: int):
+    return jsonify({
+        'success': False,
+        'error': {
+            'message': f'Interaction {interaction_id} not found',
+            'status_code': 404,
+        },
+    }), 404
+
+
+def _associations_from_interaction(interaction):
+    try:
+        return list(interaction.associations.all())
+    except Exception:
+        return None
+
+
+def _can_access_interaction(interaction) -> bool:
+    return user_can_access_association_targets(_associations_from_interaction(interaction))
+
+
+def _deny_if_cannot_access_interaction(interaction):
+    if not _can_access_interaction(interaction):
+        return _interaction_not_found(interaction.id)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Interaction CRUD routes  (prefix: /api/interactions)
 # ---------------------------------------------------------------------------
@@ -180,8 +214,26 @@ def list_interactions():
     if args.get('source'):
         filters['source'] = args['source']
 
+    if filters.get('target_type') and filters.get('target_id') is not None:
+        if not user_can_access_association_target(
+            filters['target_type'], filters['target_id'],
+        ):
+            return jsonify({
+                'interactions': [],
+                'total': 0,
+                'page': page,
+                'per_page': per_page,
+            }), 200
+
     interactions, total = _interaction_service.list(
-        filters=filters, page=page, per_page=per_page
+        filters=filters,
+        page=page,
+        per_page=per_page,
+        lead_id_scope=None,
+        association_access_scope=(
+            None if current_user_is_admin()
+            else accessible_association_target_ids_for_current_user()
+        ),
     )
 
     return jsonify({
@@ -203,12 +255,40 @@ def create_interaction():
     body             : str (required, non-empty)
     occurred_at      : ISO datetime (required)
     associations     : list of {target_type, target_id} (at least one required)
-    source           : str (optional, default 'manual')
-    hubspot_engagement_id : str (optional)
-    raw_payload      : dict (optional)
-    is_orphaned      : bool (optional, default False)
+    source           : must be omitted or 'manual'
     """
     data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({
+            'success': False,
+            'error': {
+                'message': 'Request body must be a JSON object.',
+                'status_code': 400,
+            },
+        }), 400
+    if (
+        data.get('source') not in (None, 'manual')
+        or 'hubspot_engagement_id' in data
+        or 'raw_payload' in data
+        or 'is_orphaned' in data
+    ):
+        return jsonify({
+            'success': False,
+            'error': {
+                'message': 'HubSpot provenance fields are not accepted on manual interactions.',
+                'status_code': 400,
+            },
+        }), 400
+    data = dict(data)
+    data['source'] = 'manual'
+    if data.get('associations') is not None and not user_can_access_association_targets(data.get('associations')):
+        return jsonify({
+            'success': False,
+            'error': {
+                'message': 'Not found',
+                'status_code': 404,
+            },
+        }), 404
     interaction = _interaction_service.create(data)
     return jsonify(_serialize_interaction(interaction)), 201
 
@@ -218,6 +298,9 @@ def create_interaction():
 def get_interaction(interaction_id):
     """Get a single Interaction by ID, including its associations."""
     interaction = _interaction_service.get(interaction_id)
+    denied = _deny_if_cannot_access_interaction(interaction)
+    if denied is not None:
+        return denied
     return jsonify(_serialize_interaction(interaction)), 200
 
 
@@ -233,6 +316,10 @@ def update_interaction(interaction_id):
     interaction_type : str
     """
     data = request.get_json(silent=True) or {}
+    existing = _interaction_service.get(interaction_id)
+    denied = _deny_if_cannot_access_interaction(existing)
+    if denied is not None:
+        return denied
     interaction = _interaction_service.update(interaction_id, data)
     return jsonify(_serialize_interaction(interaction)), 200
 
@@ -241,6 +328,10 @@ def update_interaction(interaction_id):
 @handle_errors
 def delete_interaction(interaction_id):
     """Delete an Interaction and its associations."""
+    existing = _interaction_service.get(interaction_id)
+    denied = _deny_if_cannot_access_interaction(existing)
+    if denied is not None:
+        return denied
     _interaction_service.delete(interaction_id)
     return jsonify({'success': True, 'message': f'Interaction {interaction_id} deleted'}), 200
 
@@ -270,6 +361,10 @@ def get_lead_interaction_timeline(lead_id):
     date_from  : ISO datetime — earliest date (inclusive)
     date_to    : ISO datetime — latest date (inclusive)
     """
+    _lead, denied = load_authorized_lead(lead_id)
+    if denied is not None:
+        return denied
+
     args = request.args
     filters = {}
     if args.get('entry_type'):
@@ -285,6 +380,10 @@ def get_lead_interaction_timeline(lead_id):
         target_type='lead',
         target_id=lead_id,
         filters=filters,
+        association_access_scope=(
+            None if current_user_is_admin()
+            else accessible_association_target_ids_for_current_user()
+        ),
     )
     response = jsonify({'timeline': entries, 'lead_id': lead_id})
     response.headers['Deprecation'] = 'Sat, 11 Jul 2026 00:00:00 GMT'
@@ -317,9 +416,16 @@ def get_organization_timeline(org_id):
     if args.get('date_to'):
         filters['date_to'] = args['date_to']
 
+    from app.controllers.organization_controller import _load_authorized_org
+    _load_authorized_org(org_id)
+
     entries = _interaction_service.get_timeline(
         target_type='organization',
         target_id=org_id,
         filters=filters,
+        association_access_scope=(
+            None if current_user_is_admin()
+            else accessible_association_target_ids_for_current_user()
+        ),
     )
     return jsonify({'timeline': entries, 'organization_id': org_id}), 200

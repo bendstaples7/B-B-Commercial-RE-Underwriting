@@ -46,7 +46,7 @@ pytestmark = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 #: The expected head revision — the current Alembic head.
-EXPECTED_HEAD_REVISION = 'act_mtg_20260919'
+EXPECTED_HEAD_REVISION = 'ctc_own_20260918'
 
 #: Columns that must be present in the users table after upgrade (Req 4.2).
 EXPECTED_USERS_COLUMNS = {
@@ -196,7 +196,7 @@ def test_fresh_db_records_head_revision():
 
     After a successful ``flask db upgrade`` on a fresh database, the
     alembic_version table must contain exactly the expected head revision
-    (act_mtg_20260919 — the current Alembic head).
+    (ctc_own_20260918 — the current Alembic head).
 
     This confirms Alembic recorded the correct revision after completing the
     full chain, not a partial or intermediate revision.

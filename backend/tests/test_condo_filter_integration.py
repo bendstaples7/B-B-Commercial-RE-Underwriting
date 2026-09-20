@@ -12,6 +12,12 @@ from datetime import datetime, timezone
 from app import db
 from app.models.lead import Lead
 from app.models.address_group_analysis import AddressGroupAnalysis
+from tests.conftest import wrap_test_client_with_user
+
+
+@pytest.fixture
+def client(app):
+    return wrap_test_client_with_user(app.test_client())
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +101,7 @@ def _seed_commercial_leads(app):
             'mailing_city': 'Chicago',
             'mailing_state': 'IL',
             'mailing_zip': '60601',
+            'owner_user_id': 'test-user',
         }
         defaults.update(data)
         lead = Lead(**defaults)
@@ -278,6 +285,7 @@ class TestForeignKeyIntegrity:
                 lead_category='commercial',
                 owner_first_name='Test',
                 owner_last_name='User',
+                owner_user_id='test-user',
                 county_assessor_pin='PIN001',
                 mailing_city='Chicago',
                 mailing_state='IL',
@@ -313,6 +321,7 @@ class TestReanalysisPreservesOverrides:
                 lead_category='commercial',
                 owner_first_name='Test',
                 owner_last_name='User',
+                owner_user_id='test-user',
                 county_assessor_pin='PIN001',
                 mailing_city='Chicago',
                 mailing_state='IL',
@@ -362,6 +371,7 @@ class TestReanalysisPreservesOverrides:
                 lead_category='commercial',
                 owner_first_name='Test',
                 owner_last_name='User',
+                owner_user_id='test-user',
                 county_assessor_pin='PIN001',
                 mailing_city='Chicago',
                 mailing_state='IL',

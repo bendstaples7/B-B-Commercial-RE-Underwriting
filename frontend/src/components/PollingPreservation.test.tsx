@@ -9,7 +9,7 @@
  *
  * Observation-first methodology:
  *   - PipelineStatusContext with pipeline_running: true → polling fires at ~8s intervals
- *   - HubSpotImportArea with activeRunId set → /api/hubspot/runs polled at 5s intervals
+ *   - HubSpotImportArea with activeRunIds set → /api/hubspot/runs polled at 5s intervals
  *   - WebhookSyncPanel with processed_count > 0 → both webhook queries polled at 30s intervals
  *   - TodaysActionQueue with tab visible → queue endpoint polled at 60s intervals
  *   - QueueSidebar rendered → badge counts visible and populated
@@ -138,12 +138,12 @@ describe('Preservation 3.1 — PipelineStatusContext polls when pipeline_running
 })
 
 // ---------------------------------------------------------------------------
-// Preservation 3.2 — HubSpotImportArea: /api/hubspot/runs polled at 5s when activeRunId set
+// Preservation 3.2 — HubSpotImportArea: /api/hubspot/runs polled at 5s when activeRunIds set
 // ---------------------------------------------------------------------------
 
-describe('Preservation 3.2 — HubSpotImportArea polls /api/hubspot/runs at 5s when activeRunId set', () => {
+describe('Preservation 3.2 — HubSpotImportArea polls /api/hubspot/runs at 5s when activeRunIds set', () => {
   /**
-   * Property: The refetchInterval: activeRunId ? 5000 : false pattern in
+   * Property: The refetchInterval: activeRunIds.length > 0 ? 5000 : false pattern in
    * HubSpotImportArea for /api/hubspot/runs must remain unchanged.
    *
    * This is already conditional and must NOT be touched by the fix.
@@ -156,7 +156,7 @@ describe('Preservation 3.2 — HubSpotImportArea polls /api/hubspot/runs at 5s w
      * Static analysis: inspect HubSpotImportArea.tsx source.
      *
      * The source must contain:
-     *   refetchInterval: activeRunId ? 5000 : false
+     *   refetchInterval: activeRunIds.length > 0 ? 5000 : false
      *
      * This pattern is already correct and must be preserved.
      * PASSES on both unfixed and fixed code.
@@ -164,7 +164,9 @@ describe('Preservation 3.2 — HubSpotImportArea polls /api/hubspot/runs at 5s w
     const source = readSource('HubSpotImportArea.tsx')
 
     // The conditional runs polling pattern must be present
-    const hasConditionalRunsPolling = /refetchInterval:\s*activeRunId\s*\?\s*5000\s*:\s*false/.test(source)
+    const hasConditionalRunsPolling = (
+      /refetchInterval:\s*activeRunIds\.length\s*>\s*0\s*\?\s*5000\s*:\s*false/.test(source)
+    )
 
     expect(hasConditionalRunsPolling).toBe(true)
   })

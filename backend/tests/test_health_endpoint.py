@@ -97,6 +97,36 @@ def test_health_returns_503_when_db_unavailable(client, monkeypatch):
     assert 'status' in data
 
 
+def test_health_does_not_echo_exception_secrets(client, monkeypatch):
+    """Unauthenticated /api/health must not dump DSN/password exception text."""
+    from app import db
+
+    leaked = (
+        'connection to server at "db.internal" failed: '
+        'FATAL:  password authentication failed for user "app" '
+        '(postgresql://app:supersecret-db-password@db.internal:5432/bb)'
+    )
+
+    def raise_operational_error(*args, **kwargs):
+        raise sqlalchemy.exc.OperationalError(
+            statement=None,
+            params=None,
+            orig=Exception(leaked),
+        )
+
+    monkeypatch.setattr(db.session, "execute", raise_operational_error)
+
+    response = client.get('/api/health')
+    body = response.get_data(as_text=True)
+    assert response.status_code == 503
+    assert 'supersecret-db-password' not in body
+    assert 'postgresql://' not in body
+    assert 'db.internal' not in body
+    data = response.get_json()
+    assert data['checks']['db_connectivity'].startswith('FAIL:')
+    assert 'probe failed' in data['checks']['db_connectivity']
+
+
 def test_health_response_is_always_valid_json(client):
     """GET /api/health response body is always valid JSON (never plain text).
 
@@ -227,3 +257,61 @@ def test_health_fails_when_catalog_still_missing(client, monkeypatch):
     assert response.status_code == 503
     assert data['status'] == 'degraded'
     assert data['checks']['enrichment_catalog'].startswith('FAIL')
+
+
+def test_health_lead_visibility_does_not_leak_user_pii(client, app, monkeypatch):
+    """Unauthenticated /api/health must not echo the probe email or user_id."""
+    from app import db
+    from app.models.lead import Lead
+    from app.models.user import User
+
+    probe_email = 'health-probe-secret@example.test'
+    probe_user_id = 'health-probe-user-id-should-not-leak'
+    monkeypatch.setenv('HEALTH_CHECK_LEAD_USER_EMAIL', probe_email)
+
+    missing = client.get('/api/health')
+    missing_body = missing.get_data(as_text=True)
+    assert probe_email not in missing_body
+    assert 'health-probe-secret' not in missing_body
+
+    with app.app_context():
+        db.session.add(User(
+            user_id=probe_user_id,
+            email=probe_email,
+            email_lower=probe_email.lower(),
+            password_hash='$2b$12$fakehashfakehashfakehashfakehashfakehashfakehash',
+            display_name='Health Probe',
+            is_active=True,
+            is_admin=False,
+        ))
+        db.session.commit()
+
+    empty = client.get('/api/health')
+    empty_body = empty.get_data(as_text=True)
+    assert probe_email not in empty_body
+    assert probe_user_id not in empty_body
+    visibility = empty.get_json()['checks']['lead_visibility']
+    assert visibility.startswith('FAIL:')
+    assert 'no visible leads' in visibility
+
+    with app.app_context():
+        db.session.add(Lead(
+            property_street='100 Health St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            owner_first_name='Health',
+            owner_last_name='Probe',
+            property_type='single_family',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
+            owner_user_id=probe_user_id,
+        ))
+        db.session.commit()
+
+    ok = client.get('/api/health')
+    ok_body = ok.get_data(as_text=True)
+    assert probe_email not in ok_body
+    assert probe_user_id not in ok_body
+    assert 'leads visible' in ok.get_json()['checks']['lead_visibility']

@@ -256,13 +256,26 @@ class TestConfirmPropertyFacts:
         )
         assert resp.status_code == 400
 
-    def test_confirm_invalid_session_returns_400(self, client, app):
+    def test_confirm_invalid_session_returns_404(self, client, app):
         resp = client.put(
             '/api/analysis/nonexistent-session-id/step/1',
             data=json.dumps(VALID_PROPERTY_FACTS),
             content_type='application/json',
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 404
+
+    def test_foreign_user_cannot_read_or_mutate_session(self, client, app):
+        session_id, _ = _start_session(client)
+        other = {'X-User-Id': 'other-user'}
+        get_resp = client.get(f'/api/analysis/{session_id}', headers=other)
+        assert get_resp.status_code == 404
+        put_resp = client.put(
+            f'/api/analysis/{session_id}/step/1',
+            data=json.dumps(VALID_PROPERTY_FACTS),
+            content_type='application/json',
+            headers=other,
+        )
+        assert put_resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------

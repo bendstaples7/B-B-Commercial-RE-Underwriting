@@ -22,6 +22,7 @@ def _make_lead(app, street='100 Test St', **kwargs):
             lead_score=50,
             has_property_match=kwargs.get('has_property_match', False),
             source_type='import',
+            owner_user_id=kwargs.get('owner_user_id', 'test-user'),
             lead_category=kwargs.get('lead_category', 'residential'),
         )
         db.session.add(lead)
@@ -31,12 +32,20 @@ def _make_lead(app, street='100 Test St', **kwargs):
 
 class TestPropertyMatchPreview:
     def test_preview_requires_auth(self, client):
-        resp = client.get('/api/leads/1/property-match/preview')
+        resp = client.get('/api/leads/1/property-match/preview', headers={'X-User-Id': ''})
         assert resp.status_code == 401
 
     def test_preview_not_found(self, client, app):
         resp = client.get('/api/leads/999999/property-match/preview', headers=_AUTH_HEADERS)
-        assert resp.status_code == 400
+        assert resp.status_code == 404
+
+    def test_preview_rejects_other_owner(self, client, app):
+        lead_id = _make_lead(app, owner_user_id='other-user')
+        resp = client.get(
+            f'/api/leads/{lead_id}/property-match/preview',
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status_code == 404
 
 
 class TestNoNextActionBulk:
@@ -73,7 +82,7 @@ class TestNoNextActionBulk:
 
 class TestImportJobsAuth:
     def test_list_import_jobs_requires_auth(self, client):
-        resp = client.get('/api/leads/import/jobs')
+        resp = client.get('/api/leads/import/jobs', headers={'X-User-Id': ''})
         assert resp.status_code == 401
 
     def test_default_user_job_visible_to_authenticated_user(self, client, app):

@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.services.cache_status_service import DatasetStatus
+from tests.conftest import wrap_test_client_with_user, seed_user
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +58,12 @@ _EXPECTED_DATASET_NAMES = {
 _VALID_STATUSES = {'empty', 'fresh', 'stale', 'never_synced'}
 
 _ACCEPTED_DATASETS = ['all', 'parcel_universe', 'parcel_sales', 'improvement_characteristics']
+
+
+@pytest.fixture
+def client(app):
+    seed_user('test-user', is_admin=True)
+    return wrap_test_client_with_user(app.test_client())
 
 
 # ---------------------------------------------------------------------------
@@ -428,3 +435,16 @@ class TestTriggerSyncMissingBody:
             json={'other_field': 'value'},
         )
         assert response.status_code == 400
+
+
+class TestSocrataSyncAdminGate:
+    def test_non_admin_cannot_trigger_sync(self, app):
+        seed_user('plain-user', is_admin=False)
+        client = wrap_test_client_with_user(app.test_client(), user_id='plain-user')
+        with patch('celery_worker.socrata_cache_refresh_task.delay') as delay:
+            response = client.post(
+                '/api/cache/socrata/sync',
+                json={'dataset': 'all'},
+            )
+        assert response.status_code == 403
+        delay.assert_not_called()

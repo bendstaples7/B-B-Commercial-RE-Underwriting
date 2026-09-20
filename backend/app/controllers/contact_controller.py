@@ -28,7 +28,7 @@ from app.exceptions import (
     ResourceNotFoundError,
     ValidationException,
 )
-from app.api_utils import require_auth
+from app.api_utils import require_auth, load_authorized_lead, user_can_access_lead, user_can_access_association_target, current_user_is_admin, owned_lead_ids_for_current_user, get_current_user_id
 from app.services.contact_service import ContactService
 
 logger = logging.getLogger(__name__)
@@ -137,6 +137,58 @@ def _serialize_property_contact(contact, pc):
     return data
 
 
+def _unlinked_contact_visible(contact) -> bool:
+    """True when an unlinked contact was created by the current user."""
+    from flask import g
+    actor = getattr(g, 'user_id', None)
+    created_by = getattr(contact, 'created_by_user_id', None)
+    return bool(actor and actor != 'anonymous' and created_by and created_by == actor)
+
+
+def _require_contact_access(contact) -> None:
+    """404 when the contact is only linked to leads the caller cannot see."""
+    if not user_can_access_association_target('contact', contact.id):
+        raise ResourceNotFoundError(
+            f"Contact id={contact.id} not found.",
+            payload={'contact_id': contact.id},
+        )
+
+
+def _require_exclusive_contact_access(contact) -> None:
+    """404 when any linked lead is outside the caller's scope.
+
+    Shared contacts must not be rewritten or deleted by a user who only
+    owns one of the linked properties.
+    """
+    if current_user_is_admin():
+        return
+    links = list(contact.property_contacts.all())
+    if not links:
+        if _unlinked_contact_visible(contact):
+            return
+        raise ResourceNotFoundError(
+            f"Contact id={contact.id} not found.",
+            payload={'contact_id': contact.id},
+        )
+    from app import db
+    from app.models.lead import Lead
+    saw_owned = False
+    for pc in links:
+        lead = db.session.get(Lead, pc.property_id)
+        if user_can_access_lead(lead):
+            saw_owned = True
+        elif lead is not None:
+            raise ResourceNotFoundError(
+                f"Contact id={contact.id} not found.",
+                payload={'contact_id': contact.id},
+            )
+    if not saw_owned:
+        raise ResourceNotFoundError(
+            f"Contact id={contact.id} not found.",
+            payload={'contact_id': contact.id},
+        )
+
+
 def _refresh_linked_property_scoring(contact) -> None:
     """Refresh score/action for every property linked to a changed contact."""
     from app.services.lead_refresh import refresh_lead_scoring
@@ -151,6 +203,7 @@ def _refresh_linked_property_scoring(contact) -> None:
 
 @contacts_bp.route('/api/contacts/', methods=['POST'])
 @handle_errors
+@require_auth
 def create_contact():
     """Create a new Contact with optional phones and emails.
 
@@ -203,18 +256,22 @@ def search_contacts():
         q,
         limit=limit,
         exclude_property_id=exclude_property_id,
+        lead_id_scope=owned_lead_ids_for_current_user(),
+        created_by_user_id=get_current_user_id(),
     )
     return jsonify({'results': [_serialize_contact(c) for c in contacts]}), 200
 
 
 @contacts_bp.route('/api/contacts/<int:contact_id>', methods=['GET'])
 @handle_errors
+@require_auth
 def get_contact(contact_id):
     """Get a Contact by ID including phones, emails, and linked properties.
 
     Returns 404 if the Contact does not exist.
     """
     from app.models.contact import Contact
+    from app.models.lead import Lead
     from app import db
 
     contact = db.session.get(Contact, contact_id)
@@ -224,11 +281,16 @@ def get_contact(contact_id):
             payload={'contact_id': contact_id},
         )
 
+    _require_contact_access(contact)
+
     data = _serialize_contact(contact)
 
     # Include linked properties via property_contacts
     linked_properties = []
     for pc in contact.property_contacts.all():
+        lead = db.session.get(Lead, pc.property_id)
+        if not user_can_access_lead(lead):
+            continue
         linked_properties.append({
             'property_id': pc.property_id,
             'role': pc.role,
@@ -241,12 +303,23 @@ def get_contact(contact_id):
 
 @contacts_bp.route('/api/contacts/<int:contact_id>', methods=['PUT'])
 @handle_errors
+@require_auth
 def update_contact(contact_id):
     """Update an existing Contact.
 
     Phones and emails are replaced atomically if provided.
     Returns 404 if the Contact does not exist.
     """
+    from app.models.contact import Contact
+    from app import db
+
+    existing = db.session.get(Contact, contact_id)
+    if existing is None:
+        raise ResourceNotFoundError(
+            f"Contact id={contact_id} not found.",
+            payload={'contact_id': contact_id},
+        )
+    _require_exclusive_contact_access(existing)
     data = request.get_json(silent=True) or {}
     contact = contact_service.update_contact(contact_id, data)
     if 'phones' in data or 'emails' in data:
@@ -256,11 +329,22 @@ def update_contact(contact_id):
 
 @contacts_bp.route('/api/contacts/<int:contact_id>', methods=['DELETE'])
 @handle_errors
+@require_auth
 def delete_contact(contact_id):
     """Delete a Contact and cascade to phones, emails, and property_contacts.
 
     Returns 204 on success, 404 if the Contact does not exist.
     """
+    from app.models.contact import Contact
+    from app import db
+
+    existing = db.session.get(Contact, contact_id)
+    if existing is None:
+        raise ResourceNotFoundError(
+            f"Contact id={contact_id} not found.",
+            payload={'contact_id': contact_id},
+        )
+    _require_exclusive_contact_access(existing)
     contact_service.delete_contact(contact_id)
     return '', 204
 
@@ -287,6 +371,17 @@ def get_property_contacts(property_id):
     include_former = str(request.args.get('include_former_owners', '')).lower() in (
         '1', 'true', 'yes',
     )
+    _lead, err = load_authorized_lead(property_id)
+    if err is not None:
+        return err
+    try:
+        contact_service.ensure_key_contact_linked(property_id)
+    except Exception:
+        logger.exception(
+            'ensure_key_contact_linked failed for property %s', property_id,
+        )
+        from app import db
+        db.session.rollback()
     rows = contact_service.get_contacts_for_property(
         property_id,
         include_former_owners=include_former,
@@ -297,6 +392,7 @@ def get_property_contacts(property_id):
 
 @contacts_bp.route('/api/properties/<int:property_id>/contacts', methods=['POST'])
 @handle_errors
+@require_auth
 def link_contact_to_property(property_id):
     """Link an existing Contact to a Property.
 
@@ -328,15 +424,26 @@ def link_contact_to_property(property_id):
     except (TypeError, ValueError):
         return jsonify({'error': 'Validation error', 'message': 'contact_id must be an integer'}), 400
 
+    _lead, err = load_authorized_lead(property_id)
+    if err is not None:
+        return err
+
+    from app.models.contact import Contact
+    from app import db
+    contact = db.session.get(Contact, contact_id)
+    if contact is None:
+        raise ResourceNotFoundError(
+            f"Contact id={contact_id} not found.",
+            payload={'contact_id': contact_id},
+        )
+    _require_contact_access(contact)
+
     pc = contact_service.link_contact_to_property(
         property_id=property_id,
         contact_id=contact_id,
         role=role,
         is_primary=bool(is_primary),
     )
-
-    from app.models.contact import Contact
-    from app import db
     contact = db.session.get(Contact, contact_id)
 
     return jsonify(_serialize_property_contact(contact, pc)), 201
@@ -344,12 +451,16 @@ def link_contact_to_property(property_id):
 
 @contacts_bp.route('/api/properties/<int:property_id>/contacts/<int:contact_id>', methods=['DELETE'])
 @handle_errors
+@require_auth
 def unlink_contact_from_property(property_id, contact_id):
     """Unlink a Contact from a Property without deleting the Contact.
 
     Returns 204 on success.
     Returns 404 if the link does not exist.
     """
+    _lead, err = load_authorized_lead(property_id)
+    if err is not None:
+        return err
     contact_service.unlink_contact_from_property(property_id, contact_id)
     return '', 204
 
@@ -385,6 +496,10 @@ def clear_owner_person(property_id):
                 'error': 'Validation error',
                 'message': 'contact_id must be an integer',
             }), 400
+
+    _lead, err = load_authorized_lead(property_id)
+    if err is not None:
+        return err
 
     result = contact_service.clear_owner_person_from_lead(
         property_id,

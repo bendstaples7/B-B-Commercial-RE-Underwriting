@@ -174,17 +174,17 @@ class TestRequireAdminUnauthorized:
 
     def test_no_token_users_returns_401(self, client, app):
         """GET /api/admin/users with no auth header returns 401."""
-        resp = client.get("/api/admin/users")
+        resp = client.get("/api/admin/users", headers={'X-User-Id': ''})
         assert resp.status_code == 401
 
     def test_no_token_leads_returns_401(self, client, app):
         """GET /api/admin/leads with no auth header returns 401."""
-        resp = client.get("/api/admin/leads")
+        resp = client.get("/api/admin/leads", headers={'X-User-Id': ''})
         assert resp.status_code == 401
 
     def test_no_token_summary_returns_401(self, client, app):
         """GET /api/admin/users/<id>/summary with no auth header returns 401."""
-        resp = client.get("/api/admin/users/some-user-id/summary")
+        resp = client.get("/api/admin/users/some-user-id/summary", headers={'X-User-Id': ''})
         assert resp.status_code == 401
 
 

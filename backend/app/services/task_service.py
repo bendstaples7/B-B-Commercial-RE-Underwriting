@@ -2,26 +2,20 @@
 
 Implements Requirements 3.1, 3.2, 3.3, 3.5, 3.6.
 """
-import unicodedata
 from datetime import datetime
+
+from sqlalchemy import or_
 
 from app import db
 from app.models.task import Task
 from app.models.task_association import TaskAssociation
 from app.exceptions import TaskValidationError, ResourceNotFoundError
+from app.services.helpers.text import strip_invisible as _strip_invisible
 
 
-def _strip_invisible(value: str) -> str:
-    """Strip all Unicode whitespace and control characters from *value*.
-
-    Stricter than ``str.strip()`` — handles Unicode Zs (space separators) and
-    Cc (control characters) so inputs like '\\x7f' are treated as empty.
-    """
-    cleaned = ''.join(
-        ch for ch in value
-        if not (unicodedata.category(ch).startswith('C') or unicodedata.category(ch) == 'Zs')
-    )
-    return cleaned.strip()
+def _strip_title(value: str) -> str:
+    """Task titles are one-line labels; bodies keep multiline text."""
+    return ' '.join(_strip_invisible(value).split())
 
 
 class TaskService:
@@ -53,7 +47,14 @@ class TaskService:
             TaskValidationError: if title is absent or whitespace-only.
         """
         title = data.get('title', '')
-        if not title or not _strip_invisible(title):
+        if not title:
+            raise TaskValidationError(
+                "Task title is required and cannot be empty.",
+                field='title',
+                value=title,
+            )
+        cleaned_title = _strip_title(title)
+        if not cleaned_title:
             raise TaskValidationError(
                 "Task title is required and cannot be empty.",
                 field='title',
@@ -61,7 +62,7 @@ class TaskService:
             )
 
         task = Task(
-            title=_strip_invisible(title),
+            title=cleaned_title,
             body=data.get('body'),
             due_date=data.get('due_date'),
             status=data.get('status', 'open'),
@@ -94,7 +95,7 @@ class TaskService:
         Args:
             task_id: Primary key of the Task to update.
             data: dict of fields to update (title, body, due_date, status,
-                  priority, hubspot_task_id, raw_payload).
+                  priority).
 
         Returns:
             The updated Task instance.
@@ -107,16 +108,22 @@ class TaskService:
 
         if 'title' in data:
             title = data['title']
-            if not title or not _strip_invisible(title):
+            if not title:
                 raise TaskValidationError(
                     "Task title cannot be set to an empty value.",
                     field='title',
                     value=title,
                 )
-            task.title = _strip_invisible(title)
+            cleaned_title = _strip_title(title)
+            if not cleaned_title:
+                raise TaskValidationError(
+                    "Task title cannot be set to an empty value.",
+                    field='title',
+                    value=title,
+                )
+            task.title = cleaned_title
 
-        updatable = ('body', 'due_date', 'status', 'priority',
-                     'hubspot_task_id', 'raw_payload')
+        updatable = ('body', 'due_date', 'status', 'priority')
         for field in updatable:
             if field in data:
                 setattr(task, field, data[field])
@@ -189,11 +196,22 @@ class TaskService:
         self.mark_overdue_if_needed(task)
         return task
 
+    def get_without_side_effects(self, task_id: int) -> Task | None:
+        """Retrieve a Task by ID without marking it overdue or raising."""
+        return db.session.get(Task, task_id)
+
     # ------------------------------------------------------------------
     # List
     # ------------------------------------------------------------------
 
-    def list(self, filters: dict = None, page: int = 1, per_page: int = 20):
+    def list(
+        self,
+        filters: dict = None,
+        page: int = 1,
+        per_page: int = 20,
+        lead_id_scope=None,
+        association_access_scope=None,
+    ):
         """Return a paginated, filtered list of Tasks.
 
         Supported filter keys:
@@ -204,15 +222,17 @@ class TaskService:
             - target_type (str): filter by association target_type
             - target_id (int): filter by association target_id (requires target_type)
 
-        Args:
-            filters: dict of filter criteria (see above).
-            page: 1-based page number.
-            per_page: number of results per page.
-
-        Returns:
-            Tuple of (list[Task], total_count).
+        ``lead_id_scope``:
+            ``None`` — no owner filter (admin).
+            empty set — return no rows.
+            otherwise — only tasks attached to those lead ids.
+        ``association_access_scope``:
+            optional mapping of accessible target ids by association type.
+            Applied in SQL before pagination for scoped callers.
         """
         filters = filters or {}
+        if lead_id_scope is not None and not lead_id_scope:
+            return [], 0
         query = Task.query
 
         if 'status' in filters:
@@ -236,8 +256,32 @@ class TaskService:
                 query = query.filter(TaskAssociation.target_id == filters['target_id'])
             query = query.distinct()
 
+        if lead_id_scope is not None:
+            assoc_ids = db.session.query(TaskAssociation.task_id).filter(
+                TaskAssociation.target_type == 'lead',
+                TaskAssociation.target_id.in_(lead_id_scope),
+            )
+            query = query.filter(
+                or_(
+                    Task.lead_id.in_(lead_id_scope),
+                    Task.id.in_(assoc_ids),
+                )
+            )
+
+        if association_access_scope is not None:
+            from app.api_utils import apply_association_access_scope_filter
+            query = apply_association_access_scope_filter(
+                query,
+                parent_model=Task,
+                association_model=TaskAssociation,
+                parent_fk_column=TaskAssociation.task_id,
+                association_access_scope=association_access_scope,
+                direct_lead_column=Task.lead_id,
+            )
+
+        query = query.order_by(Task.created_at.desc())
         total = query.count()
-        tasks = query.order_by(Task.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+        tasks = query.offset((page - 1) * per_page).limit(per_page).all()
 
         # Apply overdue check on every returned task (Requirement 3.6)
         for task in tasks:

@@ -27,6 +27,7 @@ from app.schemas import (
 from app.services.lead_task_service import LeadTaskService
 from app.services.lead_timeline_service import LeadTimelineService
 from app.services.call_log_service import CallLogService
+from app.services.action_eligibility import TERMINAL_LEAD_STATUSES
 from app.services.recommended_action_metadata import (
     RECOMMENDED_ACTION_METADATA,
     get_recommended_action_display,
@@ -346,16 +347,13 @@ _call_log_service = CallLogService()
 
 def _require_lead_read_access(lead: Lead):
     """Return a 404 response when the caller cannot read this lead."""
-    from app.controllers.property_controller import _current_user_is_admin
+    from app.api_utils import user_can_access_lead
 
-    if _current_user_is_admin():
-        return None
-    current_user_id = getattr(g, 'user_id', None)
-    is_authenticated = current_user_id and current_user_id != 'anonymous'
-    if not is_authenticated or lead.owner_user_id != current_user_id:
+    if lead is None or not user_can_access_lead(lead):
+        lead_id = getattr(lead, 'id', None)
         return jsonify({
             'error': 'Not found',
-            'message': f'Lead {lead.id} not found',
+            'message': f'Lead {lead_id} not found' if lead_id is not None else 'Lead not found',
         }), 404
     return None
 
@@ -369,6 +367,11 @@ def _load_authorized_lead(lead_id: int):
     if denied is not None:
         return None, denied
     return lead, None
+
+
+def _authenticated_actor() -> str:
+    """Actor for timeline writes — session identity only, never request body."""
+    return str(getattr(g, 'user_id', None) or 'anonymous')
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +439,8 @@ def _get_queue_service_for_cc():
 
     user_id = getattr(g, 'user_id', None)
     if not user_id or user_id == 'anonymous':
-        return QueueService(owner_user_id=None)
+        # Fail closed: QueueService(owner_user_id=None) is the admin "all leads" view.
+        return QueueService(owner_user_id='__anonymous__')
     if _current_user_is_admin():
         return QueueService(owner_user_id=None)
     return QueueService(owner_user_id=user_id)
@@ -448,6 +452,7 @@ def _get_queue_service_for_cc():
 
 @command_center_bp.route('/<int:lead_id>/recommended-action', methods=['GET'])
 @handle_errors
+@require_auth
 def get_recommended_action(lead_id: int):
     """
     GET /api/leads/<lead_id>/recommended-action
@@ -464,9 +469,9 @@ def get_recommended_action(lead_id: int):
         "signals": dict
     }
     """
-    lead = Lead.query.get(lead_id)
-    if lead is None:
-        return jsonify({'error': 'Not found', 'message': f'Lead {lead_id} not found'}), 404
+    lead, err = _load_authorized_lead(lead_id)
+    if err is not None:
+        return err
 
     ra = lead.recommended_action
     contact_method = lead.recommended_contact_method
@@ -862,6 +867,28 @@ def get_command_center(lead_id: int):
     from app.services.entity_resolution_service import EntityResolutionService
     from app.models.organization import Organization
     from app.models.property_organization_link import PropertyOrganizationLink
+
+    try:
+        linked_key_contact = ContactService().ensure_key_contact_linked(lead_id)
+        if linked_key_contact:
+            from app.services.lead_refresh import refresh_lead_scoring
+            refresh_lead_scoring(lead_id)
+            lead = Lead.query.get(lead_id) or lead
+            data_quality_breakdown = build_data_quality_breakdown(lead)
+            data_completeness_score = data_quality_breakdown['total']
+            ra, contact_method, ra_display, winning_rule, winning_signals = (
+                _build_recommended_action_snapshot(lead)
+            )
+            open_tasks = _lead_task_service.list_open(lead_id)
+            timeline_entries, timeline_total = _lead_timeline_service.get_page(
+                lead_id, page=1, per_page=25,
+            )
+    except Exception:  # noqa: BLE001 — never block the lead page
+        logger.exception('ensure_key_contact_linked failed for lead %s', lead_id)
+        try:
+            _db.session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
 
     contacts_payload = ContactService().get_ordered_contacts_payload(lead_id)
     related_properties = ContactService().get_related_properties(lead_id)
@@ -1403,7 +1430,7 @@ def update_status(lead_id: int):
     old_status = lead.lead_status
     new_status = data['status']
     reason = data.get('reason') or ''
-    actor_raw = getattr(g, 'user_id', None) or data.get('actor') or 'anonymous'
+    actor_raw = _authenticated_actor()
     previous_score = lead.lead_score
 
     lead.lead_status = new_status
@@ -1452,7 +1479,7 @@ def update_status(lead_id: int):
     # whether from Quick Actions, Confirm deprioritize, or the status selector.
     # Deprioritize is then rescored below → terminal RA `suppress` (not left null).
     cancelled_open_task_hs_ids: set[str] = set()
-    if new_status in ('do_not_contact', 'suppressed', 'deprioritize'):
+    if new_status in TERMINAL_LEAD_STATUSES:
         lead.recommended_action = None
         cancelled_open_task_hs_ids = _cancel_open_lead_tasks(
             lead_id,
@@ -1509,7 +1536,7 @@ def update_status(lead_id: int):
     # Rescore first, then recompute RA (inside _rescore_after_status_change)
     # so the action reflects the updated score. Enrich the timeline entry with
     # the score delta so Activity history shows how the change moved the score.
-    if new_status not in ('do_not_contact', 'suppressed'):
+    if new_status not in ('do_not_contact', 'suppressed', 'deal_won', 'deal_lost'):
         _rescore_after_status_change(lead_id)
         db.session.refresh(lead)
         new_score = lead.lead_score
@@ -2282,6 +2309,7 @@ def generate_lead_briefing(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/timeline', methods=['GET'])
 @handle_errors
+@require_auth
 def get_timeline(lead_id: int):
     """
     GET /api/leads/<lead_id>/timeline
@@ -2291,6 +2319,10 @@ def get_timeline(lead_id: int):
     Does not clear Needs Review flags — those stay until Merge / Dismiss /
     Mark reviewed so queue membership stays truthful while working the lead.
     """
+    _lead, err = _load_authorized_lead(lead_id)
+    if err is not None:
+        return err
+
     page = int(request.args.get('page', 1))
     per_page = int(request.args.get('per_page', 25))
 
@@ -2326,7 +2358,10 @@ def log_note(lead_id: int):
     Log a note, email, or meeting on a lead.
     """
     data = LogNoteSchema().load(request.get_json() or {})
-    actor = g.user_id
+    _lead, err = _load_authorized_lead(lead_id)
+    if err is not None:
+        return err
+    actor = _authenticated_actor()
     entry = _call_log_service.log_note(
         lead_id,
         data['body'],
@@ -2354,7 +2389,10 @@ def log_call(lead_id: int):
     Log a call on a lead with outcome, optional duration, and optional notes.
     """
     data = LogCallSchema().load(request.get_json() or {})
-    actor = g.user_id
+    _lead, err = _load_authorized_lead(lead_id)
+    if err is not None:
+        return err
+    actor = _authenticated_actor()
     entry = _call_log_service.log_call(
         lead_id,
         data['outcome'],
@@ -2431,6 +2469,7 @@ def unanswered_mail_nudge_switch_to_mail(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/do-not-contact', methods=['POST'])
 @handle_errors
+@require_auth
 def do_not_contact(lead_id: int):
     """
     POST /api/leads/<lead_id>/do-not-contact
@@ -2440,11 +2479,11 @@ def do_not_contact(lead_id: int):
     import datetime as _dt
     from app import db
 
-    data = DoNotContactSchema().load(request.get_json() or {})
-    actor = data.get('actor') or getattr(g, 'user_id', 'anonymous')
-    lead = Lead.query.get(lead_id)
-    if lead is None:
-        return jsonify({'error': 'Not found'}), 404
+    DoNotContactSchema().load(request.get_json() or {})
+    actor = _authenticated_actor()
+    lead, err = _load_authorized_lead(lead_id)
+    if err is not None:
+        return err
 
     old_status = lead.lead_status
     lead.lead_status = 'do_not_contact'
@@ -2476,6 +2515,7 @@ def do_not_contact(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/park', methods=['POST'])
 @handle_errors
+@require_auth
 def park_lead(lead_id: int):
     """
     POST /api/leads/<lead_id>/park
@@ -2489,7 +2529,7 @@ def park_lead(lead_id: int):
     from app import db
 
     data = ParkLeadSchema().load(request.get_json() or {})
-    actor = data.get('actor') or getattr(g, 'user_id', 'anonymous')
+    actor = _authenticated_actor()
     reactivation_date = data.get('reactivation_date')
 
     if reactivation_date:
@@ -2499,9 +2539,9 @@ def park_lead(lead_id: int):
         if reactivation_date > today + timedelta(days=365):
             return jsonify({'error': 'reactivation_date cannot be more than 365 days from today'}), 400
 
-    lead = Lead.query.get(lead_id)
-    if lead is None:
-        return jsonify({'error': 'Not found'}), 404
+    lead, err = _load_authorized_lead(lead_id)
+    if err is not None:
+        return err
 
     old_status = lead.lead_status
     lead.lead_status = 'deprioritize'
@@ -2629,6 +2669,7 @@ def clear_review(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/reactivate', methods=['POST'])
 @handle_errors
+@require_auth
 def reactivate_lead(lead_id: int):
     """
     POST /api/leads/<lead_id>/reactivate
@@ -2639,11 +2680,11 @@ def reactivate_lead(lead_id: int):
     import datetime as _dt
     from app import db
 
-    data = ReactivateLeadSchema().load(request.get_json() or {})
-    actor = data.get('actor') or getattr(g, 'user_id', 'anonymous')
-    lead = Lead.query.get(lead_id)
-    if lead is None:
-        return jsonify({'error': 'Not found'}), 404
+    ReactivateLeadSchema().load(request.get_json() or {})
+    actor = _authenticated_actor()
+    lead, err = _load_authorized_lead(lead_id)
+    if err is not None:
+        return err
 
     old_status = lead.lead_status
     lead.lead_status = 'mailing_no_contact_made'
@@ -2669,6 +2710,7 @@ def reactivate_lead(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/suppress', methods=['POST'])
 @handle_errors
+@require_auth
 def suppress_lead(lead_id: int):
     """
     POST /api/leads/<lead_id>/suppress
@@ -2678,11 +2720,11 @@ def suppress_lead(lead_id: int):
     import datetime as _dt
     from app import db
 
-    data = DoNotContactSchema().load(request.get_json() or {})
-    actor = data.get('actor') or getattr(g, 'user_id', 'anonymous')
-    lead = Lead.query.get(lead_id)
-    if lead is None:
-        return jsonify({'error': 'Not found'}), 404
+    DoNotContactSchema().load(request.get_json() or {})
+    actor = _authenticated_actor()
+    lead, err = _load_authorized_lead(lead_id)
+    if err is not None:
+        return err
 
     old_status = lead.lead_status
     lead.lead_status = 'suppressed'

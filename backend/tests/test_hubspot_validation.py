@@ -159,3 +159,14 @@ class TestTaskWhitespaceRejected:
                 f"but count changed from {count_before} to {count_after} "
                 f"(input title={title!r})"
             )
+
+
+def test_strip_invisible_keeps_internal_spaces():
+    from app.services.helpers.text import strip_invisible
+
+    assert strip_invisible('note on my company') == 'note on my company'
+    assert strip_invisible('B and B LLC') == 'B and B LLC'
+    assert strip_invisible('  hello world  ') == 'hello world'
+    assert strip_invisible('\x7f') == ''
+    assert strip_invisible('   ') == ''
+    assert strip_invisible('\u200bhidden') == 'hidden'
