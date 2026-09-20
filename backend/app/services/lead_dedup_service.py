@@ -12,6 +12,7 @@ from app import db
 from app.models.hubspot_match import HubSpotMatch
 from app.models.lead import Lead, LeadAuditTrail
 from app.services.lead_merge_utils import (
+    building_lookup_keys,
     dedup_street_key,
     legacy_glued_house_range_key,
     merge_mailer_history,
@@ -1079,9 +1080,13 @@ def find_same_building_leads(
 ) -> list[Lead]:
     """Same building-level street, regardless of owner name.
 
-    Used by the lead-page merge banner so Yoko vs Yoko+Edwin still surface.
-    Do not use the house-number ``1%`` prefilter — that scan is capped and
-    drops real twins when many streets start with the same number.
+    Used by the lead-page merge banner so Yoko vs Yoko+Edwin still surface,
+    and so a bare building husk (``4451 N Albany``) shows next to a unit
+    (``4451 N Albany Apt 1``) and next to a house-number range
+    (``4451-4453 N Albany``). ``Apt 1`` and ``apt 1F`` are the same door.
+    Distinct units (Apt 1 vs Apt 2, 1F vs 1R, condo A-30 vs A-206) stay out.
+    Do not use the house-number ``1%`` prefilter — that scan is capped
+    and drops real twins when many streets start with the same number.
     """
     street = (lead.property_street or '').strip()
     lead_id = getattr(lead, 'id', None)
@@ -1093,12 +1098,13 @@ def find_same_building_leads(
         base_query = base_query.filter(Lead.owner_user_id == owner_user_id)
 
     key = dedup_street_key(street)
+    lookup_keys = building_lookup_keys(street)
     if key:
         found: dict[int, Lead] = {}
-        street_predicates = [
-            Lead.normalized_street == key,
-            Lead.normalized_street.ilike(f'{key} %'),
-        ]
+        street_predicates = []
+        for lookup_key in lookup_keys:
+            street_predicates.append(Lead.normalized_street == lookup_key)
+            street_predicates.append(Lead.normalized_street.ilike(f'{lookup_key} %'))
         # Pre-fix rows may still store glued dual house numbers ("18671869…").
         legacy_glued = legacy_glued_house_range_key(street)
         if legacy_glued and legacy_glued != key:
@@ -1133,7 +1139,7 @@ def find_same_building_leads(
             .all()
         )
         for other in indexed_matches:
-            if streets_match_same_situs(street, other.property_street):
+            if streets_match_duplicate_merge(street, other.property_street):
                 found[other.id] = other
             if len(found) >= limit:
                 break
@@ -1151,7 +1157,7 @@ def find_same_building_leads(
                 .all()
             )
             for other in missing_normalized:
-                if streets_match_same_situs(street, other.property_street):
+                if streets_match_duplicate_merge(street, other.property_street):
                     found[other.id] = other
         return list(found.values())[:limit]
 
@@ -1160,7 +1166,7 @@ def find_same_building_leads(
         func.lower(func.trim(Lead.property_street)) == street.lower(),
     )
     for other in q.order_by(Lead.id.asc()).limit(limit).all():
-        if streets_match_same_situs(street, other.property_street):
+        if streets_match_duplicate_merge(street, other.property_street):
             siblings.append(other)
         if len(siblings) >= limit:
             break

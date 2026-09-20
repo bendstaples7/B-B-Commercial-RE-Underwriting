@@ -233,15 +233,20 @@ class HubSpotMatcherService:
         # don't prevent an otherwise-correct address from matching.
         result = re.sub(
             r'\b(APT|APARTMENT|UNIT|STE|SUITE|FL|FLOOR|RM|ROOM|BLDG|BUILDING)\b[\s#]*[\w-]*',
-            '',
+            ' ',
             result,
         )
+        # '#1' / '# 1' is a unit, not part of the building key.
+        result = re.sub(r'#\s*[\w-]*', ' ', result)
         # Trailing alphanumeric unit (e.g. '2834 N DRAKE AVE 1R') and bare
-        # trailing unit numbers ('… AVENUE 1').
+        # trailing unit numbers ('… AVENUE 1'). Run again after punctuation
+        # removal so '#1' becoming ' 1' does not stay on the key.
         result = re.sub(r'\s+\d+[A-Z]\s*$', '', result)
         result = re.sub(r'\s+\d+\s*$', '', result)
 
         result = _PUNCT_RE.sub("", result)
+        result = re.sub(r'\s+\d+[A-Z]\s*$', '', result)
+        result = re.sub(r'\s+\d+\s*$', '', result)
         result = re.sub(r'\s+', ' ', result).strip()
         return result
 

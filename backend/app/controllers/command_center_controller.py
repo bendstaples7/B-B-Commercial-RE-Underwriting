@@ -1946,10 +1946,18 @@ def merge_preview(lead_id: int, other_id: int):
 @require_auth
 @handle_errors
 def merge_context(lead_id: int):
-    """GET /api/leads/<lead_id>/merge-context?ids= — property/source/activity for review."""
-    from app.services.lead_dedup_service import merge_decision_summaries
+    """GET /api/leads/<lead_id>/merge-context?ids= — property/source/activity for review.
 
-    _lead, denied = _load_authorized_lead(lead_id)
+    Always includes same-building siblings (a bare building record next to
+    ``Apt 1``) so the dialog can show both leads without a second search.
+    """
+    from app.controllers.property_controller import _current_user_is_admin
+    from app.services.lead_dedup_service import (
+        find_same_building_leads,
+        merge_decision_summaries,
+    )
+
+    lead, denied = _load_authorized_lead(lead_id)
     if denied is not None:
         return denied
 
@@ -1972,6 +1980,16 @@ def merge_context(lead_id: int):
     if len(ordered) > 12:
         return jsonify({'error': 'At most 12 leads can be compared'}), 400
 
+    include_all = _current_user_is_admin()
+    owner_scope = None if include_all else (getattr(g, 'user_id', None) or '__unauthorized__')
+    sibling_ids: list[int] = []
+    for sibling in find_same_building_leads(lead, owner_user_id=owner_scope):
+        if _require_lead_read_access(sibling) is not None:
+            continue
+        sibling_ids.append(sibling.id)
+        if sibling.id not in ordered and len(ordered) < 12:
+            ordered.append(sibling.id)
+
     found = {
         row.id: row
         for row in Lead.query.filter(Lead.id.in_(ordered)).all()
@@ -1984,7 +2002,10 @@ def merge_context(lead_id: int):
         if _require_lead_read_access(item) is not None:
             continue
         readable.append(item)
-    return jsonify({'leads': merge_decision_summaries(readable)}), 200
+    return jsonify({
+        'leads': merge_decision_summaries(readable),
+        'sibling_ids': sibling_ids,
+    }), 200
 
 
 @command_center_bp.route('/<int:lead_id>/move-to-skip-trace', methods=['POST'])

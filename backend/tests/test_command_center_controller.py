@@ -1495,6 +1495,46 @@ class TestMergePreviewAndUnitGuard:
             assert twin_row['open_task_count'] == 1
             assert twin_row['activity']['total'] == 0
 
+    def test_merge_context_loads_building_husk_without_an_id_hint(self, client, app):
+        """Opening merge on Apt 1 must already include the building record."""
+        from app.services.lead_dedup_service import refresh_lead_dedup_fields
+
+        with app.app_context():
+            unit = _make_lead(
+                app,
+                '4451 N Albany Ave Apt 1',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            husk = _make_lead(
+                app,
+                '4451 N Albany Ave',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            other_unit = _make_lead(
+                app,
+                '4451 N Albany Ave Apt 2',
+                owner_first_name='Other',
+                owner_last_name='Tenant',
+            )
+            for item in (unit, husk, other_unit):
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+
+            response = client.get(
+                f'/api/leads/{unit.id}/merge-context',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            assert husk.id in body['sibling_ids']
+            assert other_unit.id not in body['sibling_ids']
+            returned = {row['id'] for row in body['leads']}
+            assert unit.id in returned
+            assert husk.id in returned
+            assert other_unit.id not in returned
+
     def test_merge_context_excludes_other_users_leads(self, client, app):
         with app.app_context():
             current = _make_lead(app, '100 Merge Auth Ave')
