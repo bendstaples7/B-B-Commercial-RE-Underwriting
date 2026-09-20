@@ -1028,9 +1028,11 @@ def find_same_building_leads(
     """Same building-level street, regardless of owner name.
 
     Used by the lead-page merge banner so Yoko vs Yoko+Edwin still surface,
-    and so a bare building husk (``4451 N Albany Ave``) shows next to a unit
-    (``4451 N Albany Ave Apt 1``). Distinct units in the same building stay
-    out. Do not use the house-number ``1%`` prefilter — that scan is capped
+    and so a bare building husk (``4451 N Albany``) shows next to a unit
+    (``4451 N Albany Apt 1``) and next to a house-number range
+    (``4451-4453 N Albany``). ``Apt 1`` and ``apt 1F`` are the same door.
+    Distinct units (Apt 1 vs Apt 2, 1F vs 1R, condo A-30 vs A-206) stay out.
+    Do not use the house-number ``1%`` prefilter — that scan is capped
     and drops real twins when many streets start with the same number.
     """
     street = (lead.property_street or '').strip()

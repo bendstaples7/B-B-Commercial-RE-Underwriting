@@ -92,6 +92,27 @@ class TestDedupStreetKey:
         )
         assert not streets_match_duplicate_merge('100 Main St 2', '100 Main St Unit 3')
         assert not streets_match_duplicate_merge('2834 N Drake Ave 2', '2834 N Drake Ave 1r')
+        # Same door: bare number vs number + letter. Different suffixes stay apart.
+        assert streets_match_duplicate_merge(
+            '4451 N Albany APt 1',
+            '4451 N Albany apt 1F',
+        )
+        assert streets_match_duplicate_merge(
+            '4451 N Albany',
+            '4451-4453 N Albany',
+        )
+        assert streets_match_duplicate_merge(
+            '4451 N Albany',
+            '4451 N Albany Apt 1',
+        )
+        assert not streets_match_duplicate_merge(
+            '4451 N Albany Apt 1F',
+            '4451 N Albany Apt 1R',
+        )
+        assert not streets_match_duplicate_merge(
+            '4451 N Albany Apt 1F',
+            '4451 N Albany Apt 2F',
+        )
 
     def test_legacy_glued_range_key_for_stale_index_rows(self):
         from app.services.lead_merge_utils import legacy_glued_house_range_key
@@ -126,7 +147,12 @@ class TestSitusUnitToken:
         assert situs_unit_token('123 Main St 2R') == '2r'
         assert situs_unit_token('123 Main St 2') == '2'
         assert situs_unit_token('123 Main St 02') == '2'
+        assert situs_unit_token('4451 N Albany APt 1') == '1'
+        assert situs_unit_token('4451 N Albany apt 1F') == '1f'
         assert not streets_match_same_situs('123 Main St 1R', '123 Main St 2R')
+        assert streets_match_same_situs('4451 N Albany APt 1', '4451 N Albany apt 1F')
+        assert not streets_match_same_situs('4451 N Albany Apt 1F', '4451 N Albany Apt 1R')
+        assert not streets_match_same_situs('4451 N Albany', '4451 N Albany Apt 1')
 
     def test_zip_only_suffix_is_not_treated_as_unit(self):
         from app.services.lead_merge_utils import situs_unit_token
@@ -886,6 +912,76 @@ class TestSameBuildingBannerAndAdditivePeople:
 
             found = {item.id for item in find_same_building_leads(numbered)}
             assert husk.id in found
+
+    def test_find_same_building_prompts_albany_range_husk_and_letter_suffix(self, app):
+        """The three Albany spellings the merge banner must offer, both ways."""
+        from app.services.lead_dedup_service import (
+            find_same_building_leads,
+            refresh_lead_dedup_fields,
+        )
+
+        with app.app_context():
+            bare = Lead(
+                property_street='4451 N Albany',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            ranged = Lead(
+                property_street='4451-4453 N Albany',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            unit = Lead(
+                property_street='4451 N Albany APt 1',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            letter = Lead(
+                property_street='4451 N Albany apt 1F',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            other_door = Lead(
+                property_street='4451 N Albany Apt 1R',
+                owner_first_name='Other',
+                owner_last_name='Door',
+            )
+            other_unit = Lead(
+                property_street='4451 N Albany Apt 2',
+                owner_first_name='Other',
+                owner_last_name='Unit',
+            )
+            rows = (bare, ranged, unit, letter, other_door, other_unit)
+            db.session.add_all(rows)
+            for item in rows:
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+
+            def ids_for(lead: Lead) -> set[int]:
+                return {item.id for item in find_same_building_leads(lead)}
+
+            from_bare = ids_for(bare)
+            assert ranged.id in from_bare
+            assert unit.id in from_bare
+            assert letter.id in from_bare
+
+            from_ranged = ids_for(ranged)
+            assert bare.id in from_ranged
+            assert unit.id in from_ranged
+
+            from_unit = ids_for(unit)
+            assert bare.id in from_unit
+            assert letter.id in from_unit
+            # Bare "1" is the same door as "1F" and "1R". Those lettered doors
+            # are not the same as each other, and Apt 2 stays out.
+            assert other_door.id in from_unit
+            assert other_unit.id not in from_unit
+
+            from_letter = ids_for(letter)
+            assert unit.id in from_letter
+            assert bare.id in from_letter
+            assert other_door.id not in from_letter
+            assert other_unit.id not in from_letter
 
     def test_same_address_summaries_default_to_current_lead_owner_scope(self, app):
         from app.services.lead_dedup_service import (
