@@ -20,7 +20,9 @@ import {
 } from '@mui/material'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { contactService } from '@/services/api'
+import { searchService } from '@/services/searchApi'
 import { AppSnackbar } from '@/components/AppSnackbar'
+import { CaptureSourceFields } from '@/components/CaptureSourceFields'
 import { contactDisplayName } from '@/utils/propertyContacts'
 import type {
   Contact,
@@ -29,13 +31,14 @@ import type {
   EmailLabel,
   PhoneLabel,
   PropertyContact,
+  SearchResultItem,
 } from '@/types'
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const CONTACT_ROLE_OPTIONS: { value: ContactRole; label: string }[] = [
+export const CONTACT_ROLE_OPTIONS: { value: ContactRole; label: string }[] = [
   { value: 'owner', label: 'Owner' },
   { value: 'property_manager', label: 'Property Manager' },
   { value: 'attorney', label: 'Attorney' },
@@ -76,6 +79,8 @@ interface FormState {
   role: ContactRole
   roleDescription: string
   notes: string
+  source: string
+  captureContext: string
   phones: PhoneRow[]
   emails: EmailRow[]
 }
@@ -86,6 +91,8 @@ export type ContactFormInitialValues = {
   role?: ContactRole
   roleDescription?: string
   notes?: string
+  source?: string
+  captureContext?: string
   phones?: Array<{ value: string; label?: PhoneLabel | string }>
   emails?: Array<{ value: string; label?: EmailLabel | string }>
 }
@@ -103,6 +110,8 @@ export type ContactFormEditTarget = {
   property_contact_role?: ContactRole | string | null
   role_description?: string | null
   notes?: string | null
+  source?: string | null
+  capture_context?: string | null
   phones?: Array<{ value: string; label?: PhoneLabel | string }>
   emails?: Array<{ value: string; label?: EmailLabel | string }>
   is_primary?: boolean
@@ -111,7 +120,8 @@ export type ContactFormEditTarget = {
 export interface ContactFormModalProps {
   open: boolean
   onClose: () => void
-  propertyId: number
+  /** Omit when capturing a contact from the header before a property is chosen. */
+  propertyId?: number
   contact?: ContactFormEditTarget | PropertyContact
   /** Prefill create mode (e.g. flat Key Contact name + phones). */
   initialValues?: ContactFormInitialValues
@@ -223,6 +233,8 @@ function buildInitialState(
       ),
       roleDescription: contact.role_description ?? initialValues?.roleDescription ?? '',
       notes: contact.notes ?? initialValues?.notes ?? '',
+      source: contact.source ?? initialValues?.source ?? '',
+      captureContext: contact.capture_context ?? initialValues?.captureContext ?? '',
       phones: mergePhoneRows(contactPhones, seedPhones),
       emails: mergeEmailRows(contactEmails, seedEmails),
     }
@@ -233,6 +245,8 @@ function buildInitialState(
     role: initialValues?.role ?? 'owner',
     roleDescription: initialValues?.roleDescription ?? '',
     notes: initialValues?.notes ?? '',
+    source: initialValues?.source ?? '',
+    captureContext: initialValues?.captureContext ?? '',
     phones:
       initialValues?.phones
         ?.filter((p) => p.value?.trim())
@@ -269,6 +283,10 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const [selectedExisting, setSelectedExisting] = useState<Contact | null>(null)
   const [linkRole, setLinkRole] = useState<ContactRole>('owner')
+  const [selectedProperty, setSelectedProperty] = useState<SearchResultItem | null>(null)
+  const [propertyQuery, setPropertyQuery] = useState('')
+  const [propertySearchText, setPropertySearchText] = useState('')
+  const [debouncedPropertyQuery, setDebouncedPropertyQuery] = useState('')
 
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string }>({
     open: false,
@@ -279,13 +297,18 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
 
   useEffect(() => {
     if (!open) return
-    const nextMode = !isEditMode && allowLinkExisting && initialMode === 'link' ? 'link' : 'create'
+    const canLink = !isEditMode && allowLinkExisting && propertyId != null
+    const nextMode = canLink && initialMode === 'link' ? 'link' : 'create'
     setForm(buildInitialState(contact, initialValues))
     setNameError(false)
     setMode(nextMode)
     setLinkQuery(nextMode === 'link' ? initialLinkQuery : '')
     setDebouncedQuery('')
     setSelectedExisting(null)
+    setSelectedProperty(null)
+    setPropertyQuery('')
+    setPropertySearchText('')
+    setDebouncedPropertyQuery('')
     setLinkRole(initialValues?.role ?? 'owner')
     // Reset only when the dialog opens or the edited contact changes — not on
     // every parent re-render of initialValues.
@@ -302,6 +325,15 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
     return () => window.clearTimeout(timeout)
   }, [isEditMode, linkQuery, mode, open])
 
+  useEffect(() => {
+    if (!open || propertyId != null) {
+      setDebouncedPropertyQuery('')
+      return
+    }
+    const timeout = window.setTimeout(() => setDebouncedPropertyQuery(propertySearchText.trim()), 250)
+    return () => window.clearTimeout(timeout)
+  }, [open, propertyId, propertySearchText])
+
   const { data: searchResults = [], isFetching: searchLoading } = useQuery({
     queryKey: ['contactSearch', propertyId, debouncedQuery],
     queryFn: () =>
@@ -310,26 +342,37 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
         excludePropertyId: propertyId,
         limit: 20,
       }),
-    enabled: open && !isEditMode && mode === 'link' && debouncedQuery.length >= 2,
+    enabled: open && propertyId != null && !isEditMode && mode === 'link' && debouncedQuery.length >= 2,
   })
 
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ['propertyContacts', propertyId] })
-    queryClient.invalidateQueries({ queryKey: ['commandCenter', propertyId] })
+  const { data: propertySearch, isFetching: propertySearchLoading } = useQuery({
+    queryKey: ['capture-property-search', debouncedPropertyQuery],
+    queryFn: ({ signal }) => searchService.search({ q: debouncedPropertyQuery, per_page: 8, signal }),
+    enabled: open && propertyId == null && !isEditMode && debouncedPropertyQuery.length >= 2,
+  })
+
+  const invalidate = (linkedId?: number | null) => {
+    const id = linkedId ?? propertyId
+    if (id == null) return
+    queryClient.invalidateQueries({ queryKey: ['propertyContacts', id] })
+    queryClient.invalidateQueries({ queryKey: ['commandCenter', id] })
   }
 
   const createMutation = useMutation({
     mutationFn: async (payload: ContactCreatePayload) => {
       const newContact = await contactService.createContact(payload)
-      await contactService.linkContactToProperty(propertyId, {
-        contact_id: newContact.id,
-        role: payload.role ?? 'owner',
-        is_primary: linkAsPrimary,
-      })
-      return newContact
+      const linkId = propertyId ?? selectedProperty?.id ?? null
+      if (linkId != null) {
+        await contactService.linkContactToProperty(linkId, {
+          contact_id: newContact.id,
+          role: payload.role ?? 'owner',
+          is_primary: linkAsPrimary,
+        })
+      }
+      return { contact: newContact, linkId }
     },
-    onSuccess: () => {
-      invalidate()
+    onSuccess: (result) => {
+      invalidate(result.linkId)
       onClose()
     },
     onError: (err: Error) => showError(err.message || 'Failed to create contact.'),
@@ -347,6 +390,9 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
 
   const linkMutation = useMutation({
     mutationFn: async (existing: Contact) => {
+      if (propertyId == null) {
+        throw new Error('Choose a property before linking an existing contact.')
+      }
       await contactService.linkContactToProperty(propertyId, {
         contact_id: existing.id,
         role: linkRole,
@@ -457,6 +503,8 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
       role: form.role,
       role_description: form.role === 'other' ? form.roleDescription.trim() || null : null,
       notes: form.notes.trim() || null,
+      source: form.source.trim() || null,
+      capture_context: form.captureContext.trim() || null,
       phones: form.phones
         .filter((p) => p.value.trim())
         .map((p) => ({ value: p.value.trim(), label: p.label })),
@@ -480,6 +528,22 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
     ) {
       delete payload.notes
     }
+    if (
+      isEditMode
+      && contact?.source === undefined
+      && initialValues?.source === undefined
+      && !form.source.trim()
+    ) {
+      delete payload.source
+    }
+    if (
+      isEditMode
+      && contact?.capture_context === undefined
+      && initialValues?.captureContext === undefined
+      && !form.captureContext.trim()
+    ) {
+      delete payload.capture_context
+    }
 
     if (isEditMode) {
       updateMutation.mutate(payload)
@@ -497,7 +561,7 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
     return 'Add Contact'
   }, [isEditMode, mode, initialValues])
 
-  const showLinkToggle = !isEditMode && allowLinkExisting
+  const showLinkToggle = !isEditMode && allowLinkExisting && propertyId != null
 
   return (
     <>
@@ -607,6 +671,47 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
               </>
             ) : (
               <>
+                {propertyId == null && (
+                  <Autocomplete
+                    options={propertySearch?.leads ?? []}
+                    loading={propertySearchLoading}
+                    value={selectedProperty}
+                    onChange={(_, value) => {
+                      setSelectedProperty(value)
+                      setPropertyQuery(value ? (value.label || value.property_street || '') : '')
+                      setPropertySearchText('')
+                      setDebouncedPropertyQuery('')
+                    }}
+                    inputValue={propertyQuery}
+                    onInputChange={(_, value, reason) => {
+                      if (reason === 'reset') return
+                      setPropertyQuery(value)
+                      setPropertySearchText(value)
+                      if (reason === 'input' || reason === 'clear') setSelectedProperty(null)
+                    }}
+                    getOptionLabel={(option) => option.label || option.property_street || `Lead #${option.id}`}
+                    isOptionEqualToValue={(a, b) => a.id === b.id}
+                    filterOptions={(options) => options}
+                    noOptionsText={
+                      debouncedPropertyQuery.length < 2
+                        ? 'Type at least 2 characters'
+                        : 'No matching properties'
+                    }
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="Property"
+                        placeholder="Search an address to link"
+                        helperText="Optional. Link this person so they show up on that lead."
+                        inputProps={{
+                          ...params.inputProps,
+                          'aria-label': 'Link to property',
+                        }}
+                        sx={{ caretColor: 'text.primary' }}
+                      />
+                    )}
+                  />
+                )}
                 <Box sx={{ display: 'flex', gap: 2 }}>
                   <TextField
                     label="First Name"
@@ -663,6 +768,17 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
                     sx={{ caretColor: 'text.primary' }}
                   />
                 )}
+
+                <CaptureSourceFields
+                  source={form.source}
+                  onSourceChange={(value) => setForm((prev) => ({ ...prev, source: value }))}
+                  context={form.captureContext}
+                  onContextChange={(value) => setForm((prev) => ({ ...prev, captureContext: value }))}
+                  allowEmptySource
+                  fieldMb={0}
+                  sourceLabelId="contact-capture-source-label"
+                  contextPlaceholder="How you know them, or why they matter…"
+                />
 
                 <TextField
                   label="Notes"

@@ -1518,6 +1518,8 @@ class ContactCreateSchema(Schema):
     )
     role_description = fields.Str(allow_none=True, dump_default=None)
     notes = fields.Str(allow_none=True, dump_default=None)
+    source = fields.Str(allow_none=True, dump_default=None)
+    capture_context = fields.Str(allow_none=True, dump_default=None)
     phones = fields.List(fields.Nested(ContactPhoneSchema), load_default=[])
     emails = fields.List(fields.Nested(ContactEmailSchema), load_default=[])
 
@@ -1540,6 +1542,8 @@ class ContactUpdateSchema(Schema):
     role = fields.Str(validate=validate.OneOf(VALID_CONTACT_ROLES))
     role_description = fields.Str(allow_none=True, dump_default=None)
     notes = fields.Str(allow_none=True, dump_default=None)
+    source = fields.Str(allow_none=True, dump_default=None)
+    capture_context = fields.Str(allow_none=True, dump_default=None)
     phones = fields.List(fields.Nested(ContactPhoneSchema), load_default=[])
     emails = fields.List(fields.Nested(ContactEmailSchema), load_default=[])
 
@@ -1556,6 +1560,8 @@ class ContactResponseSchema(Schema):
     role = fields.Str()
     role_description = fields.Str(allow_none=True)
     notes = fields.Str(allow_none=True)
+    source = fields.Str(allow_none=True)
+    capture_context = fields.Str(allow_none=True)
     phones = fields.List(fields.Nested(ContactPhoneSchema))
     emails = fields.List(fields.Nested(ContactEmailSchema))
     created_at = fields.DateTime(dump_only=True)
@@ -1829,6 +1835,25 @@ class QuickAddSchema(RequestSchema):
     """Validation schema for POST /api/leads/quick-add."""
     property_street = fields.String(required=True, validate=validate.Length(min=1, max=500))
     note = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=5000))
+    context = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=5000))
+    capture_kind = fields.String(
+        allow_none=True,
+        load_default=None,
+        validate=validate.OneOf(['property', 'lead']),
+    )
+
+    @pre_load
+    def normalize_capture_kind(self, data, **kwargs):
+        """Treat blank and mixed-case kinds as the canonical values."""
+        if not isinstance(data, dict) or 'capture_kind' not in data:
+            return data
+        raw = data.get('capture_kind')
+        if not isinstance(raw, str):
+            return data
+        cleaned = raw.strip().lower()
+        data['capture_kind'] = cleaned or None
+        return data
+
     priority = fields.String(
         allow_none=True,
         load_default=None,

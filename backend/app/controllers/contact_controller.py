@@ -109,6 +109,8 @@ def _serialize_contact(contact):
         'role': contact.role,
         'role_description': contact.role_description,
         'notes': contact.notes,
+        'source': contact.source,
+        'capture_context': contact.capture_context,
         'name_locked': bool(contact.name_locked),
         'keep_on_gis': bool(contact.keep_on_gis),
         'phones': PhoneConfidenceService.serialize_contact_phones(
@@ -214,6 +216,8 @@ def create_contact():
     role : str (optional, default 'owner')
     role_description : str (optional)
     notes : str (optional)
+    source : str (optional, HubSpot deal-source value)
+    capture_context : str (optional, why this person is being added)
     phones : list of {value, label} (optional)
     emails : list of {value, label} (optional)
 
@@ -308,6 +312,7 @@ def update_contact(contact_id):
     """Update an existing Contact.
 
     Phones and emails are replaced atomically if provided.
+    Optional body fields include notes, source, and capture_context.
     Returns 404 if the Contact does not exist.
     """
     from app.models.contact import Contact

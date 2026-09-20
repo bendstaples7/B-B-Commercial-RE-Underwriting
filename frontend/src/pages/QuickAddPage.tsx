@@ -27,6 +27,7 @@ import {
   Typography,
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import MyLocationIcon from '@mui/icons-material/MyLocation'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
@@ -36,11 +37,28 @@ import { useGoogleMapsLoaded } from '@/context/GoogleMapsContext'
 import { leadService } from '@/services/leadApi'
 import { commandCenterService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
-import type { QuickAddPayload, QuickAddResponse } from '@/types'
+import type { ContactRole, QuickAddPayload, QuickAddResponse } from '@/types'
 import { QUICK_ADD_DEAL_SOURCES } from '@/types'
 import { formatDateOnly } from '@/utils/formatters'
+import { CaptureSourceFields } from '@/components/CaptureSourceFields'
+import { CONTACT_ROLE_OPTIONS } from '@/components/ContactFormModal'
+import { contactService } from '@/services/contactApi'
 
 type Priority = 'high' | 'medium' | 'low'
+
+type CapturePerson = {
+  key: string
+  firstName: string
+  lastName: string
+  role: ContactRole
+  phone: string
+  email: string
+}
+
+type SavedQuickAdd = QuickAddResponse & {
+  peopleSaved: number
+  peopleWarning: string | null
+}
 
 const PRIORITY_OPTIONS: { value: Priority; label: string }[] = [
   { value: 'high', label: 'High' },
@@ -100,6 +118,7 @@ export function QuickAddPage() {
   const coordSourceRef = useRef<'gps' | 'place-pending' | 'place' | null>(null)
 
   const [note, setNote] = useState('')
+  const [context, setContext] = useState('')
   const [priority, setPriority] = useState<Priority | null>(null)
   const [dealSource, setDealSource] = useState<string>(QUICK_ADD_DEAL_SOURCES[0])
   const [dateIdentified, setDateIdentified] = useState(todayIsoDate)
@@ -114,7 +133,10 @@ export function QuickAddPage() {
   }>({ city: null, state: null, zip: null })
   // Bumped on every Places selection so older getDetails callbacks are ignored.
   const placesRequestIdRef = useRef(0)
-  const [successResult, setSuccessResult] = useState<QuickAddResponse | null>(null)
+  const personSeq = useRef(0)
+  const [people, setPeople] = useState<CapturePerson[]>([])
+  const [peopleError, setPeopleError] = useState('')
+  const [successResult, setSuccessResult] = useState<SavedQuickAdd | null>(null)
   const [existingActionFeedback, setExistingActionFeedback] = useState<{
     severity: 'success' | 'warning' | 'error'
     message: string
@@ -199,7 +221,71 @@ export function QuickAddPage() {
   }, [mapsLoaded, coords])
 
   const quickAddMutation = useMutation({
-    mutationFn: (payload: QuickAddPayload) => leadService.quickAdd(payload),
+    mutationFn: async ({
+      quickAdd,
+      people: peopleToSave,
+    }: {
+      quickAdd: QuickAddPayload
+      people: CapturePerson[]
+    }): Promise<SavedQuickAdd> => {
+      const result = await leadService.quickAdd(quickAdd)
+      let peopleSaved = 0
+      const failures: string[] = []
+      // A repeat capture must not demote whoever is already primary. If we
+      // cannot tell, fail closed and leave every new person non-primary.
+      let existingHasPrimary = false
+      if (!result.created) {
+        try {
+          const existing = await contactService.getPropertyContacts(result.lead_id)
+          existingHasPrimary = existing.some((row) => row.is_primary)
+        } catch {
+          existingHasPrimary = true
+        }
+      }
+      for (const person of peopleToSave) {
+        const label = [person.firstName, person.lastName].filter(Boolean).join(' ') || 'Contact'
+        let createdId: number | null = null
+        try {
+          const created = await contactService.createContact({
+            first_name: person.firstName.trim() || null,
+            last_name: person.lastName.trim() || null,
+            role: person.role,
+            source: quickAdd.deal_source ?? null,
+            capture_context: quickAdd.context ?? null,
+            phones: person.phone.trim()
+              ? [{ value: person.phone.trim(), label: 'mobile' }]
+              : [],
+            emails: person.email.trim()
+              ? [{ value: person.email.trim(), label: 'personal' }]
+              : [],
+          })
+          createdId = created.id
+          const makePrimary = !existingHasPrimary && peopleSaved === 0
+          await contactService.linkContactToProperty(result.lead_id, {
+            contact_id: created.id,
+            role: person.role,
+            is_primary: makePrimary,
+          })
+          if (makePrimary) existingHasPrimary = true
+          peopleSaved += 1
+        } catch (error) {
+          if (createdId != null) {
+            try {
+              await contactService.deleteContact(createdId)
+            } catch {
+              // Still surface the link failure if cleanup also fails.
+            }
+          }
+          const message = error instanceof Error ? error.message : 'Could not save contact'
+          failures.push(`${label}: ${message}`)
+        }
+      }
+      return {
+        ...result,
+        peopleSaved,
+        peopleWarning: failures.length ? failures.join(' ') : null,
+      }
+    },
     onSuccess: (result) => {
       setSuccessResult(result)
     },
@@ -341,28 +427,47 @@ export function QuickAddPage() {
       setAddressError('Property address is required')
       return
     }
+    const incompletePerson = people.some(
+      (person) => !person.firstName.trim() && !person.lastName.trim(),
+    )
+    if (incompletePerson) {
+      setPeopleError('Each person needs a first or last name, or remove them.')
+      return
+    }
     setAddressError('')
+    setPeopleError('')
+    const namedPeople = people.filter(
+      (person) => person.firstName.trim() || person.lastName.trim(),
+    )
     quickAddMutation.mutate({
-      property_street: street,
-      note: note.trim() || null,
-      priority,
-      deal_source: dealSource,
-      date_identified: dateIdentified || todayIsoDate(),
-      capture_latitude: coords?.lat ?? null,
-      capture_longitude: coords?.lng ?? null,
-      capture_location_label: gpsLabel,
-      property_city: parsedAddress.city,
-      property_state: parsedAddress.state,
-      property_zip: parsedAddress.zip,
+      quickAdd: {
+        property_street: street,
+        note: note.trim() || null,
+        context: context.trim() || null,
+        capture_kind: namedPeople.length ? 'lead' : null,
+        priority,
+        deal_source: dealSource,
+        date_identified: dateIdentified || todayIsoDate(),
+        capture_latitude: coords?.lat ?? null,
+        capture_longitude: coords?.lng ?? null,
+        capture_location_label: gpsLabel,
+        property_city: parsedAddress.city,
+        property_state: parsedAddress.state,
+        property_zip: parsedAddress.zip,
+      },
+      people: namedPeople,
     })
   }
 
   const handleReset = () => {
     setAddress('')
     setNote('')
+    setContext('')
     setPriority(null)
     setDealSource(QUICK_ADD_DEAL_SOURCES[0])
     setDateIdentified(todayIsoDate())
+    setPeople([])
+    setPeopleError('')
     setSuccessResult(null)
     setExistingActionFeedback(null)
     setAddressError('')
@@ -388,6 +493,20 @@ export function QuickAddPage() {
     navigate('/kanban')
   }
 
+  const addPerson = () => {
+    const key = `person-${personSeq.current}`
+    personSeq.current += 1
+    setPeople((current) => [
+      ...current,
+      { key, firstName: '', lastName: '', role: 'owner', phone: '', email: '' },
+    ])
+    setPeopleError('')
+  }
+
+  const intro = 'Save an address you are interested in. Add the people you already know — one property can have more than one — plus where it came from and why.'
+
+  const dialogTitle = 'Quick Add'
+
   const formBody =
     successResult !== null ? (
       (() => {
@@ -403,8 +522,16 @@ export function QuickAddPage() {
                 {successResult.created
                   ? 'Added to Skip Trace.'
                   : 'This address was already in the system. Walk-by notes were appended without changing the pipeline stage.'}
+                {successResult.peopleSaved > 0
+                  ? ` ${successResult.peopleSaved === 1 ? '1 person' : `${successResult.peopleSaved} people`} saved on this property.`
+                  : ''}
                 {hubspotMessage ? ` ${hubspotMessage}` : ' HubSpot write-back is disabled in this environment.'}
               </Typography>
+              {successResult.peopleWarning && (
+                <Alert severity="warning" sx={{ mb: 2, textAlign: 'left' }}>
+                  {successResult.peopleWarning}
+                </Alert>
+              )}
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 <Button variant="contained" component={RouterLink} to={`/leads/${successResult.lead_id}`}>
                   View lead
@@ -424,11 +551,17 @@ export function QuickAddPage() {
     <Box
       component="form"
       onSubmit={handleSubmit}
-      sx={{ maxWidth: 480, mx: 'auto', pb: 4 }}
+      sx={{ width: '100%', pb: 4, cursor: 'auto' }}
     >
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Capture a walk-by address. We will add it to Skip Trace and create a HubSpot deal.
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2, maxWidth: 720 }}>
+        {intro}
       </Typography>
+
+      {peopleError && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {peopleError}
+        </Alert>
+      )}
 
       {quickAddMutation.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>
@@ -436,6 +569,20 @@ export function QuickAddPage() {
         </Alert>
       )}
 
+      <Box
+        data-testid="quick-add-layout"
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1.15fr) minmax(320px, 0.85fr)' },
+          columnGap: { md: 5 },
+          rowGap: 3,
+          alignItems: 'start',
+        }}
+      >
+      <Box data-testid="quick-add-property-fields" sx={{ minWidth: 0, cursor: 'auto' }}>
+      <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5 }}>
+        Property
+      </Typography>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <MyLocationIcon
           fontSize="small"
@@ -622,21 +769,14 @@ export function QuickAddPage() {
         </Box>
       )}
 
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <InputLabel id="quick-add-deal-source-label">Deal source</InputLabel>
-        <Select
-          labelId="quick-add-deal-source-label"
-          label="Deal source"
-          value={dealSource}
-          onChange={(e) => setDealSource(e.target.value)}
-        >
-          {QUICK_ADD_DEAL_SOURCES.map((source) => (
-            <MenuItem key={source} value={source}>
-              {source}
-            </MenuItem>
-          ))}
-        </Select>
-      </FormControl>
+      <CaptureSourceFields
+        source={dealSource}
+        onSourceChange={setDealSource}
+        context={context}
+        onContextChange={setContext}
+        sourceLabelId="quick-add-deal-source-label"
+        contextPlaceholder="Why this property stood out…"
+      />
 
       <TextField
         label="Date identified"
@@ -652,21 +792,21 @@ export function QuickAddPage() {
       />
 
       <TextField
-        label="Note (optional)"
+        label="Notes"
         value={note}
         onChange={(e) => setNote(e.target.value)}
         fullWidth
         multiline
-        minRows={3}
-        sx={{ mb: 2 }}
-        placeholder="Why this property stood out…"
-        inputProps={{ 'aria-label': 'Quick add note' }}
+        minRows={4}
+        sx={{ mb: 2, caretColor: 'text.primary' }}
+        placeholder="Anything else to remember"
+        inputProps={{ 'aria-label': 'Notes' }}
       />
 
       <Typography variant="subtitle2" sx={{ mb: 1 }}>
         Priority
       </Typography>
-      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 3 }}>
+      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
         {PRIORITY_OPTIONS.map((opt) => (
           <Chip
             key={opt.value}
@@ -675,17 +815,142 @@ export function QuickAddPage() {
             color={priority === opt.value ? 'primary' : 'default'}
             variant={priority === opt.value ? 'filled' : 'outlined'}
             onClick={() => setPriority(priority === opt.value ? null : opt.value)}
+            sx={{ cursor: 'pointer' }}
           />
         ))}
+      </Box>
+      </Box>
+
+      <Box data-testid="quick-add-people" sx={{ minWidth: 0, cursor: 'auto' }}>
+        <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 0.5 }}>
+          People
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          Add everyone you know for this address. Leave this empty if you only have the property.
+        </Typography>
+        {people.map((person, index) => (
+          <Paper
+            key={person.key}
+            variant="outlined"
+            data-testid={`quick-add-person-${index}`}
+            sx={{ p: 1.5, mb: 1.5, cursor: 'auto' }}
+          >
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+              <Typography variant="body2" fontWeight={600}>
+                Person {index + 1}
+              </Typography>
+              <IconButton
+                aria-label={`Remove person ${index + 1}`}
+                data-testid={`quick-add-remove-person-${index}`}
+                onClick={() => {
+                  setPeople((current) => current.filter((row) => row.key !== person.key))
+                  setPeopleError('')
+                }}
+                size="small"
+                sx={{ cursor: 'pointer' }}
+              >
+                <DeleteOutlineIcon fontSize="small" />
+              </IconButton>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1, mb: 1.5 }}>
+              <TextField
+                label="First name"
+                value={person.firstName}
+                onChange={(event) => {
+                  const value = event.target.value
+                  setPeople((current) => current.map((row) => (
+                    row.key === person.key ? { ...row, firstName: value } : row
+                  )))
+                }}
+                fullWidth
+                size="small"
+                inputProps={{ 'aria-label': `First name ${index + 1}` }}
+                sx={{ caretColor: 'text.primary' }}
+              />
+              <TextField
+                label="Last name"
+                value={person.lastName}
+                onChange={(event) => {
+                  const value = event.target.value
+                  setPeople((current) => current.map((row) => (
+                    row.key === person.key ? { ...row, lastName: value } : row
+                  )))
+                }}
+                fullWidth
+                size="small"
+                inputProps={{ 'aria-label': `Last name ${index + 1}` }}
+                sx={{ caretColor: 'text.primary' }}
+              />
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
+              <FormControl size="small" sx={{ minWidth: 160, flex: '1 1 160px' }}>
+                <InputLabel id={`quick-add-person-role-${index}`}>Role</InputLabel>
+                <Select
+                  labelId={`quick-add-person-role-${index}`}
+                  label="Role"
+                  value={person.role}
+                  onChange={(event) => {
+                    const value = event.target.value as ContactRole
+                    setPeople((current) => current.map((row) => (
+                      row.key === person.key ? { ...row, role: value } : row
+                    )))
+                  }}
+                >
+                  {CONTACT_ROLE_OPTIONS.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      {option.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <TextField
+                label="Phone"
+                value={person.phone}
+                onChange={(event) => {
+                  const value = event.target.value
+                  setPeople((current) => current.map((row) => (
+                    row.key === person.key ? { ...row, phone: value } : row
+                  )))
+                }}
+                size="small"
+                sx={{ flex: '1 1 180px', caretColor: 'text.primary' }}
+                inputProps={{ 'aria-label': `Phone ${index + 1}` }}
+              />
+              <TextField
+                label="Email"
+                value={person.email}
+                onChange={(event) => {
+                  const value = event.target.value
+                  setPeople((current) => current.map((row) => (
+                    row.key === person.key ? { ...row, email: value } : row
+                  )))
+                }}
+                size="small"
+                sx={{ flex: '1 1 180px', caretColor: 'text.primary' }}
+                inputProps={{ 'aria-label': `Email ${index + 1}` }}
+              />
+            </Box>
+          </Paper>
+        ))}
+        <Button
+          type="button"
+          variant="outlined"
+          onClick={addPerson}
+          data-testid="quick-add-add-person"
+          sx={{ cursor: 'pointer' }}
+        >
+          Add a person
+        </Button>
+      </Box>
       </Box>
 
       <Button
         type="submit"
         variant="contained"
         size="large"
-        fullWidth
         disabled={quickAddMutation.isPending}
         startIcon={quickAddMutation.isPending ? <CircularProgress size={18} color="inherit" /> : undefined}
+        sx={{ mt: 3, minWidth: { md: 280 }, cursor: 'pointer' }}
       >
         {quickAddMutation.isPending ? 'Saving…' : 'Save to Skip Trace'}
       </Button>
@@ -712,7 +977,7 @@ export function QuickAddPage() {
         }}
       >
         <Typography component="h1" variant="h6" fontWeight={700}>
-          Quick Add
+          {dialogTitle}
         </Typography>
         <IconButton
           aria-label="Close quick add"
@@ -723,7 +988,7 @@ export function QuickAddPage() {
           <CloseIcon />
         </IconButton>
       </DialogTitle>
-      <DialogContent dividers sx={{ pt: 2 }}>
+      <DialogContent dividers sx={{ pt: 2.5, px: { xs: 2, md: 4 }, cursor: 'auto' }}>
         {formBody}
       </DialogContent>
     </Dialog>

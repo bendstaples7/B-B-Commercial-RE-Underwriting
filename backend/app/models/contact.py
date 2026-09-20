@@ -23,6 +23,10 @@ class Contact(db.Model):
     )
     role_description = db.Column(db.String(255), nullable=True)
     notes = db.Column(db.Text, nullable=True)
+    # Where this person was found (HubSpot-aligned deal source list).
+    source = db.Column(db.String(255), nullable=True)
+    # Why the user added this person — distinct from general notes.
+    capture_context = db.Column(db.Text, nullable=True)
     # True after a human edits first/last — GIS/upsert must not overwrite names.
     name_locked = db.Column(
         db.Boolean, nullable=False, default=False, server_default=false(),

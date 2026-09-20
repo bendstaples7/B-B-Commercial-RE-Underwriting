@@ -184,6 +184,8 @@ _KNOWN_REVISIONS = frozenset({
     'mtg_log_20260918',
     # Activity dashboard meetings metric
     'act_mtg_20260919',
+    # Contact source + why on manual capture
+    'cap_src_20260919',
 })
 
 

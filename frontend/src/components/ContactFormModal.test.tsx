@@ -437,6 +437,8 @@ describe('ContactFormModal', () => {
       const payload = vi.mocked(contactService.updateContact).mock.calls[0][1]
       expect(payload).not.toHaveProperty('notes')
       expect(payload).not.toHaveProperty('role_description')
+      expect(payload).not.toHaveProperty('source')
+      expect(payload).not.toHaveProperty('capture_context')
     })
 
     it('preserves newly typed notes for summary edit targets', async () => {
