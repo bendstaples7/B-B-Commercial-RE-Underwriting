@@ -225,4 +225,24 @@ describe('QuickAddFabHost', () => {
 
     vi.unstubAllGlobals()
   })
+
+  it('hides the FAB at desktop width', () => {
+    const original = window.matchMedia
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes('min-width'),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }))
+    try {
+      renderFabAt('/kanban')
+      expect(screen.queryByTestId('quick-add-fab')).not.toBeInTheDocument()
+    } finally {
+      window.matchMedia = original
+    }
+  })
 })

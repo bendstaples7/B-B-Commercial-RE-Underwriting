@@ -1,7 +1,7 @@
 """Store source and why on manually captured contacts.
 
 Revision ID: cap_src_20260919
-Revises: act_mtg_20260919
+Revises: ctc_own_20260918
 Create Date: 2026-09-19
 """
 from alembic import op

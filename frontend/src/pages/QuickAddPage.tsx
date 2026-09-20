@@ -231,8 +231,20 @@ export function QuickAddPage() {
       const result = await leadService.quickAdd(quickAdd)
       let peopleSaved = 0
       const failures: string[] = []
-      for (const [index, person] of peopleToSave.entries()) {
+      // A repeat capture must not demote whoever is already primary. If we
+      // cannot tell, fail closed and leave every new person non-primary.
+      let existingHasPrimary = false
+      if (!result.created) {
+        try {
+          const existing = await contactService.getPropertyContacts(result.lead_id)
+          existingHasPrimary = existing.some((row) => row.is_primary)
+        } catch {
+          existingHasPrimary = true
+        }
+      }
+      for (const person of peopleToSave) {
         const label = [person.firstName, person.lastName].filter(Boolean).join(' ') || 'Contact'
+        let createdId: number | null = null
         try {
           const created = await contactService.createContact({
             first_name: person.firstName.trim() || null,
@@ -247,13 +259,23 @@ export function QuickAddPage() {
               ? [{ value: person.email.trim(), label: 'personal' }]
               : [],
           })
+          createdId = created.id
+          const makePrimary = !existingHasPrimary && peopleSaved === 0
           await contactService.linkContactToProperty(result.lead_id, {
             contact_id: created.id,
             role: person.role,
-            is_primary: index === 0,
+            is_primary: makePrimary,
           })
+          if (makePrimary) existingHasPrimary = true
           peopleSaved += 1
         } catch (error) {
+          if (createdId != null) {
+            try {
+              await contactService.deleteContact(createdId)
+            } catch {
+              // Still surface the link failure if cleanup also fails.
+            }
+          }
           const message = error instanceof Error ? error.message : 'Could not save contact'
           failures.push(`${label}: ${message}`)
         }

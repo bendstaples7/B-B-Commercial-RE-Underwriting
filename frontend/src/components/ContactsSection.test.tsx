@@ -106,7 +106,11 @@ beforeEach(() => {
 describe('ContactsSection', () => {
   it('renders people with phones and emails', async () => {
     vi.mocked(contactService.getPropertyContacts).mockResolvedValue([
-      mockPrimaryContact,
+      {
+        ...mockPrimaryContact,
+        source: 'Driving For Dollars',
+        capture_context: 'Broker sent them',
+      },
       mockSecondaryContact,
     ])
 
@@ -118,6 +122,8 @@ describe('ContactsSection', () => {
     })
     expect(screen.getByText(/555-1111/)).toBeInTheDocument()
     expect(screen.getByText(/alice@example\.com/)).toBeInTheDocument()
+    expect(screen.getByText('Source: Driving For Dollars')).toBeInTheDocument()
+    expect(screen.getByTestId('contact-context-1')).toHaveTextContent('Why: Broker sent them')
   })
 
   it('puts address-like names under Companies, not People', async () => {

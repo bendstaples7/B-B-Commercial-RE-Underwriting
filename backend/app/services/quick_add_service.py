@@ -83,14 +83,19 @@ def build_deal_description(
 
 
 def merge_deal_description(existing: str | None, new_block: str | None) -> str | None:
-    """Append a new quick-add capture block without discarding prior deal notes."""
+    """Append a capture block unless that exact block is already present."""
     new_block = (new_block or '').strip()
     if not new_block:
         return (existing or '').strip() or None
     existing_text = (existing or '').strip()
     if not existing_text:
         return new_block
-    if new_block in existing_text:
+    existing_blocks = [
+        block.strip()
+        for block in existing_text.split('\n\n---\n\n')
+        if block.strip()
+    ]
+    if new_block in existing_blocks:
         return existing_text
     return f'{existing_text}\n\n---\n\n{new_block}'
 
@@ -333,8 +338,9 @@ class QuickAddService:
             assert lead is not None
             upsert_payload: dict[str, Any] = {
                 'property_street': street,
-                'source': provenance,
             }
+            if not (lead.source or '').strip():
+                upsert_payload['source'] = provenance
             if city and not lead.property_city:
                 upsert_payload['property_city'] = city
             if state and not lead.property_state:
@@ -376,6 +382,7 @@ class QuickAddService:
             lead_id=lead.id,
             user_id=user_id,
             note=note,
+            context=context,
             capture_meta=capture_meta,
             created=created,
             capture_kind=resolved_kind,
@@ -428,12 +435,13 @@ class QuickAddService:
         lead_id: int,
         user_id: str,
         note: str | None,
+        context: str | None = None,
         capture_meta: dict[str, Any],
         created: bool,
         capture_kind: str = '',
     ) -> None:
         now = datetime.now(timezone.utc)
-        has_user_note = bool(note and note.strip())
+        has_user_content = bool((note or '').strip() or (context or '').strip())
         if capture_kind == 'property':
             created_summary = 'Quick-add: new property captured'
         elif capture_kind == 'lead':
@@ -451,7 +459,7 @@ class QuickAddService:
                 summary=created_summary[:500],
                 event_metadata=capture_meta,
             ))
-        elif not has_user_note:
+        elif not has_user_content:
             db.session.add(LeadTimelineEntry(
                 lead_id=lead_id,
                 event_type='lead_imported',

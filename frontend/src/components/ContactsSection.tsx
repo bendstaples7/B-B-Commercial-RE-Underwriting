@@ -820,11 +820,12 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
                         ) : null}
                         {contact.capture_context ? (
                           <Typography
-                            variant="body2"
+                            variant="caption"
                             color="text.secondary"
+                            sx={{ display: 'block' }}
                             data-testid={`contact-context-${contact.id}`}
                           >
-                            {contact.capture_context}
+                            Why: {contact.capture_context}
                           </Typography>
                         ) : null}
                         {organizations

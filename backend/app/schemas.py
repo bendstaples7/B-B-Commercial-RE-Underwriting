@@ -1841,6 +1841,19 @@ class QuickAddSchema(RequestSchema):
         load_default=None,
         validate=validate.OneOf(['property', 'lead']),
     )
+
+    @pre_load
+    def normalize_capture_kind(self, data, **kwargs):
+        """Treat blank and mixed-case kinds as the canonical values."""
+        if not isinstance(data, dict) or 'capture_kind' not in data:
+            return data
+        raw = data.get('capture_kind')
+        if not isinstance(raw, str):
+            return data
+        cleaned = raw.strip().lower()
+        data['capture_kind'] = cleaned or None
+        return data
+
     priority = fields.String(
         allow_none=True,
         load_default=None,

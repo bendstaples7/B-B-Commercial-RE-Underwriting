@@ -216,6 +216,8 @@ def create_contact():
     role : str (optional, default 'owner')
     role_description : str (optional)
     notes : str (optional)
+    source : str (optional, HubSpot deal-source value)
+    capture_context : str (optional, why this person is being added)
     phones : list of {value, label} (optional)
     emails : list of {value, label} (optional)
 
@@ -310,6 +312,7 @@ def update_contact(contact_id):
     """Update an existing Contact.
 
     Phones and emails are replaced atomically if provided.
+    Optional body fields include notes, source, and capture_context.
     Returns 404 if the Contact does not exist.
     """
     from app.models.contact import Contact

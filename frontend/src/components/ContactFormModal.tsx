@@ -285,6 +285,7 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
   const [linkRole, setLinkRole] = useState<ContactRole>('owner')
   const [selectedProperty, setSelectedProperty] = useState<SearchResultItem | null>(null)
   const [propertyQuery, setPropertyQuery] = useState('')
+  const [propertySearchText, setPropertySearchText] = useState('')
   const [debouncedPropertyQuery, setDebouncedPropertyQuery] = useState('')
 
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string }>({
@@ -306,6 +307,7 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
     setSelectedExisting(null)
     setSelectedProperty(null)
     setPropertyQuery('')
+    setPropertySearchText('')
     setDebouncedPropertyQuery('')
     setLinkRole(initialValues?.role ?? 'owner')
     // Reset only when the dialog opens or the edited contact changes — not on
@@ -328,9 +330,9 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
       setDebouncedPropertyQuery('')
       return
     }
-    const timeout = window.setTimeout(() => setDebouncedPropertyQuery(propertyQuery.trim()), 250)
+    const timeout = window.setTimeout(() => setDebouncedPropertyQuery(propertySearchText.trim()), 250)
     return () => window.clearTimeout(timeout)
-  }, [open, propertyId, propertyQuery])
+  }, [open, propertyId, propertySearchText])
 
   const { data: searchResults = [], isFetching: searchLoading } = useQuery({
     queryKey: ['contactSearch', propertyId, debouncedQuery],
@@ -526,6 +528,22 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
     ) {
       delete payload.notes
     }
+    if (
+      isEditMode
+      && contact?.source === undefined
+      && initialValues?.source === undefined
+      && !form.source.trim()
+    ) {
+      delete payload.source
+    }
+    if (
+      isEditMode
+      && contact?.capture_context === undefined
+      && initialValues?.captureContext === undefined
+      && !form.captureContext.trim()
+    ) {
+      delete payload.capture_context
+    }
 
     if (isEditMode) {
       updateMutation.mutate(payload)
@@ -661,11 +679,14 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
                     onChange={(_, value) => {
                       setSelectedProperty(value)
                       setPropertyQuery(value ? (value.label || value.property_street || '') : '')
+                      setPropertySearchText('')
+                      setDebouncedPropertyQuery('')
                     }}
                     inputValue={propertyQuery}
                     onInputChange={(_, value, reason) => {
                       if (reason === 'reset') return
                       setPropertyQuery(value)
+                      setPropertySearchText(value)
                       if (reason === 'input' || reason === 'clear') setSelectedProperty(null)
                     }}
                     getOptionLabel={(option) => option.label || option.property_street || `Lead #${option.id}`}

@@ -265,6 +265,85 @@ class TestQuickAddEndpoint:
             ]
             assert [e.summary for e in capture_notes] == ['First pass', 'Second pass']
 
+    def test_recapture_keeps_existing_source(self, quick_add_client, app):
+        with app.app_context():
+            street = '424 Source Keep St, Chicago, IL'
+            r1 = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({'property_street': street}),
+                content_type='application/json',
+            )
+            lead = db.session.get(Lead, r1.get_json()['lead_id'])
+            lead.source = 'hubspot'
+            db.session.commit()
+
+            r2 = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': street,
+                    'capture_kind': 'lead',
+                    'note': 'Second visit',
+                }),
+                content_type='application/json',
+            )
+            assert r2.status_code == 201
+            assert r2.get_json()['created'] is False
+            db.session.refresh(lead)
+            assert lead.source == 'hubspot'
+
+    def test_context_only_recapture_skips_generic_import(self, quick_add_client, app):
+        with app.app_context():
+            street = '121 Context Only Ln, Chicago, IL'
+            r1 = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({'property_street': street, 'note': 'First note'}),
+                content_type='application/json',
+            )
+            lead_id = r1.get_json()['lead_id']
+            r2 = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({'property_street': street, 'context': 'Broker sent it'}),
+                content_type='application/json',
+            )
+            assert r2.status_code == 201
+            imported = LeadTimelineEntry.query.filter_by(
+                lead_id=lead_id,
+                event_type='lead_imported',
+            ).count()
+            assert imported == 1
+
+    def test_blank_and_mixed_case_capture_kind(self, quick_add_client, app):
+        with app.app_context():
+            blank = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '10 Blank Kind Ave, Chicago, IL',
+                    'capture_kind': '',
+                }),
+                content_type='application/json',
+            )
+            assert blank.status_code == 201
+            blank_lead = db.session.get(Lead, blank.get_json()['lead_id'])
+            assert blank_lead.source == 'walk_by'
+
+            mixed = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '11 Mixed Kind Ave, Chicago, IL',
+                    'capture_kind': 'Lead',
+                }),
+                content_type='application/json',
+            )
+            assert mixed.status_code == 201
+            mixed_lead = db.session.get(Lead, mixed.get_json()['lead_id'])
+            assert mixed_lead.source == 'manual'
+
     def test_lookup_returns_address_matches(self, quick_add_client, app):
         with app.app_context():
             quick_add_client.post(
@@ -494,6 +573,10 @@ class TestMergeDealDescription:
         block = 'Walk-by · same capture'
         merged = merge_deal_description(f'Prior\n\n---\n\n{block}', block)
         assert merged.count(block) == 1
+
+    def test_appends_when_new_note_is_only_a_substring(self):
+        merged = merge_deal_description('Call the owner after 5', 'after 5')
+        assert merged == 'Call the owner after 5\n\n---\n\nafter 5'
 
 
 class TestQuickAddActivityNoteBody:

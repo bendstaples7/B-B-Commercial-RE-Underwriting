@@ -47,6 +47,8 @@ vi.mock('@/services/contactApi', () => ({
   contactService: {
     createContact: vi.fn(),
     linkContactToProperty: vi.fn(),
+    getPropertyContacts: vi.fn(),
+    deleteContact: vi.fn(),
   },
 }))
 
@@ -312,6 +314,84 @@ describe('QuickAddPage deprioritized matches', () => {
       99,
       expect.objectContaining({ contact_id: 12, is_primary: false }),
     )
+    expect(contactService.getPropertyContacts).not.toHaveBeenCalled()
+  })
+
+  it('does not mark a new person primary when the property already has one', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    vi.mocked(leadService.quickAdd).mockResolvedValue({
+      created: false,
+      lead_id: 99,
+      hubspot_push_status: 'disabled',
+    } as never)
+    vi.mocked(contactService.getPropertyContacts).mockResolvedValue([
+      { id: 4, is_primary: true } as never,
+    ])
+    vi.mocked(contactService.createContact).mockResolvedValue({ id: 11 } as never)
+    vi.mocked(contactService.linkContactToProperty).mockResolvedValue({} as never)
+    renderPage()
+
+    fireEvent.click(screen.getByTestId('quick-add-add-person'))
+    fireEvent.change(screen.getByLabelText('First name 1'), { target: { value: 'Ada' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save to Skip Trace' }))
+
+    await waitFor(() => {
+      expect(contactService.linkContactToProperty).toHaveBeenCalledWith(
+        99,
+        expect.objectContaining({ contact_id: 11, is_primary: false }),
+      )
+    })
+  })
+
+  it('does not guess a primary when existing contacts cannot be loaded', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    vi.mocked(leadService.quickAdd).mockResolvedValue({
+      created: false,
+      lead_id: 99,
+      hubspot_push_status: 'disabled',
+    } as never)
+    vi.mocked(contactService.getPropertyContacts).mockRejectedValue(new Error('offline'))
+    vi.mocked(contactService.createContact).mockResolvedValue({ id: 11 } as never)
+    vi.mocked(contactService.linkContactToProperty).mockResolvedValue({} as never)
+    renderPage()
+
+    fireEvent.click(screen.getByTestId('quick-add-add-person'))
+    fireEvent.change(screen.getByLabelText('First name 1'), { target: { value: 'Ada' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save to Skip Trace' }))
+
+    await waitFor(() => {
+      expect(contactService.linkContactToProperty).toHaveBeenCalledWith(
+        99,
+        expect.objectContaining({ contact_id: 11, is_primary: false }),
+      )
+    })
+  })
+
+  it('deletes an unlinked person and makes the next saved person primary', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    vi.mocked(contactService.createContact)
+      .mockResolvedValueOnce({ id: 11 } as never)
+      .mockResolvedValueOnce({ id: 12 } as never)
+    vi.mocked(contactService.linkContactToProperty)
+      .mockRejectedValueOnce(new Error('link failed'))
+      .mockResolvedValueOnce({} as never)
+    vi.mocked(contactService.deleteContact).mockResolvedValue(undefined)
+    renderPage()
+
+    fireEvent.click(screen.getByTestId('quick-add-add-person'))
+    fireEvent.change(screen.getByLabelText('First name 1'), { target: { value: 'Ada' } })
+    fireEvent.click(screen.getByTestId('quick-add-add-person'))
+    fireEvent.change(screen.getByLabelText('First name 2'), { target: { value: 'Grace' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save to Skip Trace' }))
+
+    await waitFor(() => {
+      expect(contactService.deleteContact).toHaveBeenCalledWith(11)
+    })
+    expect(contactService.linkContactToProperty).toHaveBeenLastCalledWith(
+      99,
+      expect.objectContaining({ contact_id: 12, is_primary: true }),
+    )
+    expect(await screen.findByText(/link failed/)).toBeInTheDocument()
   })
 
   it('does not save a person row that has no name', () => {
