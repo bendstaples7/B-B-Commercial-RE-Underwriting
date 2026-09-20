@@ -17,6 +17,7 @@ from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
 from app import db, limiter
+from app.api_utils import PUBLIC_API_ROUTES
 from app.exceptions import PasswordSetupRequiredException
 from app.models.user import User
 from app.schemas import LoginSchema
@@ -26,17 +27,9 @@ logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint('auth', __name__)
 
-# ---------------------------------------------------------------------------
-# Public-endpoint allowlist
-#
-# Paths listed here are skipped by the ``require_auth`` decorator (task 3.2).
-# The login endpoint must always be on this list so unauthenticated clients
-# can obtain a token.
-# ---------------------------------------------------------------------------
+# Canonical allowlist lives in api_utils.PUBLIC_API_ROUTES (global API gate).
 PUBLIC_ENDPOINTS = {
-    'POST /api/auth/login',
-    'POST /api/auth/set-password',
-    'GET /api/health',
+    f'{method} {path}' for method, path in PUBLIC_API_ROUTES
 }
 
 _login_schema = LoginSchema()

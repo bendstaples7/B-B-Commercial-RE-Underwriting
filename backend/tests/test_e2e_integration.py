@@ -14,6 +14,12 @@ import json
 from datetime import datetime
 from app.models.analysis_session import WorkflowStep
 from app.models import AnalysisSession, PropertyFacts, ComparableSale
+from tests.conftest import wrap_test_client_with_user
+
+
+@pytest.fixture
+def client(app):
+    return wrap_test_client_with_user(app.test_client(), user_id='user123')
 
 
 # Helper: full property facts payload for PUT /step/1
@@ -597,8 +603,14 @@ class TestSessionPersistence:
         
         assert session1_id != session2_id
         
-        state1 = client.get(f'/api/analysis/{session1_id}').get_json()
-        state2 = client.get(f'/api/analysis/{session2_id}').get_json()
+        state1 = client.get(
+            f'/api/analysis/{session1_id}',
+            headers={'X-User-Id': 'user-001'},
+        ).get_json()
+        state2 = client.get(
+            f'/api/analysis/{session2_id}',
+            headers={'X-User-Id': 'user-002'},
+        ).get_json()
         
         assert state1['user_id'] == 'user-001'
         assert state2['user_id'] == 'user-002'

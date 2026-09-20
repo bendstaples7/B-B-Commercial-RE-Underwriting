@@ -23,6 +23,12 @@ import pytest
 
 from app import db
 from app.models.import_job import ImportJob
+from tests.conftest import wrap_test_client_with_user
+
+
+@pytest.fixture
+def client(app):
+    return wrap_test_client_with_user(app.test_client(), user_id='test-user-001')
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +173,32 @@ class TestIngestForeclosure:
                     [FORECLOSURE_RECORD], OWNER_USER_ID
                 )
 
+    def test_spoofed_owner_user_id_is_ignored(self, client, app):
+        """Leads are owned by the authenticated caller, not the request body."""
+        fake_job = _make_fake_job()
+
+        with app.app_context():
+            with patch(
+                "app.controllers.ingestion_controller._build_service"
+            ) as mock_build:
+                mock_service = MagicMock()
+                mock_service.ingest_foreclosure.return_value = fake_job
+                mock_build.return_value = mock_service
+
+                payload = {
+                    "owner_user_id": "victim-user-id",
+                    "records": [FORECLOSURE_RECORD],
+                }
+                resp = client.post(
+                    "/api/ingestion/foreclosure",
+                    data=json.dumps(payload),
+                    content_type="application/json",
+                )
+                assert resp.status_code == 200
+                mock_service.ingest_foreclosure.assert_called_once_with(
+                    [FORECLOSURE_RECORD], OWNER_USER_ID
+                )
+
 
 # ---------------------------------------------------------------------------
 # GET /api/ingestion/jobs/<job_id>
@@ -214,6 +246,28 @@ class TestGetImportJob:
         data = resp.get_json()
         assert "error" in data
         assert "99999" in data["error"]["message"]
+
+    def test_foreign_job_returns_404(self, client, app):
+        """Another user's ingestion job is not readable."""
+        with app.app_context():
+            job = ImportJob(
+                user_id="other-user",
+                spreadsheet_id="ingestion",
+                sheet_name="foreclosure",
+                source_type="foreclosure",
+                status="completed",
+                rows_processed=5,
+                rows_imported=4,
+                rows_skipped=1,
+                error_log=[{"row": 1, "owner": "secret name"}],
+            )
+            db.session.add(job)
+            db.session.commit()
+            job_id = job.id
+
+        resp = client.get(f"/api/ingestion/jobs/{job_id}")
+        assert resp.status_code == 404
+        assert "error_log" not in (resp.get_json() or {})
 
 
 # ---------------------------------------------------------------------------
@@ -396,3 +450,55 @@ class TestFilterParamsForwarding:
                 call_args = mock_service.ingest_foreclosure.call_args
                 assert call_args[0][0] == records
                 assert call_args[0][1] == OWNER_USER_ID
+
+
+class TestScoreImportedLeadsIsolatesFailures:
+    def test_later_leads_still_score_after_one_failure(self, app):
+        from app.models.lead import Lead
+        from app.services.deduplication_engine import DeduplicationEngine
+        from app.services.lead_ingestion_service import LeadIngestionService
+
+        with app.app_context():
+            job = ImportJob(
+                user_id='test-user',
+                spreadsheet_id='ingestion',
+                sheet_name='manual',
+                source_type='manual_distress',
+                status='completed',
+            )
+            db.session.add(job)
+            db.session.flush()
+            first = Lead(
+                property_street='1 Score Fail St',
+                owner_user_id='test-user',
+                last_import_job_id=job.id,
+            )
+            second = Lead(
+                property_street='2 Score Ok St',
+                owner_user_id='test-user',
+                last_import_job_id=job.id,
+            )
+            db.session.add_all([first, second])
+            db.session.commit()
+            first_id, second_id = first.id, second.id
+            scored = []
+
+            def fake_score(lead):
+                scored.append(lead.id)
+                if lead.id == first_id:
+                    db.session.add(lead)
+                    db.session.flush()
+                    raise RuntimeError('persist failed')
+                lead.lead_score = 77.0
+                db.session.commit()
+
+            svc = LeadIngestionService(DeduplicationEngine(), {})
+            with patch(
+                'app.services.lead_scoring_engine.LeadScoringEngine.recalculate_lead_score',
+                side_effect=fake_score,
+            ):
+                svc._score_imported_leads(job.id)
+
+            assert scored == [first_id, second_id]
+            refreshed = db.session.get(Lead, second_id)
+            assert refreshed.lead_score == 77.0

@@ -37,6 +37,9 @@ class TestQuickAddEndpoint:
             assert body['lead_status'] == 'skip_trace'
             assert body['deal_source'] == 'Driving For Dollars'
             assert body['date_identified'] is not None
+            lead = db.session.get(Lead, body['lead_id'])
+            assert lead is not None
+            assert lead.owner_first_name == ''
 
             lead = db.session.get(Lead, body['lead_id'])
             assert lead is not None
@@ -529,5 +532,6 @@ class TestQuickAddActivityNoteBody:
                 '/api/leads/quick-add',
                 data=json.dumps({'property_street': '123 No Auth St'}),
                 content_type='application/json',
+                headers={'X-User-Id': ''},
             )
             assert response.status_code in (401, 403)

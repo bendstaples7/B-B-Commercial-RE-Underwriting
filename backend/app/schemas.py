@@ -1182,7 +1182,7 @@ class OMIntakeConfirmRequestSchema(RequestSchema):
 # HubSpot CRM Migration Schemas — Interaction / Timeline
 # ---------------------------------------------------------------------------
 
-class InteractionSchema(Schema):
+class InteractionSchema(RequestSchema):
     """Schema for serializing and deserializing Interaction records.
 
     Used for both request validation (create/update) and response serialization.
@@ -1195,13 +1195,10 @@ class InteractionSchema(Schema):
     )
     body = fields.Str(required=True, validate=validate.Length(min=1))
     occurred_at = fields.DateTime(required=True)
-    source = fields.Str(
-        load_default='manual',
-        validate=validate.OneOf(['manual', 'hubspot_import']),
-    )
-    hubspot_engagement_id = fields.Str(allow_none=True, load_default=None)
-    raw_payload = fields.Dict(allow_none=True, load_default=None)
-    is_orphaned = fields.Bool(load_default=False)
+    source = fields.Str(dump_only=True)
+    hubspot_engagement_id = fields.Str(dump_only=True, allow_none=True)
+    raw_payload = fields.Dict(dump_only=True, allow_none=True)
+    is_orphaned = fields.Bool(dump_only=True)
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
 
@@ -1238,7 +1235,7 @@ class TimelineEntrySchema(Schema):
 # HubSpot CRM — Task Schemas
 # ---------------------------------------------------------------------------
 
-class TaskSchema(Schema):
+class TaskSchema(RequestSchema):
     """Schema for serializing and deserializing Task records.
 
     Requirements: 3.1
@@ -1255,12 +1252,9 @@ class TaskSchema(Schema):
         load_default='medium',
         validate=validate.OneOf(['high', 'medium', 'low']),
     )
-    source = fields.Str(
-        load_default='manual',
-        validate=validate.OneOf(['manual', 'hubspot_import']),
-    )
-    hubspot_task_id = fields.Str(allow_none=True)
-    raw_payload = fields.Dict(allow_none=True)
+    source = fields.Str(dump_only=True)
+    hubspot_task_id = fields.Str(dump_only=True, allow_none=True)
+    raw_payload = fields.Dict(dump_only=True, allow_none=True)
     completion_timestamp = fields.DateTime(dump_only=True, allow_none=True)
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
@@ -1291,7 +1285,7 @@ VALID_ORG_TYPES = [
 VALID_ORG_STATUSES = ['active', 'inactive', 'unknown']
 
 
-class OrganizationSchema(Schema):
+class OrganizationSchema(RequestSchema):
     """Schema for serializing and deserializing Organization records.
 
     dump_only fields: id, created_at, updated_at (server-managed).
@@ -1309,7 +1303,7 @@ class OrganizationSchema(Schema):
     )
     notes = fields.Str(allow_none=True, load_default=None)
     source = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=100))
-    hubspot_company_id = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=50))
+    hubspot_company_id = fields.Str(dump_only=True, allow_none=True)
     jurisdiction = fields.Str(dump_only=True, allow_none=True)
     file_number = fields.Str(dump_only=True, allow_none=True)
     registered_agent_name = fields.Str(dump_only=True, allow_none=True)

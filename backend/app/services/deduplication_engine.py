@@ -11,6 +11,55 @@ from typing import Literal, Optional
 NORMALIZATION_PATTERN = re.compile(r'[^\w\s]')  # strip punctuation
 WHITESPACE_PATTERN = re.compile(r'\s+')          # collapse whitespace
 
+# Callers pass a dict; never copy scoring/pipeline/CRM identity from that dict.
+_INGEST_NEVER_WRITE = frozenset({
+    'id',
+    'created_at',
+    'updated_at',
+    'last_import_job_id',
+    'lead_score',
+    'recommended_action',
+    'recommended_contact_method',
+    'is_warm',
+    'lead_status',
+    'needs_skip_trace',
+    'review_required',
+    'review_reason',
+    'review_triggered_at',
+    'motivation_score',
+    'motivation_signal_summary',
+    'analysis_session_id',
+    'condo_analysis_id',
+    'condo_risk_status',
+    'building_sale_possible',
+    'suppression_flag',
+    'up_next_to_mail',
+    'mailer_history',
+    'lead_category_locked',
+    'last_contact_date',
+    'unanswered_call_count',
+    'unanswered_mail_nudge_dismissed_count',
+    'prefer_direct_mail',
+    'hubspot_deal_stage',
+    'last_hubspot_sync_at',
+    'date_added_to_hubspot',
+    'follow_up_date',
+    'skip_trace_next_source_id',
+    'skip_trace_exhausted_at',
+    'skip_trace_cycle',
+    'skip_tracer',
+    'date_skip_traced',
+    'normalized_street',
+    'analysis_complete',
+    'follow_up_overdue',
+    'has_phone',
+    'has_email',
+    'has_property_match',
+    'data_completeness_score',
+    'quick_briefing',
+    'note_property_facts',
+})
+
 
 def _normalize_record_names(record: dict) -> dict:
     """Ensure owner_first_name and owner_last_name are separate.
@@ -140,6 +189,7 @@ class DeduplicationEngine:
         self,
         property_street: str,
         pin: Optional[str] = None,
+        owner_user_id: Optional[str] = None,
     ) -> Optional[object]:
         """Look up an existing Lead by normalized address, with PIN as secondary key.
 
@@ -155,6 +205,7 @@ class DeduplicationEngine:
         Args:
             property_street: Incoming property street address.
             pin: Optional county assessor PIN for secondary lookup.
+            owner_user_id: When set, only match leads owned by this user.
 
         Returns:
             Matching Property/Lead instance, or None if no match found.
@@ -181,11 +232,13 @@ class DeduplicationEngine:
         # The Python-side normalization comparison is the authoritative deduplication
         # check. For production workloads with large tables, a separate pre-computed
         # normalized_address column with an index is the correct optimization path.
-        candidates = (
+        query = (
             db.session.query(Property)
             .filter(Property.property_street.isnot(None))
-            .all()
         )
+        if owner_user_id:
+            query = query.filter(Property.owner_user_id == owner_user_id)
+        candidates = query.all()
 
         for candidate in candidates:
             if candidate.property_street and \
@@ -194,12 +247,12 @@ class DeduplicationEngine:
 
         # ---- Secondary key: PIN ----
         if pin:
-            lead = (
-                db.session.query(Property)
-                .filter(Property.county_assessor_pin == pin)
-                .first()
+            pin_query = db.session.query(Property).filter(
+                Property.county_assessor_pin == pin
             )
-            return lead
+            if owner_user_id:
+                pin_query = pin_query.filter(Property.owner_user_id == owner_user_id)
+            return pin_query.first()
 
         return None
 
@@ -235,11 +288,15 @@ class DeduplicationEngine:
         conflicts = []
         updated = False
 
-        # Fields that must never be overwritten (internal metadata)
-        PROTECTED_FIELDS = {'id', 'created_at', 'last_import_job_id'}
+        # Fields that must never be overwritten (internal metadata / scoring)
+        PROTECTED_FIELDS = set(_INGEST_NEVER_WRITE) | {'owner_user_id'}
         if ContactService.primary_owner_name_locked(existing.id):
             PROTECTED_FIELDS = PROTECTED_FIELDS | {
                 'owner_first_name', 'owner_last_name',
+            }
+        if getattr(existing, 'lead_category_locked', False):
+            PROTECTED_FIELDS = PROTECTED_FIELDS | {
+                'lead_category', 'property_type',
             }
 
         for field, incoming_value in incoming.items():
@@ -328,12 +385,18 @@ class DeduplicationEngine:
         property_street = record.get('property_street', '') or ''
         incoming_pin = record.get('county_assessor_pin')
 
-        existing = self.find_existing_lead(property_street, incoming_pin)
+        existing = self.find_existing_lead(
+            property_street,
+            incoming_pin,
+            owner_user_id=record.get('owner_user_id'),
+        )
 
         if existing is None:
             # No match — create a new lead
             new_lead = Property()
             for field, value in record.items():
+                if field in _INGEST_NEVER_WRITE:
+                    continue
                 if hasattr(new_lead, field) and value is not None and value != '':
                     setattr(new_lead, field, value)
             new_lead.last_import_job_id = import_job_id

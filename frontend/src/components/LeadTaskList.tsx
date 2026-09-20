@@ -169,6 +169,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
   const [formOpen, setFormOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [taskPreset, setTaskPreset] = useState<CreateTaskPresetId>('custom')
+  const [duePreset, setDuePreset] = useState<FollowUpPreset>('custom')
   const [dueDate, setDueDate] = useState('')
   const [titleError, setTitleError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -219,6 +220,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     setFormOpen(true)
     setTitle('')
     setTaskPreset('custom')
+    setDuePreset('custom')
     setDueDate('')
     setTitleError(null)
     setSubmitError(null)
@@ -232,6 +234,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     setFormOpen(false)
     setTitle('')
     setTaskPreset('custom')
+    setDuePreset('custom')
     setDueDate('')
     setTitleError(null)
     setSubmitError(null)
@@ -271,6 +274,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
       taskPreset,
       titleForValidation,
     )
+    const resolvedDue = resolveFollowUpDueDate(duePreset, dueDate)
 
     setTitleError(null)
     setSubmitError(null)
@@ -284,7 +288,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
       task_type: taskType,
       title: resolvedTitle,
       status: 'open',
-      due_date: dueDate || null,
+      due_date: resolvedDue,
       created_at: new Date().toISOString(),
       completed_at: null,
       created_by: 'user',
@@ -297,7 +301,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
       const newTask = await leadTaskService.createTask(leadId, {
         title: resolvedTitle,
         task_type: taskType,
-        due_date: dueDate || null,
+        due_date: resolvedDue,
       })
       onTaskCreated(newTask)
       handleCloseForm()
@@ -1090,17 +1094,17 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
             inputProps={{ maxLength: 255, 'data-testid': 'task-title-input' }}
           />
 
-          <TextField
-            label="Due Date (optional)"
-            type="date"
-            value={dueDate}
-            onChange={(e) => setDueDate(e.target.value)}
-            fullWidth
-            size="small"
-            sx={{ mb: 2 }}
-            InputLabelProps={{ shrink: true }}
-            inputProps={{ 'data-testid': 'task-due-date-input' }}
-          />
+          <Box sx={{ mb: 2 }}>
+            <FollowUpHorizonControls
+              variant="list"
+              preset={duePreset}
+              customDueDate={dueDate}
+              onPresetChange={setDuePreset}
+              onCustomDueDateChange={setDueDate}
+              testIdPrefix="task-due"
+              dateLabel="Due date"
+            />
+          </Box>
 
           <Stack direction="row" spacing={1} justifyContent="flex-end">
             <Button

@@ -11,6 +11,7 @@ Covers:
   - HubSpot matcher end-to-end: email match, phone match, name+property match
 """
 import pytest
+from unittest.mock import patch
 
 from app import db
 from app.models.lead import Lead
@@ -39,7 +40,10 @@ def _make_property(street: str = "100 Integration St") -> Lead:
 
 def _make_contact(first: str, last: str, role: str = "owner") -> Contact:
     """Create and persist a minimal Contact record."""
-    contact = Contact(first_name=first, last_name=last, role=role)
+    contact = Contact(
+        first_name=first, last_name=last, role=role,
+        created_by_user_id="test-user",
+    )
     db.session.add(contact)
     db.session.commit()
     return contact
@@ -67,6 +71,15 @@ def _make_hubspot_contact(hubspot_id: str, **props) -> HubSpotContact:
     db.session.add(hc)
     db.session.commit()
     return hc
+
+
+def _match_contact_as_test_importer(hc: HubSpotContact):
+    with patch.object(
+        HubSpotMatcherService,
+        '_hubspot_import_owner_user_id',
+        return_value='test-user',
+    ):
+        return HubSpotMatcherService().match_contact(hc)
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +218,7 @@ class TestPrimaryDemotion:
                 "role": "owner",
                 "is_primary": True,
             },
+            headers=_AUTH_HEADERS,
         )
         assert resp.status_code == 201
 
@@ -233,7 +247,7 @@ class TestPrimaryDemotion:
             active_id = active.id
             former_id = former.id
 
-        anon = client.get(f"/api/properties/{prop_id}/contacts")
+        anon = client.get(f"/api/properties/{prop_id}/contacts", headers={'X-User-Id': ''})
         assert anon.status_code == 401
 
         default_resp = client.get(f"/api/properties/{prop_id}/contacts", headers=_AUTH_HEADERS)
@@ -273,6 +287,7 @@ class TestPrimaryDemotion:
                 "role": "owner",
                 "is_primary": True,
             },
+            headers=_AUTH_HEADERS,
         )
         assert resp.status_code == 201
 
@@ -306,6 +321,7 @@ class TestPrimaryDemotion:
                 "role": "owner",
                 "is_primary": False,
             },
+            headers=_AUTH_HEADERS,
         )
         assert resp.status_code == 201
 
@@ -338,7 +354,10 @@ class TestDeletePrimaryNoAutoPromotion:
             secondary_id = secondary.id
 
         # DELETE the primary contact link
-        resp = client.delete(f"/api/properties/{prop_id}/contacts/{primary_id}")
+        resp = client.delete(
+            f"/api/properties/{prop_id}/contacts/{primary_id}",
+            headers=_AUTH_HEADERS,
+        )
         assert resp.status_code == 204
 
         # Verify via HTTP that secondary is still not primary
@@ -364,7 +383,10 @@ class TestDeletePrimaryNoAutoPromotion:
             primary_id = primary.id
             secondary_id = secondary.id
 
-        resp = client.delete(f"/api/properties/{prop_id}/contacts/{primary_id}")
+        resp = client.delete(
+            f"/api/properties/{prop_id}/contacts/{primary_id}",
+            headers=_AUTH_HEADERS,
+        )
         assert resp.status_code == 204
 
         with app.app_context():
@@ -389,7 +411,7 @@ class TestDeletePrimaryNoAutoPromotion:
             prop_id = prop.id
             primary_id = primary.id
 
-        resp = client.delete(f"/api/properties/{prop_id}/contacts/{primary_id}")
+        resp = client.delete(f"/api/properties/{prop_id}/contacts/{primary_id}", headers=_AUTH_HEADERS)
         assert resp.status_code == 204
 
         with app.app_context():
@@ -405,7 +427,7 @@ class TestDeletePrimaryNoAutoPromotion:
             prop_id = prop.id
             contact_id = contact.id
 
-        resp = client.delete(f"/api/properties/{prop_id}/contacts/{contact_id}")
+        resp = client.delete(f"/api/properties/{prop_id}/contacts/{contact_id}", headers=_AUTH_HEADERS)
         assert resp.status_code == 404
 
 
@@ -433,8 +455,7 @@ class TestHubSpotMatcherEndToEnd:
                 lastname="Matcher",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.confidence == "HIGH"
@@ -457,8 +478,7 @@ class TestHubSpotMatcherEndToEnd:
                 email="caseemail@example.com",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.confidence == "HIGH"
@@ -480,8 +500,7 @@ class TestHubSpotMatcherEndToEnd:
                 phone="3125557890",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.confidence == "HIGH"
@@ -503,8 +522,7 @@ class TestHubSpotMatcherEndToEnd:
                 phone="(773) 555-1234",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.confidence == "HIGH"
@@ -525,8 +543,7 @@ class TestHubSpotMatcherEndToEnd:
                 lastname="NameLast",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.confidence == "MEDIUM"
@@ -547,8 +564,7 @@ class TestHubSpotMatcherEndToEnd:
                 lastname="lastname",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.confidence == "MEDIUM"
@@ -574,8 +590,7 @@ class TestHubSpotMatcherEndToEnd:
                 lastname="Test",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.confidence == "HIGH"
@@ -594,8 +609,7 @@ class TestHubSpotMatcherEndToEnd:
                 lastname="New",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             final_count = Contact.query.count()
@@ -623,8 +637,7 @@ class TestHubSpotMatcherEndToEnd:
                 email="correct@example.com",
             )
 
-            svc = HubSpotMatcherService()
-            match = svc.match_contact(hc)
+            match = _match_contact_as_test_importer(hc)
             db.session.commit()
 
             assert match.internal_record_id == prop_a.id

@@ -1663,10 +1663,10 @@ def rescore_leads_after_import(user_id: str = 'default') -> int:
 
 
 @celery.task(name='hubspot.generate_backup')
-def generate_backup_export() -> str:
+def generate_backup_export(user_id: str = 'system') -> str:
     """Serialize all raw HubSpot tables to a JSON backup file."""
     from app.tasks.hubspot_tasks import run_generate_backup_export
-    return run_generate_backup_export()
+    return run_generate_backup_export(user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -2283,8 +2283,11 @@ def pull_dupage_absentee_leads_task(self):
                     try:
                         if pin:
                             existing = conn.execute(
-                                sa.text('SELECT id FROM leads WHERE county_assessor_pin = :pin'),
-                                {'pin': pin}
+                                sa.text(
+                                    'SELECT id FROM leads WHERE county_assessor_pin = :pin '
+                                    'AND owner_user_id = :owner_user_id'
+                                ),
+                                {'pin': pin, 'owner_user_id': OWNER_USER_ID}
                             ).fetchone()
                             if existing:
                                 conn.execute(sa.text("""
@@ -2304,6 +2307,7 @@ def pull_dupage_absentee_leads_task(self):
                                         owner_user_id    = COALESCE(owner_user_id,    :owner_user_id),
                                         updated_at       = :now
                                     WHERE county_assessor_pin = :county_assessor_pin
+                                      AND owner_user_id = :owner_user_id
                                 """), {**row, 'now': now})
                                 sp.commit()
                                 total_upserted += 1
@@ -2352,6 +2356,7 @@ def pull_dupage_absentee_leads_task(self):
                 .filter(
                     Property.source_type == 'absentee_owner',
                     Property.lead_score == 0,
+                    Property.owner_user_id == OWNER_USER_ID,
                 )
                 .all()
             )
@@ -2478,7 +2483,7 @@ def backfill_property_matches_task(self):
                             no_connector += 1
                             continue
                         outcome = ingestion_svc._enrich_with_gis(
-                            lead, lead_connector, import_job_id=0
+                            lead, lead_connector, import_job_id=0, is_creation=False,
                         )
                         gis_lookups += 1
                         if outcome.get('error'):

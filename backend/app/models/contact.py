@@ -35,6 +35,8 @@ class Contact(db.Model):
     keep_on_gis = db.Column(
         db.Boolean, nullable=False, default=False, server_default=false(),
     )
+    # Creating user; unlinked contacts are only visible to this user (or admin).
+    created_by_user_id = db.Column(db.String(255), nullable=True, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(
         db.DateTime, nullable=False,

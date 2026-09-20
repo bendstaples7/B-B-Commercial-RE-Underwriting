@@ -294,7 +294,7 @@ class TestBug2SynchronousStep2Exploration:
             session_id = str(uuid.uuid4())
             session = AnalysisSession(
                 session_id=session_id,
-                user_id="test_user",
+                user_id="test-user",
                 current_step=WorkflowStep.PROPERTY_FACTS,
                 completed_steps=["PROPERTY_FACTS"],
                 step_results={"PROPERTY_FACTS": {"status": "complete"}},
@@ -497,7 +497,7 @@ def _pres_seed_session(app, target_step_value: int):
 
     session = AnalysisSession(
         session_id=session_id,
-        user_id="test_user",
+        user_id="test-user",
         current_step=current_step,
         completed_steps=completed,
         step_results={s: {"status": "complete"} for s in completed},
@@ -1541,7 +1541,7 @@ class TestBug2UnitTests:
             session_id = str(uuid.uuid4())
             session = AnalysisSession(
                 session_id=session_id,
-                user_id="test_user",
+                user_id="test-user",
                 current_step=WorkflowStep.PROPERTY_FACTS,
                 completed_steps=["PROPERTY_FACTS"],
                 step_results={"PROPERTY_FACTS": {"status": "complete"}},
@@ -1596,7 +1596,7 @@ class TestBug2UnitTests:
             session_id = str(uuid.uuid4())
             session = AnalysisSession(
                 session_id=session_id,
-                user_id="test_user",
+                user_id="test-user",
                 current_step=WorkflowStep.COMPARABLE_SEARCH,
                 completed_steps=["PROPERTY_FACTS"],
                 step_results={"PROPERTY_FACTS": {"status": "complete"}},
@@ -2055,7 +2055,7 @@ class TestIntegration:
             session_id = str(uuid.uuid4())
             session = AnalysisSession(
                 session_id=session_id,
-                user_id="test_user",
+                user_id="test-user",
                 current_step=WorkflowStep.PROPERTY_FACTS,
                 completed_steps=["PROPERTY_FACTS"],
                 step_results={"PROPERTY_FACTS": {"status": "complete"}},
@@ -2475,6 +2475,11 @@ class TestSocrataSyncEndpointPreserved:
 
     Validates: Requirements 8.1, 8.4
     """
+
+    @pytest.fixture(autouse=True)
+    def _admin_user(self, app):
+        from tests.conftest import seed_user
+        seed_user('test-user', is_admin=True)
 
     def test_socrata_sync_endpoint_preserved(self, client):
         """

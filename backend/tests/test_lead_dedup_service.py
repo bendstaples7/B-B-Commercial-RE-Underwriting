@@ -23,6 +23,8 @@ class TestDedupStreetKey:
 
     def test_abbreviation_variants_share_key(self):
         assert dedup_street_key('4263 W Montrose') == dedup_street_key('4263 W Montrose Ave Apt 1')
+        assert dedup_street_key('4451 N Albany Ave') == dedup_street_key('4451 N Albany Ave #1')
+        assert dedup_street_key('4451 N Albany Ave') == dedup_street_key('4451 N Albany Ave 1')
 
     def test_places_full_address_shares_key_with_street(self):
         assert dedup_street_key('4903 N Hermitage') == dedup_street_key(
@@ -90,6 +92,27 @@ class TestDedupStreetKey:
         )
         assert not streets_match_duplicate_merge('100 Main St 2', '100 Main St Unit 3')
         assert not streets_match_duplicate_merge('2834 N Drake Ave 2', '2834 N Drake Ave 1r')
+        # Same door: bare number vs number + letter. Different suffixes stay apart.
+        assert streets_match_duplicate_merge(
+            '4451 N Albany APt 1',
+            '4451 N Albany apt 1F',
+        )
+        assert streets_match_duplicate_merge(
+            '4451 N Albany',
+            '4451-4453 N Albany',
+        )
+        assert streets_match_duplicate_merge(
+            '4451 N Albany',
+            '4451 N Albany Apt 1',
+        )
+        assert not streets_match_duplicate_merge(
+            '4451 N Albany Apt 1F',
+            '4451 N Albany Apt 1R',
+        )
+        assert not streets_match_duplicate_merge(
+            '4451 N Albany Apt 1F',
+            '4451 N Albany Apt 2F',
+        )
 
     def test_legacy_glued_range_key_for_stale_index_rows(self):
         from app.services.lead_merge_utils import legacy_glued_house_range_key
@@ -124,7 +147,12 @@ class TestSitusUnitToken:
         assert situs_unit_token('123 Main St 2R') == '2r'
         assert situs_unit_token('123 Main St 2') == '2'
         assert situs_unit_token('123 Main St 02') == '2'
+        assert situs_unit_token('4451 N Albany APt 1') == '1'
+        assert situs_unit_token('4451 N Albany apt 1F') == '1f'
         assert not streets_match_same_situs('123 Main St 1R', '123 Main St 2R')
+        assert streets_match_same_situs('4451 N Albany APt 1', '4451 N Albany apt 1F')
+        assert not streets_match_same_situs('4451 N Albany Apt 1F', '4451 N Albany Apt 1R')
+        assert not streets_match_same_situs('4451 N Albany', '4451 N Albany Apt 1')
 
     def test_zip_only_suffix_is_not_treated_as_unit(self):
         from app.services.lead_merge_utils import situs_unit_token
@@ -532,6 +560,30 @@ class TestSiblingAbsorbAndSoftMerge:
             siblings = find_building_owner_siblings(husk)
             assert [s.id for s in siblings] == [twin.id]
 
+    def test_siblings_do_not_cross_crm_assignee(self, app):
+        """Auto-merge must not absorb a lead owned by a different user."""
+        from app.services.lead_dedup_service import find_building_owner_siblings
+
+        with app.app_context():
+            mine = Lead(
+                property_street='2834 N Drake Ave',
+                owner_first_name='Francisco',
+                owner_last_name='R Solis',
+                owner_user_id='user-a',
+                lead_status='mailing_no_contact_made',
+            )
+            theirs = Lead(
+                property_street='2834 N Drake Ave 1r',
+                owner_first_name='Francisco',
+                owner_last_name='R Solis',
+                owner_user_id='user-b',
+                lead_status='mailing_no_contact_made',
+            )
+            db.session.add_all([mine, theirs])
+            db.session.commit()
+
+            assert find_building_owner_siblings(mine) == []
+
     def test_merge_loser_into_winner_api_helper(self, app):
         from app.services.lead_dedup_service import merge_loser_into_winner
 
@@ -575,6 +627,7 @@ class TestSiblingAbsorbAndSoftMerge:
             assert refreshed.review_reason is None
 
     def test_merge_loser_into_winner_allows_building_husk_vs_unit(self, app):
+
         from app.services.lead_dedup_service import merge_loser_into_winner
 
         with app.app_context():
@@ -647,6 +700,36 @@ class TestSiblingAbsorbAndSoftMerge:
                 assert db.session.get(Lead, sentinel.id) is sentinel
             finally:
                 db.session.rollback()
+
+    def test_merge_loser_rejects_different_owners(self, app):
+        from app.services.lead_dedup_service import merge_loser_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='100 Soft Merge St',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                owner_user_id='user-a',
+            )
+            loser = Lead(
+                property_street='100 Soft Merge Street',
+                owner_first_name='Ada',
+                owner_last_name='Lovelace',
+                owner_user_id='user-b',
+            )
+            db.session.add_all([winner, loser])
+            db.session.commit()
+            loser_id = loser.id
+            try:
+                merge_loser_into_winner(
+                    winner.id, loser.id, changed_by='test', commit=False,
+                )
+                assert False, 'expected cross-owner merge to fail'
+            except ValueError as exc:
+                assert 'owned by different users' in str(exc)
+            assert db.session.get(Lead, loser_id) is not None
+
+
 
     def test_merge_prefers_unit_street_onto_bare_winner(self, app):
         from app.services.lead_dedup_service import merge_lead_into_winner
@@ -822,6 +905,139 @@ class TestSameBuildingBannerAndAdditivePeople:
             assert same_unit.id in ids
             assert other_unit.id not in ids
 
+    def test_find_same_building_includes_husk_next_to_unit(self, app):
+        """Apt 1 should offer the bare building record, not Apt 2."""
+        from app.services.lead_dedup_service import (
+            find_same_building_leads,
+            refresh_lead_dedup_fields,
+        )
+
+        with app.app_context():
+            unit = Lead(
+                property_street='4451 N Albany Ave Apt 1',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            husk = Lead(
+                property_street='4451 N Albany Ave',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            other_unit = Lead(
+                property_street='4451 N Albany Ave Apt 2',
+                owner_first_name='Other',
+                owner_last_name='Tenant',
+            )
+            db.session.add_all([unit, husk, other_unit])
+            for item in (unit, husk, other_unit):
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+
+            from_unit = {item.id for item in find_same_building_leads(unit)}
+            assert husk.id in from_unit
+            assert other_unit.id not in from_unit
+
+            from_husk = {item.id for item in find_same_building_leads(husk)}
+            assert unit.id in from_husk
+            assert other_unit.id in from_husk
+
+    def test_find_same_building_from_hash_unit_finds_husk(self, app):
+        """A trailing #1 must not hide the building record."""
+        from app.services.lead_dedup_service import (
+            find_same_building_leads,
+            refresh_lead_dedup_fields,
+        )
+
+        with app.app_context():
+            numbered = Lead(
+                property_street='4451 N Albany Ave #1',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            husk = Lead(
+                property_street='4451 N Albany Ave',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            db.session.add_all([numbered, husk])
+            refresh_lead_dedup_fields(husk)
+            # Stale index still ends in the unit number.
+            numbered.normalized_street = '4451 N ALBANY AVENUE 1'
+            db.session.commit()
+
+            found = {item.id for item in find_same_building_leads(numbered)}
+            assert husk.id in found
+
+    def test_find_same_building_prompts_albany_range_husk_and_letter_suffix(self, app):
+        """The three Albany spellings the merge banner must offer, both ways."""
+        from app.services.lead_dedup_service import (
+            find_same_building_leads,
+            refresh_lead_dedup_fields,
+        )
+
+        with app.app_context():
+            bare = Lead(
+                property_street='4451 N Albany',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            ranged = Lead(
+                property_street='4451-4453 N Albany',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            unit = Lead(
+                property_street='4451 N Albany APt 1',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            letter = Lead(
+                property_street='4451 N Albany apt 1F',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            other_door = Lead(
+                property_street='4451 N Albany Apt 1R',
+                owner_first_name='Other',
+                owner_last_name='Door',
+            )
+            other_unit = Lead(
+                property_street='4451 N Albany Apt 2',
+                owner_first_name='Other',
+                owner_last_name='Unit',
+            )
+            rows = (bare, ranged, unit, letter, other_door, other_unit)
+            db.session.add_all(rows)
+            for item in rows:
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+
+            def ids_for(lead: Lead) -> set[int]:
+                return {item.id for item in find_same_building_leads(lead)}
+
+            from_bare = ids_for(bare)
+            assert ranged.id in from_bare
+            assert unit.id in from_bare
+            assert letter.id in from_bare
+
+            from_ranged = ids_for(ranged)
+            assert bare.id in from_ranged
+            assert unit.id in from_ranged
+
+            from_unit = ids_for(unit)
+            assert bare.id in from_unit
+            assert letter.id in from_unit
+            # Bare "1" is the same door as "1F" and "1R". Those lettered doors
+            # are not the same as each other, and Apt 2 stays out.
+            assert other_door.id in from_unit
+            assert other_unit.id not in from_unit
+
+            from_letter = ids_for(letter)
+            assert unit.id in from_letter
+            assert bare.id in from_letter
+            assert other_door.id not in from_letter
+            assert other_unit.id not in from_letter
+
     def test_same_address_summaries_default_to_current_lead_owner_scope(self, app):
         from app.services.lead_dedup_service import (
             refresh_lead_dedup_fields,
@@ -872,7 +1088,7 @@ class TestSameBuildingBannerAndAdditivePeople:
 
             assert same_address_lead_summaries(lead) == []
 
-    def test_cluster_preview_hides_people_names_for_other_assignees(self, app):
+    def test_cluster_preview_omits_other_assignees(self, app):
         from app.services.contact_service import ContactService
         from app.services.lead_dedup_service import cluster_preview_for_lead
 
@@ -922,7 +1138,7 @@ class TestSameBuildingBannerAndAdditivePeople:
             assert preview is not None
             members = {row['id']: row for row in preview['members']}
             assert members[same_scope.id]['people_names'] == ['Visible Owner']
-            assert members[other_scope.id]['people_names'] == []
+            assert other_scope.id not in members
 
     def test_merge_keeps_edwin_and_unions_yoko_phones(self, app):
         from app.models.contact_phone import ContactPhone
@@ -1479,6 +1695,42 @@ class TestSameBuildingBannerAndAdditivePeople:
             assert refreshed.property_type is None
             assert refreshed.lead_category_locked is True
 
+    def test_merge_reattaches_task_instead_of_deleting_on_unique_clash(self, app):
+        from app.models.lead_task import LeadTask
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            winner = Lead(property_street='10 Clash St')
+            loser = Lead(property_street='10 Clash St')
+            db.session.add_all([winner, loser])
+            db.session.flush()
+            winner_task = LeadTask(
+                title='Winner HubSpot task',
+                task_type='custom',
+                hubspot_task_id='hs-same-id',
+                lead_id=winner.id,
+            )
+            loser_task = LeadTask(
+                title='Loser unique notes',
+                task_type='custom',
+                hubspot_task_id='hs-same-id',
+                lead_id=loser.id,
+            )
+            db.session.add_all([winner_task, loser_task])
+            db.session.commit()
+            loser_task_id = loser_task.id
+            winner_task_id = winner_task.id
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+            ):
+                merge_lead_into_winner(winner, loser, changed_by='test')
+                db.session.commit()
+            assert db.session.get(LeadTask, winner_task_id) is not None
+            leftover = db.session.get(LeadTask, loser_task_id)
+            assert leftover is not None
+            assert leftover.lead_id == winner.id
+            assert leftover.title == 'Loser unique notes'
+
 
 def _install_prod_dedup_indexes() -> None:
     """The partial owner+street and owner+PIN indexes exist on Postgres, not create_all."""
@@ -1640,3 +1892,4 @@ class TestMergeUnderDedupUniqueIndexes:
             finally:
                 db.session.rollback()
                 _drop_prod_dedup_indexes()
+

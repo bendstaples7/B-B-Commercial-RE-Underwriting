@@ -34,7 +34,7 @@ class TestDataSourcesControllerAuth:
         # is present — the require_auth decorator must reject the request.
         response = client.get(
             '/api/data-sources/status',
-            headers={},
+            headers={'X-User-Id': ''},
         )
         assert response.status_code == 401
 
@@ -43,7 +43,7 @@ class TestDataSourcesControllerAuth:
 
         Requirements: 5.5
         """
-        response = client.get('/api/data-sources/status', headers={})
+        response = client.get('/api/data-sources/status', headers={'X-User-Id': ''})
         data = response.get_json()
         assert 'error' in data
 

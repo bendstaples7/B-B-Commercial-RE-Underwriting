@@ -293,8 +293,8 @@ def test_log_call_rejects_phone_id_from_other_contact(app):
             )
 
 
-def test_log_call_answered_cancels_mail_rematch(app):
-    """Answered call cancels an open quarterly mail rematch task."""
+def test_log_call_answered_keeps_mail_task(app):
+    """An answered call does not cancel an open mail task."""
     from app import db
     from app.models import LeadTask
     from datetime import date, timedelta
@@ -322,7 +322,7 @@ def test_log_call_answered_cancels_mail_rematch(app):
             )
 
         updated = LeadTask.query.get(rematch.id)
-        assert updated.status == 'cancelled'
+        assert updated.status == 'open'
 
 
 def test_log_call_voicemail_keeps_mail_rematch(app):
@@ -357,8 +357,8 @@ def test_log_call_voicemail_keeps_mail_rematch(app):
         assert updated.status == 'open'
 
 
-def test_log_call_inbound_voicemail_cancels_mail_rematch(app):
-    """Inbound contact cancels rematch even when the call reaches voicemail."""
+def test_log_call_inbound_keeps_mail_task(app):
+    """An inbound call does not cancel an open mail task."""
     from app import db
     from app.models import LeadTask
     from datetime import date, timedelta
@@ -387,7 +387,7 @@ def test_log_call_inbound_voicemail_cancels_mail_rematch(app):
             )
 
         updated = LeadTask.query.get(rematch.id)
-        assert updated.status == 'cancelled'
+        assert updated.status == 'open'
 
 
 def test_log_call_completes_call_task_and_creates_follow_up(app):
@@ -584,4 +584,49 @@ def test_log_call_occurred_at_after_task_side_effects(app):
         assert len(task_rows) == 2
         for task_row in task_rows:
             assert entry.occurred_at >= task_row.occurred_at
+
+
+def test_log_call_still_completes_task_when_phone_confidence_fails(app):
+    """A phone-confidence error must not poison the session after the call is saved."""
+    from app.models import LeadTask
+    from datetime import timedelta
+    from app import db
+
+    with app.app_context():
+        lead = _make_lead(app, '14 Call St')
+        task = LeadTask(
+            lead_id=lead.id,
+            task_type='call_owner_today',
+            title='Call owner',
+            status='open',
+            created_by='test',
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        follow_due = date.today() + timedelta(days=2)
+        svc = CallLogService()
+        with patch(_REFRESH_PATCH), patch(
+            'app.services.phone_confidence_service.PhoneConfidenceService.update_from_call',
+            side_effect=RuntimeError('confidence boom'),
+        ):
+            svc.log_call(
+                lead.id,
+                outcome='answered',
+                duration_minutes=4,
+                notes='Call saved',
+                complete_task_id=task.id,
+                follow_up={
+                    'title': 'Follow up call',
+                    'due_date': follow_due,
+                    'task_type': 'call_owner_today',
+                },
+            )
+
+        db.session.refresh(task)
+        assert task.status == 'completed'
+        open_follow = LeadTask.query.filter_by(
+            lead_id=lead.id, title='Follow up call', status='open',
+        ).one()
+        assert open_follow.due_date == follow_due
 

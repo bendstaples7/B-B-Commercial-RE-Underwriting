@@ -48,8 +48,7 @@ function formatContactShortLabel(contact: PropertyContact): string {
 function formatContactLabel(contact: PropertyContact): string {
   const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || 'Unnamed contact'
   const role = (contact.property_contact_role || contact.role || 'contact').replace(/_/g, ' ')
-  const primary = contact.is_primary ? ', primary' : ''
-  return `${name} (${role}${primary})`
+  return `${name} (${role})`
 }
 
 function formatPhoneLabel(value: string, label: string, contactName?: string, phone?: { confidence_score?: number | null; notes?: string | null }): string {

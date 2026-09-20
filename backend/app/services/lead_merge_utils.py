@@ -87,6 +87,34 @@ def _collapse_cardinal_after_house(norm: str) -> str:
     return norm
 
 
+_TRAILING_UNIT_KEY_RE = re.compile(r'\s+\d+[A-Z]?$', re.IGNORECASE)
+
+
+def building_lookup_keys(street: Optional[str]) -> list[str]:
+    """Building keys to scan, including a copy with a trailing unit number removed.
+
+    ``4451 N Albany Ave #1`` can still be stored as ``4451 N ALBANY AVENUE 1``.
+    Looking up only that longer key misses ``4451 N ALBANY``, so the merge
+    dialog opens with no other lead. Search the shorter building key too.
+    """
+    key = dedup_street_key(street)
+    if not key:
+        return []
+    keys: list[str] = []
+
+    def add(value: str) -> None:
+        text = (value or '').strip()
+        if text and text not in keys:
+            keys.append(text)
+
+    add(key)
+    shorter = _TRAILING_UNIT_KEY_RE.sub('', key).strip()
+    if shorter and shorter != key:
+        add(shorter)
+        add(dedup_street_key(shorter))
+    return keys
+
+
 def _expand_abbreviated_range_end(start: str, end: str) -> str:
     """Expand ``1867-69`` → ``1869`` when the end token is a short suffix."""
     if len(end) >= len(start):
@@ -187,18 +215,52 @@ def situs_unit_token(street: Optional[str]) -> str:
     return token
 
 
-def streets_match_same_situs(a: Optional[str], b: Optional[str]) -> bool:
-    """Same building, and the same unit when either side names one.
+_UNIT_NUMBER_SUFFIX_RE = re.compile(r'^(\d+)([a-z]*)$')
 
-    Used by the lead-page merge banner so condo A-30 is not offered as a
-    twin of condo A-206 in the same building.
+
+def unit_tokens_same_door(left: str, right: str) -> bool:
+    """True when both non-empty tokens name the same door.
+
+    A bare unit number and that number plus a letter suffix are the same door
+    (``1`` and ``1f``, including ``Apt 1`` vs ``apt 1F``). Two different letter
+    suffixes are not (``1f`` vs ``1r``), and tokens that are not a number plus
+    optional letters stay distinct (condo ``a30`` vs ``a206``).
+    """
+    a = (left or '').strip().lower()
+    b = (right or '').strip().lower()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+
+    def split_number_suffix(token: str) -> tuple[str, str] | None:
+        match = _UNIT_NUMBER_SUFFIX_RE.fullmatch(token)
+        if not match:
+            return None
+        return str(int(match.group(1))), match.group(2)
+
+    split_a = split_number_suffix(a)
+    split_b = split_number_suffix(b)
+    if not split_a or not split_b or split_a[0] != split_b[0]:
+        return False
+    if split_a[1] and split_b[1] and split_a[1] != split_b[1]:
+        return False
+    return True
+
+
+def streets_match_same_situs(a: Optional[str], b: Optional[str]) -> bool:
+    """Same building, and the same door when either side names a unit.
+
+    A bare number and that number plus a letter (``Apt 1`` vs ``apt 1F``) are
+    the same door. Condo A-30 is not a twin of A-206, and a building husk is
+    not the same situs as a named unit.
     """
     if not streets_match_normalized(a, b):
         return False
     ua = situs_unit_token(a)
     ub = situs_unit_token(b)
     if ua or ub:
-        return ua == ub
+        return bool(ua) and bool(ub) and unit_tokens_same_door(ua, ub)
     return True
 
 
@@ -206,7 +268,8 @@ def streets_match_duplicate_merge(a: Optional[str], b: Optional[str]) -> bool:
     """Human-confirmed duplicate merge: same building, not two distinct units.
 
     Allows a bare building husk (``100 Main``) to merge into a unit record
-    (``100 Main Unit 2``). Still rejects condo A-30 vs A-206.
+    (``100 Main Unit 2``), and ``Apt 1`` to merge with ``apt 1F``. Still
+    rejects condo A-30 vs A-206 and ``1F`` vs ``1R``.
     """
     if streets_match_same_situs(a, b):
         return True
@@ -214,7 +277,7 @@ def streets_match_duplicate_merge(a: Optional[str], b: Optional[str]) -> bool:
         return False
     ua = situs_unit_token(a)
     ub = situs_unit_token(b)
-    if ua and ub and ua != ub:
+    if ua and ub and not unit_tokens_same_door(ua, ub):
         return False
     return True
 

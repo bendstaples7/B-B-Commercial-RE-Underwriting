@@ -468,6 +468,26 @@ class TestOwnerNameLock:
             assert prop.owner_first_name == 'Gilberto'
             assert prop.owner_last_name == 'Olivier'
 
+    def test_gis_enrichment_skips_locked_property_type(self, app):
+        with app.app_context():
+            from app.services.data_source_connector import (
+                DataSourceConnector,
+                EnrichmentData,
+            )
+            prop = _make_property('11131 Type Lock St')
+            prop.lead_category = 'residential'
+            prop.lead_category_locked = True
+            prop.property_type = None
+            db.session.commit()
+            DataSourceConnector()._apply_enrichment(
+                prop,
+                EnrichmentData(fields={'property_type': 'CONDO'}),
+                'gis',
+            )
+            db.session.refresh(prop)
+            assert prop.property_type is None
+            assert prop.lead_category == 'residential'
+
 
 class TestKeepOnGis:
     def test_added_owner_survives_gis_upsert_of_primary_only(self, app):
@@ -1466,6 +1486,53 @@ class TestSamePersonOwnerConsolidate:
             ).one()
             assert sign_link.role == 'former_owner'
 
+    def test_heal_survives_scoring_rollback(self, app, monkeypatch):
+        """Scoring refresh must not undo a committed same-person heal."""
+        from datetime import datetime, timezone
+
+        with app.app_context():
+            service = ContactService()
+            prop = _make_property('4491 Heal Score Rollback St')
+            outreach = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'For Sale By Owner',
+                'phones': [{'value': '(773) 271-5525', 'label': 'mobile'}],
+            })
+            gis = service.create_contact({
+                'first_name': 'Sam',
+                'last_name': 'Old Town Square Cbre',
+                'phones': [{'value': '(773) 454-0106', 'label': 'other'}],
+            })
+            service.link_contact_to_property(
+                prop.id, outreach.id, role='former_owner', is_primary=False,
+            )
+            service.link_contact_to_property(
+                prop.id, gis.id, role='owner', is_primary=True,
+            )
+            phone = ContactPhone.query.filter_by(contact_id=outreach.id).first()
+            phone.confidence_score = 85
+            phone.notes = 'HubSpot primary'
+            phone.last_called_at = datetime.now(timezone.utc)
+            db.session.commit()
+
+            def _boom(_lead_id, **_kwargs):
+                db.session.rollback()
+
+            monkeypatch.setattr(
+                'app.services.lead_refresh.refresh_lead_scoring',
+                _boom,
+            )
+            result = service.heal_same_person_owner_cluster(
+                prop.id, apply=True, refresh_scoring=True, bump_call_task=False,
+            )
+            assert result['healed'] is True
+            db.session.expire_all()
+            outreach_link = PropertyContact.query.filter_by(
+                property_id=prop.id, contact_id=outreach.id,
+            ).one()
+            assert outreach_link.role == 'owner'
+            assert outreach_link.is_primary is True
+
 
 # ---------------------------------------------------------------------------
 # Search contacts API
@@ -1473,13 +1540,21 @@ class TestSamePersonOwnerConsolidate:
 
 class TestSearchContactsApi:
     def test_search_endpoint_requires_auth(self, client):
-        resp = client.get("/api/contacts/search", query_string={"q": "Shek"})
+        resp = client.get(
+            "/api/contacts/search",
+            query_string={"q": "Shek"},
+            headers={'X-User-Id': ''},
+        )
         assert resp.status_code == 401
 
     def test_search_endpoint_returns_results(self, app, client):
         with app.app_context():
+            from app import db
             service = ContactService()
             contact = _make_contact(service, "Gregory", "Shek")
+            contact.created_by_user_id = 'test-user'
+            db.session.commit()
+            contact_id = contact.id
 
         resp = client.get(
             "/api/contacts/search",
@@ -1489,7 +1564,7 @@ class TestSearchContactsApi:
         assert resp.status_code == 200
         body = resp.get_json()
         assert "results" in body
-        assert any(r["id"] == contact.id for r in body["results"])
+        assert any(r["id"] == contact_id for r in body["results"])
 
     def test_search_endpoint_rejects_short_query(self, client):
         resp = client.get(
@@ -1498,3 +1573,32 @@ class TestSearchContactsApi:
             query_string={"q": "S"},
         )
         assert resp.status_code == 400
+
+
+def test_ensure_key_contact_linked_from_owner_name(app):
+    """A lead owner name with no person contact becomes a linked contact."""
+    with app.app_context():
+        prop = _make_property("544 W Oakdale Ave")
+        prop.owner_first_name = "CYNTHIA V MUNGERSON"
+        db.session.commit()
+
+        service = ContactService()
+        assert service.ensure_key_contact_linked(prop.id) is True
+        rows = service.get_contacts_for_property(prop.id)
+        assert len(rows) == 1
+        contact, link = rows[0]
+        assert contact.first_name == "CYNTHIA V"
+        assert contact.last_name == "MUNGERSON"
+        assert link.role == "owner"
+        assert link.is_primary is True
+        assert service.ensure_key_contact_linked(prop.id) is False
+
+
+def test_ensure_key_contact_linked_skips_company_name(app):
+    with app.app_context():
+        prop = _make_property("1 Holdings Way")
+        prop.owner_first_name = "OAKDALE HOLDINGS LLC"
+        db.session.commit()
+        assert ContactService().ensure_key_contact_linked(prop.id) is False
+        assert ContactService().get_contacts_for_property(prop.id) == []
+

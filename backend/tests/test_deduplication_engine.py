@@ -179,6 +179,28 @@ class TestFindExistingLead:
             assert result is None
             db.session.rollback()
 
+    def test_owner_scope_skips_other_users_lead(self, app):
+        with app.app_context():
+            other = _make_lead("10 Shared Dedup St", pin="PIN-OWN")
+            other.owner_user_id = "other-user"
+            db.session.flush()
+            engine = DeduplicationEngine()
+            assert engine.find_existing_lead(
+                "10 Shared Dedup St",
+                pin="PIN-OWN",
+                owner_user_id="test-user",
+            ) is None
+            mine = _make_lead("10 Shared Dedup St", pin="PIN-OWN-MINE")
+            mine.owner_user_id = "test-user"
+            db.session.flush()
+            hit = engine.find_existing_lead(
+                "10 Shared Dedup St",
+                owner_user_id="test-user",
+            )
+            assert hit is not None
+            assert hit.id == mine.id
+            db.session.rollback()
+
 
 # ---------------------------------------------------------------------------
 # merge_lead — field merge behaviour
@@ -651,4 +673,79 @@ class TestProcessRecord:
             # Found via PIN → merge, not create
             assert result.outcome in ("updated", "conflict")
             assert result.lead.id == existing.id
+            db.session.rollback()
+
+    def test_process_record_ignores_mapped_score_and_status(self, app):
+        """Ingest must not write scoring or pipeline columns from a record dict."""
+        with app.app_context():
+            engine = DeduplicationEngine()
+            created = engine.process_record(
+                record={
+                    'property_street': '12 Score Guard St',
+                    'owner_user_id': 'importer-user',
+                    'lead_score': 99.0,
+                    'lead_status': 'deal_won',
+                    'recommended_action': 'call_now',
+                    'needs_skip_trace': True,
+                    'review_reason': 'from-sheet',
+                    'motivation_score': 88.0,
+                    'suppression_flag': True,
+                    'up_next_to_mail': True,
+                    'analysis_complete': True,
+                    'mailer_history': [{'sent': True}],
+                    'skip_tracer': 'Acme Skip',
+                    'date_skip_traced': '2024-01-15',
+                    'note_property_facts': {'units': 99, 'source': 'sheet'},
+                },
+                import_job_id=7,
+            )
+            assert created.outcome == 'created'
+            assert created.lead.owner_user_id == 'importer-user'
+            assert created.lead.lead_score != 99.0
+            assert created.lead.lead_status != 'deal_won'
+            assert created.lead.recommended_action != 'call_now'
+            assert created.lead.needs_skip_trace is not True
+            assert created.lead.review_reason != 'from-sheet'
+            assert created.lead.motivation_score != 88.0
+            assert created.lead.suppression_flag is not True
+            assert created.lead.up_next_to_mail is not True
+            assert created.lead.analysis_complete is not True
+            assert created.lead.mailer_history != [{'sent': True}]
+            assert created.lead.skip_tracer != 'Acme Skip'
+            assert created.lead.date_skip_traced is None
+            assert created.lead.note_property_facts != {'units': 99, 'source': 'sheet'}
+
+            existing = _make_lead('13 Score Guard St', owner_first_name='Pat')
+            existing.lead_score = 12.0
+            existing.lead_status = 'skip_trace'
+            existing.owner_user_id = 'importer-user'
+            db.session.flush()
+            merged = engine.merge_lead(
+                existing,
+                {
+                    'property_street': '13 Score Guard St',
+                    'lead_score': 50.0,
+                    'lead_status': 'deal_won',
+                    'owner_user_id': 'attacker',
+                    'notes': 'ok to fill',
+                },
+                import_job_id=8,
+            )
+            assert merged.lead.id == existing.id
+            assert merged.lead.lead_score == 12.0
+            assert merged.lead.lead_status == 'skip_trace'
+            assert merged.lead.owner_user_id == 'importer-user'
+            existing.lead_category = 'residential'
+            existing.lead_category_locked = True
+            existing.property_type = None
+            engine.merge_lead(
+                existing,
+                {
+                    'lead_category': 'commercial',
+                    'property_type': 'duplex',
+                },
+                import_job_id=9,
+            )
+            assert existing.lead_category == 'residential'
+            assert existing.property_type is None
             db.session.rollback()

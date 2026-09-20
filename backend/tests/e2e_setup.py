@@ -58,7 +58,7 @@ def seed_test_data(app):
     # Create sample analysis session first
     session = AnalysisSession(
         session_id="test-session-001",
-        user_id="test-user-001",
+        user_id="user123",
         created_at=datetime.now(),
         current_step=WorkflowStep.PROPERTY_FACTS
     )

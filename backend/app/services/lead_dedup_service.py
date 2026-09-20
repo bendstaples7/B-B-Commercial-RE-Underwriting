@@ -12,6 +12,7 @@ from app import db
 from app.models.hubspot_match import HubSpotMatch
 from app.models.lead import Lead, LeadAuditTrail
 from app.services.lead_merge_utils import (
+    building_lookup_keys,
     dedup_street_key,
     legacy_glued_house_range_key,
     merge_mailer_history,
@@ -38,7 +39,7 @@ COPYABLE_FIELDS = [
     'asking_price',
     'most_recent_sale', 'owner_2_first_name', 'owner_2_last_name',
     'address_2', 'returned_addresses', 'up_next_to_mail', 'mailer_history',
-    'lead_score', 'lead_category', 'property_type',
+    'lead_category', 'property_type',
 ]
 
 FK_REPOINTS = [
@@ -184,7 +185,14 @@ def find_lead_by_identity(
                 q = q.filter(Lead.owner_user_id == owner_user_id)
             hit = q.first()
             if hit:
-                return hit
+                if owner_user_id or not hit.owner_user_id:
+                    return hit
+                other = q.filter(
+                    Lead.owner_user_id.isnot(None),
+                    Lead.owner_user_id != hit.owner_user_id,
+                ).first()
+                if other is None:
+                    return hit
 
     street_key = dedup_street_key(property_street)
     first = (owner_first_name or '').strip()
@@ -198,18 +206,37 @@ def find_lead_by_identity(
         q = q.filter(Lead.owner_user_id == owner_user_id)
     hit = q.first()
     if hit:
-        return hit
+        if owner_user_id or not hit.owner_user_id:
+            return hit
+        other = q.filter(
+            Lead.owner_user_id.isnot(None),
+            Lead.owner_user_id != hit.owner_user_id,
+        ).first()
+        if other is None:
+            return hit
 
     # Fallback when normalized_street not yet backfilled on older rows.
     q = Lead.query.filter(Lead.property_street.isnot(None))
     q = _owner_name_filters(q, first, last)
     if owner_user_id:
         q = q.filter(Lead.owner_user_id == owner_user_id)
+    matches: list[Lead] = []
     for candidate in q:
         if streets_match_normalized(property_street, candidate.property_street):
             refresh_lead_dedup_fields(candidate)
-            return candidate
-    return None
+            matches.append(candidate)
+    if not matches:
+        return None
+    hit = matches[0]
+    if owner_user_id or not hit.owner_user_id:
+        return hit
+    if any(
+        other.owner_user_id
+        and other.owner_user_id != hit.owner_user_id
+        for other in matches[1:]
+    ):
+        return None
+    return hit
 
 
 def confirmed_hubspot_lead_ids() -> set[int]:
@@ -606,6 +633,8 @@ def _filter_owner_contact_methods(
     from app.services.phone_confidence_service import PhoneConfidenceService
 
     owner_links = PropertyContact.query.filter_by(property_id=lead_id, role='owner').all()
+    owner_lead = db.session.get(Lead, lead_id)
+    clone_creator = getattr(owner_lead, 'owner_user_id', None)
     owner_contact_ids: list[int] = []
     for link in owner_links:
         shared_elsewhere = PropertyContact.query.filter(
@@ -622,6 +651,7 @@ def _filter_owner_contact_methods(
                 notes=original.notes,
                 name_locked=original.name_locked,
                 keep_on_gis=original.keep_on_gis,
+                created_by_user_id=clone_creator,
             )
             db.session.add(clone)
             db.session.flush()
@@ -792,7 +822,27 @@ def merge_lead_into_winner(
                         table.update().where(table.c.id == row_id).values({col_name: winner_id})
                     )
             except IntegrityError:
-                db.session.execute(table.delete().where(table.c.id == row_id))
+                logger.warning(
+                    'merge skip unique-clash delete table=%s id=%s winner=%s loser=%s',
+                    table_name, row_id, winner_id, loser_id,
+                )
+                retry_values = {col_name: winner_id}
+                for uniq_col in ('hubspot_task_id', 'hubspot_activity_id'):
+                    if uniq_col in table.c:
+                        retry_values[uniq_col] = None
+                if len(retry_values) == 1:
+                    continue
+                try:
+                    with db.session.begin_nested():
+                        db.session.execute(
+                            table.update().where(table.c.id == row_id).values(retry_values)
+                        )
+                except IntegrityError:
+                    logger.warning(
+                        'merge could not reattach table=%s id=%s after clearing unique keys',
+                        table_name,
+                        row_id,
+                    )
 
     _repoint_hubspot_matches(winner_id, loser_id)
 
@@ -986,9 +1036,8 @@ def find_duplicate_clusters() -> list[list[Lead]]:
 def find_building_owner_siblings(lead: Lead, *, limit: int = 40) -> list[Lead]:
     """Same property-owner leads whose street matches *lead* at building level.
 
-    Matches on owner first/last name — not ``owner_user_id`` (CRM assignee).
-    Assignees commonly own thousands of leads; filtering by assignee + a small
-    id-ordered window misses same-building twins (e.g. street-only husk vs unit).
+    Matches on owner first/last name plus the same CRM assignee
+    (``owner_user_id``). Auto-merge must never absorb another user's lead.
     """
     street = (lead.property_street or '').strip()
     lead_id = getattr(lead, 'id', None)
@@ -1006,6 +1055,11 @@ def find_building_owner_siblings(lead: Lead, *, limit: int = 40) -> list[Lead]:
         Lead.property_street != '',
     )
     q = _owner_name_filters(q, first, last)
+    assignee = getattr(lead, 'owner_user_id', None)
+    if assignee:
+        q = q.filter(Lead.owner_user_id == assignee)
+    else:
+        q = q.filter(Lead.owner_user_id.is_(None))
 
     siblings: list[Lead] = []
     q = _street_prefilter(q, street)
@@ -1026,9 +1080,13 @@ def find_same_building_leads(
 ) -> list[Lead]:
     """Same building-level street, regardless of owner name.
 
-    Used by the lead-page merge banner so Yoko vs Yoko+Edwin still surface.
-    Do not use the house-number ``1%`` prefilter — that scan is capped and
-    drops real twins when many streets start with the same number.
+    Used by the lead-page merge banner so Yoko vs Yoko+Edwin still surface,
+    and so a bare building husk (``4451 N Albany``) shows next to a unit
+    (``4451 N Albany Apt 1``) and next to a house-number range
+    (``4451-4453 N Albany``). ``Apt 1`` and ``apt 1F`` are the same door.
+    Distinct units (Apt 1 vs Apt 2, 1F vs 1R, condo A-30 vs A-206) stay out.
+    Do not use the house-number ``1%`` prefilter — that scan is capped
+    and drops real twins when many streets start with the same number.
     """
     street = (lead.property_street or '').strip()
     lead_id = getattr(lead, 'id', None)
@@ -1040,12 +1098,13 @@ def find_same_building_leads(
         base_query = base_query.filter(Lead.owner_user_id == owner_user_id)
 
     key = dedup_street_key(street)
+    lookup_keys = building_lookup_keys(street)
     if key:
         found: dict[int, Lead] = {}
-        street_predicates = [
-            Lead.normalized_street == key,
-            Lead.normalized_street.ilike(f'{key} %'),
-        ]
+        street_predicates = []
+        for lookup_key in lookup_keys:
+            street_predicates.append(Lead.normalized_street == lookup_key)
+            street_predicates.append(Lead.normalized_street.ilike(f'{lookup_key} %'))
         # Pre-fix rows may still store glued dual house numbers ("18671869…").
         legacy_glued = legacy_glued_house_range_key(street)
         if legacy_glued and legacy_glued != key:
@@ -1080,7 +1139,7 @@ def find_same_building_leads(
             .all()
         )
         for other in indexed_matches:
-            if streets_match_same_situs(street, other.property_street):
+            if streets_match_duplicate_merge(street, other.property_street):
                 found[other.id] = other
             if len(found) >= limit:
                 break
@@ -1098,7 +1157,7 @@ def find_same_building_leads(
                 .all()
             )
             for other in missing_normalized:
-                if streets_match_same_situs(street, other.property_street):
+                if streets_match_duplicate_merge(street, other.property_street):
                     found[other.id] = other
         return list(found.values())[:limit]
 
@@ -1107,7 +1166,7 @@ def find_same_building_leads(
         func.lower(func.trim(Lead.property_street)) == street.lower(),
     )
     for other in q.order_by(Lead.id.asc()).limit(limit).all():
-        if streets_match_same_situs(street, other.property_street):
+        if streets_match_duplicate_merge(street, other.property_street):
             siblings.append(other)
         if len(siblings) >= limit:
             break
@@ -1585,6 +1644,8 @@ def merge_loser_into_winner(
     loser = db.session.get(Lead, loser_id)
     if winner is None or loser is None:
         raise ValueError('winner or loser lead not found')
+    if (winner.owner_user_id or None) != (loser.owner_user_id or None):
+        raise ValueError('cannot merge leads owned by different users')
     if not streets_match_duplicate_merge(winner.property_street, loser.property_street):
         raise ValueError('leads do not share the same address / unit')
 
@@ -1665,6 +1726,12 @@ def try_absorb_duplicate_for_lead(
                 loser = db.session.get(Lead, loser.id)
                 if winner is None or loser is None:
                     break
+                if (winner.owner_user_id or None) != (loser.owner_user_id or None):
+                    logger.warning(
+                        'skip absorb across assignees winner=%s loser=%s',
+                        winner.id, loser.id,
+                    )
+                    continue
                 pair = {
                     'winner_id': winner.id,
                     'loser_id': loser.id,

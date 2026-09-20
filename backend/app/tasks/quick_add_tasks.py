@@ -40,7 +40,9 @@ def _run_gis_match(lead_id: int) -> tuple[bool, bool]:
         db.session.commit()  # persist any city/state/zip backfill from parser
         return False, False
 
-    outcome = ingestion._enrich_with_gis(lead, connector, import_job_id=None)  # noqa: SLF001
+    outcome = ingestion._enrich_with_gis(
+        lead, connector, import_job_id=None, is_creation=False,
+    )  # noqa: SLF001
     db.session.commit()
     matched = bool(outcome.get('match_found'))
     logger.info(

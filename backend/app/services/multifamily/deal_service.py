@@ -325,9 +325,9 @@ class DealService:
         # Verify deal access
         self.get_deal(user_id, deal_id)
 
-        # Verify lead exists
+        # Verify lead exists and belongs to this user
         lead = Lead.query.get(lead_id)
-        if lead is None:
+        if lead is None or lead.owner_user_id != user_id:
             raise ValidationException(
                 message=f"Lead {lead_id} not found",
                 field="lead_id",
@@ -362,9 +362,10 @@ class DealService:
         if not property_address:
             return None
 
-        # Exact match on property_street
+        # Exact match on property_street among this user's leads
         lead = Lead.query.filter(
-            Lead.property_street == property_address
+            Lead.property_street == property_address,
+            Lead.owner_user_id == user_id,
         ).first()
         return lead
 
@@ -377,8 +378,7 @@ class DealService:
 
         Access is granted if:
         1. The user is the direct owner (deal.created_by_user_id == user_id), OR
-        2. Any LeadDealLink for this deal points to a Lead that the user can
-           access (for now, just check if the link exists).
+        2. A LeadDealLink for this deal points to a Lead the user owns.
 
         Args:
             user_id: The user to check.
@@ -397,12 +397,17 @@ class DealService:
         if deal.created_by_user_id == user_id:
             return True
 
-        # Check 2: Access via LeadDealLink
-        link_exists = LeadDealLink.query.filter_by(deal_id=deal_id).first()
-        if link_exists is not None:
-            return True
-
-        return False
+        # Check 2: Access via a lead this user owns
+        owned_link = (
+            db.session.query(LeadDealLink.id)
+            .join(Lead, Lead.id == LeadDealLink.lead_id)
+            .filter(
+                LeadDealLink.deal_id == deal_id,
+                Lead.owner_user_id == user_id,
+            )
+            .first()
+        )
+        return owned_link is not None
 
     # ------------------------------------------------------------------
     # Snapshot builder

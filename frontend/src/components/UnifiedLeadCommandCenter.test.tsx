@@ -120,6 +120,15 @@ function makeCommandCenterPayload(
       signals: {},
     },
     open_tasks: [],
+    contacts: [{
+      id: 88,
+      first_name: 'Jane',
+      last_name: 'Doe',
+      role: 'owner',
+      is_primary: true,
+      phones: [],
+      emails: [],
+    }],
     timeline: {
       entries: [],
       total: 0,

@@ -43,7 +43,7 @@ def test_resolve_does_not_expose_server_key(monkeypatch):
 
 
 def test_client_config_requires_auth(client):
-    response = client.get('/api/config/client', headers={})
+    response = client.get('/api/config/client', headers={'X-User-Id': ''})
     assert response.status_code == 401
 
 

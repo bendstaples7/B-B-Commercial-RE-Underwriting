@@ -175,12 +175,14 @@ def attach_lender_to_deal(deal_id, scenario):
 
     payload = _deal_lender_selection_schema.load(request.get_json())
 
+    user_id = get_user_id()
     service = LenderService()
     selection = service.attach_to_deal(
         deal_id=deal_id,
         scenario=scenario,
         profile_id=payload['lender_profile_id'],
         is_primary=payload.get('is_primary', False),
+        user_id=user_id,
     )
     db.session.commit()
 

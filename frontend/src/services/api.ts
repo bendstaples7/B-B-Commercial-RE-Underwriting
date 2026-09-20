@@ -912,6 +912,20 @@ export const hubSpotService = {
     return response.data
   },
 
+  /** POST /api/hubspot/pipeline/run — queue matching, enrich, rescore */
+  runHubSpotPipeline: async (): Promise<{
+    status: string
+    mode?: string
+    message?: string
+  }> => {
+    const response = await api.post<{
+      status: string
+      mode?: string
+      message?: string
+    }>('/hubspot/pipeline/run')
+    return response.data
+  },
+
   /** POST /api/hubspot/import/trigger — kick off a HubSpot import */
   triggerHubSpotImport: async (
     objectTypes?: string[]
@@ -1369,7 +1383,7 @@ export const commandCenterService = {
   getMergeContext: (
     leadId: number,
     otherIds: number[],
-  ): Promise<{ leads: SameAddressLeadSummary[] }> =>
+  ): Promise<{ leads: SameAddressLeadSummary[]; sibling_ids?: number[] }> =>
     api.get(`/leads/${leadId}/merge-context`, {
       params: {
         ids: otherIds.filter((id) => id !== leadId).join(','),

@@ -608,6 +608,76 @@ class TestGISEnrichment:
             assert lead.bedrooms == 3
             assert lead.square_footage == 1800
 
+    def test_match_skips_property_type_when_category_locked(self, app):
+        with app.app_context():
+            lead = Property(
+                property_street='701 GIS Lock St',
+                owner_user_id=USER_ID,
+                lead_category='residential',
+                lead_category_locked=True,
+                property_type=None,
+            )
+            db.session.add(lead)
+            db.session.flush()
+            connector = _make_mock_connector(parcel=_make_gis_parcel())
+            svc = _make_service(gis_registry={'dupage_il': connector})
+            svc._enrich_with_gis(lead, connector, import_job_id=1)
+            assert lead.property_type is None
+            assert lead.lead_category == 'residential'
+            assert lead.has_property_match is True
+
+    def test_match_skips_locked_owner_names(self, app):
+        with app.app_context():
+            from app.models.contact import Contact
+            from app.models.property_contact import PropertyContact
+            from app.services.contact_service import ContactService
+
+            lead = Property(
+                property_street='703 GIS Name Lock St',
+                owner_user_id=USER_ID,
+                owner_first_name=None,
+                owner_last_name=None,
+            )
+            db.session.add(lead)
+            db.session.flush()
+            contact = Contact(
+                first_name='Gilberto', last_name='Olivier', name_locked=True,
+            )
+            db.session.add(contact)
+            db.session.flush()
+            db.session.add(PropertyContact(
+                property_id=lead.id,
+                contact_id=contact.id,
+                role='owner',
+                is_primary=True,
+            ))
+            db.session.flush()
+            assert ContactService.primary_owner_name_locked(lead.id) is True
+            connector = _make_mock_connector(parcel=_make_gis_parcel())
+            svc = _make_service(gis_registry={'dupage_il': connector})
+            svc._enrich_with_gis(lead, connector, import_job_id=1)
+            assert lead.owner_first_name is None
+            assert lead.owner_last_name is None
+            assert lead.has_property_match is True
+
+    def test_gis_miss_on_update_does_not_reopen_skip_trace(self, app):
+        with app.app_context():
+            lead = Property(
+                property_street='702 GIS Update St',
+                owner_user_id=USER_ID,
+                needs_skip_trace=False,
+                has_property_match=True,
+                notes='already worked',
+            )
+            db.session.add(lead)
+            db.session.flush()
+            connector = _make_mock_connector(parcel=None)
+            svc = _make_service(gis_registry={'dupage_il': connector})
+            svc._enrich_with_gis(lead, connector, import_job_id=1, is_creation=False)
+            assert lead.needs_skip_trace is False
+            assert lead.has_property_match is True
+            assert 'GIS match not found' not in (lead.notes or '')
+
     def test_match_found_sets_has_property_match_true(self, app):
         """Req 8.3: has_property_match set to True when match found."""
         with app.app_context():

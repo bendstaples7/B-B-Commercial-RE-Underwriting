@@ -1126,6 +1126,7 @@ class PropertyMatchReviewService:
         try:
             outcome = self._ingestion_service()._enrich_with_gis(
                 lead, connector, import_job_id=None, pin_hint=pin_value,
+                is_creation=False,
             )
             if not outcome.get('match_found'):
                 db.session.rollback()

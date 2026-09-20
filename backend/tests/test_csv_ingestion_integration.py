@@ -92,6 +92,7 @@ class TestCSVAsyncPath:
                         f"/api/ingestion/csv?owner_user_id={OWNER_USER_ID}",
                         data={"file": (io.BytesIO(csv_bytes), "leads_501.csv")},
                         content_type="multipart/form-data",
+                        headers={"X-User-Id": OWNER_USER_ID},
                     )
 
             # ---------------------------------------------------------------
@@ -214,6 +215,7 @@ class TestCSVAsyncPath:
                     f"/api/ingestion/csv?owner_user_id={OWNER_USER_ID}",
                     data={"file": (io.BytesIO(csv_bytes), "leads.csv")},
                     content_type="multipart/form-data",
+                    headers={"X-User-Id": OWNER_USER_ID},
                 )
 
             assert resp.status_code == 202
@@ -255,6 +257,7 @@ class TestCSVSyncPath:
                     f"/api/ingestion/csv?owner_user_id={OWNER_USER_ID}",
                     data={"file": (io.BytesIO(csv_bytes), "leads_499.csv")},
                     content_type="multipart/form-data",
+                    headers={"X-User-Id": OWNER_USER_ID},
                 )
 
         assert resp.status_code == 200, (
@@ -288,6 +291,7 @@ class TestCSVSyncPath:
                     f"/api/ingestion/csv?owner_user_id={OWNER_USER_ID}",
                     data={"file": (io.BytesIO(csv_bytes), "leads_500.csv")},
                     content_type="multipart/form-data",
+                    headers={"X-User-Id": OWNER_USER_ID},
                 )
 
         assert resp.status_code == 200, (

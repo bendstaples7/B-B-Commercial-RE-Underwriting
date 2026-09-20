@@ -8,7 +8,7 @@ from alembic import op
 
 
 revision = 'cap_src_20260919'
-down_revision = 'act_mtg_20260919'
+down_revision = 'ctc_own_20260918'
 branch_labels = None
 depends_on = None
 

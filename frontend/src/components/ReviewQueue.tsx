@@ -603,6 +603,7 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({ standalone = true }) =
               }
             >
               <MenuItem value="">All Confidence Levels</MenuItem>
+              <MenuItem value={MatchConfidence.HIGH}>High</MenuItem>
               <MenuItem value={MatchConfidence.MEDIUM}>Medium</MenuItem>
               <MenuItem value={MatchConfidence.LOW}>Low</MenuItem>
               <MenuItem value={MatchConfidence.UNMATCHED}>Unmatched</MenuItem>

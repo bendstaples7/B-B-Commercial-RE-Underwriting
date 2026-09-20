@@ -214,6 +214,8 @@ class LeadIngestionService:
         connector: GISConnector,
         import_job_id: int | None = None,
         pin_hint: str | None = None,
+        *,
+        is_creation: bool = True,
     ) -> dict:
         """Attempt a GIS parcel lookup and populate null fields on the lead.
 
@@ -271,14 +273,27 @@ class LeadIngestionService:
                 parcel = connector.lookup_by_pin(pin_for_lookup)
 
             if parcel is None:
-                # No match found (Requirement 8.4)
-                lead.needs_skip_trace = True
-                lead.has_property_match = False          # Req 6.2, 6.3
-                _append_note(lead, 'GIS match not found')
+                # No match found (Requirement 8.4). Re-import must not reopen
+                # skip-trace or wipe a prior GIS match on an existing lead.
+                if is_creation:
+                    lead.needs_skip_trace = True
+                    lead.has_property_match = False          # Req 6.2, 6.3
+                    _append_note(lead, 'GIS match not found')
             else:
                 outcome['parcel_pin'] = getattr(parcel, 'county_assessor_pin', None)
 
                 # Match found — populate null fields (Requirement 8.2)
+                from app.services.contact_service import ContactService
+                skip_owner_names = False
+                lead_id = getattr(lead, 'id', None)
+                if isinstance(lead_id, int):
+                    try:
+                        skip_owner_names = ContactService.primary_owner_name_locked(lead_id)
+                    except Exception:
+                        logger.warning(
+                            'Could not check owner-name lock for lead %s',
+                            lead_id,
+                        )
                 fields_populated = 0
                 for field in _GIS_FIELDS:
                     parcel_value = getattr(parcel, field, None)
@@ -290,6 +305,14 @@ class LeadIngestionService:
                             and not current_value.strip()
                         )
                     )
+                    if field == 'property_type' and getattr(
+                        lead, 'lead_category_locked', False,
+                    ):
+                        continue
+                    if skip_owner_names and field in (
+                        'owner_first_name', 'owner_last_name',
+                    ):
+                        continue
                     if parcel_value is not None and current_missing:
                         setattr(lead, field, parcel_value)
                         fields_populated += 1
@@ -302,7 +325,6 @@ class LeadIngestionService:
                 if outcome['match_found'] and getattr(lead, 'id', None):
                     try:
                         from app import db
-                        from app.services.contact_service import ContactService
                         with db.session.begin_nested():
                             ContactService().upsert_owners_from_lead(lead, commit=False)
                     except Exception as contact_exc:
@@ -473,6 +495,7 @@ class LeadIngestionService:
                         "Scoring failed for lead %s: %s",
                         getattr(lead, 'id', '?'), exc
                     )
+                    db.session.rollback()
             logger.info("Auto-scored %d/%d leads for job %d", scored, len(leads), job_id)
         except Exception as exc:
             logger.error("_score_imported_leads failed for job %d: %s", job_id, exc)
@@ -879,7 +902,9 @@ class LeadIngestionService:
                 # GIS enrichment for foreclosure leads (Req 8.1)
                 connector = self._gis_connector_for_lead(lead)
                 if connector:
-                    gis_outcome = self._enrich_with_gis(lead, connector, job.id)
+                    gis_outcome = self._enrich_with_gis(
+                        lead, connector, job.id, is_creation=is_creation,
+                    )
                     error_log_entry = {
                         'type': 'gis_enrichment',
                         'record': rows_processed,
@@ -955,11 +980,16 @@ class LeadIngestionService:
                 # Both must match; conflict if only one matches.
                 existing_by_pin = None
                 if incoming_pin:
-                    existing_by_pin = db.session.query(Property).filter(
-                        Property.county_assessor_pin == incoming_pin
-                    ).first()
+                    pin_query = db.session.query(Property).filter(
+                        Property.county_assessor_pin == incoming_pin,
+                        Property.owner_user_id == owner_user_id,
+                    )
+                    existing_by_pin = pin_query.first()
 
-                existing_by_address = self.dedup_engine.find_existing_lead(incoming_street)
+                existing_by_address = self.dedup_engine.find_existing_lead(
+                    incoming_street,
+                    owner_user_id=owner_user_id,
+                )
 
                 if existing_by_pin and existing_by_address:
                     if existing_by_pin.id != existing_by_address.id:
@@ -1019,7 +1049,9 @@ class LeadIngestionService:
                 # GIS enrichment for tax_distress (Req 8.1)
                 connector = self._gis_connector_for_lead(lead)
                 if connector:
-                    gis_outcome = self._enrich_with_gis(lead, connector, job.id)
+                    gis_outcome = self._enrich_with_gis(
+                        lead, connector, job.id, is_creation=is_creation,
+                    )
                     if gis_outcome.get('error'):
                         error_log.append({'type': 'gis_enrichment', 'record': rows_processed, **gis_outcome})
 
@@ -1275,7 +1307,9 @@ class LeadIngestionService:
                     # --------------------------------------------------
                     connector = self._gis_connector_for_lead(lead)
                     if connector:
-                        gis_outcome = self._enrich_with_gis(lead, connector, job_id)
+                        gis_outcome = self._enrich_with_gis(
+                            lead, connector, job_id, is_creation=is_creation,
+                        )
                         if gis_outcome.get('error'):
                             error_log.append({
                                 'type': 'gis_enrichment',

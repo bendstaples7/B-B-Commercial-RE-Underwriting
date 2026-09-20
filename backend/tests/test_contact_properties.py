@@ -16,6 +16,7 @@ Contains all 13 Hypothesis property-based tests covering:
   - Property 13: Owner-name filter returns exactly matching properties (Req 11.1, 11.2)
 """
 import uuid
+from unittest.mock import patch
 
 import pytest
 import sqlalchemy as sa
@@ -32,6 +33,15 @@ from app.services.hubspot_matcher_service import HubSpotMatcherService
 from app.models.hubspot_contact import HubSpotContact
 
 _AUTH_HEADERS = {"X-User-Id": "test-user"}
+
+
+def _match_contact_as_test_importer(hs_contact: HubSpotContact):
+    with patch.object(
+        HubSpotMatcherService,
+        '_hubspot_import_owner_user_id',
+        return_value='test-user',
+    ):
+        return HubSpotMatcherService().match_contact(hs_contact)
 
 # Import the migration helper from the migration test module
 from tests.test_migration_contact import run_migration_logic
@@ -134,7 +144,10 @@ def _create_property(app_ctx, street=None):
 
 def _create_contact(app_ctx, first_name="Test", last_name="Contact", role="owner"):
     """Create a Contact row and return its id."""
-    contact = Contact(first_name=first_name, last_name=last_name, role=role)
+    contact = Contact(
+        first_name=first_name, last_name=last_name, role=role,
+        created_by_user_id="test-user",
+    )
     db.session.add(contact)
     db.session.commit()
     return contact.id
@@ -183,7 +196,7 @@ def test_legacy_redirect_preserves_path_suffix(app, client, suffix):
     """
     # Feature: property-contact-model, Property 1: Legacy redirect preserves path suffix
     path = f"/api/leads/{suffix}"
-    response = client.get(path, follow_redirects=False)
+    response = client.get(path, follow_redirects=False, headers=_AUTH_HEADERS)
 
     assert response.status_code == 301, (
         f"Expected 301 for path {path!r}, got {response.status_code}"
@@ -260,7 +273,7 @@ def test_contact_data_round_trip(app, client, payload):
     # Feature: property-contact-model, Property 3: Contact data round-trip
     with app.app_context():
         # Create the contact
-        create_resp = client.post("/api/contacts/", json=payload)
+        create_resp = client.post("/api/contacts/", json=payload, headers=_AUTH_HEADERS)
         assert create_resp.status_code == 201, (
             f"Expected 201, got {create_resp.status_code}: {create_resp.get_json()}"
         )
@@ -268,7 +281,7 @@ def test_contact_data_round_trip(app, client, payload):
         contact_id = created["id"]
 
         # Retrieve the contact
-        get_resp = client.get(f"/api/contacts/{contact_id}")
+        get_resp = client.get(f"/api/contacts/{contact_id}", headers=_AUTH_HEADERS)
         assert get_resp.status_code == 200
         retrieved = get_resp.get_json()
 
@@ -298,7 +311,7 @@ def test_contact_data_round_trip(app, client, payload):
             assert returned["label"] == submitted["label"]
 
         # Clean up
-        client.delete(f"/api/contacts/{contact_id}")
+        client.delete(f"/api/contacts/{contact_id}", headers=_AUTH_HEADERS)
 
 
 # ===========================================================================
@@ -320,7 +333,7 @@ def test_empty_name_contacts_are_rejected(app, client, payload):
     with app.app_context():
         count_before = Contact.query.count()
 
-        response = client.post("/api/contacts/", json=payload)
+        response = client.post("/api/contacts/", json=payload, headers=_AUTH_HEADERS)
 
         assert response.status_code == 400, (
             f"Expected 400 for empty-name payload {payload!r}, got {response.status_code}"
@@ -366,7 +379,7 @@ def test_property_contact_join_record_round_trip(app, client, role, is_primary):
             "is_primary": is_primary,
         }
         link_resp = client.post(
-            f"/api/properties/{property_id}/contacts", json=link_payload
+            f"/api/properties/{property_id}/contacts", json=link_payload, headers=_AUTH_HEADERS
         )
         assert link_resp.status_code == 201, (
             f"Expected 201, got {link_resp.status_code}: {link_resp.get_json()}"
@@ -390,8 +403,8 @@ def test_property_contact_join_record_round_trip(app, client, role, is_primary):
         )
 
         # Clean up
-        client.delete(f"/api/properties/{property_id}/contacts/{contact_id}")
-        client.delete(f"/api/contacts/{contact_id}")
+        client.delete(f"/api/properties/{property_id}/contacts/{contact_id}", headers=_AUTH_HEADERS)
+        client.delete(f"/api/contacts/{contact_id}", headers=_AUTH_HEADERS)
         prop = db.session.get(Lead, property_id)
         if prop:
             db.session.delete(prop)
@@ -432,6 +445,7 @@ def test_at_most_one_primary_contact_per_property(app, client, num_contacts, is_
             link_resp = client.post(
                 f"/api/properties/{property_id}/contacts",
                 json={"contact_id": contact_id, "role": "owner", "is_primary": is_primary},
+                headers=_AUTH_HEADERS,
             )
             assert link_resp.status_code == 201
 
@@ -453,7 +467,8 @@ def test_at_most_one_primary_contact_per_property(app, client, num_contacts, is_
         if primary_contacts:
             primary_id = primary_contacts[0]["id"]
             del_resp = client.delete(
-                f"/api/properties/{property_id}/contacts/{primary_id}"
+                f"/api/properties/{property_id}/contacts/{primary_id}",
+                headers=_AUTH_HEADERS,
             )
             assert del_resp.status_code == 204
 
@@ -468,7 +483,7 @@ def test_at_most_one_primary_contact_per_property(app, client, num_contacts, is_
 
         # Clean up
         for cid in contact_ids:
-            client.delete(f"/api/contacts/{cid}")
+            client.delete(f"/api/contacts/{cid}", headers=_AUTH_HEADERS)
         prop = db.session.get(Lead, property_id)
         if prop:
             db.session.delete(prop)
@@ -495,19 +510,19 @@ def test_nonexistent_ids_return_404(app, client, nonexistent_id):
         assume(Lead.query.get(nonexistent_id) is None)
 
         # GET /api/contacts/<id>
-        resp = client.get(f"/api/contacts/{nonexistent_id}")
+        resp = client.get(f"/api/contacts/{nonexistent_id}", headers=_AUTH_HEADERS)
         assert resp.status_code == 404, (
             f"GET /api/contacts/{nonexistent_id} expected 404, got {resp.status_code}"
         )
 
         # PUT /api/contacts/<id>
-        resp = client.put(f"/api/contacts/{nonexistent_id}", json={"first_name": "X"})
+        resp = client.put(f"/api/contacts/{nonexistent_id}", json={"first_name": "X"}, headers=_AUTH_HEADERS)
         assert resp.status_code == 404, (
             f"PUT /api/contacts/{nonexistent_id} expected 404, got {resp.status_code}"
         )
 
         # DELETE /api/contacts/<id>
-        resp = client.delete(f"/api/contacts/{nonexistent_id}")
+        resp = client.delete(f"/api/contacts/{nonexistent_id}", headers=_AUTH_HEADERS)
         assert resp.status_code == 404, (
             f"DELETE /api/contacts/{nonexistent_id} expected 404, got {resp.status_code}"
         )
@@ -522,6 +537,7 @@ def test_nonexistent_ids_return_404(app, client, nonexistent_id):
         resp = client.post(
             f"/api/properties/{nonexistent_id}/contacts",
             json={"contact_id": 1, "role": "owner", "is_primary": False},
+            headers=_AUTH_HEADERS,
         )
         assert resp.status_code == 404, (
             f"POST /api/properties/{nonexistent_id}/contacts expected 404, got {resp.status_code}"
@@ -529,7 +545,8 @@ def test_nonexistent_ids_return_404(app, client, nonexistent_id):
 
         # DELETE /api/properties/<id>/contacts/<contact_id>
         resp = client.delete(
-            f"/api/properties/{nonexistent_id}/contacts/{nonexistent_id}"
+            f"/api/properties/{nonexistent_id}/contacts/{nonexistent_id}",
+            headers=_AUTH_HEADERS,
         )
         assert resp.status_code == 404, (
             f"DELETE /api/properties/{nonexistent_id}/contacts/{nonexistent_id} "
@@ -782,8 +799,7 @@ def test_hubspot_matching_targets_contact_records(
         db.session.commit()
 
         # Run the matcher
-        svc = HubSpotMatcherService()
-        match = svc.match_contact(hs_contact)
+        match = _match_contact_as_test_importer(hs_contact)
         db.session.commit()
 
         assert match.confidence == "HIGH", (
@@ -849,7 +865,7 @@ def test_unmatched_hubspot_contacts_create_new_contact_records(app, first_name, 
         db.session.commit()
 
         svc = HubSpotMatcherService()
-        svc.match_contact(hs_contact)
+        _match_contact_as_test_importer(hs_contact)
         db.session.commit()
 
         count_after = Contact.query.count()
@@ -927,7 +943,7 @@ def test_matching_never_deletes_existing_contact_records(app, num_existing, hs_f
         db.session.commit()
 
         svc = HubSpotMatcherService()
-        svc.match_contact(hs_contact)
+        _match_contact_as_test_importer(hs_contact)
         db.session.commit()
 
         count_after = Contact.query.count()

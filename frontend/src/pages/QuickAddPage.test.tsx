@@ -322,4 +322,45 @@ describe('QuickAddPage deprioritized matches', () => {
     expect(screen.getByText(/first or last name/i)).toBeInTheDocument()
     expect(leadService.quickAdd).not.toHaveBeenCalled()
   })
+
+  it('blocks a blank address before calling the api', () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    renderPage()
+    fireEvent.change(screen.getByLabelText('Property address'), { target: { value: '   ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save to Skip Trace' }))
+    expect(screen.getByText(/property address is required/i)).toBeInTheDocument()
+    expect(leadService.quickAdd).not.toHaveBeenCalled()
+    expect(contactService.createContact).not.toHaveBeenCalled()
+  })
+
+  it('keeps the property when a person cannot be saved', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    vi.mocked(contactService.createContact).mockRejectedValue(new Error('Invalid source'))
+    renderPage()
+    fireEvent.click(screen.getByTestId('quick-add-add-person'))
+    fireEvent.change(screen.getByLabelText('First name 1'), { target: { value: 'Ada' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save to Skip Trace' }))
+
+    expect(await screen.findByText(/Invalid source/)).toBeInTheDocument()
+    expect(screen.getByText(/Added to Skip Trace/)).toBeInTheDocument()
+    expect(leadService.quickAdd).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets you remove a blank person and save the property alone', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    renderPage()
+    fireEvent.click(screen.getByTestId('quick-add-add-person'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save to Skip Trace' }))
+    expect(screen.getByText(/first or last name/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('quick-add-remove-person-0'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save to Skip Trace' }))
+
+    await waitFor(() => {
+      expect(leadService.quickAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ capture_kind: null }),
+      )
+    })
+    expect(contactService.createContact).not.toHaveBeenCalled()
+  })
 })

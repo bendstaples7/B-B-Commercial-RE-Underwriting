@@ -867,6 +867,23 @@ class TestUpdateStatus:
             assert task.status == 'cancelled'
             assert task.completed_at is None
 
+    def test_deal_won_status_cancels_open_tasks(self, client, app):
+        """PATCH to deal_won cancels open tasks (same as other terminal statuses)."""
+        with app.app_context():
+            lead = _make_lead(app, '10c Status St', lead_status='offer_delivered')
+            task = _make_task(app, lead.id)
+            client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'deal_won'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            db.session.refresh(task)
+            db.session.refresh(lead)
+            assert lead.lead_status == 'deal_won'
+            assert task.status == 'cancelled'
+            assert task.completed_at is None
+
     def test_deprioritize_status_syncs_hubspot_backed_cancelled_tasks(
         self, client, app, monkeypatch,
     ):
@@ -1362,6 +1379,17 @@ class TestSameAddressLeadsPayload:
             assert visible_twin.id in twin_ids
             assert other_user_twin.id not in twin_ids
 
+    def test_queue_helper_does_not_use_admin_scope_for_anonymous(self, app):
+        """Anonymous must not get QueueService(owner_user_id=None) (all leads)."""
+        from flask import g
+        from app.controllers.command_center_controller import _get_queue_service_for_cc
+
+        with app.app_context():
+            g.user_id = 'anonymous'
+            g.is_admin = False
+            svc = _get_queue_service_for_cc()
+            assert svc._owner_user_id == '__anonymous__'
+
 
 class TestMergePreviewAndUnitGuard:
     def test_merge_preview_same_building_false_for_other_unit(self, client, app):
@@ -1466,6 +1494,46 @@ class TestMergePreviewAndUnitGuard:
             assert twin_row['data_source'] == 'cook_county_assessor'
             assert twin_row['open_task_count'] == 1
             assert twin_row['activity']['total'] == 0
+
+    def test_merge_context_loads_building_husk_without_an_id_hint(self, client, app):
+        """Opening merge on Apt 1 must already include the building record."""
+        from app.services.lead_dedup_service import refresh_lead_dedup_fields
+
+        with app.app_context():
+            unit = _make_lead(
+                app,
+                '4451 N Albany Ave Apt 1',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            husk = _make_lead(
+                app,
+                '4451 N Albany Ave',
+                owner_first_name='Samuel',
+                owner_last_name='Marconi',
+            )
+            other_unit = _make_lead(
+                app,
+                '4451 N Albany Ave Apt 2',
+                owner_first_name='Other',
+                owner_last_name='Tenant',
+            )
+            for item in (unit, husk, other_unit):
+                refresh_lead_dedup_fields(item)
+            db.session.commit()
+
+            response = client.get(
+                f'/api/leads/{unit.id}/merge-context',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            assert husk.id in body['sibling_ids']
+            assert other_unit.id not in body['sibling_ids']
+            returned = {row['id'] for row in body['leads']}
+            assert unit.id in returned
+            assert husk.id in returned
+            assert other_unit.id not in returned
 
     def test_merge_context_excludes_other_users_leads(self, client, app):
         with app.app_context():
@@ -2714,6 +2782,7 @@ class TestLogActivityAuth:
                 f'/api/leads/{lead.id}/notes',
                 data=json.dumps({'body': 'Unauthorized note'}),
                 content_type='application/json',
+                headers={'X-User-Id': ''},
             )
             assert response.status_code == 401
 
@@ -2725,14 +2794,40 @@ class TestLogActivityAuth:
                 f'/api/leads/{lead.id}/calls',
                 data=json.dumps({'outcome': 'answered'}),
                 content_type='application/json',
+                headers={'X-User-Id': ''},
             )
             assert response.status_code == 401
+
+    def test_log_note_rejects_non_owner(self, client, app):
+        """POST /notes cannot write on another user's lead."""
+        with app.app_context():
+            lead = _make_lead(app, '21z Other Owner Note St', owner_user_id='other-user')
+            response = client.post(
+                f'/api/leads/{lead.id}/notes',
+                data=json.dumps({'body': 'Stolen note'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 404
+            assert LeadTimelineEntry.query.filter_by(lead_id=lead.id).count() == 0
+
+    def test_log_call_rejects_non_owner(self, client, app):
+        """POST /calls cannot write on another user's lead."""
+        with app.app_context():
+            lead = _make_lead(app, '24z Other Owner Call St', owner_user_id='other-user')
+            response = client.post(
+                f'/api/leads/{lead.id}/calls',
+                data=json.dumps({'outcome': 'answered'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 404
 
     def test_log_note_actor_resolved_from_bearer_token(self, client, app):
         """Authenticated note log stores actor as the user's display name."""
         with app.app_context():
-            lead = _make_lead(app, '21f Note St')
             user = _make_log_user('Jane Logger')
+            lead = _make_lead(app, '21f Note St', owner_user_id=user.user_id)
             token = AuthService().issue_token(user)
             response = client.post(
                 f'/api/leads/{lead.id}/notes',
@@ -2747,8 +2842,8 @@ class TestLogActivityAuth:
     def test_log_call_actor_resolved_from_bearer_token(self, client, app):
         """Authenticated call log stores actor as the user's display name."""
         with app.app_context():
-            lead = _make_lead(app, '24c Call St')
             user = _make_log_user('Call Logger')
+            lead = _make_lead(app, '24c Call St', owner_user_id=user.user_id)
             token = AuthService().issue_token(user)
             response = client.post(
                 f'/api/leads/{lead.id}/calls',
@@ -2766,6 +2861,58 @@ class TestLogActivityAuth:
 # ---------------------------------------------------------------------------
 
 class TestDoNotContact:
+    def test_dnc_without_auth_returns_401(self, client, app):
+        """Anonymous POST /do-not-contact must not mutate the lead."""
+        with app.app_context():
+            lead = _make_lead(app, '24z Anon DNC St', lead_status='mailing_no_contact_made')
+            response = client.post(
+                f'/api/leads/{lead.id}/do-not-contact',
+                data=json.dumps({}),
+                content_type='application/json',
+                headers={'X-User-Id': ''},
+            )
+            assert response.status_code == 401
+            db.session.refresh(lead)
+            assert lead.lead_status == 'mailing_no_contact_made'
+
+    def test_dnc_rejects_non_owner(self, client, app):
+        """POST /do-not-contact cannot mutate a lead owned by another user."""
+        with app.app_context():
+            lead = _make_lead(
+                app, '24y Other Owner DNC St',
+                lead_status='mailing_no_contact_made',
+                owner_user_id='other-user',
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/do-not-contact',
+                data=json.dumps({}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 404
+            db.session.refresh(lead)
+            assert lead.lead_status == 'mailing_no_contact_made'
+
+    def test_dnc_ignores_spoofed_actor(self, client, app):
+        """Timeline actor comes from the session, not the JSON body."""
+        with app.app_context():
+            lead = _make_lead(app, '24x Spoof DNC St', lead_status='mailing_no_contact_made')
+            response = client.post(
+                f'/api/leads/{lead.id}/do-not-contact',
+                data=json.dumps({'actor': 'spoofed-user'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            entry = (
+                LeadTimelineEntry.query
+                .filter_by(lead_id=lead.id, event_type='status_changed')
+                .order_by(LeadTimelineEntry.id.desc())
+                .first()
+            )
+            assert entry is not None
+            assert entry.actor == 'test-user'
+
     def test_dnc_returns_200(self, client, app):
         """POST /api/leads/<id>/do-not-contact returns 200."""
         with app.app_context():
@@ -2924,6 +3071,19 @@ class TestDoNotContact:
 # ---------------------------------------------------------------------------
 
 class TestParkLead:
+    def test_park_without_auth_returns_401(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '30z Anon Park St', lead_status='mailing_no_contact_made')
+            response = client.post(
+                f'/api/leads/{lead.id}/park',
+                data=json.dumps({}),
+                content_type='application/json',
+                headers={'X-User-Id': ''},
+            )
+            assert response.status_code == 401
+            db.session.refresh(lead)
+            assert lead.lead_status == 'mailing_no_contact_made'
+
     def test_park_returns_200(self, client, app):
         """POST /api/leads/<id>/park returns 200."""
         with app.app_context():

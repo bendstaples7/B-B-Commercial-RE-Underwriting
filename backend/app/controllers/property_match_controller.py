@@ -2,7 +2,7 @@
 from flask import Blueprint, g, jsonify, request
 from marshmallow import Schema, fields, validate
 
-from app.api_utils import require_auth, require_admin
+from app.api_utils import require_auth, require_admin, load_authorized_lead
 from app.controllers.decorators import handle_errors
 from app.schemas import VALID_BUILDING_SALE_POSSIBLE, VALID_CONDO_RISK_STATUSES
 from app.services.building_ownership_service import BuildingOwnershipService
@@ -49,6 +49,9 @@ class BackfillSchema(Schema):
 @require_auth
 @handle_errors
 def preview_property_match(lead_id: int):
+    _lead, err = load_authorized_lead(lead_id)
+    if err is not None:
+        return err
     pin_hint = request.args.get('pin')
     if isinstance(pin_hint, str):
         pin_hint = pin_hint.strip() or None
@@ -61,6 +64,9 @@ def preview_property_match(lead_id: int):
 @require_auth
 @handle_errors
 def approve_property_match(lead_id: int):
+    _lead, err = load_authorized_lead(lead_id)
+    if err is not None:
+        return err
     actor = getattr(g, 'user_id', 'anonymous')
     body = request.get_json(silent=True)
     pin = (
@@ -87,6 +93,9 @@ def approve_property_match(lead_id: int):
 @require_auth
 @handle_errors
 def reject_property_match(lead_id: int):
+    _lead, err = load_authorized_lead(lead_id)
+    if err is not None:
+        return err
     data = RejectMatchSchema().load(request.get_json() or {})
     actor = getattr(g, 'user_id', 'anonymous')
     return jsonify(_match_svc.reject_match(
@@ -98,6 +107,9 @@ def reject_property_match(lead_id: int):
 @require_auth
 @handle_errors
 def update_property_address(lead_id: int):
+    _lead, err = load_authorized_lead(lead_id)
+    if err is not None:
+        return err
     data = AddressUpdateSchema().load(request.get_json() or {})
     actor = getattr(g, 'user_id', 'anonymous')
     return jsonify(_match_svc.update_property_address(lead_id, actor=actor, **data)), 200
@@ -126,6 +138,9 @@ def backfill_building_ownership():
 @require_auth
 @handle_errors
 def get_building_ownership(lead_id: int):
+    _lead, err = load_authorized_lead(lead_id)
+    if err is not None:
+        return err
     detail = _ownership_svc.get_for_lead(lead_id)
     if detail is None:
         return jsonify({'error': 'Not found', 'message': 'No analysis for lead'}), 404
@@ -136,6 +151,9 @@ def get_building_ownership(lead_id: int):
 @require_auth
 @handle_errors
 def analyze_building_ownership(lead_id: int):
+    _lead, err = load_authorized_lead(lead_id)
+    if err is not None:
+        return err
     body = request.get_json(silent=True) or {}
     force = bool(body.get('force'))
     tax_situs = body.get('tax_situs_street')
@@ -169,6 +187,9 @@ def analyze_building_ownership(lead_id: int):
 @require_auth
 @handle_errors
 def override_building_ownership(lead_id: int):
+    _lead, err = load_authorized_lead(lead_id)
+    if err is not None:
+        return err
     data = OverrideSchema().load(request.get_json() or {})
     result = _ownership_svc.apply_override(
         lead_id,
@@ -176,4 +197,6 @@ def override_building_ownership(lead_id: int):
         data['building_sale_possible'],
         data['reason'],
     )
+    if not result:
+        return jsonify({'error': 'Not found', 'message': 'No analysis for lead'}), 404
     return jsonify(result), 200

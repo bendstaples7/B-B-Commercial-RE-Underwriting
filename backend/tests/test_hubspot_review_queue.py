@@ -1,15 +1,13 @@
 """Property-based tests for the Review Queue membership invariant.
 
 Properties verified:
-  16. Review Queue membership invariant — matches with confidence MEDIUM/LOW/UNMATCHED
-      and status=pending appear in the review queue; matches with status=confirmed or
-      status=rejected do not appear in the review queue regardless of confidence.
+  16. Review Queue membership invariant — matches with status=pending appear in
+      the review queue (including HIGH unique PIN/email hits that stay pending);
+      matches with status=confirmed or status=rejected do not appear regardless
+      of confidence.
 
 The review queue is defined as:
-    HubSpotMatch.query.filter(
-        HubSpotMatch.confidence.in_(['MEDIUM', 'LOW', 'UNMATCHED']),
-        HubSpotMatch.status == 'pending'
-    )
+    HubSpotMatch.query.filter(HubSpotMatch.status == 'pending')
 
 This test requires a Flask app context because it writes HubSpotMatch rows to the
 in-memory SQLite database.  The ``app`` fixture from conftest.py provides that context.
@@ -27,8 +25,8 @@ from app.models.hubspot_match import HubSpotMatch
 # Strategies
 # ---------------------------------------------------------------------------
 
-# All valid confidence values
-_CONFIDENCE_REVIEW = ['MEDIUM', 'LOW', 'UNMATCHED']
+# All valid confidence values — pending HIGH must appear (unique PIN stays pending)
+_CONFIDENCE_REVIEW = ['HIGH', 'MEDIUM', 'LOW', 'UNMATCHED']
 _CONFIDENCE_ALL = ['HIGH', 'MEDIUM', 'LOW', 'UNMATCHED']
 
 _confidence_review_st = st.sampled_from(_CONFIDENCE_REVIEW)
@@ -51,7 +49,6 @@ _hubspot_id_st = st.integers(min_value=1, max_value=999_999).map(lambda n: f"hs-
 def _review_queue(session):
     """Return the review queue query result (list of HubSpotMatch)."""
     return session.query(HubSpotMatch).filter(
-        HubSpotMatch.confidence.in_(['MEDIUM', 'LOW', 'UNMATCHED']),
         HubSpotMatch.status == 'pending',
     ).all()
 
@@ -87,7 +84,7 @@ class TestReviewQueueMembershipInvariant:
     def test_pending_review_confidence_appears_in_queue(
         self, app, confidence, record_type, hubspot_id
     ):
-        """Matches with MEDIUM/LOW/UNMATCHED confidence and status=pending must appear in the queue.
+        """Pending matches of any confidence (including HIGH unique PIN) must appear in the queue.
 
         **Validates: Requirements 13.1, 13.4, 13.5**
         """
@@ -160,12 +157,10 @@ class TestReviewQueueMembershipInvariant:
         record_type=_record_type_st,
         hubspot_id=_hubspot_id_st,
     )
-    def test_high_confidence_pending_not_in_queue(
+    def test_high_confidence_pending_is_in_queue(
         self, app, record_type, hubspot_id
     ):
-        """Matches with HIGH confidence and status=pending must NOT appear in the queue.
-
-        HIGH confidence matches are auto-confirmed and do not require manual review.
+        """HIGH pending matches must appear — unique PIN/email stay pending until confirmed.
 
         **Validates: Requirements 13.1, 13.4, 13.5**
         """
@@ -182,9 +177,9 @@ class TestReviewQueueMembershipInvariant:
             queue = _review_queue(db.session)
             queue_ids = {m.id for m in queue}
 
-            assert match.id not in queue_ids, (
-                f"Expected HIGH confidence pending match to be absent from review queue, "
-                f"but it was present."
+            assert match.id in queue_ids, (
+                f"Expected HIGH confidence pending match to appear in review queue, "
+                f"but it was absent."
             )
 
             db.session.rollback()
@@ -293,10 +288,10 @@ class TestReviewQueueMembershipInvariant:
                 _make_match('q-m1', 'deal', 'MEDIUM', 'pending'),
                 _make_match('q-m2', 'contact', 'LOW', 'pending'),
                 _make_match('q-m3', 'company', 'UNMATCHED', 'pending'),
+                _make_match('q-m4', 'deal', 'HIGH', 'pending'),
             ]
             # Records that should NOT appear in the queue
             should_not_be_in = [
-                _make_match('q-m4', 'deal', 'HIGH', 'pending'),       # HIGH confidence
                 _make_match('q-m5', 'deal', 'MEDIUM', 'confirmed'),   # confirmed
                 _make_match('q-m6', 'contact', 'LOW', 'rejected'),    # rejected
                 _make_match('q-m7', 'company', 'HIGH', 'confirmed'),  # HIGH + confirmed
@@ -323,3 +318,21 @@ class TestReviewQueueMembershipInvariant:
                 )
 
             db.session.rollback()
+
+    def test_review_queue_http_includes_high_pending(self, app, client):
+        """GET /api/hubspot/review-queue must list HIGH pending unique-PIN matches."""
+        with app.app_context():
+            match = _make_match('http-high-pending', 'deal', 'HIGH', 'pending')
+            db.session.add(match)
+            db.session.commit()
+            match_id = match.id
+
+        listed = client.get('/api/hubspot/review-queue')
+        assert listed.status_code == 200
+        ids = {row['id'] for row in listed.get_json()['matches']}
+        assert match_id in ids
+        assert listed.get_json()['pending_count'] >= 1
+
+        with app.app_context():
+            db.session.delete(db.session.get(HubSpotMatch, match_id))
+            db.session.commit()
