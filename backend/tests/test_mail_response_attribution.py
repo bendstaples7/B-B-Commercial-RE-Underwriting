@@ -223,6 +223,7 @@ def test_campaign_older_than_ninety_days_is_not_attributable(app):
         db.session.commit()
 
         assert MailCampaignService().get_recent_for_lead(lead.id, 'test-user') == []
+        assert MailCampaignService().get_recent_for_lead(lead.id, 'test-user', days=120) == []
         CallLogService().log_call(
             lead.id, 'answered', None, 'old letter', actor='test-user',
             mail_campaign_id=campaign.id, direction='inbound',

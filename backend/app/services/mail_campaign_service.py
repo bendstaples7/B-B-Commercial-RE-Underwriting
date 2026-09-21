@@ -2537,7 +2537,8 @@ class MailCampaignService:
         if lead is None or (lead.owner_user_id and lead.owner_user_id != user_id):
             raise MailQueueError('Lead not found', status_code=404)
 
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        effective_days = min(days, _MAIL_RESPONSE_WINDOW.days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=effective_days)
         sent_at = db.func.coalesce(MailCampaign.submitted_at, MailCampaign.created_at)
         query = (
             MailCampaign.query
