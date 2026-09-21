@@ -19,6 +19,18 @@ down_revision = 'cap_src_20260919'
 branch_labels = None
 depends_on = None
 
+# Safe integer parse for legacy JSON mail_campaign_id values. Rejects empty,
+# non-digits, and values outside a signed 32-bit int before casting.
+_SAFE_CAMPAIGN_ID = """
+CASE
+    WHEN COALESCE(e.metadata->>'mail_campaign_id', '') ~ '^[0-9]{1,9}$'
+         AND (e.metadata->>'mail_campaign_id')::bigint
+               BETWEEN 1 AND 2147483647
+    THEN (e.metadata->>'mail_campaign_id')::integer
+    ELSE NULL
+END
+"""
+
 
 def upgrade():
     bind = op.get_bind()
@@ -83,22 +95,25 @@ def upgrade():
         FROM best
         WHERE e.id = best.entry_id
     """)
-    op.execute("""
+    op.execute(f"""
         INSERT INTO mail_campaign_lead_attributions (
             lead_id, mail_campaign_id, created_at
         )
         SELECT DISTINCT
             e.lead_id,
-            (e.metadata->>'mail_campaign_id')::integer,
+            campaign_id,
             timezone('utc', now())
-        FROM lead_timeline_entries e
-        JOIN leads l ON l.id = e.lead_id
-        JOIN mail_campaigns c
-          ON c.id = (e.metadata->>'mail_campaign_id')::integer
-        WHERE e.is_deleted = false
-          AND LOWER(COALESCE(e.metadata->>'attributed_to_mail', ''))
-                IN ('true', 't', '1')
-          AND COALESCE(e.metadata->>'mail_campaign_id', '') ~ '^[0-9]+$'
+        FROM (
+            SELECT
+                e.lead_id,
+                {_SAFE_CAMPAIGN_ID} AS campaign_id
+            FROM lead_timeline_entries e
+            WHERE e.is_deleted = false
+              AND LOWER(COALESCE(e.metadata->>'attributed_to_mail', ''))
+                    IN ('true', 't', '1')
+        ) AS e
+        JOIN mail_campaigns c ON c.id = e.campaign_id
+        WHERE e.campaign_id IS NOT NULL
         ON CONFLICT (lead_id, mail_campaign_id) DO NOTHING
     """)
     op.execute("""
@@ -119,4 +134,39 @@ def downgrade():
     bind = op.get_bind()
     if bind.dialect.name != 'postgresql':
         return
+    # Reverse only rows this migration stamped. Live attributions stay.
+    op.execute(f"""
+        WITH stamped AS (
+            SELECT DISTINCT
+                e.lead_id,
+                {_SAFE_CAMPAIGN_ID} AS campaign_id
+            FROM lead_timeline_entries e
+            WHERE e.metadata->>'mail_attribution_source' = 'inbound_after_mailer'
+        ),
+        per_campaign AS (
+            SELECT campaign_id, COUNT(*)::integer AS n
+            FROM stamped
+            WHERE campaign_id IS NOT NULL
+            GROUP BY campaign_id
+        )
+        UPDATE mail_campaigns AS c
+        SET response_count = GREATEST(0, COALESCE(c.response_count, 0) - p.n),
+            updated_at = timezone('utc', now())
+        FROM per_campaign p
+        WHERE c.id = p.campaign_id
+    """)
+    op.execute("""
+        UPDATE lead_timeline_entries e
+        SET metadata = (
+            CASE
+                WHEN jsonb_typeof(COALESCE(e.metadata::jsonb, '{}'::jsonb)) = 'object'
+                THEN COALESCE(e.metadata::jsonb, '{}'::jsonb)
+                ELSE '{}'::jsonb
+            END
+            - 'mail_campaign_id'
+            - 'attributed_to_mail'
+            - 'mail_attribution_source'
+        )::json
+        WHERE e.metadata->>'mail_attribution_source' = 'inbound_after_mailer'
+    """)
     op.execute('DROP TABLE IF EXISTS mail_campaign_lead_attributions')

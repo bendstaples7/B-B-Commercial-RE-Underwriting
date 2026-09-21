@@ -555,7 +555,7 @@ class CallLogService:
                 metadata['sent_from_email'] = sent_from_email
 
         attributed_to_mail = _stamp_mail_attribution(
-            metadata, lead_id, mail_campaign_id, actor,
+            metadata, lead_id, mail_campaign_id if is_text else None, actor,
         )
 
         if is_meeting:

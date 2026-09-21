@@ -234,6 +234,25 @@ describe('LogActivityForm — mode="call" (parity with former LogCallForm)', () 
     })
   })
 
+  it('blocks inbound save when recent mailers fail to load', async () => {
+    vi.mocked(openLetterService.campaignsForLead).mockRejectedValue(new Error('mailer offline'))
+    render(<LogActivityForm mode="call" leadId={1} onSaved={vi.fn()} />)
+
+    fireEvent.click(screen.getByTestId('call-direction-inbound'))
+    selectOutcome('answered')
+    await waitFor(() => {
+      expect(openLetterService.campaignsForLead).toHaveBeenCalled()
+    })
+    await user.click(screen.getByTestId('call-save-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('call-submit-error')).toHaveTextContent(
+        'Could not load recent mailers',
+      )
+    })
+    expect(mockLogCall).not.toHaveBeenCalled()
+  })
+
   it('validates duration range (1–999)', () => {
     render(<LogActivityForm mode="call" leadId={1} onSaved={vi.fn()} />)
 

@@ -84,6 +84,10 @@ def mail_response_eligible(lead_id: int, mail_campaign_id: int, actor_user_id: s
     campaign = MailCampaign.query.get(mail_campaign_id)
     if campaign is None or campaign.status not in ATTRIBUTABLE_CAMPAIGN_STATUSES:
         return False
+    sent_at = _utc_naive(campaign.submitted_at or campaign.created_at)
+    now = _utc_naive(datetime.now(timezone.utc))
+    if sent_at is None or now is None or sent_at < now - _MAIL_RESPONSE_WINDOW:
+        return False
     item = (
         MailQueueItem.query.filter(
             MailQueueItem.campaign_id == mail_campaign_id,
@@ -166,10 +170,14 @@ def backfill_inbound_mail_responses(session=None) -> dict[str, int]:
     copy is pure SQL in ``mail_attr_20260919_mailer_response_attribution``
     (Alembic revisions cannot import this module). Keep that SQL aligned
     with this function.
+
+    When *session* is omitted, this owns ``db.session`` and commits. When a
+    session is passed, the caller must commit.
     """
     from app.models.lead_timeline_entry import LeadTimelineEntry
 
-    sess = session if session is not None else db.session
+    owns_session = session is None
+    sess = db.session if owns_session else session
     stamped = 0
     seeded = 0
 
@@ -235,6 +243,8 @@ def backfill_inbound_mail_responses(session=None) -> dict[str, int]:
         if ledger_n > (campaign.response_count or 0):
             campaign.response_count = ledger_n
     sess.flush()
+    if owns_session:
+        sess.commit()
     return {'stamped': stamped, 'ledger_rows': seeded}
 
 

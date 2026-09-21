@@ -166,6 +166,70 @@ def test_inbound_text_counts_once(app):
         assert (entry.event_metadata or {}).get('attributed_to_mail') is True
 
 
+def test_ordinary_note_ignores_mail_campaign_id(app):
+    with app.app_context():
+        lead = _lead('301 Plain Note St')
+        campaign = _campaign()
+        _queue(lead.id, campaign.id)
+        CallLogService().log_note(
+            lead.id,
+            'Just a note',
+            actor='test-user',
+            activity_kind='note',
+            mail_campaign_id=campaign.id,
+        )
+        assert MailCampaign.query.get(campaign.id).response_count == 0
+        entry = LeadTimelineEntry.query.filter_by(
+            lead_id=lead.id, event_type='note_added',
+        ).order_by(LeadTimelineEntry.id.desc()).first()
+        meta = entry.event_metadata or {}
+        assert meta.get('attributed_to_mail') is not True
+        assert meta.get('mail_campaign_id') is None
+
+
+def test_latest_batch_is_first_and_older_batch_counts_separately(app):
+    with app.app_context():
+        lead = _lead('302 Two Batch St')
+        older = _campaign(submitted_at=datetime.now(timezone.utc) - timedelta(days=10))
+        newer = _campaign(submitted_at=datetime.now(timezone.utc) - timedelta(days=1))
+        _queue(lead.id, older.id, status='sent', user_id='mailer-bot')
+        _queue(lead.id, newer.id, status='submitted', user_id='test-user')
+
+        recent = MailCampaignService().get_recent_for_lead(lead.id, 'test-user')
+        assert [c.id for c in recent] == [newer.id, older.id]
+
+        CallLogService().log_call(
+            lead.id, 'answered', None, 'about older letter', actor='test-user',
+            mail_campaign_id=older.id, direction='inbound',
+        )
+        assert MailCampaign.query.get(older.id).response_count == 1
+        assert MailCampaign.query.get(newer.id).response_count == 0
+
+        CallLogService().log_call(
+            lead.id, 'answered', None, 'about newer letter', actor='test-user',
+            mail_campaign_id=newer.id, direction='inbound',
+        )
+        assert MailCampaign.query.get(older.id).response_count == 1
+        assert MailCampaign.query.get(newer.id).response_count == 1
+
+
+def test_campaign_older_than_ninety_days_is_not_attributable(app):
+    with app.app_context():
+        lead = _lead('303 Stale Batch St')
+        campaign = _campaign(submitted_at=datetime.now(timezone.utc) - timedelta(days=100))
+        _queue(lead.id, campaign.id, status='sent')
+        campaign.status = 'mailed'
+        db.session.add(campaign)
+        db.session.commit()
+
+        assert MailCampaignService().get_recent_for_lead(lead.id, 'test-user') == []
+        CallLogService().log_call(
+            lead.id, 'answered', None, 'old letter', actor='test-user',
+            mail_campaign_id=campaign.id, direction='inbound',
+        )
+        assert MailCampaign.query.get(campaign.id).response_count == 0
+
+
 def test_backfill_attributes_unconfirmed_inbound_call(app):
     """The call already logged without a source still counts after heal."""
     with app.app_context():
@@ -184,7 +248,6 @@ def test_backfill_attributes_unconfirmed_inbound_call(app):
         assert MailCampaign.query.get(campaign.id).response_count == 0
 
         stats = backfill_inbound_mail_responses()
-        db.session.commit()
 
         assert stats['stamped'] == 1
         saved = MailCampaign.query.get(campaign.id)
@@ -197,7 +260,6 @@ def test_backfill_attributes_unconfirmed_inbound_call(app):
         assert meta.get('mail_campaign_id') == campaign.id
 
         again = backfill_inbound_mail_responses()
-        db.session.commit()
         assert again['stamped'] == 0
         assert MailCampaign.query.get(campaign.id).response_count == 1
 
@@ -219,6 +281,11 @@ def test_backfill_ignores_outbound_and_calls_before_the_mailer(app):
         CallLogService().log_call(
             lead.id, 'voicemail', None, 'I called them', actor='test-user', direction='outbound',
         )
-        backfill_inbound_mail_responses()
-        db.session.commit()
+        stats = backfill_inbound_mail_responses()
+        assert stats['stamped'] == 0
+        assert stats['ledger_rows'] == 0
         assert MailCampaign.query.get(campaign.id).response_count == 0
+        for entry in LeadTimelineEntry.query.filter_by(lead_id=lead.id).all():
+            meta = entry.event_metadata or {}
+            assert meta.get('attributed_to_mail') is not True
+            assert meta.get('mail_campaign_id') is None

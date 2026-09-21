@@ -76,7 +76,9 @@ function mailerBatchLabel(campaign: MailCampaign): string {
 
 function resolveMailerChoice(choice: MailSourceChoice, campaigns: MailCampaign[]): number | null {
   if (campaigns.length === 0 || choice === 'none') return null
-  if (typeof choice === 'number' && campaigns.some((c) => c.id === choice)) return choice
+  if (typeof choice === 'number') {
+    return campaigns.some((c) => c.id === choice) ? choice : null
+  }
   return campaigns[0].id
 }
 
@@ -307,6 +309,8 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       () => findCompletableTaskForMode(mode, openTasks),
       [mode, openTasks],
     )
+    const [inboundText, setInboundText] = useState(false)
+    const [mailSourceChoice, setMailSourceChoice] = useState<MailSourceChoice>('suggested')
     const resolvedPreferredPhoneDigits = useMemo(() => {
       const fromEdit = normalizePhoneDigits(editTask?.phoneDigits)
       if (fromEdit.length >= 7) return fromEdit
@@ -321,13 +325,19 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
     const hasOpenNonCompletableTasks =
       !completableTask && openTasks.some((t) => t.status === 'open' || t.status === 'overdue')
 
-    const { data: recentMailCampaigns, isLoading: mailCampaignsLoading } = useQuery({
+    const {
+      data: recentMailCampaigns,
+      isLoading: mailCampaignsLoading,
+      isError: mailCampaignsError,
+    } = useQuery({
       queryKey: ['mail-campaigns-for-lead', leadId],
       queryFn: () => openLetterService.campaignsForLead(leadId),
-      enabled: mode === 'call' || mode === 'note',
+      enabled: mode === 'call' || (mode === 'note' && inboundText && !isEditingTask),
     })
     const mailCampaignOptions =
-      mode === 'call' || mode === 'note' ? (recentMailCampaigns?.campaigns ?? []) : []
+      mode === 'call' || (mode === 'note' && inboundText)
+        ? (recentMailCampaigns?.campaigns ?? [])
+        : []
 
     const { data: channelRoiSettings } = useQuery({
       queryKey: ['channel-roi-settings'],
@@ -357,8 +367,6 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
     const [duration, setDuration] = useState('')
     const [callNotes, setCallNotes] = useState('')
     const [mailCampaignId, setMailCampaignId] = useState<number | ''>('')
-    const [mailSourceChoice, setMailSourceChoice] = useState<MailSourceChoice>('suggested')
-    const [inboundText, setInboundText] = useState(false)
     const [facebookCampaignId, setFacebookCampaignId] = useState<number | ''>('')
     const [completeTask, setCompleteTask] = useState(!editTask)
 
@@ -534,6 +542,10 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
         setSubmitError('Still checking recent mailers. Save again in a moment.')
         return
       }
+      if (direction === 'inbound' && mailCampaignsError) {
+        setSubmitError('Could not load recent mailers. Save again when they appear.')
+        return
+      }
 
       setSubmitError(null)
       setSubmitting(true)
@@ -620,6 +632,10 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       if (fErr) return
       if (kind === 'note' && inboundText && mailCampaignsLoading) {
         setSubmitError('Still checking recent mailers. Save again in a moment.')
+        return
+      }
+      if (kind === 'note' && inboundText && mailCampaignsError) {
+        setSubmitError('Could not load recent mailers. Save again when they appear.')
         return
       }
 
