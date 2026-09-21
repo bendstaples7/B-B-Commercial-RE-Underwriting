@@ -186,6 +186,8 @@ _KNOWN_REVISIONS = frozenset({
     'act_mtg_20260919',
     # Contact source + why on manual capture
     'cap_src_20260919',
+    # Direct-mail response ledger + inbound call/text backfill
+    'mail_attr_20260919',
 })
 
 

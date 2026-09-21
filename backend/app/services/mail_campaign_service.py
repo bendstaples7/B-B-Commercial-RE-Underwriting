@@ -162,9 +162,10 @@ def _best_prior_campaign(campaigns: list[MailCampaign], occurred_at: datetime | 
 def backfill_inbound_mail_responses(session=None) -> dict[str, int]:
     """Attribute inbound calls/texts after a mailer and sync response_count.
 
-    Idempotent. Does not decrease an existing ``response_count``. Used by the
-    Alembic data migration so already-logged inbound calls on mailed leads
-    show up on Channel ROI without a manual backfill.
+    Idempotent. Does not decrease an existing ``response_count``. The deploy
+    copy is pure SQL in ``mail_attr_20260919_mailer_response_attribution``
+    (Alembic revisions cannot import this module). Keep that SQL aligned
+    with this function.
     """
     from app.models.lead_timeline_entry import LeadTimelineEntry
 
