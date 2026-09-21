@@ -69,6 +69,67 @@ class TestQuickAddEndpoint:
             assert (notes[0].event_metadata or {}).get('body') == 'Looks promising'
             assert lead.notes == 'Looks promising'
 
+    def test_creates_lead_in_chosen_pipeline_status(self, quick_add_client, app):
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '12 Chosen Stage Ave, Chicago, IL',
+                    'lead_status': 'negotiating_remote',
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 201
+            body = response.get_json()
+            assert body['lead_status'] == 'negotiating_remote'
+            lead = db.session.get(Lead, body['lead_id'])
+            assert lead is not None
+            assert lead.lead_status == 'negotiating_remote'
+            assert lead.needs_skip_trace is not True
+            assert LeadTask.query.filter_by(
+                lead_id=lead.id, task_type='skip_trace_owner', status='open',
+            ).first() is None
+
+    def test_rejects_unknown_pipeline_status(self, quick_add_client, app):
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '14 Bad Stage Ave, Chicago, IL',
+                    'lead_status': 'not_a_stage',
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 400
+
+    def test_dedup_does_not_apply_requested_pipeline_status(self, quick_add_client, app):
+        with app.app_context():
+            payload = {'property_street': '16 Keep Stage Ave, Chicago, IL'}
+            created = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps(payload),
+                content_type='application/json',
+            )
+            assert created.status_code == 201
+            lead = db.session.get(Lead, created.get_json()['lead_id'])
+            lead.lead_status = 'offer_delivered'
+            db.session.commit()
+
+            again = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({**payload, 'lead_status': 'mailing_no_contact_made'}),
+                content_type='application/json',
+            )
+            assert again.status_code == 201
+            assert again.get_json()['created'] is False
+            assert again.get_json()['lead_status'] == 'offer_delivered'
+            lead = db.session.get(Lead, lead.id)
+            assert lead.lead_status == 'offer_delivered'
+
     def test_lead_capture_stores_source_context_and_notes(self, quick_add_client, app):
         with app.app_context():
             response = quick_add_client.post(

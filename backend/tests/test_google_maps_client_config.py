@@ -33,13 +33,13 @@ def test_resolve_skips_placeholder(monkeypatch):
     assert resolve_google_maps_browser_api_key() is None
 
 
-def test_resolve_does_not_expose_server_key(monkeypatch):
+def test_resolve_falls_back_to_maps_api_key(monkeypatch):
     from app.services.helpers.google_maps_browser_key import (
         resolve_google_maps_browser_api_key,
     )
 
-    monkeypatch.setenv('GOOGLE_MAPS_API_KEY', 'AIzaSyServerOnlyKey')
-    assert resolve_google_maps_browser_api_key() is None
+    monkeypatch.setenv('GOOGLE_MAPS_API_KEY', 'AIzaSyFromServerEnv')
+    assert resolve_google_maps_browser_api_key() == 'AIzaSyFromServerEnv'
 
 
 def test_client_config_requires_auth(client):
@@ -67,11 +67,11 @@ def test_client_config_returns_null_without_key(client):
     assert response.get_json()['google_maps_api_key'] is None
 
 
-def test_client_config_does_not_return_server_key(client, monkeypatch):
-    monkeypatch.setenv('GOOGLE_MAPS_API_KEY', 'AIzaSyServerOnlyKey')
+def test_client_config_falls_back_to_maps_api_key(client, monkeypatch):
+    monkeypatch.setenv('GOOGLE_MAPS_API_KEY', 'AIzaSyFromServerEnv')
     response = client.get(
         '/api/config/client',
         headers={'X-User-Id': 'test-user'},
     )
     assert response.status_code == 200
-    assert response.get_json()['google_maps_api_key'] is None
+    assert response.get_json()['google_maps_api_key'] == 'AIzaSyFromServerEnv'

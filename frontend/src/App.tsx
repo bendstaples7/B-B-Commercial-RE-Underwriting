@@ -245,7 +245,7 @@ const NAV_ICON_PILL_HOVER = 'rgba(51, 65, 85, 0.14)'
 // Google Maps context — provides isLoaded state to child components
 // (e.g. PropertyFactsForm uses usePlacesAutocomplete which needs the API ready)
 // ---------------------------------------------------------------------------
-import { GoogleMapsLoadedContext } from '@/context/GoogleMapsContext'
+import { GoogleMapsAvailabilityContext, GoogleMapsLoadedContext, type GoogleMapsAvailability } from '@/context/GoogleMapsContext'
 import {
   fetchGoogleMapsApiKeyFromBackend,
   resolveGoogleMapsApiKeySync,
@@ -270,13 +270,20 @@ function GoogleMapsScriptLoader({
   apiKey: string
   children: React.ReactNode
 }) {
-  const { isLoaded } = useLoadScript({
+  const { isLoaded, loadError } = useLoadScript({
     googleMapsApiKey: apiKey,
     libraries: GOOGLE_MAPS_LIBRARIES,
   })
+  const availability: GoogleMapsAvailability = loadError
+    ? 'unavailable'
+    : isLoaded
+      ? 'ready'
+      : 'loading'
   return (
     <GoogleMapsLoadedContext.Provider value={isLoaded}>
-      {children}
+      <GoogleMapsAvailabilityContext.Provider value={availability}>
+        {children}
+      </GoogleMapsAvailabilityContext.Provider>
     </GoogleMapsLoadedContext.Provider>
   )
 }
@@ -310,15 +317,19 @@ function GoogleMapsScriptProvider({
   useEffect(() => {
     if (enabled && keyLookupDone && !apiKey) {
       console.warn(
-        'Google Maps browser API key is not available (runtime inject, local Vite env, and backend /api/config/client returned none) — address autocomplete will not work.',
+        'Google Maps API key is not available (runtime inject, Vite env, and backend /api/config/client returned none, including GOOGLE_MAPS_API_KEY) — address autocomplete will not work.',
       )
     }
   }, [enabled, keyLookupDone, apiKey])
 
   if (!enabled || !apiKey) {
+    const availability: GoogleMapsAvailability =
+      enabled && !keyLookupDone ? 'loading' : 'unavailable'
     return (
       <GoogleMapsLoadedContext.Provider value={false}>
-        {children}
+        <GoogleMapsAvailabilityContext.Provider value={availability}>
+          {children}
+        </GoogleMapsAvailabilityContext.Provider>
       </GoogleMapsLoadedContext.Provider>
     )
   }

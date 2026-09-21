@@ -84,7 +84,9 @@ def test_resolve_key_from_dotenv(tmp_path: Path, monkeypatch):
     assert inj.resolve_key(tmp_path) == 'AIzaSyFromBackendEnv'
 
 
-def test_resolve_key_skips_deploy_placeholders_and_server_key(tmp_path: Path, monkeypatch):
+def test_resolve_key_uses_maps_api_key_when_browser_names_are_placeholders(
+    tmp_path: Path, monkeypatch
+):
     monkeypatch.delenv('GOOGLE_MAPS_API_KEY', raising=False)
     monkeypatch.delenv('GOOGLE_MAPS_BROWSER_API_KEY', raising=False)
     monkeypatch.delenv('VITE_GOOGLE_MAPS_API_KEY', raising=False)
@@ -94,12 +96,37 @@ def test_resolve_key_skips_deploy_placeholders_and_server_key(tmp_path: Path, mo
             [
                 'GOOGLE_MAPS_BROWSER_API_KEY=REPLACE_ME',
                 'VITE_GOOGLE_MAPS_API_KEY=your-google-maps-api-key',
-                'GOOGLE_MAPS_API_KEY=AIzaSyServerOnlyKey',
+                'GOOGLE_MAPS_API_KEY=AIzaSyFromServerEnv',
             ]
         ),
         encoding='utf-8',
     )
-    assert inj.resolve_key(tmp_path) is None
+    assert inj.resolve_key(tmp_path) == 'AIzaSyFromServerEnv'
+
+
+def test_main_reads_backend_env_through_dist_release_symlink(tmp_path: Path, monkeypatch):
+    app = tmp_path / 'app'
+    release = app / 'frontend' / 'dist-releases' / 'rel'
+    release.mkdir(parents=True)
+    (release / 'index.html').write_text(
+        '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
+        encoding='utf-8',
+    )
+    (app / 'backend').mkdir()
+    (app / 'backend' / '.env').write_text(
+        'GOOGLE_MAPS_API_KEY=AIzaSyFromServerEnv\n',
+        encoding='utf-8',
+    )
+    (app / 'frontend' / 'dist').symlink_to(release, target_is_directory=True)
+    monkeypatch.delenv('APP_DIR', raising=False)
+    monkeypatch.delenv('GOOGLE_MAPS_API_KEY', raising=False)
+    monkeypatch.delenv('GOOGLE_MAPS_BROWSER_API_KEY', raising=False)
+    monkeypatch.delenv('VITE_GOOGLE_MAPS_API_KEY', raising=False)
+    monkeypatch.chdir(app)
+    assert inj.main(['inject', 'frontend/dist/index.html']) == 0
+    text = (app / 'frontend' / 'dist' / 'index.html').read_text(encoding='utf-8')
+    assert 'AIzaSyFromServerEnv' in text
+    assert 'bb-google-maps-api-key' in text
 
 
 def test_inject_script_and_backend_helper_share_browser_key_policy():

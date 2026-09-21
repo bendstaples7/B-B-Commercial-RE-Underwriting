@@ -222,7 +222,8 @@ def client_config():
 
     The SPA historically relied on build-time ``VITE_GOOGLE_MAPS_API_KEY``.
     CI often ships an empty key; this endpoint lets authenticated sessions
-    recover autocomplete from the backend env without rebuilding the SPA.
+    recover autocomplete from the backend env (browser key, Vite key, or the
+    historical ``GOOGLE_MAPS_API_KEY``) without rebuilding the SPA.
     """
     return jsonify({
         'google_maps_api_key': resolve_google_maps_browser_api_key(),

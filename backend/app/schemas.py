@@ -1895,6 +1895,11 @@ class QuickAddSchema(RequestSchema):
         load_default=None,
         validate=validate.Length(max=20),
     )
+    lead_status = fields.String(
+        allow_none=True,
+        load_default=None,
+        validate=validate.OneOf(VALID_LEAD_STATUSES),
+    )
 
 
 class QuickAddLookupSchema(RequestSchema):
