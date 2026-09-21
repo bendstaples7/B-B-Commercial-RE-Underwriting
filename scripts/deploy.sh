@@ -471,7 +471,10 @@ if [[ ! -f "$MAPS_INJECT_SCRIPT" ]]; then
     MAPS_INJECT_SCRIPT="/home/deploy/inject_google_maps_browser_key.py"
 fi
 if [[ -f "$MAPS_INJECT_SCRIPT" ]]; then
-    python3.11 "$MAPS_INJECT_SCRIPT" frontend/dist/index.html \
+    # APP_DIR must be exported: frontend/dist is a symlink into dist-releases,
+    # and the injector uses APP_DIR to find backend/.env instead of walking
+    # the resolved release path.
+    APP_DIR="$APP_DIR" python3.11 "$MAPS_INJECT_SCRIPT" frontend/dist/index.html \
         || echo "WARNING: Google Maps key inject skipped/failed — Places autocomplete may be unavailable"
 else
     echo "WARNING: inject_google_maps_browser_key.py not found — Places key inject skipped"

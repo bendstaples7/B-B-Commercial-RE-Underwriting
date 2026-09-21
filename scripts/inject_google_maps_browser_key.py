@@ -2,9 +2,11 @@
 """Inject window.__BB_GOOGLE_MAPS_API_KEY__ into a built SPA index.html.
 
 CI often builds the frontend without VITE_GOOGLE_MAPS_API_KEY, leaving
-``googleMapsApiKey:""`` in the bundle. Deploy reads a browser-scoped key from
-backend/.env (or repo-root .env) and injects a small bootstrap script so
-authenticated clients can load Places autocomplete without a rebuild.
+``googleMapsApiKey:""`` in the bundle. Deploy reads the browser key from
+backend/.env (or repo-root .env) — ``GOOGLE_MAPS_BROWSER_API_KEY``, then
+``VITE_GOOGLE_MAPS_API_KEY``, then the historical ``GOOGLE_MAPS_API_KEY`` —
+and injects a small bootstrap script so clients can load Places autocomplete
+without a rebuild.
 
 Usage:
   python3.11 scripts/inject_google_maps_browser_key.py frontend/dist/index.html
@@ -86,16 +88,57 @@ def inject(index_html: Path, api_key: str) -> bool:
     return True
 
 
+def infer_app_dir(index_html: Path) -> Path:
+    """Locate the app root that holds ``backend/.env``.
+
+    Deploy publishes ``frontend/dist`` as a symlink into
+    ``frontend/dist-releases/<id>``. Resolving that symlink and taking a fixed
+    parent lands in ``frontend/`` and misses ``backend/.env``. Walk upward from
+    the path deploy actually passed (and from the resolved file) until the
+    app root is found. ``APP_DIR`` wins when set.
+    """
+    configured = (os.environ.get('APP_DIR') or '').strip()
+    if configured:
+        return Path(configured)
+
+    starts = [index_html.parent]
+    resolved_parent = index_html.resolve().parent
+    if resolved_parent != index_html.parent:
+        starts.append(resolved_parent)
+
+    seen: set[Path] = set()
+    for start in starts:
+        current = start
+        for _ in range(8):
+            if current in seen:
+                break
+            seen.add(current)
+            has_backend = (current / 'backend').is_dir()
+            has_env = (current / 'backend' / '.env').is_file() or (current / '.env').is_file()
+            if has_backend and (has_env or (current / 'frontend').is_dir()):
+                return current
+            if current.parent == current:
+                break
+            current = current.parent
+
+    if len(index_html.parents) >= 3:
+        return index_html.parents[2]
+    return Path.cwd()
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(f'Usage: {argv[0]} <path-to-index.html>', file=sys.stderr)
         return 2
-    index_html = Path(argv[1]).resolve()
+    # Keep the caller path (do not resolve first). Writing through
+    # frontend/dist/index.html updates the live release symlink target.
+    index_html = Path(argv[1])
+    if not index_html.is_absolute():
+        index_html = Path.cwd() / index_html
     if not index_html.is_file():
         print(f'FAILED: {index_html} not found', file=sys.stderr)
         return 1
-    # Prefer APP_DIR / deploy layout; fall back to repo root inferred from script.
-    app_dir = Path(os.environ.get('APP_DIR') or index_html.parents[2])
+    app_dir = infer_app_dir(index_html)
     api_key = resolve_key(app_dir)
     if not api_key:
         print('SKIP: no Google Maps browser API key in env/.env')

@@ -1,9 +1,10 @@
 """Resolve the browser-facing Google Maps / Places API key.
 
 The SPA needs a Maps JavaScript + Places key for address autocomplete
-(Quick Add, New Analysis, PropertyFactsForm). Only expose keys that are
-intended for browsers; the server-side geocoding key must never be returned to
-the frontend.
+(Quick Add, New Analysis, PropertyFactsForm). Prefer a dedicated browser key
+(``GOOGLE_MAPS_BROWSER_API_KEY``, then ``VITE_GOOGLE_MAPS_API_KEY``). When
+those are unset, fall back to ``GOOGLE_MAPS_API_KEY`` — the key already in
+the platform env and previously used for Places autocomplete.
 """
 from __future__ import annotations
 

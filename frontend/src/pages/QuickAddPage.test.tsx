@@ -6,8 +6,13 @@ import { ThemeProvider, createTheme } from '@mui/material'
 import { useState } from 'react'
 import { QuickAddPage } from './QuickAddPage'
 
+const { mapsState } = vi.hoisted(() => ({
+  mapsState: { availability: 'ready' as 'loading' | 'ready' | 'unavailable' },
+}))
+
 vi.mock('@/context/GoogleMapsContext', () => ({
-  useGoogleMapsLoaded: () => true,
+  useGoogleMapsLoaded: () => mapsState.availability === 'ready',
+  useGoogleMapsAvailability: () => mapsState.availability,
 }))
 
 vi.mock('use-places-autocomplete', () => ({
@@ -86,6 +91,7 @@ function renderPage(initialEntries: string[] = ['/quick-add']) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mapsState.availability = 'ready'
   Object.defineProperty(navigator, 'geolocation', {
     configurable: true,
     value: {
@@ -123,6 +129,21 @@ describe('QuickAddPage fullscreen dialog', () => {
     expect(screen.getByTestId('quick-add-close')).toBeInTheDocument()
     expect(screen.getByLabelText('Property address')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument()
+  })
+
+  it('does not warn about a missing Maps key while the script is still loading', () => {
+    mapsState.availability = 'loading'
+    renderPage()
+    expect(screen.queryByTestId('quick-add-maps-unavailable')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Property address')).toBeInTheDocument()
+  })
+
+  it('warns when the Maps API key is unavailable', () => {
+    mapsState.availability = 'unavailable'
+    renderPage()
+    expect(screen.getByTestId('quick-add-maps-unavailable')).toHaveTextContent(
+      'Maps API key not loaded',
+    )
   })
 
   it('navigates back when the close button is clicked with same-origin referrer', () => {

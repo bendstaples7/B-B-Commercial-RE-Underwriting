@@ -33,7 +33,7 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import usePlacesAutocomplete from 'use-places-autocomplete'
-import { useGoogleMapsLoaded } from '@/context/GoogleMapsContext'
+import { useGoogleMapsAvailability, useGoogleMapsLoaded } from '@/context/GoogleMapsContext'
 import { leadService } from '@/services/leadApi'
 import { commandCenterService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
@@ -114,6 +114,7 @@ export function QuickAddPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const mapsLoaded = useGoogleMapsLoaded()
+  const mapsAvailability = useGoogleMapsAvailability()
   const suggestionsRef = useRef<HTMLUListElement>(null)
   const coordSourceRef = useRef<'gps' | 'place-pending' | 'place' | null>(null)
 
@@ -625,7 +626,7 @@ export function QuickAddPage() {
             'aria-expanded': status === 'OK',
           }}
         />
-        {!mapsLoaded && (
+        {mapsAvailability === 'unavailable' && (
           <Alert severity="warning" sx={{ mt: 1 }} data-testid="quick-add-maps-unavailable">
             Google address suggestions are unavailable (Maps API key not loaded). You can still
             enter a full street address and save.
