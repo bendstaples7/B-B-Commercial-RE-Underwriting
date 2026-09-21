@@ -23,9 +23,11 @@ depends_on = None
 # non-digits, and values outside a signed 32-bit int before casting.
 _SAFE_CAMPAIGN_ID = """
 CASE
-    WHEN COALESCE(e.metadata->>'mail_campaign_id', '') ~ '^[0-9]{1,9}$'
-         AND (e.metadata->>'mail_campaign_id')::bigint
-               BETWEEN 1 AND 2147483647
+    WHEN COALESCE(e.metadata->>'mail_campaign_id', '') ~ '^[0-9]{1,10}$'
+         AND (
+               LENGTH(e.metadata->>'mail_campaign_id') < 10
+            OR e.metadata->>'mail_campaign_id' <= '2147483647'
+         )
     THEN (e.metadata->>'mail_campaign_id')::integer
     ELSE NULL
 END
@@ -89,11 +91,19 @@ def upgrade():
             || jsonb_build_object(
                 'mail_campaign_id', best.campaign_id,
                 'attributed_to_mail', true,
-                'mail_attribution_source', 'inbound_after_mailer'
+                'mail_attribution_source', 'inbound_after_mailer',
+                'mail_attr_migration', 'mail_attr_20260919'
             )
         )::json
         FROM best
         WHERE e.id = best.entry_id
+    """)
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS mail_attr_20260919_response_count_backups (
+            mail_campaign_id INTEGER PRIMARY KEY
+                REFERENCES mail_campaigns(id) ON DELETE CASCADE,
+            response_count INTEGER NOT NULL
+        )
     """)
     op.execute(f"""
         INSERT INTO mail_campaign_lead_attributions (
@@ -117,6 +127,21 @@ def upgrade():
         ON CONFLICT (lead_id, mail_campaign_id) DO NOTHING
     """)
     op.execute("""
+        INSERT INTO mail_attr_20260919_response_count_backups (
+            mail_campaign_id, response_count
+        )
+        SELECT c.id, COALESCE(c.response_count, 0)
+        FROM mail_campaigns c
+        JOIN (
+            SELECT mail_campaign_id, COUNT(*)::integer AS n
+            FROM mail_campaign_lead_attributions
+            GROUP BY mail_campaign_id
+        ) AS counts
+          ON counts.mail_campaign_id = c.id
+        WHERE counts.n > COALESCE(c.response_count, 0)
+        ON CONFLICT (mail_campaign_id) DO NOTHING
+    """)
+    op.execute("""
         UPDATE mail_campaigns AS c
         SET response_count = counts.n,
             updated_at = timezone('utc', now())
@@ -134,26 +159,17 @@ def downgrade():
     bind = op.get_bind()
     if bind.dialect.name != 'postgresql':
         return
-    # Reverse only rows this migration stamped. Live attributions stay.
-    op.execute(f"""
-        WITH stamped AS (
-            SELECT DISTINCT
-                e.lead_id,
-                {_SAFE_CAMPAIGN_ID} AS campaign_id
-            FROM lead_timeline_entries e
-            WHERE e.metadata->>'mail_attribution_source' = 'inbound_after_mailer'
-        ),
-        per_campaign AS (
-            SELECT campaign_id, COUNT(*)::integer AS n
-            FROM stamped
-            WHERE campaign_id IS NOT NULL
-            GROUP BY campaign_id
-        )
-        UPDATE mail_campaigns AS c
-        SET response_count = GREATEST(0, COALESCE(c.response_count, 0) - p.n),
-            updated_at = timezone('utc', now())
-        FROM per_campaign p
-        WHERE c.id = p.campaign_id
+    op.execute("""
+        DO $$
+        BEGIN
+            IF to_regclass('mail_attr_20260919_response_count_backups') IS NOT NULL THEN
+                UPDATE mail_campaigns AS c
+                SET response_count = backups.response_count,
+                    updated_at = timezone('utc', now())
+                FROM mail_attr_20260919_response_count_backups AS backups
+                WHERE backups.mail_campaign_id = c.id;
+            END IF;
+        END $$;
     """)
     op.execute("""
         UPDATE lead_timeline_entries e
@@ -166,7 +182,9 @@ def downgrade():
             - 'mail_campaign_id'
             - 'attributed_to_mail'
             - 'mail_attribution_source'
+            - 'mail_attr_migration'
         )::json
-        WHERE e.metadata->>'mail_attribution_source' = 'inbound_after_mailer'
+        WHERE e.metadata->>'mail_attr_migration' = 'mail_attr_20260919'
     """)
+    op.execute('DROP TABLE IF EXISTS mail_attr_20260919_response_count_backups')
     op.execute('DROP TABLE IF EXISTS mail_campaign_lead_attributions')
