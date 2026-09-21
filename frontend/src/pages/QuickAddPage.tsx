@@ -14,6 +14,7 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
+  FormHelperText,
   IconButton,
   InputLabel,
   List,
@@ -37,8 +38,10 @@ import { useGoogleMapsAvailability, useGoogleMapsLoaded } from '@/context/Google
 import { leadService } from '@/services/leadApi'
 import { commandCenterService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
-import type { ContactRole, QuickAddPayload, QuickAddResponse } from '@/types'
+import type { ContactRole, LeadStatus, QuickAddPayload, QuickAddResponse } from '@/types'
 import { QUICK_ADD_DEAL_SOURCES } from '@/types'
+import { LEAD_STATUS_LABELS } from '@/components/LeadStatusChip'
+import { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
 import { formatDateOnly } from '@/utils/formatters'
 import { CaptureSourceFields } from '@/components/CaptureSourceFields'
 import { CONTACT_ROLE_OPTIONS } from '@/components/ContactFormModal'
@@ -122,6 +125,7 @@ export function QuickAddPage() {
   const [context, setContext] = useState('')
   const [priority, setPriority] = useState<Priority | null>(null)
   const [dealSource, setDealSource] = useState<string>(QUICK_ADD_DEAL_SOURCES[0])
+  const [pipelineStatus, setPipelineStatus] = useState<LeadStatus>('skip_trace')
   const [dateIdentified, setDateIdentified] = useState(todayIsoDate)
   const [addressError, setAddressError] = useState('')
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
@@ -448,6 +452,7 @@ export function QuickAddPage() {
         capture_kind: namedPeople.length ? 'lead' : null,
         priority,
         deal_source: dealSource,
+        lead_status: pipelineStatus,
         date_identified: dateIdentified || todayIsoDate(),
         capture_latitude: coords?.lat ?? null,
         capture_longitude: coords?.lng ?? null,
@@ -466,6 +471,7 @@ export function QuickAddPage() {
     setContext('')
     setPriority(null)
     setDealSource(QUICK_ADD_DEAL_SOURCES[0])
+    setPipelineStatus('skip_trace')
     setDateIdentified(todayIsoDate())
     setPeople([])
     setPeopleError('')
@@ -521,7 +527,9 @@ export function QuickAddPage() {
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                 {successResult.created
-                  ? 'Added to Skip Trace.'
+                  ? (successResult.lead_status || 'skip_trace') === 'skip_trace'
+                    ? 'Added to Skip Trace.'
+                    : `Saved as ${LEAD_STATUS_LABELS[successResult.lead_status as LeadStatus] ?? successResult.lead_status}.`
                   : 'This address was already in the system. Walk-by notes were appended without changing the pipeline stage.'}
                 {successResult.peopleSaved > 0
                   ? ` ${successResult.peopleSaved === 1 ? '1 person' : `${successResult.peopleSaved} people`} saved on this property.`
@@ -945,15 +953,40 @@ export function QuickAddPage() {
       </Box>
       </Box>
 
+      <FormControl fullWidth required sx={{ mt: 3 }}>
+        <InputLabel id="quick-add-pipeline-status-label">Pipeline status</InputLabel>
+        <Select
+          labelId="quick-add-pipeline-status-label"
+          label="Pipeline status"
+          value={pipelineStatus}
+          onChange={(event) => setPipelineStatus(event.target.value as LeadStatus)}
+          disabled={quickAddMutation.isPending}
+          inputProps={{ 'aria-label': 'Pipeline status' }}
+        >
+          {ALL_LEAD_STATUSES.map((status) => (
+            <MenuItem key={status} value={status}>
+              {LEAD_STATUS_LABELS[status]}
+            </MenuItem>
+          ))}
+        </Select>
+        <FormHelperText>
+          New properties are saved in this stage. An address already in the system keeps its current stage.
+        </FormHelperText>
+      </FormControl>
+
       <Button
         type="submit"
         variant="contained"
         size="large"
         disabled={quickAddMutation.isPending}
         startIcon={quickAddMutation.isPending ? <CircularProgress size={18} color="inherit" /> : undefined}
-        sx={{ mt: 3, minWidth: { md: 280 }, cursor: 'pointer' }}
+        sx={{ mt: 2, minWidth: { md: 280 }, cursor: 'pointer' }}
       >
-        {quickAddMutation.isPending ? 'Saving…' : 'Save to Skip Trace'}
+        {quickAddMutation.isPending
+          ? 'Saving…'
+          : pipelineStatus === 'skip_trace'
+            ? 'Save to Skip Trace'
+            : `Save as ${LEAD_STATUS_LABELS[pipelineStatus]}`}
       </Button>
     </Box>
     )

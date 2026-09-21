@@ -267,6 +267,30 @@ describe('QuickAddPage deprioritized matches', () => {
           property_city: null,
           property_state: null,
           property_zip: null,
+          lead_status: 'skip_trace',
+        }),
+      )
+    })
+  })
+
+  it('saves a new property in the selected pipeline status', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    renderPage()
+
+    fireEvent.change(screen.getByLabelText('Property address'), {
+      target: { value: '88 Status Ave' },
+    })
+    fireEvent.mouseDown(screen.getByLabelText('Pipeline status'))
+    fireEvent.click(screen.getByRole('option', { name: 'Negotiating Remote' }))
+
+    expect(screen.getByRole('button', { name: 'Save as Negotiating Remote' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save as Negotiating Remote' }))
+
+    await waitFor(() => {
+      expect(leadService.quickAdd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          property_street: '88 Status Ave',
+          lead_status: 'negotiating_remote',
         }),
       )
     })
@@ -286,6 +310,7 @@ describe('QuickAddPage deprioritized matches', () => {
     expect(screen.getByLabelText('Date identified')).toBeInTheDocument()
     expect(screen.getByLabelText('Notes')).toBeInTheDocument()
     expect(screen.getByText('Priority')).toBeInTheDocument()
+    expect(screen.getByLabelText('Pipeline status')).toBeInTheDocument()
     expect(screen.queryByTestId('quick-add-kind')).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Add lead' })).not.toBeInTheDocument()
 

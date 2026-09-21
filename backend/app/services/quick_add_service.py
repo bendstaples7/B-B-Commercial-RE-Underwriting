@@ -20,6 +20,16 @@ QUICK_ADD_DATA_SOURCE = 'quick_add'
 QUICK_ADD_SOURCE = 'walk_by'
 QUICK_ADD_STATUS = 'skip_trace'
 
+
+def _resolve_quick_add_status(lead_status: str | None) -> str:
+    """Pipeline stage for a new quick-add property. Defaults to skip trace."""
+    from app.schemas import VALID_LEAD_STATUSES
+
+    requested = (lead_status or '').strip() or QUICK_ADD_STATUS
+    if requested not in VALID_LEAD_STATUSES:
+        raise ValueError('lead_status is not a pipeline status')
+    return requested
+
 QUICK_ADD_DEAL_SOURCE_OPTIONS: tuple[str, ...] = DEAL_SOURCE_OPTIONS
 
 PRIORITY_TO_MANUAL: dict[str, int] = {
@@ -232,6 +242,7 @@ class QuickAddService:
         property_state: str | None = None,
         property_zip: str | None = None,
         capture_kind: str | None = None,
+        lead_status: str | None = None,
     ) -> tuple[Lead, bool]:
         """Create or update a lead from a quick-add submission."""
         street = property_street.strip()
@@ -244,6 +255,7 @@ class QuickAddService:
         if resolved_kind not in ('', 'property', 'lead'):
             raise ValueError('capture_kind must be property or lead')
         resolved_deal_source = (deal_source or '').strip() or DEFAULT_QUICK_ADD_DEAL_SOURCE
+        resolved_status = _resolve_quick_add_status(lead_status)
         provenance = 'manual' if resolved_kind == 'lead' else QUICK_ADD_SOURCE
         capture_label = 'Lead capture' if resolved_kind == 'lead' else 'Walk-by'
         walk_by_context = build_walk_by_context_line(
@@ -304,7 +316,7 @@ class QuickAddService:
                 'source': provenance,
                 'deal_source': resolved_deal_source,
                 'deal_description': capture_description,
-                'lead_status': QUICK_ADD_STATUS,
+                'lead_status': resolved_status,
                 'date_identified': identified_on,
             }
             if city:
@@ -326,7 +338,9 @@ class QuickAddService:
                 owner_user_id=user_id,
             )
             lead.deal_source = resolved_deal_source
-            lead.lead_status = QUICK_ADD_STATUS
+            lead.lead_status = resolved_status
+            if resolved_status != QUICK_ADD_STATUS:
+                lead.needs_skip_trace = False
             if capture_description and not (lead.deal_description or '').strip():
                 lead.deal_description = capture_description
             if manual_priority is not None and lead.manual_priority is None:
@@ -389,7 +403,7 @@ class QuickAddService:
         )
         db.session.commit()
 
-        if created:
+        if created and lead.lead_status == QUICK_ADD_STATUS:
             try:
                 SkipTraceEnqueue().enqueue(
                     lead.id,

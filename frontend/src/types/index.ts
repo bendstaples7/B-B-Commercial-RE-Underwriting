@@ -1847,6 +1847,7 @@ export interface QuickAddPayload {
   capture_kind?: 'property' | 'lead' | null
   priority?: 'high' | 'medium' | 'low' | null
   deal_source?: string | null
+  lead_status?: LeadStatus | null
   date_identified?: string | null
   capture_latitude?: number | null
   capture_longitude?: number | null

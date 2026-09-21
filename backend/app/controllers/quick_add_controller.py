@@ -81,6 +81,7 @@ def quick_add_lead():
         property_state=data.get('property_state'),
         property_zip=data.get('property_zip'),
         capture_kind=data.get('capture_kind'),
+        lead_status=data.get('lead_status'),
     )
 
     # Always queue follow-up for GIS match (+ enrichment / HubSpot when enabled).
