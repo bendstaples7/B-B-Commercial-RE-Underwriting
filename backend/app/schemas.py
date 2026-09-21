@@ -1782,10 +1782,11 @@ class LogNoteSchema(RequestSchema):
     activity_kind = fields.String(
         allow_none=True,
         load_default=None,
-        validate=validate.OneOf(['note', 'email', 'meeting']),
+        validate=validate.OneOf(['note', 'email', 'meeting', 'text']),
     )
     complete_task_id = fields.Integer(allow_none=True, load_default=None)
     follow_up = fields.Nested(LogCallFollowUpSchema, allow_none=True, load_default=None)
+    mail_campaign_id = fields.Integer(allow_none=True, load_default=None)
 
 
 class LogCallSchema(RequestSchema):

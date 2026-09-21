@@ -2396,6 +2396,7 @@ def log_note(lead_id: int):
         complete_task_id=data.get('complete_task_id'),
         follow_up=data.get('follow_up'),
         activity_kind=data.get('activity_kind'),
+        mail_campaign_id=data.get('mail_campaign_id'),
     )
     return jsonify(_serialize_timeline_entry(entry)), 201
 

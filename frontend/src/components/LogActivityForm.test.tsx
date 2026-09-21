@@ -53,6 +53,7 @@ vi.mock('@/services/channelRoiApi', () => ({
 }))
 
 import { callLogService, leadTaskService } from '@/services/api'
+import openLetterService from '@/services/openLetterApi'
 
 const mockLogCall = callLogService.logCall as ReturnType<typeof vi.fn>
 const mockLogNote = callLogService.logNote as ReturnType<typeof vi.fn>
@@ -115,6 +116,7 @@ function selectOutcome(outcomeValue: string) {
 beforeEach(() => {
   vi.clearAllMocks()
   window.localStorage.clear()
+  vi.mocked(openLetterService.campaignsForLead).mockResolvedValue({ campaigns: [] })
 })
 
 // ---------------------------------------------------------------------------
@@ -167,6 +169,88 @@ describe('LogActivityForm — mode="call" (parity with former LogCallForm)', () 
     await waitFor(() => {
       expect(mockLogCall).toHaveBeenCalledWith(1, expect.objectContaining({ direction: 'inbound' }))
     })
+  })
+
+  it('preselects the recent mailer when an inbound call is logged', async () => {
+    vi.mocked(openLetterService.campaignsForLead).mockResolvedValue({
+      campaigns: [{
+        id: 77,
+        status: 'submitted',
+        lead_count: 40,
+        response_count: 0,
+        created_by: 'user',
+        template_name: 'Yellow letter',
+        submitted_at: '2026-09-01T12:00:00Z',
+      }],
+    })
+    mockLogCall.mockResolvedValue(makeTimelineEntry())
+    render(<LogActivityForm mode="call" leadId={1} onSaved={vi.fn()} />)
+
+    fireEvent.click(screen.getByTestId('call-direction-inbound'))
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-response-source')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('mail-response-source-77')).toBeChecked()
+
+    selectOutcome('answered')
+    await user.click(screen.getByTestId('call-save-btn'))
+
+    await waitFor(() => {
+      expect(mockLogCall).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ direction: 'inbound', mail_campaign_id: 77 }),
+      )
+    })
+  })
+
+  it('sends no mailer when the inbound call is marked not from a mailer', async () => {
+    vi.mocked(openLetterService.campaignsForLead).mockResolvedValue({
+      campaigns: [{
+        id: 77,
+        status: 'submitted',
+        lead_count: 40,
+        response_count: 0,
+        created_by: 'user',
+        template_name: 'Yellow letter',
+        submitted_at: '2026-09-01T12:00:00Z',
+      }],
+    })
+    mockLogCall.mockResolvedValue(makeTimelineEntry())
+    render(<LogActivityForm mode="call" leadId={1} onSaved={vi.fn()} />)
+
+    fireEvent.click(screen.getByTestId('call-direction-inbound'))
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-response-source-none')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId('mail-response-source-none'))
+    selectOutcome('answered')
+    await user.click(screen.getByTestId('call-save-btn'))
+
+    await waitFor(() => {
+      expect(mockLogCall).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ direction: 'inbound', mail_campaign_id: null }),
+      )
+    })
+  })
+
+  it('blocks inbound save when recent mailers fail to load', async () => {
+    vi.mocked(openLetterService.campaignsForLead).mockRejectedValue(new Error('mailer offline'))
+    render(<LogActivityForm mode="call" leadId={1} onSaved={vi.fn()} />)
+
+    fireEvent.click(screen.getByTestId('call-direction-inbound'))
+    selectOutcome('answered')
+    await waitFor(() => {
+      expect(openLetterService.campaignsForLead).toHaveBeenCalled()
+    })
+    await user.click(screen.getByTestId('call-save-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('call-submit-error')).toHaveTextContent(
+        'Could not load recent mailers',
+      )
+    })
+    expect(mockLogCall).not.toHaveBeenCalled()
   })
 
   it('validates duration range (1–999)', () => {
@@ -270,6 +354,40 @@ describe('LogActivityForm — mode="note"', () => {
     await user.click(screen.getByTestId('note-save-btn'))
     expect(screen.getByText('Note cannot be empty.')).toBeInTheDocument()
     expect(mockLogNote).not.toHaveBeenCalled()
+  })
+
+  it('ties an inbound text to the recent mailer when confirmed', async () => {
+    vi.mocked(openLetterService.campaignsForLead).mockResolvedValue({
+      campaigns: [{
+        id: 88,
+        status: 'submitted',
+        lead_count: 8,
+        response_count: 0,
+        created_by: 'user',
+        template_name: 'Yellow letter',
+        submitted_at: '2026-09-01T12:00:00Z',
+      }],
+    })
+    mockLogNote.mockResolvedValue(makeTimelineEntry({ event_type: 'note_added', summary: 'Inbound text' }))
+    render(<LogActivityForm mode="note" leadId={1} onSaved={vi.fn()} />)
+
+    fireEvent.click(screen.getByTestId('inbound-text-yes'))
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-response-source-88')).toBeChecked()
+    })
+    await user.type(screen.getByTestId('note-body-input'), 'Got the letter')
+    await user.click(screen.getByTestId('note-save-btn'))
+
+    await waitFor(() => {
+      expect(mockLogNote).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({
+          body: 'Got the letter',
+          activity_kind: 'text',
+          mail_campaign_id: 88,
+        }),
+      )
+    })
   })
 
   it('always shows the next-step section; follow-up defaults off when no completable task', () => {

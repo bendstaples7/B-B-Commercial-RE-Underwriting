@@ -8,17 +8,20 @@
  * HubSpot task completion. Note, email, and meeting modes share the same
  * Next-step panel (complete task + follow-up) via ActivityNextStepPanel.
  */
-import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { forwardRef, useImperativeHandle, useMemo, useRef, useState, type InputHTMLAttributes } from 'react'
 import {
   Alert,
   Box,
   Button,
   CircularProgress,
   FormControl,
+  FormControlLabel,
   FormHelperText,
   FormLabel,
   InputLabel,
   MenuItem,
+  Radio,
+  RadioGroup,
   Select,
   Grid,
   Stack,
@@ -29,7 +32,7 @@ import {
 } from '@mui/material'
 import type { LeadTask, LeadTimelineEntry, LogCallPayload, LogNotePayload, PropertyContact } from '@/types'
 import { callLogService, leadTaskService } from '@/services/api'
-import openLetterService from '@/services/openLetterApi'
+import openLetterService, { type MailCampaign } from '@/services/openLetterApi'
 import channelRoiService from '@/services/channelRoiApi'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -60,6 +63,81 @@ const MAX_CALL_NOTES_LENGTH = 2000
 const MAX_BODY_LENGTH = 5000
 const MAX_SUBJECT_LENGTH = 200
 const ADD_NEW_SENT_FROM = '__add_new__'
+
+type MailSourceChoice = 'suggested' | 'none' | number
+
+function mailerBatchLabel(campaign: MailCampaign): string {
+  const when = campaign.submitted_at ? formatDate(campaign.submitted_at) : 'Recent batch'
+  const name =
+    campaign.template_name ||
+    (campaign.template_id != null ? `Template ${campaign.template_id}` : `Batch ${campaign.id}`)
+  return `${when} — ${name}`
+}
+
+function resolveMailerChoice(choice: MailSourceChoice, campaigns: MailCampaign[]): number | null {
+  if (campaigns.length === 0 || choice === 'none') return null
+  if (typeof choice === 'number') {
+    return campaigns.some((c) => c.id === choice) ? choice : null
+  }
+  return campaigns[0].id
+}
+
+function MailerResponseSourceConfirm({
+  campaigns,
+  choice,
+  onChange,
+  heading,
+}: {
+  campaigns: MailCampaign[]
+  choice: MailSourceChoice
+  onChange: (next: MailSourceChoice) => void
+  heading: string
+}) {
+  if (campaigns.length === 0) return null
+  const selected = resolveMailerChoice(choice, campaigns)
+  const value = selected == null ? 'none' : String(selected)
+  return (
+    <FormControl
+      component="fieldset"
+      fullWidth
+      sx={{ mb: 1.25, cursor: 'default' }}
+      data-testid="mail-response-source"
+    >
+      <FormLabel id="mail-response-source-label" sx={{ mb: 0.5, display: 'block', typography: 'body2' }}>
+        {heading}
+      </FormLabel>
+      <RadioGroup
+        aria-labelledby="mail-response-source-label"
+        value={value}
+        onChange={(e) => {
+          const next = e.target.value
+          onChange(next === 'none' ? 'none' : Number(next))
+        }}
+      >
+        {campaigns.map((c) => (
+          <FormControlLabel
+            key={c.id}
+            value={String(c.id)}
+            control={
+              <Radio
+                size="small"
+                inputProps={{
+                  'data-testid': `mail-response-source-${c.id}`,
+                } as InputHTMLAttributes<HTMLInputElement>}
+              />
+            }
+            label={`Direct mail — ${mailerBatchLabel(c)}`}
+          />
+        ))}
+        <FormControlLabel
+          value="none"
+          control={<Radio size="small" inputProps={{ 'data-testid': 'mail-response-source-none' } as InputHTMLAttributes<HTMLInputElement>} />}
+          label="Not from a mailer"
+        />
+      </RadioGroup>
+    </FormControl>
+  )
+}
 
 export type LogActivityMode = 'call' | 'note' | 'email' | 'meeting'
 
@@ -231,6 +309,8 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       () => findCompletableTaskForMode(mode, openTasks),
       [mode, openTasks],
     )
+    const [inboundText, setInboundText] = useState(false)
+    const [mailSourceChoice, setMailSourceChoice] = useState<MailSourceChoice>('suggested')
     const resolvedPreferredPhoneDigits = useMemo(() => {
       const fromEdit = normalizePhoneDigits(editTask?.phoneDigits)
       if (fromEdit.length >= 7) return fromEdit
@@ -245,12 +325,19 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
     const hasOpenNonCompletableTasks =
       !completableTask && openTasks.some((t) => t.status === 'open' || t.status === 'overdue')
 
-    const { data: recentMailCampaigns } = useQuery({
+    const {
+      data: recentMailCampaigns,
+      isLoading: mailCampaignsLoading,
+      isError: mailCampaignsError,
+    } = useQuery({
       queryKey: ['mail-campaigns-for-lead', leadId],
       queryFn: () => openLetterService.campaignsForLead(leadId),
-      enabled: mode === 'call',
+      enabled: mode === 'call' || (mode === 'note' && inboundText && !isEditingTask),
     })
-    const mailCampaignOptions = mode === 'call' ? (recentMailCampaigns?.campaigns ?? []) : []
+    const mailCampaignOptions =
+      mode === 'call' || (mode === 'note' && inboundText)
+        ? (recentMailCampaigns?.campaigns ?? [])
+        : []
 
     const { data: channelRoiSettings } = useQuery({
       queryKey: ['channel-roi-settings'],
@@ -451,6 +538,14 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       setCallNotesError(nErr)
       setFollowUpError(fErr)
       if (oErr || dErr || nErr || fErr) return
+      if (direction === 'inbound' && mailCampaignsLoading) {
+        setSubmitError('Still checking recent mailers. Save again in a moment.')
+        return
+      }
+      if (direction === 'inbound' && mailCampaignsError) {
+        setSubmitError('Could not load recent mailers. Save again when they appear.')
+        return
+      }
 
       setSubmitError(null)
       setSubmitting(true)
@@ -463,7 +558,12 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
         direction,
         duration_minutes: duration !== '' ? Number(duration) : null,
         notes: callNotes.trim() || null,
-        mail_campaign_id: mailCampaignId === '' ? null : mailCampaignId,
+        mail_campaign_id:
+          direction === 'inbound'
+            ? resolveMailerChoice(mailSourceChoice, mailCampaignOptions)
+            : mailCampaignId === ''
+              ? null
+              : mailCampaignId,
         facebook_campaign_id: facebookCampaignId === '' ? null : facebookCampaignId,
         ...contactMethodToCallPayload(contactMethod),
         complete_task_id: completedTaskId,
@@ -507,6 +607,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
         setDuration('')
         setCallNotes('')
         setMailCampaignId('')
+        setMailSourceChoice('suggested')
         setFacebookCampaignId('')
         setContactMethod(EMPTY_CONTACT_METHOD)
         resetNextStepState(completableTask)
@@ -529,6 +630,14 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       }
       setFollowUpError(fErr)
       if (fErr) return
+      if (kind === 'note' && inboundText && mailCampaignsLoading) {
+        setSubmitError('Still checking recent mailers. Save again in a moment.')
+        return
+      }
+      if (kind === 'note' && inboundText && mailCampaignsError) {
+        setSubmitError('Could not load recent mailers. Save again when they appear.')
+        return
+      }
 
       setBodyError(null)
       setSubmitError(null)
@@ -536,11 +645,15 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
 
       const followUpDue = getFollowUpDueDate()
       const { completedTaskId, hubSpotTaskId } = buildCompletionIds()
+      const loggingInboundText = kind === 'note' && inboundText
       const payload: LogNotePayload = {
         body,
-        activity_kind: kind,
+        activity_kind: loggingInboundText ? 'text' : kind,
         complete_task_id: completedTaskId,
         follow_up: buildFollowUpPayload(followUpDue),
+        ...(loggingInboundText
+          ? { mail_campaign_id: resolveMailerChoice(mailSourceChoice, mailCampaignOptions) }
+          : {}),
         ...(kind === 'meeting' && contactMethod.contactId != null
           ? { contact_id: contactMethod.contactId }
           : {}),
@@ -581,6 +694,8 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
           savedMeta,
         )
         setBody('')
+        setInboundText(false)
+        setMailSourceChoice('suggested')
         if (kind === 'meeting') setContactMethod(EMPTY_CONTACT_METHOD)
         resetNextStepState(completableTask)
       } catch (err) {
@@ -824,6 +939,15 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
                   </ToggleButtonGroup>
                 </Box>
 
+                {direction === 'inbound' && (
+                  <MailerResponseSourceConfirm
+                    campaigns={mailCampaignOptions}
+                    choice={mailSourceChoice}
+                    onChange={setMailSourceChoice}
+                    heading="Where did this inbound call come from?"
+                  />
+                )}
+
                 <Box sx={{ mb: 1.25 }} data-testid="call-outcome-buttons">
                   <FormLabel
                     id="call-outcome-label"
@@ -924,7 +1048,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
                   inputProps={{ 'data-testid': 'call-notes-input' }}
                 />
 
-                {mailCampaignOptions.length > 0 && (
+                {direction !== 'inbound' && mailCampaignOptions.length > 0 && (
                   <FormControl fullWidth sx={{ mb: 1.25 }} size="small">
                     <InputLabel id="mail-campaign-label">Response to mailer? (optional)</InputLabel>
                     <Select
@@ -992,6 +1116,56 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
                       preferredPhoneDigits={resolvedPreferredPhoneDigits}
                     />
                   </>
+                )}
+                {!isEditingTask && (
+                  <Box sx={{ mb: 1.25 }} data-testid="inbound-text-toggle">
+                    <FormLabel
+                      id="inbound-text-label"
+                      sx={{ mb: 0.75, display: 'block', typography: 'body2' }}
+                    >
+                      Inbound text?
+                    </FormLabel>
+                    <ToggleButtonGroup
+                      exclusive
+                      size="small"
+                      value={inboundText ? 'yes' : 'no'}
+                      onChange={(_e, next: 'yes' | 'no' | null) => {
+                        if (next) setInboundText(next === 'yes')
+                      }}
+                      aria-labelledby="inbound-text-label"
+                      sx={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: 0.5,
+                        mb: inboundText ? 1.25 : 0,
+                        '& .MuiToggleButtonGroup-grouped': {
+                          border: 1,
+                          borderColor: 'divider',
+                          borderRadius: '4px !important',
+                          marginLeft: 0,
+                          textTransform: 'none',
+                          px: 1.25,
+                          py: 0.75,
+                          minHeight: 40,
+                        },
+                      }}
+                    >
+                      <ToggleButton value="no" data-testid="inbound-text-no">
+                        No
+                      </ToggleButton>
+                      <ToggleButton value="yes" data-testid="inbound-text-yes">
+                        Yes, inbound text
+                      </ToggleButton>
+                    </ToggleButtonGroup>
+                    {inboundText && (
+                      <MailerResponseSourceConfirm
+                        campaigns={mailCampaignOptions}
+                        choice={mailSourceChoice}
+                        onChange={setMailSourceChoice}
+                        heading="Where did this text come from?"
+                      />
+                    )}
+                  </Box>
                 )}
                 <TextField
                   label="Note"

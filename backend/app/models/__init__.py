@@ -130,6 +130,7 @@ from app.models.hubspot_platform_write import HubSpotPlatformWrite
 from app.models.open_letter_config import OpenLetterConfig
 from app.models.mail_queue_item import MailQueueItem
 from app.models.mail_campaign import MailCampaign
+from app.models.mail_campaign_lead_attribution import MailCampaignLeadAttribution
 from app.models.mail_enqueue_attempt import MailEnqueueAttempt
 from app.models.skip_trace_config import SkipTraceConfig
 from app.models.skip_trace_attempt import SkipTraceAttempt
@@ -251,6 +252,7 @@ __all__ = [
     'OpenLetterConfig',
     'MailQueueItem',
     'MailCampaign',
+    'MailCampaignLeadAttribution',
     'MailEnqueueAttempt',
     'SkipTraceConfig',
     'SkipTraceAttempt',
