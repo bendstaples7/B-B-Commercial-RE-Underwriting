@@ -188,6 +188,10 @@ _KNOWN_REVISIONS = frozenset({
     'cap_src_20260919',
     # Direct-mail response ledger + inbound call/text backfill
     'mail_attr_20260919',
+    # User-created Source dropdown values (e.g. Facebook Ad)
+    'deal_src_20260924',
+    # Lead capture: task notes, subtype, lead_units inventory
+    'lead_cap_20260924',
 })
 
 

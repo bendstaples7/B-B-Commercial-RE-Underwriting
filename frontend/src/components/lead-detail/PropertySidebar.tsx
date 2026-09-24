@@ -48,6 +48,7 @@ import {
 } from '@/utils/propertyContacts'
 import { formatImportNote } from './leadDetailFormatters'
 import { formatDate } from '@/utils/formatters'
+import { LeadUnitsPanel } from '@/components/lead-detail/LeadUnitsPanel'
 import { formatMailerSentAtDisplay, resolveMailerHistorySummary } from '@/utils/mailerHistory'
 import { formatNeedsReviewReason } from '@/utils/needsReviewReason'
 import { hasNonBlankPhones, PhoneList } from '@/components/PhoneRow'
@@ -704,6 +705,15 @@ export function PropertySidebar({
         />
         <SidebarRow label="Units" value={data.units} />
         <SidebarRow label="Units Allowed" value={data.units_allowed} />
+        <LeadUnitsPanel
+          leadId={commandCenterData.id}
+          commandCenterData={commandCenterData}
+          onSaved={async () => {
+            await queryClient.invalidateQueries({
+              queryKey: ['commandCenter', commandCenterData.id],
+            })
+          }}
+        />
         <SidebarRow label="Zoning" value={data.zoning} />
         <SidebarRow
           label="PIN"

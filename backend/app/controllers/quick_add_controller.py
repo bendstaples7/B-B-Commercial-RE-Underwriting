@@ -68,7 +68,7 @@ def quick_add_lead():
 
     lead, created = _service.create_lead(
         user_id=user_id,
-        property_street=data['property_street'],
+        property_street=data.get('property_street'),
         note=data.get('note'),
         context=data.get('context'),
         priority=data.get('priority'),
@@ -82,6 +82,13 @@ def quick_add_lead():
         property_zip=data.get('property_zip'),
         capture_kind=data.get('capture_kind'),
         lead_status=data.get('lead_status'),
+        units=data.get('units'),
+        asking_price=data.get('asking_price'),
+        bedrooms=data.get('bedrooms'),
+        bathrooms=data.get('bathrooms'),
+        lead_subtype=data.get('lead_subtype'),
+        lead_units=data.get('lead_units'),
+        next_task=data.get('next_task'),
     )
 
     # Always queue follow-up for GIS match (+ enrichment / HubSpot when enabled).

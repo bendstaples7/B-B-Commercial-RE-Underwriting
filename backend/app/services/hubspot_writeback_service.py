@@ -14,6 +14,7 @@ from app.models.hubspot_platform_write import HubSpotPlatformWrite
 from app.models.lead import Lead
 from app.services.hubspot_client_service import HubSpotClientService
 from app.services.hubspot_stage_mapping import hubspot_stage_label_for_lead_status
+from app.services.helpers.deal_source import hubspot_deal_source_for_writeback
 from app.tasks.hubspot_tasks import _upsert_hubspot_record
 
 logger = logging.getLogger(__name__)
@@ -132,7 +133,12 @@ class HubSpotWriteBackService:
         props: dict[str, str] = {
             'dealname': address or f'Lead {lead.id}',
             'address': address,
-            'deal_source': (lead.deal_source or '').strip() or HUBSPOT_WALK_BY_DEAL_SOURCE,
+            # HubSpot deal_source is a fixed enum — map custom labels (Facebook Ad, …) to Other.
+            'deal_source': (
+                hubspot_deal_source_for_writeback(lead.deal_source)
+                if (lead.deal_source or '').strip()
+                else HUBSPOT_WALK_BY_DEAL_SOURCE
+            ),
         }
         if (lead.deal_description or '').strip():
             props['description'] = lead.deal_description.strip()[:65536]

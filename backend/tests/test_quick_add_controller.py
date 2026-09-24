@@ -529,18 +529,36 @@ class TestQuickAddEndpoint:
             )
             assert response.status_code == 400
 
-    def test_invalid_deal_source_rejected(self, quick_add_client, app):
+    def test_oversized_deal_source_rejected(self, quick_add_client, app):
         with app.app_context():
             response = quick_add_client.post(
                 '/api/leads/quick-add',
                 headers=_AUTH_HEADERS,
                 data=json.dumps({
                     'property_street': '123 Bad Source St',
-                    'deal_source': 'Not A Real Source',
+                    'deal_source': 'x' * 300,
                 }),
                 content_type='application/json',
             )
             assert response.status_code == 400
+
+    def test_custom_facebook_ad_deal_source_accepted(self, quick_add_client, app):
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '456 Facebook Ad St, Chicago, IL',
+                    'deal_source': 'Facebook Ad',
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 201
+            body = response.get_json()
+            assert body['deal_source'] == 'Facebook Ad'
+            lead = db.session.get(Lead, body['lead_id'])
+            assert lead is not None
+            assert lead.deal_source == 'Facebook Ad'
 
     def test_costar_deal_source_accepted(self, quick_add_client, app):
         with app.app_context():
@@ -624,6 +642,129 @@ class TestQuickAddEndpoint:
             assert capture_notes[0].summary.startswith('Walk-by ·')
 
 
+    def test_locality_only_without_street(self, quick_add_client, app):
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_city': 'Chicago',
+                    'property_state': 'IL',
+                    'note': 'Seller interested, address TBD',
+                    'deal_source': 'Driving For Dollars',
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 201, response.get_json()
+            body = response.get_json()
+            lead = db.session.get(Lead, body['lead_id'])
+            assert lead is not None
+            assert not (lead.property_street or '').strip()
+            assert lead.property_city == 'Chicago'
+            assert lead.property_state == 'IL'
+
+    def test_property_facts_and_next_task(self, quick_add_client, app):
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '88 Facts Ave, Chicago, IL',
+                    'lead_status': 'mailing_contacted_interested',
+                    'units': 4,
+                    'asking_price': 750000,
+                    'bedrooms': 6,
+                    'bathrooms': 3.5,
+                    'lead_subtype': 'mixed_use',
+                    'lead_units': [
+                        {
+                            'unit_label': 'Store',
+                            'unit_type': 'storefront',
+                            'current_rent': 2500,
+                        },
+                        {
+                            'unit_label': '2F',
+                            'unit_type': 'residential',
+                            'beds': 2,
+                            'baths': 1,
+                        },
+                    ],
+                    'next_task': {
+                        'title': 'Call seller about address',
+                        'task_type': 'call_owner_today',
+                        'due_date': date.today().isoformat(),
+                        'notes': 'Confirm street address',
+                    },
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 201, response.get_json()
+            body = response.get_json()
+            lead = db.session.get(Lead, body['lead_id'])
+            assert lead.units == 4
+            assert float(lead.asking_price) == 750000
+            assert lead.bedrooms == 6
+            assert float(lead.bathrooms) == 3.5
+            assert lead.lead_subtype == 'mixed_use'
+            from app.models.lead_unit import LeadUnit
+            units = (
+                LeadUnit.query.filter_by(lead_id=lead.id)
+                .order_by(LeadUnit.sort_order)
+                .all()
+            )
+            assert len(units) == 2
+            assert units[0].unit_type == 'storefront'
+            task = LeadTask.query.filter_by(
+                lead_id=lead.id, title='Call seller about address',
+            ).first()
+            assert task is not None
+            assert task.task_type == 'call_owner_today'
+            assert task.due_date == date.today()
+            assert task.notes == 'Confirm street address'
+
+    def test_malformed_lead_units_returns_validation_error(self, quick_add_client, app):
+        """QuickAddSchema keeps lead_units; replace_lead_units ValueError → 400."""
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '89 Bad Units Ave, Chicago, IL',
+                    'lead_units': [
+                        {'unit_label': 'Unit 1', 'beds': 1.5},
+                    ],
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 400
+            body = response.get_json()
+            # Service ValueError (not marshmallow messages) after schema load.
+            assert body.get('message') == 'beds/sqft must be integers'
+            assert Lead.query.filter_by(
+                property_street='89 Bad Units Ave, Chicago, IL',
+            ).count() == 0
+
+    def test_requires_address(self, quick_add_client, app):
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({'property_street': '  '}),
+                content_type='application/json',
+            )
+            assert response.status_code == 400
+
+    def test_requires_auth(self, quick_add_client, app):
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                data=json.dumps({'property_street': '123 No Auth St'}),
+                content_type='application/json',
+                headers={'X-User-Id': ''},
+            )
+            assert response.status_code in (401, 403)
+
+
 class TestMergeDealDescription:
     def test_appends_without_discarding_existing(self):
         merged = merge_deal_description('Existing notes', 'Walk-by · new capture')
@@ -659,23 +800,3 @@ class TestQuickAddActivityNoteBody:
             note='   ',
             walk_by_context='Walk-by · 123 Main · Sep 03, 2026 11:49 PM',
         ) == 'Walk-by · 123 Main · Sep 03, 2026 11:49 PM'
-
-    def test_requires_address(self, quick_add_client, app):
-        with app.app_context():
-            response = quick_add_client.post(
-                '/api/leads/quick-add',
-                headers=_AUTH_HEADERS,
-                data=json.dumps({'property_street': '  '}),
-                content_type='application/json',
-            )
-            assert response.status_code == 400
-
-    def test_requires_auth(self, quick_add_client, app):
-        with app.app_context():
-            response = quick_add_client.post(
-                '/api/leads/quick-add',
-                data=json.dumps({'property_street': '123 No Auth St'}),
-                content_type='application/json',
-                headers={'X-User-Id': ''},
-            )
-            assert response.status_code in (401, 403)

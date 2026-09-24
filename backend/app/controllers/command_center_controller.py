@@ -16,6 +16,7 @@ from marshmallow import ValidationError
 from app.api_utils import require_auth
 from app.exceptions import RealEstateAnalysisException
 from app.models import Lead, LeadTask, LeadTimelineEntry
+from app.models.lead_unit import LEAD_SUBTYPES
 from app.schemas import (
     LeadTaskCreateSchema, LeadTaskUpdateSchema, LeadTaskSnoozeSchema,
     LogNoteSchema, LogCallSchema, LeadStatusUpdateSchema, LeadCategoryUpdateSchema,
@@ -339,6 +340,18 @@ def _get_stage_label(stage_id: str) -> str:
 # ---------------------------------------------------------------------------
 # Module-level service instances
 # ---------------------------------------------------------------------------
+
+
+def _serialize_lead_units_for_cc(lead_id: int) -> list[dict]:
+    from app.models.lead_unit import LeadUnit
+    from app.services.lead_unit_service import serialize_lead_unit
+    rows = (
+        LeadUnit.query.filter_by(lead_id=lead_id)
+        .order_by(LeadUnit.sort_order, LeadUnit.id)
+        .all()
+    )
+    return [serialize_lead_unit(u) for u in rows]
+
 
 _lead_task_service = LeadTaskService()
 _lead_timeline_service = LeadTimelineService()
@@ -1205,6 +1218,8 @@ def get_command_center(lead_id: int):
         'deal_description': deal_description,
         'lead_category': lead.lead_category,
         'lead_category_locked': bool(getattr(lead, 'lead_category_locked', False)),
+        'lead_subtype': getattr(lead, 'lead_subtype', None),
+        'lead_units': _serialize_lead_units_for_cc(lead.id),
         'notes': lead.notes,
         # Flag when lead.notes content implies contact was made but status says otherwise.
         # Used by the frontend to show a warning banner nudging the user to update status.
@@ -1350,6 +1365,7 @@ def get_command_center(lead_id: int):
                 'title': t.title,
                 'status': t.status,
                 'due_date': t.due_date.isoformat() if t.due_date else None,
+                'notes': getattr(t, 'notes', None),
                 'created_at': t.created_at.isoformat(),
                 'completed_at': t.completed_at.isoformat() if t.completed_at else None,
                 'created_by': t.created_by,
@@ -1808,6 +1824,71 @@ def remove_lead_finding(lead_id: int, signal_id: int):
     }), 200
 
 
+
+@command_center_bp.route('/<int:lead_id>/units', methods=['PUT'])
+@require_auth
+@handle_errors
+def replace_lead_units(lead_id: int):
+    """
+    PUT /api/leads/<lead_id>/units
+
+    Replace the full lead_units inventory for a lead.
+    Body: { "units": [ { unit_label, unit_type, beds, baths, sqft, current_rent } ] }
+    Optional: lead_subtype on the same body.
+    """
+    from app import db
+    from app.services.lead_unit_service import replace_lead_units as replace_units
+
+    lead, denied = _load_authorized_lead(lead_id)
+    if denied is not None:
+        return denied
+
+    body = request.get_json(silent=True)
+    if body is None:
+        body = {}
+    if not isinstance(body, dict):
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'JSON body must be an object',
+        }), 400
+    rows = body.get('units')
+    if rows is None:
+        return jsonify({'error': 'Validation error', 'message': 'units is required'}), 400
+    if not isinstance(rows, list):
+        return jsonify({'error': 'Validation error', 'message': 'units must be a list'}), 400
+
+    try:
+        created = replace_units(lead_id, rows)
+    except ValueError as exc:
+        return jsonify({'error': 'Validation error', 'message': str(exc)}), 400
+
+    if 'lead_subtype' in body:
+        subtype = body.get('lead_subtype')
+        if subtype is not None:
+            subtype = str(subtype).strip() or None
+        if subtype is not None and subtype not in LEAD_SUBTYPES:
+            return jsonify({
+                'error': 'Validation error',
+                'message': f'lead_subtype must be one of: {", ".join(LEAD_SUBTYPES)}',
+            }), 400
+        lead.lead_subtype = subtype
+
+    if lead.units is None and created:
+        lead.units = len(created)
+    elif created is not None and rows is not None:
+        # Keep units count aligned when inventory is the source of truth.
+        lead.units = len(created)
+
+    db.session.add(lead)
+    db.session.commit()
+    return jsonify({
+        'lead_id': lead_id,
+        'lead_subtype': lead.lead_subtype,
+        'units': lead.units,
+        'lead_units': _serialize_lead_units_for_cc(lead_id),
+    }), 200
+
+
 @command_center_bp.route('/<int:lead_id>/property-overview', methods=['PATCH'])
 @require_auth
 @handle_errors
@@ -1860,6 +1941,8 @@ def update_property_overview(lead_id: int):
         _set('most_recent_sale_price', data['most_recent_sale_price'])
     if 'units' in data:
         _set('units', data['units'])
+    if 'lead_subtype' in data:
+        _set('lead_subtype', data['lead_subtype'])
     if 'property_type' in data:
         ptype = data['property_type']
         if isinstance(ptype, str):
@@ -1877,6 +1960,7 @@ def update_property_overview(lead_id: int):
             'acquisition_date': 'Last sale date',
             'most_recent_sale_price': 'Last sale price',
             'units': 'Units',
+            'lead_subtype': 'Property subtype',
             'property_type': 'Property type',
         }
         for key in changed:
@@ -2172,6 +2256,7 @@ def create_task(lead_id: int):
             actor=actor,
             reason=data.get('title') or 'Run skip trace on owner',
             due_date=data.get('due_date'),
+            notes=data.get('notes'),
             recompute_action=False,
         )
         if task is None:
@@ -2191,6 +2276,7 @@ def create_task(lead_id: int):
         'title': task.title,
         'status': task.status,
         'due_date': task.due_date.isoformat() if task.due_date else None,
+        'notes': getattr(task, 'notes', None),
         'created_at': task.created_at.isoformat(),
         'created_by': task.created_by,
     }), 201
@@ -2236,6 +2322,9 @@ def update_task(lead_id: int, task_id: int):
             clear_due_date = data['due_date'] is None
             task.due_date = data['due_date']
             due_changed = True
+        if 'notes' in data:
+            raw_notes = data['notes']
+            task.notes = (str(raw_notes).strip() if raw_notes is not None else '') or None
         db.session.add(task)
         db.session.commit()
 
@@ -2244,6 +2333,7 @@ def update_task(lead_id: int, task_id: int):
     task_title = task.title
     task_status = task.status
     task_due_date = task.due_date
+    task_notes = getattr(task, 'notes', None)
     hubspot_task_id = task.hubspot_task_id
 
     hubspot_synced = None
@@ -2275,6 +2365,7 @@ def update_task(lead_id: int, task_id: int):
         'title': task_title,
         'status': task_status,
         'due_date': task_due_date.isoformat() if task_due_date else None,
+        'notes': task_notes,
     }
     if hubspot_synced is not None:
         payload['hubspot_synced'] = hubspot_synced

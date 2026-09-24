@@ -27,6 +27,23 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+import { FollowUpHorizonControls } from '@/components/FollowUpHorizonControls'
+import {
+  CREATE_TASK_PRESETS,
+  getCreateTaskPreset,
+  resolveCreateTaskPayload,
+  type CreateTaskPresetId,
+} from '@/utils/createTaskPresets'
+import {
+  resolveFollowUpDueDate,
+  type FollowUpPreset,
+} from '@/utils/followUpPresets'
+import {
+  LeadUnitsEditor,
+  serializeLeadUnitDrafts,
+  type LeadSubtype,
+  type LeadUnitDraft,
+} from '@/components/LeadUnitsEditor'
 import CloseIcon from '@mui/icons-material/Close'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import MyLocationIcon from '@mui/icons-material/MyLocation'
@@ -128,6 +145,7 @@ export function QuickAddPage() {
   const [pipelineStatus, setPipelineStatus] = useState<LeadStatus>('skip_trace')
   const [dateIdentified, setDateIdentified] = useState(todayIsoDate)
   const [addressError, setAddressError] = useState('')
+  const [nextTaskError, setNextTaskError] = useState('')
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
   const [gpsLabel, setGpsLabel] = useState<string | null>(null)
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null)
@@ -138,9 +156,23 @@ export function QuickAddPage() {
   }>({ city: null, state: null, zip: null })
   // Bumped on every Places selection so older getDetails callbacks are ignored.
   const placesRequestIdRef = useRef(0)
+  // True while city/state/ZIP came from Places — clear on street replacement.
+  const localityFromPlacesRef = useRef(false)
   const personSeq = useRef(0)
   const [people, setPeople] = useState<CapturePerson[]>([])
   const [peopleError, setPeopleError] = useState('')
+  const [unitsCount, setUnitsCount] = useState('')
+  const [askingPrice, setAskingPrice] = useState('')
+  const [bedrooms, setBedrooms] = useState('')
+  const [bathrooms, setBathrooms] = useState('')
+  const [leadSubtype, setLeadSubtype] = useState<LeadSubtype | ''>('')
+  const [leadUnitDrafts, setLeadUnitDrafts] = useState<LeadUnitDraft[]>([])
+  const [nextTaskEnabled, setNextTaskEnabled] = useState(false)
+  const [nextTaskPreset, setNextTaskPreset] = useState<CreateTaskPresetId>('custom')
+  const [nextTaskTitle, setNextTaskTitle] = useState('')
+  const [nextTaskDuePreset, setNextTaskDuePreset] = useState<FollowUpPreset>('3')
+  const [nextTaskDueDate, setNextTaskDueDate] = useState('')
+  const [nextTaskNotes, setNextTaskNotes] = useState('')
   const [successResult, setSuccessResult] = useState<SavedQuickAdd | null>(null)
   const [existingActionFeedback, setExistingActionFeedback] = useState<{
     severity: 'success' | 'warning' | 'error'
@@ -181,8 +213,8 @@ export function QuickAddPage() {
   const addressHelperText = addressError
     ? addressError
     : !mapsLoaded || !ready
-      ? 'Address suggestions loading… (you can still type a full address and save)'
-      : 'Start typing for Google address suggestions'
+      ? 'Street optional if you have city, state, or ZIP — suggestions load when Maps is ready'
+      : 'Street optional if you know city / state / ZIP. Start typing for Google suggestions'
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -364,6 +396,7 @@ export function QuickAddPage() {
     const streetGuess = description.split(',')[0]?.trim() || description
     setAddress(streetGuess, false)
     setParsedAddress({ city: null, state: null, zip: null })
+    localityFromPlacesRef.current = false
     coordSourceRef.current = 'place-pending'
     setCoords(null)
     clearSuggestions()
@@ -407,6 +440,7 @@ export function QuickAddPage() {
           const state = find('administrative_area_level_1')?.short_name ?? null
           const zip = find('postal_code')?.long_name ?? null
           setParsedAddress({ city, state, zip })
+          localityFromPlacesRef.current = Boolean(city || state || zip)
         },
       )
     } catch {
@@ -428,8 +462,12 @@ export function QuickAddPage() {
         ? (address.split(',')[0] || address)
         : address
     ).trim()
-    if (!street) {
-      setAddressError('Property address is required')
+    const city = (parsedAddress.city || '').trim()
+    const state = (parsedAddress.state || '').trim()
+    const zip = (parsedAddress.zip || '').trim()
+    if (!street && !(city || state || zip)) {
+      setAddressError('Enter a property address, or at least a city, state, or ZIP')
+      setNextTaskError('')
       return
     }
     const incompletePerson = people.some(
@@ -439,14 +477,44 @@ export function QuickAddPage() {
       setPeopleError('Each person needs a first or last name, or remove them.')
       return
     }
-    setAddressError('')
     setPeopleError('')
+    setAddressError('')
+    setNextTaskError('')
     const namedPeople = people.filter(
       (person) => person.firstName.trim() || person.lastName.trim(),
     )
+    const parseOptionalNumber = (raw: string): number | null => {
+      const trimmed = raw.trim()
+      if (!trimmed) return null
+      const n = Number(trimmed)
+      return Number.isFinite(n) ? n : null
+    }
+    let next_task: QuickAddPayload['next_task'] = null
+    if (pipelineStatus !== 'skip_trace' && nextTaskEnabled) {
+      const preset = getCreateTaskPreset(nextTaskPreset)
+      const titleForValidation = nextTaskTitle.trim() || preset.defaultTitle || ''
+      if (!titleForValidation) {
+        setNextTaskError('Next task needs a title')
+        return
+      }
+      setNextTaskError('')
+      const { title: resolvedTitle, task_type: taskType } = resolveCreateTaskPayload(
+        nextTaskPreset,
+        titleForValidation,
+      )
+      next_task = {
+        title: resolvedTitle,
+        task_type: taskType,
+        due_date: resolveFollowUpDueDate(nextTaskDuePreset, nextTaskDueDate),
+        notes: nextTaskNotes.trim() || null,
+      }
+    }
+    const serializedUnits = leadUnitDrafts.length
+      ? serializeLeadUnitDrafts(leadUnitDrafts)
+      : null
     quickAddMutation.mutate({
       quickAdd: {
-        property_street: street,
+        property_street: street || null,
         note: note.trim() || null,
         context: context.trim() || null,
         capture_kind: namedPeople.length ? 'lead' : null,
@@ -457,9 +525,16 @@ export function QuickAddPage() {
         capture_latitude: coords?.lat ?? null,
         capture_longitude: coords?.lng ?? null,
         capture_location_label: gpsLabel,
-        property_city: parsedAddress.city,
-        property_state: parsedAddress.state,
-        property_zip: parsedAddress.zip,
+        property_city: city || null,
+        property_state: state || null,
+        property_zip: zip || null,
+        units: parseOptionalNumber(unitsCount),
+        asking_price: parseOptionalNumber(askingPrice),
+        bedrooms: parseOptionalNumber(bedrooms),
+        bathrooms: parseOptionalNumber(bathrooms),
+        lead_subtype: leadSubtype || null,
+        lead_units: serializedUnits,
+        next_task,
       },
       people: namedPeople,
     })
@@ -475,9 +550,22 @@ export function QuickAddPage() {
     setDateIdentified(todayIsoDate())
     setPeople([])
     setPeopleError('')
+    setUnitsCount('')
+    setAskingPrice('')
+    setBedrooms('')
+    setBathrooms('')
+    setLeadSubtype('')
+    setLeadUnitDrafts([])
+    setNextTaskEnabled(false)
+    setNextTaskPreset('custom')
+    setNextTaskTitle('')
+    setNextTaskDuePreset('3')
+    setNextTaskDueDate('')
+    setNextTaskNotes('')
     setSuccessResult(null)
     setExistingActionFeedback(null)
     setAddressError('')
+    localityFromPlacesRef.current = false
     setParsedAddress({ city: null, state: null, zip: null })
     quickAddMutation.reset()
     clearSuggestions()
@@ -510,7 +598,7 @@ export function QuickAddPage() {
     setPeopleError('')
   }
 
-  const intro = 'Save an address you are interested in. Add the people you already know — one property can have more than one — plus where it came from and why.'
+  const intro = 'Save a lead even when the full street is unknown — city, state, or ZIP is enough. Add people, source, property facts, and a follow-up when you already know the pipeline stage.'
 
   const dialogTitle = 'Quick Add'
 
@@ -607,37 +695,46 @@ export function QuickAddPage() {
 
       <Box sx={{ position: 'relative', mb: 1 }}>
         <TextField
-          label="Property address"
+          label="Property street (optional)"
           value={address}
           onChange={(e) => {
+            const nextAddress = e.target.value
             placesRequestIdRef.current += 1
             coordSourceRef.current = null
-            setAddress(e.target.value)
+            setAddress(nextAddress)
             setExistingActionFeedback(null)
-            setParsedAddress({ city: null, state: null, zip: null })
-            if (e.target.value.trim()) setAddressError('')
+            // Keep locality when clearing street (city/ZIP-only capture).
+            // Clear Places-sourced locality when replacing with a new street.
+            if (nextAddress.trim() && localityFromPlacesRef.current) {
+              setParsedAddress({ city: null, state: null, zip: null })
+              localityFromPlacesRef.current = false
+              setCoords(null)
+            }
+            if (nextAddress.trim() || parsedAddress.city || parsedAddress.state || parsedAddress.zip) {
+              setAddressError('')
+            }
           }}
           onKeyDown={(e) => {
             if (e.key === 'Escape') clearSuggestions()
           }}
           error={!!addressError}
           helperText={addressHelperText}
-          required
           fullWidth
           autoComplete="off"
-          placeholder="123 Main St, Chicago, IL"
+          placeholder="123 Main St — or leave blank and use city / ZIP below"
           disabled={quickAddMutation.isPending}
           inputProps={{
-            'aria-label': 'Property address',
+            'aria-label': 'Property street',
             'aria-autocomplete': 'list',
             'aria-controls': status === 'OK' ? 'quick-add-suggestions' : undefined,
             'aria-expanded': status === 'OK',
+            'data-testid': 'quick-add-street',
           }}
         />
         {mapsAvailability === 'unavailable' && (
           <Alert severity="warning" sx={{ mt: 1 }} data-testid="quick-add-maps-unavailable">
             Google address suggestions are unavailable (Maps API key not loaded). You can still
-            enter a full street address and save.
+            enter a street or just city / state / ZIP and save.
           </Alert>
         )}
         {status === 'OK' && data.length > 0 && (
@@ -680,6 +777,108 @@ export function QuickAddPage() {
             ))}
           </List>
         )}
+      </Box>
+
+      <Box
+        sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2, mt: 1 }}
+        data-testid="quick-add-locality"
+      >
+        <TextField
+          label="City"
+          value={parsedAddress.city ?? ''}
+          onChange={(e) => {
+            setParsedAddress((prev) => ({ ...prev, city: e.target.value || null }))
+            setAddressError('')
+          }}
+          size="small"
+          sx={{ flex: '1 1 140px', caretColor: 'text.primary' }}
+          inputProps={{ 'data-testid': 'quick-add-city', 'aria-label': 'City' }}
+          disabled={quickAddMutation.isPending}
+        />
+        <TextField
+          label="State"
+          value={parsedAddress.state ?? ''}
+          onChange={(e) => {
+            setParsedAddress((prev) => ({ ...prev, state: e.target.value || null }))
+            setAddressError('')
+          }}
+          size="small"
+          sx={{ width: 88, caretColor: 'text.primary' }}
+          inputProps={{ 'data-testid': 'quick-add-state', 'aria-label': 'State', maxLength: 2 }}
+          disabled={quickAddMutation.isPending}
+        />
+        <TextField
+          label="ZIP"
+          value={parsedAddress.zip ?? ''}
+          onChange={(e) => {
+            setParsedAddress((prev) => ({ ...prev, zip: e.target.value || null }))
+            setAddressError('')
+          }}
+          size="small"
+          sx={{ width: 110, caretColor: 'text.primary' }}
+          inputProps={{ 'data-testid': 'quick-add-zip', 'aria-label': 'ZIP' }}
+          disabled={quickAddMutation.isPending}
+        />
+      </Box>
+
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+        Property facts
+      </Typography>
+      <Box
+        sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}
+        data-testid="quick-add-property-facts"
+      >
+        <TextField
+          label="Units"
+          type="number"
+          size="small"
+          value={unitsCount}
+          onChange={(e) => setUnitsCount(e.target.value)}
+          sx={{ width: 100, caretColor: 'text.primary' }}
+          inputProps={{ min: 0, 'data-testid': 'quick-add-units' }}
+          disabled={quickAddMutation.isPending}
+        />
+        <TextField
+          label="Asking price"
+          type="number"
+          size="small"
+          value={askingPrice}
+          onChange={(e) => setAskingPrice(e.target.value)}
+          sx={{ width: 140, caretColor: 'text.primary' }}
+          inputProps={{ min: 0, 'data-testid': 'quick-add-asking-price' }}
+          disabled={quickAddMutation.isPending}
+        />
+        <TextField
+          label="Beds"
+          type="number"
+          size="small"
+          value={bedrooms}
+          onChange={(e) => setBedrooms(e.target.value)}
+          sx={{ width: 90, caretColor: 'text.primary' }}
+          inputProps={{ min: 0, 'data-testid': 'quick-add-bedrooms' }}
+          disabled={quickAddMutation.isPending}
+        />
+        <TextField
+          label="Baths"
+          type="number"
+          size="small"
+          value={bathrooms}
+          onChange={(e) => setBathrooms(e.target.value)}
+          sx={{ width: 90, caretColor: 'text.primary' }}
+          inputProps={{ min: 0, step: 0.5, 'data-testid': 'quick-add-bathrooms' }}
+          disabled={quickAddMutation.isPending}
+        />
+      </Box>
+
+      <Box sx={{ mb: 2 }}>
+        <LeadUnitsEditor
+          units={leadUnitDrafts}
+          onChange={setLeadUnitDrafts}
+          subtype={leadSubtype}
+          onSubtypeChange={setLeadSubtype}
+          disabled={quickAddMutation.isPending}
+          testIdPrefix="quick-add-units-editor"
+        />
       </Box>
 
       {debouncedAddress.length >= 2 && (
@@ -973,6 +1172,100 @@ export function QuickAddPage() {
           New properties are saved in this stage. An address already in the system keeps its current stage.
         </FormHelperText>
       </FormControl>
+
+      {pipelineStatus !== 'skip_trace' && (
+        <Box
+          sx={{ mt: 3, p: 2, border: 1, borderColor: 'divider', borderRadius: 1, cursor: 'auto' }}
+          data-testid="quick-add-next-task"
+        >
+          <Typography variant="subtitle2" gutterBottom>
+            Next task
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            Optional. Same create flow as Open Tasks on the lead — skip-trace stage queues skip work automatically instead.
+          </Typography>
+          <Chip
+            label={nextTaskEnabled ? 'Include next task' : 'No next task'}
+            clickable
+            color={nextTaskEnabled ? 'primary' : 'default'}
+            variant={nextTaskEnabled ? 'filled' : 'outlined'}
+            onClick={() => {
+              setNextTaskEnabled((v) => !v)
+              setNextTaskError('')
+            }}
+            sx={{ mb: 2, cursor: 'pointer' }}
+            data-testid="quick-add-next-task-toggle"
+          />
+          {nextTaskEnabled && (
+            <>
+              <FormControl fullWidth size="small" sx={{ mb: 2 }}>
+                <InputLabel id="quick-add-next-task-type-label">Type</InputLabel>
+                <Select
+                  labelId="quick-add-next-task-type-label"
+                  label="Type"
+                  value={nextTaskPreset}
+                  onChange={(e) => {
+                    const next = e.target.value as CreateTaskPresetId
+                    const prevDefault = getCreateTaskPreset(nextTaskPreset).defaultTitle
+                    const nextDefault = getCreateTaskPreset(next).defaultTitle
+                    setNextTaskPreset(next)
+                    setNextTaskError('')
+                    if (nextDefault && (!nextTaskTitle.trim() || nextTaskTitle.trim() === prevDefault)) {
+                      setNextTaskTitle(nextDefault)
+                    } else if (!nextDefault && nextTaskTitle.trim() === prevDefault) {
+                      setNextTaskTitle('')
+                    }
+                  }}
+                  inputProps={{ 'data-testid': 'quick-add-next-task-type' }}
+                >
+                  {CREATE_TASK_PRESETS.map((opt) => (
+                    <MenuItem key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <TextField
+                label="Title"
+                value={nextTaskTitle}
+                onChange={(e) => {
+                  setNextTaskTitle(e.target.value)
+                  if (nextTaskError) setNextTaskError('')
+                }}
+                fullWidth
+                size="small"
+                error={Boolean(nextTaskError)}
+                helperText={nextTaskError || undefined}
+                sx={{ mb: 2, caretColor: 'text.primary' }}
+                inputProps={{ maxLength: 255, 'data-testid': 'quick-add-next-task-title' }}
+              />
+              <Box sx={{ mb: 2 }}>
+                <FollowUpHorizonControls
+                  variant="list"
+                  preset={nextTaskDuePreset}
+                  customDueDate={nextTaskDueDate}
+                  onPresetChange={setNextTaskDuePreset}
+                  onCustomDueDateChange={setNextTaskDueDate}
+                  testIdPrefix="quick-add-next-task-due"
+                  dateLabel="Due date"
+                />
+              </Box>
+              <TextField
+                label="Task notes"
+                value={nextTaskNotes}
+                onChange={(e) => setNextTaskNotes(e.target.value)}
+                fullWidth
+                size="small"
+                multiline
+                minRows={2}
+                sx={{ mb: 1, caretColor: 'text.primary' }}
+                placeholder="Conversation goal or what to cover"
+                inputProps={{ 'data-testid': 'quick-add-next-task-notes' }}
+              />
+            </>
+          )}
+        </Box>
+      )}
 
       <Button
         type="submit"

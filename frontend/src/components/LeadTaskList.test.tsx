@@ -424,6 +424,34 @@ describe('LeadTaskList', () => {
           title: 'Call owner',
           task_type: 'custom',
           due_date: null,
+          notes: null,
+        })
+      })
+    })
+
+    it('passes typed task notes to createTask', async () => {
+      const newTask = makeTask(100, { title: 'Call owner', notes: 'Ask about roof' })
+      mockCreateTask.mockResolvedValue(newTask)
+
+      render(
+        <LeadTaskList
+          leadId={42}
+          tasks={[]}
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      await user.click(screen.getByTestId('open-task-form-btn'))
+      await user.type(screen.getByTestId('task-title-input'), 'Call owner')
+      await user.type(screen.getByTestId('task-notes-input'), 'Ask about roof')
+      await user.click(screen.getByTestId('save-task-btn'))
+
+      await waitFor(() => {
+        expect(mockCreateTask).toHaveBeenCalledWith(42, {
+          title: 'Call owner',
+          task_type: 'custom',
+          due_date: null,
+          notes: 'Ask about roof',
         })
       })
     })
@@ -455,6 +483,7 @@ describe('LeadTaskList', () => {
           title: 'Follow up call',
           task_type: 'call_owner_today',
           due_date: null,
+        notes: null,
         })
       })
     })
@@ -486,6 +515,7 @@ describe('LeadTaskList', () => {
           title: 'Email owner',
           task_type: 'custom',
           due_date: null,
+        notes: null,
         })
       })
     })
@@ -517,6 +547,7 @@ describe('LeadTaskList', () => {
           title: 'Add to mail queue',
           task_type: 'add_to_mail_batch',
           due_date: null,
+        notes: null,
         })
       })
     })
@@ -547,6 +578,7 @@ describe('LeadTaskList', () => {
           title: 'Task with date',
           task_type: 'custom',
           due_date: '2025-06-15',
+        notes: null,
         })
       })
     })
@@ -723,11 +755,15 @@ describe('LeadTaskList', () => {
 
       await user.click(screen.getByTestId('open-task-form-btn'))
       await user.type(screen.getByTestId('task-title-input'), 'New Task')
+      await user.type(screen.getByTestId('task-notes-input'), 'Call about leases')
       await user.click(screen.getByTestId('save-task-btn'))
 
       await waitFor(() => {
         expect(onOptimisticTaskCreate).toHaveBeenCalledTimes(1)
       })
+      expect(onOptimisticTaskCreate.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ notes: 'Call about leases' }),
+      )
       expect(onOptimisticTaskRevert).not.toHaveBeenCalled()
     })
   })

@@ -37,6 +37,17 @@ vi.mock('@/services/api', () => ({
   },
 }))
 
+vi.mock('@/services/dealSourcesApi', () => ({
+  default: {
+    list: vi.fn().mockResolvedValue([
+      { name: 'Driving For Dollars', is_builtin: true },
+      { name: 'Referral', is_builtin: true },
+      { name: 'Other', is_builtin: true },
+    ]),
+    create: vi.fn(),
+  },
+}))
+
 // ---------------------------------------------------------------------------
 // Test data
 // ---------------------------------------------------------------------------

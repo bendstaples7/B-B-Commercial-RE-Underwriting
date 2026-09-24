@@ -112,6 +112,8 @@ class Property(db.Model):
 
     # Lead classification
     lead_category = db.Column(db.String(50), nullable=False, default='residential', server_default='residential', index=True)
+    # User-set subtype (residential / mixed_use / commercial) — orthogonal to category.
+    lead_subtype = db.Column(db.String(50), nullable=True)
     # True after a user sets Residential/Commercial — import/note heals must not flip it.
     lead_category_locked = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
 
