@@ -710,7 +710,7 @@ export function PropertySidebar({
           commandCenterData={commandCenterData}
           onSaved={async () => {
             await queryClient.invalidateQueries({
-              queryKey: ['command-center', commandCenterData.id],
+              queryKey: ['commandCenter', commandCenterData.id],
             })
           }}
         />

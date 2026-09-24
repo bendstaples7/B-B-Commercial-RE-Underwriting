@@ -34,12 +34,24 @@ export function LeadUnitsPanel({
   const [error, setError] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
 
+  // Remount-safe sync from server: skip while the user has unsaved edits so
+  // other Command Center mutations (which invalidate the same query) do not
+  // wipe in-progress unit mix drafts.
+  useEffect(() => {
+    if (dirty) return
+    setDrafts(leadUnitDraftsFromApi(commandCenterData.lead_units))
+    setSubtype((commandCenterData.lead_subtype as LeadSubtype | null | undefined) || '')
+    setError(null)
+  }, [commandCenterData.lead_units, commandCenterData.lead_subtype, leadId, dirty])
+
+  // Lead switch always resets drafts even if the prior lead was dirty.
   useEffect(() => {
     setDrafts(leadUnitDraftsFromApi(commandCenterData.lead_units))
     setSubtype((commandCenterData.lead_subtype as LeadSubtype | null | undefined) || '')
     setDirty(false)
     setError(null)
-  }, [commandCenterData.lead_units, commandCenterData.lead_subtype, leadId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- leadId boundary only
+  }, [leadId])
 
   const handleSave = async () => {
     setSaving(true)

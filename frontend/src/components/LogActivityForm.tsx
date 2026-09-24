@@ -398,6 +398,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
     )
     const [customTaskTitle, setCustomTaskTitle] = useState(() => editTask?.task.title ?? '')
     const [editTaskNotes, setEditTaskNotes] = useState(() => editTask?.task.notes ?? '')
+    const [followUpNotes, setFollowUpNotes] = useState('')
 
     const [outcomeError, setOutcomeError] = useState<string | null>(null)
     const [durationError, setDurationError] = useState<string | null>(null)
@@ -471,6 +472,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
         title,
         due_date: dueDate,
         task_type,
+        notes: followUpNotes.trim() || null,
       }
     }
 
@@ -481,6 +483,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       setNextStepExpanded(false)
       setNextStepType('call_owner_today')
       setCustomTaskTitle('')
+      setFollowUpNotes('')
       setCompleteTask(true)
     }
 
@@ -872,8 +875,8 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
         onCustomTaskTitleChange={setCustomTaskTitle}
         hideCompleteTask={isEditingTask}
         lockFollowUp={isEditingTask}
-        taskNotes={isEditingTask ? editTaskNotes : undefined}
-        onTaskNotesChange={isEditingTask ? setEditTaskNotes : undefined}
+        taskNotes={isEditingTask ? editTaskNotes : followUpNotes}
+        onTaskNotesChange={isEditingTask ? setEditTaskNotes : setFollowUpNotes}
       />
     )
 

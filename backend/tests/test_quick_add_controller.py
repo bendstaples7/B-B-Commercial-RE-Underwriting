@@ -703,6 +703,8 @@ class TestQuickAddEndpoint:
             lead = db.session.get(Lead, body['lead_id'])
             assert lead.units == 4
             assert float(lead.asking_price) == 750000
+            assert lead.bedrooms == 6
+            assert float(lead.bathrooms) == 3.5
             assert lead.lead_subtype == 'mixed_use'
             from app.models.lead_unit import LeadUnit
             units = (
@@ -716,6 +718,8 @@ class TestQuickAddEndpoint:
                 lead_id=lead.id, title='Call seller about address',
             ).first()
             assert task is not None
+            assert task.task_type == 'call_owner_today'
+            assert task.due_date == date.today()
             assert task.notes == 'Confirm street address'
 
     def test_requires_address(self, quick_add_client, app):

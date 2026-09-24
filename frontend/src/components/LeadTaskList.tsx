@@ -292,6 +292,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
       title: resolvedTitle,
       status: 'open',
       due_date: resolvedDue,
+      notes: taskNotes.trim() || null,
       created_at: new Date().toISOString(),
       completed_at: null,
       created_by: 'user',

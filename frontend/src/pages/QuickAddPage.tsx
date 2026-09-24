@@ -145,6 +145,7 @@ export function QuickAddPage() {
   const [pipelineStatus, setPipelineStatus] = useState<LeadStatus>('skip_trace')
   const [dateIdentified, setDateIdentified] = useState(todayIsoDate)
   const [addressError, setAddressError] = useState('')
+  const [nextTaskError, setNextTaskError] = useState('')
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
   const [gpsLabel, setGpsLabel] = useState<string | null>(null)
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null)
@@ -155,6 +156,8 @@ export function QuickAddPage() {
   }>({ city: null, state: null, zip: null })
   // Bumped on every Places selection so older getDetails callbacks are ignored.
   const placesRequestIdRef = useRef(0)
+  // True while city/state/ZIP came from Places — clear on street replacement.
+  const localityFromPlacesRef = useRef(false)
   const personSeq = useRef(0)
   const [people, setPeople] = useState<CapturePerson[]>([])
   const [peopleError, setPeopleError] = useState('')
@@ -393,6 +396,7 @@ export function QuickAddPage() {
     const streetGuess = description.split(',')[0]?.trim() || description
     setAddress(streetGuess, false)
     setParsedAddress({ city: null, state: null, zip: null })
+    localityFromPlacesRef.current = false
     coordSourceRef.current = 'place-pending'
     setCoords(null)
     clearSuggestions()
@@ -436,6 +440,7 @@ export function QuickAddPage() {
           const state = find('administrative_area_level_1')?.short_name ?? null
           const zip = find('postal_code')?.long_name ?? null
           setParsedAddress({ city, state, zip })
+          localityFromPlacesRef.current = Boolean(city || state || zip)
         },
       )
     } catch {
@@ -462,6 +467,7 @@ export function QuickAddPage() {
     const zip = (parsedAddress.zip || '').trim()
     if (!street && !(city || state || zip)) {
       setAddressError('Enter a property address, or at least a city, state, or ZIP')
+      setNextTaskError('')
       return
     }
     const incompletePerson = people.some(
@@ -471,8 +477,9 @@ export function QuickAddPage() {
       setPeopleError('Each person needs a first or last name, or remove them.')
       return
     }
-    setAddressError('')
     setPeopleError('')
+    setAddressError('')
+    setNextTaskError('')
     const namedPeople = people.filter(
       (person) => person.firstName.trim() || person.lastName.trim(),
     )
@@ -487,7 +494,7 @@ export function QuickAddPage() {
       const preset = getCreateTaskPreset(nextTaskPreset)
       const titleForValidation = nextTaskTitle.trim() || preset.defaultTitle || ''
       if (!titleForValidation) {
-        setAddressError('Next task needs a title')
+        setNextTaskError('Next task needs a title')
         return
       }
       const { title: resolvedTitle, task_type: taskType } = resolveCreateTaskPayload(
@@ -557,6 +564,8 @@ export function QuickAddPage() {
     setSuccessResult(null)
     setExistingActionFeedback(null)
     setAddressError('')
+    setNextTaskError('')
+    localityFromPlacesRef.current = false
     setParsedAddress({ city: null, state: null, zip: null })
     quickAddMutation.reset()
     clearSuggestions()
@@ -691,10 +700,17 @@ export function QuickAddPage() {
           onChange={(e) => {
             placesRequestIdRef.current += 1
             coordSourceRef.current = null
-            setAddress(e.target.value)
+            const nextStreet = e.target.value
+            setAddress(nextStreet)
             setExistingActionFeedback(null)
-            // Keep locality fields — user may clear street while keeping city/ZIP.
-            if (e.target.value.trim() || parsedAddress.city || parsedAddress.state || parsedAddress.zip) {
+            // Keep locality when clearing street (city/ZIP-only capture).
+            // Clear Places-sourced locality when replacing with a new street.
+            if (nextStreet.trim() && localityFromPlacesRef.current) {
+              setParsedAddress({ city: null, state: null, zip: null })
+              localityFromPlacesRef.current = false
+              setCoords(null)
+            }
+            if (nextStreet.trim() || parsedAddress.city || parsedAddress.state || parsedAddress.zip) {
               setAddressError('')
             }
           }}
@@ -1208,9 +1224,14 @@ export function QuickAddPage() {
               <TextField
                 label="Title"
                 value={nextTaskTitle}
-                onChange={(e) => setNextTaskTitle(e.target.value)}
+                onChange={(e) => {
+                  setNextTaskTitle(e.target.value)
+                  if (nextTaskError) setNextTaskError('')
+                }}
                 fullWidth
                 size="small"
+                error={Boolean(nextTaskError)}
+                helperText={nextTaskError || undefined}
                 sx={{ mb: 2, caretColor: 'text.primary' }}
                 inputProps={{ maxLength: 255, 'data-testid': 'quick-add-next-task-title' }}
               />

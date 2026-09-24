@@ -424,7 +424,34 @@ describe('LeadTaskList', () => {
           title: 'Call owner',
           task_type: 'custom',
           due_date: null,
-        notes: null,
+          notes: null,
+        })
+      })
+    })
+
+    it('passes typed task notes to createTask', async () => {
+      const newTask = makeTask(100, { title: 'Call owner', notes: 'Ask about roof' })
+      mockCreateTask.mockResolvedValue(newTask)
+
+      render(
+        <LeadTaskList
+          leadId={42}
+          tasks={[]}
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      await user.click(screen.getByTestId('open-task-form-btn'))
+      await user.type(screen.getByTestId('task-title-input'), 'Call owner')
+      await user.type(screen.getByTestId('task-notes-input'), 'Ask about roof')
+      await user.click(screen.getByTestId('save-task-btn'))
+
+      await waitFor(() => {
+        expect(mockCreateTask).toHaveBeenCalledWith(42, {
+          title: 'Call owner',
+          task_type: 'custom',
+          due_date: null,
+          notes: 'Ask about roof',
         })
       })
     })

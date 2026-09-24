@@ -2,6 +2,7 @@
 from marshmallow import Schema, fields, validate, ValidationError, validates_schema, validates, EXCLUDE, pre_load
 from datetime import datetime
 from app.services.helpers.deal_source import DEAL_SOURCE_MAX_LENGTH
+from app.models.lead_unit import LEAD_SUBTYPES
 
 
 class RequestSchema(Schema):
@@ -1750,7 +1751,7 @@ class LeadPropertyOverviewUpdateSchema(RequestSchema):
     )
     lead_subtype = fields.String(
         allow_none=True,
-        validate=validate.OneOf(['residential', 'mixed_use', 'commercial']),
+        validate=validate.OneOf(list(LEAD_SUBTYPES)),
     )
     property_type = fields.String(
         allow_none=True, validate=validate.Length(max=50),
@@ -1775,6 +1776,7 @@ class LogCallFollowUpSchema(RequestSchema):
         load_default='call_owner_today',
         validate=validate.OneOf(VALID_TASK_TYPES),
     )
+    notes = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=5000))
 
 
 class LogNoteSchema(RequestSchema):
@@ -1932,10 +1934,10 @@ class QuickAddSchema(RequestSchema):
     lead_subtype = fields.String(
         allow_none=True,
         load_default=None,
-        validate=validate.OneOf(['residential', 'mixed_use', 'commercial']),
+        validate=validate.OneOf(list(LEAD_SUBTYPES)),
     )
     lead_units = fields.List(fields.Dict(), allow_none=True, load_default=None)
-    next_task = fields.Dict(allow_none=True, load_default=None)
+    next_task = fields.Nested(LeadTaskCreateSchema, allow_none=True, load_default=None)
 
 
 class QuickAddLookupSchema(RequestSchema):

@@ -93,6 +93,18 @@ class TestDealSourcesApi:
             )
             assert response.status_code == 400
 
+    def test_non_string_name_rejected(self, client, app):
+        with app.app_context():
+            response = client.post(
+                '/api/deal-sources',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({'name': ['Facebook']}),
+                content_type='application/json',
+            )
+            assert response.status_code == 400
+            body = response.get_json()
+            assert 'string' in (body.get('message') or body.get('error') or '').lower()
+
 
 class TestQuickAddCustomDealSource:
     def test_custom_deal_source_accepted_and_registered(self, client, app):

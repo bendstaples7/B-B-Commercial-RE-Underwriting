@@ -78,7 +78,10 @@ def _normalize_capture_source(raw) -> str | None:
     if not text:
         return None
     try:
-        return DealSourceService().ensure_registered(text)
+        return DealSourceService().ensure_registered(
+            text,
+            created_by=_creating_user_id(),
+        )
     except ValueError as exc:
         raise ValidationException(
             str(exc),

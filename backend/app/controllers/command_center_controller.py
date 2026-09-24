@@ -1836,13 +1836,21 @@ def replace_lead_units(lead_id: int):
     Optional: lead_subtype on the same body.
     """
     from app import db
+    from app.models.lead_unit import LEAD_SUBTYPES
     from app.services.lead_unit_service import replace_lead_units as replace_units
 
     lead, denied = _load_authorized_lead(lead_id)
     if denied is not None:
         return denied
 
-    body = request.get_json() or {}
+    body = request.get_json(silent=True)
+    if body is None:
+        body = {}
+    if not isinstance(body, dict):
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'JSON body must be an object',
+        }), 400
     rows = body.get('units')
     if rows is None:
         return jsonify({'error': 'Validation error', 'message': 'units is required'}), 400
@@ -1858,10 +1866,10 @@ def replace_lead_units(lead_id: int):
         subtype = body.get('lead_subtype')
         if subtype is not None:
             subtype = str(subtype).strip() or None
-        if subtype is not None and subtype not in ('residential', 'mixed_use', 'commercial'):
+        if subtype is not None and subtype not in LEAD_SUBTYPES:
             return jsonify({
                 'error': 'Validation error',
-                'message': 'lead_subtype must be residential, mixed_use, or commercial',
+                'message': f'lead_subtype must be one of: {", ".join(LEAD_SUBTYPES)}',
             }), 400
         lead.lead_subtype = subtype
 
@@ -1952,6 +1960,7 @@ def update_property_overview(lead_id: int):
             'acquisition_date': 'Last sale date',
             'most_recent_sale_price': 'Last sale price',
             'units': 'Units',
+            'lead_subtype': 'Property subtype',
             'property_type': 'Property type',
         }
         for key in changed:
@@ -2247,6 +2256,7 @@ def create_task(lead_id: int):
             actor=actor,
             reason=data.get('title') or 'Run skip trace on owner',
             due_date=data.get('due_date'),
+            notes=data.get('notes'),
             recompute_action=False,
         )
         if task is None:

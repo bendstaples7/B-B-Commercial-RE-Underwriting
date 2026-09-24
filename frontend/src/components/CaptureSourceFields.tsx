@@ -70,6 +70,16 @@ export function CaptureSourceFields({
   const createMutation = useMutation({
     mutationFn: (name: string) => dealSourcesApi.create(name),
     onSuccess: (result) => {
+      queryClient.setQueryData<Array<{ name: string; is_builtin?: boolean }>>(
+        DEAL_SOURCES_QUERY_KEY,
+        (prev) => {
+          const next = [...(prev ?? [])]
+          if (!next.some((row) => row.name.toLowerCase() === result.name.toLowerCase())) {
+            next.push({ name: result.name, is_builtin: result.is_builtin })
+          }
+          return next
+        },
+      )
       void queryClient.invalidateQueries({ queryKey: DEAL_SOURCES_QUERY_KEY })
       onSourceChange(result.name)
       setAddingSource(false)
@@ -78,13 +88,8 @@ export function CaptureSourceFields({
     },
     onError: (err: unknown) => {
       const message =
-        err && typeof err === 'object' && 'response' in err
-          ? String(
-              (err as { response?: { data?: { message?: string; error?: string } } }).response?.data
-                ?.message
-                || (err as { response?: { data?: { error?: string } } }).response?.data?.error
-                || 'Could not add source',
-            )
+        err instanceof Error && err.message.trim()
+          ? err.message
           : 'Could not add source'
       setAddError(message)
     },

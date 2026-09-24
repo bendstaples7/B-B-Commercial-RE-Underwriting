@@ -182,6 +182,7 @@ class SkipTraceEnqueue:
         actor: str = "entity_resolution",
         reason: str = "Entity manager resolved — run skip trace on person",
         due_date: Optional[date] = None,
+        notes: Optional[str] = None,
         recompute_action: bool = True,
     ) -> Optional[LeadTask]:
         """Enqueue skip-trace work for *lead_id* / optional *contact_id*.
@@ -204,6 +205,8 @@ class SkipTraceEnqueue:
             lead.needs_skip_trace = True
             if due_date is not None:
                 existing.due_date = due_date
+            if notes is not None:
+                existing.notes = notes
             db.session.commit()
             logger.info(
                 "SkipTraceEnqueue: open skip_trace_owner task already exists "
@@ -223,13 +226,16 @@ class SkipTraceEnqueue:
         lead.needs_skip_trace = True
         db.session.flush()
 
+        payload = {
+            "task_type": "skip_trace_owner",
+            "title": title,
+            "due_date": due_date,
+        }
+        if notes is not None:
+            payload["notes"] = notes
         task = self._tasks.create(
             lead_id,
-            {
-                "task_type": "skip_trace_owner",
-                "title": title,
-                "due_date": due_date,
-            },
+            payload,
             actor=actor,
             recompute_action=recompute_action,
         )

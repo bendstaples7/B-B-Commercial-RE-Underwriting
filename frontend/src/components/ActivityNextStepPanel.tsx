@@ -235,7 +235,7 @@ export function ActivityNextStepPanel({
         </Box>
       )}
 
-      {onTaskNotesChange != null && (
+      {onTaskNotesChange != null && (createFollowUp || lockFollowUp) && (
         <TextField
           label="Task notes"
           value={taskNotes ?? ''}

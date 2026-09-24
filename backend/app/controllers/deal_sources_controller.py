@@ -27,7 +27,9 @@ def create_deal_source():
         raise ValueError('JSON body must be an object')
     payload = data or {}
     name = payload.get('name')
+    if name is not None and not isinstance(name, str):
+        raise ValueError('name must be a string')
     actor = getattr(g, 'user_id', None)
-    result = _service.create_source(name if isinstance(name, str) else str(name or ''), created_by=actor)
+    result = _service.create_source(name or '', created_by=actor)
     status = 201 if result.get('created') else 200
     return jsonify(result), status

@@ -1880,7 +1880,7 @@ export interface QuickAddPayload {
 export interface QuickAddResponse {
   lead_id: number
   created: boolean
-  property_street: string
+  property_street: string | null
   lead_status: string
   deal_source: string
   date_identified: string | null
@@ -2605,6 +2605,7 @@ export interface LogCallFollowUpPayload {
   title: string;
   due_date: string;
   task_type?: string;
+  notes?: string | null;
 }
 
 export interface LogCallPayload {

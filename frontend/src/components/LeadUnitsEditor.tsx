@@ -42,10 +42,25 @@ export type LeadUnitDraft = {
   current_rent: string
 }
 
-export function emptyLeadUnitDraft(index = 0): LeadUnitDraft {
+/** Next unused default label (`Unit 1`, `Unit 2`, …) given current drafts. */
+export function nextUnusedUnitLabel(existing: LeadUnitDraft[]): string {
+  const taken = new Set(
+    existing.map((row) => row.unit_label.trim().toLowerCase()).filter(Boolean),
+  )
+  let n = 1
+  while (taken.has(`unit ${n}`)) {
+    n += 1
+  }
+  return `Unit ${n}`
+}
+
+export function emptyLeadUnitDraft(
+  index = 0,
+  existing: LeadUnitDraft[] = [],
+): LeadUnitDraft {
   return {
     key: `unit-${Date.now()}-${index}`,
-    unit_label: `Unit ${index + 1}`,
+    unit_label: nextUnusedUnitLabel(existing),
     unit_type: 'residential',
     beds: '',
     baths: '',
@@ -247,7 +262,7 @@ export function LeadUnitsEditor({
         type="button"
         size="small"
         startIcon={<AddIcon />}
-        onClick={() => onChange([...units, emptyLeadUnitDraft(units.length)])}
+        onClick={() => onChange([...units, emptyLeadUnitDraft(units.length, units)])}
         disabled={disabled}
         data-testid={`${testIdPrefix}-add`}
         sx={{ cursor: 'pointer' }}

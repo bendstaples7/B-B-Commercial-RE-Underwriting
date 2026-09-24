@@ -1476,11 +1476,23 @@ export const commandCenterService = {
     api.post(`/leads/${leadId}/sale-date-verification`).then(r => r.data),
 }
 
-type LeadTaskWrite = { title?: string; task_type?: string; due_date?: string | null; notes?: string | null }
+type LeadTaskCreate = {
+  title: string
+  task_type?: string
+  due_date?: string | null
+  notes?: string | null
+}
+/** PATCH may update title/due_date/notes — not task_type (server ignores it). */
+type LeadTaskUpdate = {
+  title?: string
+  due_date?: string | null
+  notes?: string | null
+  new_due_date?: string
+}
 export const leadTaskService = {
-  createTask: (leadId: number, data: LeadTaskWrite & { title: string }): Promise<LeadTask> =>
+  createTask: (leadId: number, data: LeadTaskCreate): Promise<LeadTask> =>
     api.post(`/leads/${leadId}/tasks`, data).then(r => r.data),
-  updateTask: (leadId: number, taskId: number, data: LeadTaskWrite): Promise<LeadTask> =>
+  updateTask: (leadId: number, taskId: number, data: LeadTaskUpdate): Promise<LeadTask> =>
     api.patch(`/leads/${leadId}/tasks/${taskId}`, data).then(r => r.data),
   completeTask: (leadId: number, taskId: number): Promise<LeadTask> =>
     api.post(`/leads/${leadId}/tasks/${taskId}/complete`).then(r => r.data),
