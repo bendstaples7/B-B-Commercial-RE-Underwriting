@@ -22,7 +22,9 @@ def _optional_int(raw) -> int | None:
             value = raw
         else:
             text = str(raw).strip()
-            # Reject fractional / scientific forms before int() truncates.
+            # Reject fractional / scientific / oversized forms before int() truncates.
+            if 'e' in text.lower() or len(text.lstrip('+-')) > 12:
+                raise ValueError('beds/sqft must be integers')
             as_decimal = Decimal(text)
             if not as_decimal.is_finite() or as_decimal != as_decimal.to_integral_value():
                 raise ValueError('beds/sqft must be integers')
@@ -33,6 +35,8 @@ def _optional_int(raw) -> int | None:
         raise ValueError('beds/sqft must be integers') from exc
     if value < 0:
         raise ValueError('beds/sqft must be >= 0')
+    if value > 1_000_000_000:
+        raise ValueError('beds/sqft must be integers')
     return value
 
 

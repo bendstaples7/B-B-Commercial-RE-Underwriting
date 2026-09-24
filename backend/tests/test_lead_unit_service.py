@@ -33,12 +33,35 @@ class TestReplaceLeadUnitsValidation:
                     {'unit_label': 'A', 'beds': 1.5},
                 ])
 
+    def test_rejects_exponent_integer_text(self, app, lead):
+        with app.app_context():
+            with pytest.raises(ValueError, match='beds/sqft must be integers'):
+                replace_lead_units(lead, [
+                    {'unit_label': 'A', 'sqft': '1e100000'},
+                ])
+
     def test_rejects_nan_baths(self, app, lead):
         with app.app_context():
             with pytest.raises(ValueError, match='baths must be a number'):
                 replace_lead_units(lead, [
                     {'unit_label': 'A', 'baths': 'NaN'},
                 ])
+
+    def test_reject_preserves_existing_inventory(self, app, lead):
+        with app.app_context():
+            replace_lead_units(lead, [
+                {'unit_label': 'Existing', 'unit_type': 'residential'},
+            ])
+            db.session.commit()
+
+            with pytest.raises(ValueError, match='beds/sqft must be integers'):
+                replace_lead_units(lead, [
+                    {'unit_label': 'Bad', 'beds': 1.5},
+                ])
+
+            remaining = LeadUnit.query.filter_by(lead_id=lead).all()
+            assert len(remaining) == 1
+            assert remaining[0].unit_label == 'Existing'
 
     def test_accepts_valid_rows(self, app, lead):
         with app.app_context():

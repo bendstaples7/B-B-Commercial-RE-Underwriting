@@ -417,6 +417,21 @@ class TestSkipTraceEnqueue:
                 lead_id=lead.id, task_type="skip_trace_owner", status="open",
             ).count() == 1
 
+    def test_existing_task_notes_are_normalized(self, app):
+        with app.app_context():
+            lead = _make_lead(ownership_type="individual")
+            db.session.commit()
+            enqueue = SkipTraceEnqueue()
+
+            first = enqueue.enqueue(lead.id, notes='  First note  ')
+            assert first is not None
+            assert first.notes == 'First note'
+
+            second = enqueue.enqueue(lead.id, notes='   ')
+            assert second is not None
+            assert second.id == first.id
+            assert second.notes is None
+
     def test_title_uses_contact_display_name(self, app):
         with app.app_context():
             from app.models.contact import Contact
