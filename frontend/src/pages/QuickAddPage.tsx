@@ -565,7 +565,6 @@ export function QuickAddPage() {
     setSuccessResult(null)
     setExistingActionFeedback(null)
     setAddressError('')
-    setNextTaskError('')
     localityFromPlacesRef.current = false
     setParsedAddress({ city: null, state: null, zip: null })
     quickAddMutation.reset()
