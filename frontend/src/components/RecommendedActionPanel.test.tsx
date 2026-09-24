@@ -811,16 +811,14 @@ describe('RecommendedActionPanel', () => {
       )
 
       expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
-        'Deprioritized for the recent-sale hold',
-      )
-      expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
-        'moves to Skip Trace for active work',
+        'Recent sale hold',
       )
       expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
         formatDateOnly('2027-03-31'),
       )
-      expect(screen.getByTestId('dismiss-recent-sale')).toHaveTextContent(
-        "Not this unit's sale",
+      expect(screen.getByTestId('dismiss-recent-sale')).toHaveAttribute(
+        'aria-label',
+        'Dismiss',
       )
       await user.click(screen.getByTestId('dismiss-recent-sale'))
       expect(onDismissRecentSale).toHaveBeenCalled()

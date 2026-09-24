@@ -91,6 +91,7 @@ def dismiss_incorrect_recent_sale(
     pin_cleared = False
     if clear_pin and (
         situs_unit_token(lead.property_street or '')
+        or situs_unit_token(getattr(lead, 'address_2', None) or '')
         or reason in ('not_this_unit', 'wrong_pin_sale')
     ):
         if lead.county_assessor_pin:

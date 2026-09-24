@@ -645,19 +645,31 @@ export function PropertySidebar({
                 whiteSpace: 'pre-line',
                 wordBreak: 'break-word',
                 color:
-                  commandCenterData.property_street || commandCenterData.property_city
+                  commandCenterData.property_street ||
+                  commandCenterData.address_2 ||
+                  commandCenterData.property_city
                     ? 'text.primary'
                     : 'text.disabled',
               }}
             >
-              {commandCenterData.property_street || commandCenterData.property_city ? (
+              {commandCenterData.property_street ||
+              commandCenterData.address_2 ||
+              commandCenterData.property_city ? (
                 <>
                   {commandCenterData.property_street}
+                  {commandCenterData.address_2 ? (
+                    <>
+                      {commandCenterData.property_street ? '\n' : ''}
+                      {commandCenterData.address_2}
+                    </>
+                  ) : null}
                   {(commandCenterData.property_city ||
                     commandCenterData.property_state ||
                     commandCenterData.property_zip) && (
                     <>
-                      {commandCenterData.property_street ? '\n' : ''}
+                      {commandCenterData.property_street || commandCenterData.address_2
+                        ? '\n'
+                        : ''}
                       {[
                         commandCenterData.property_city,
                         commandCenterData.property_state,
@@ -926,7 +938,6 @@ export function PropertySidebar({
             {commandCenterData.deal_description || '—'}
           </Typography>
         </SidebarLabeledContent>
-        {data.address_2 && <SidebarRow label="Additional Address" value={data.address_2} />}
       </SidebarSection>
 
       {showRelatedProperties && (
@@ -1226,6 +1237,7 @@ export function PropertySidebar({
       row={{
         id: commandCenterData.id,
         property_street: commandCenterData.property_street,
+        address_2: commandCenterData.address_2,
         property_city: commandCenterData.property_city,
         property_state: commandCenterData.property_state,
         property_zip: commandCenterData.property_zip,

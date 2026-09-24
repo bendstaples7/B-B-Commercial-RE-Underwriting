@@ -268,6 +268,8 @@ class LeadIngestionService:
                 or None
             )
             unit_token = situs_unit_token(lead.property_street or '')
+            if not unit_token:
+                unit_token = situs_unit_token(getattr(lead, 'address_2', None) or '')
             # Cook / county parcel address tables strip unit designators. Address
             # lookup then returns an arbitrary PIN in a condo stack (e.g. 3 PINs
             # at 717 W Bittersweet) and Cook enrichment stamps that unit's sale

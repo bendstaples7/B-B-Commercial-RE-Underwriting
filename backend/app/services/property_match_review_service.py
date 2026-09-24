@@ -1280,6 +1280,8 @@ class PropertyMatchReviewService:
         property_city: str | None = None,
         property_state: str | None = None,
         property_zip: str | None = None,
+        address_2: str | None = None,
+        set_address_2: bool = False,
         actor: str = 'anonymous',
     ) -> dict:
         from app.services.lead_merge_utils import situs_unit_token
@@ -1288,8 +1290,10 @@ class PropertyMatchReviewService:
         if lead is None:
             raise ValueError(f'Lead {lead_id} not found')
 
-        prev_street = lead.property_street
-        prev_unit = situs_unit_token(prev_street)
+        def _unit_token(street: str | None, line2: str | None) -> str:
+            return situs_unit_token(street) or situs_unit_token(line2)
+
+        prev_unit = _unit_token(lead.property_street, lead.address_2)
         if property_street is not None:
             lead.property_street = property_street
         if property_city is not None:
@@ -1298,8 +1302,10 @@ class PropertyMatchReviewService:
             lead.property_state = property_state
         if property_zip is not None:
             lead.property_zip = property_zip
+        if set_address_2:
+            lead.address_2 = (address_2 or '').strip() or None
 
-        new_unit = situs_unit_token(lead.property_street)
+        new_unit = _unit_token(lead.property_street, lead.address_2)
         # Unit added/changed: prior building-level PIN/sale is untrusted.
         if new_unit and new_unit != prev_unit:
             lead.county_assessor_pin = None

@@ -859,12 +859,11 @@ describe('PropertySidebar prior-owner stale contacts', () => {
   })
 })
 
-describe('PropertySidebar Other Addresses placement', () => {
-  it('does not render Other Addresses in the sidebar (lives on Info instead)', () => {
-    renderSidebar(makePayload({ address_2: '456 Secondary Ave' }))
+describe('PropertySidebar address line 2', () => {
+  it('shows address_2 under the Address block (not a separate Additional Address row)', () => {
+    renderSidebar(makePayload({ address_2: 'Unit L2' }))
 
-    expect(screen.getAllByText('Additional Address')).toHaveLength(1)
-    expect(screen.getAllByText('456 Secondary Ave')).toHaveLength(1)
-    expect(screen.queryByText('Other Addresses')).not.toBeInTheDocument()
+    expect(screen.getByTestId('sidebar-property-address')).toHaveTextContent('Unit L2')
+    expect(screen.queryByText('Additional Address')).not.toBeInTheDocument()
   })
 })

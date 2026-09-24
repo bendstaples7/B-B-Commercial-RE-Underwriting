@@ -2166,6 +2166,8 @@ export interface QueueRow {
   property_city: string | null;
   property_state: string | null;
   property_zip?: string | null;
+  /** Apt / unit / suite line (situs address line 2). */
+  address_2?: string | null;
   lead_score: number;
   lead_status: LeadStatus;
   recommended_action: CRMRecommendedAction | null;

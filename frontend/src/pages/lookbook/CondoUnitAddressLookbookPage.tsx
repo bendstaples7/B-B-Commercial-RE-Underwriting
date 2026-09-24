@@ -13,6 +13,7 @@ const FAKE_PAYLOAD = {
   owner_first_name: 'Alex',
   owner_last_name: 'Owner',
   property_street: '717 W Bittersweet Pl',
+  address_2: 'Unit L2',
   property_city: 'Chicago',
   property_state: 'IL',
   property_zip: '60613',

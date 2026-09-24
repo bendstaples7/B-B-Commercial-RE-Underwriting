@@ -298,3 +298,37 @@ def test_parkway_suffix_does_not_force_aka():
         '1000 W Foster Parkway',
         '1000 W FOSTER PKWY',
     )
+
+
+class TestUpdatePropertyAddressLine2:
+    def test_sets_address_2_and_clears_wrong_unit_pin(self, app):
+        with app.app_context():
+            lead = _seed_lead(
+                property_street='717 W Bittersweet Pl',
+                address_2=None,
+                county_assessor_pin='14163050211081',
+                has_property_match=True,
+                most_recent_sale='2025-11-01',
+            )
+            with patch(
+                'app.services.property_address_service.complete_property_address',
+            ), patch(
+                'app.services.lead_refresh.refresh_lead_scoring',
+            ), patch.object(
+                PropertyMatchReviewService,
+                'preview_match',
+                return_value={'match_found': False},
+            ):
+                PropertyMatchReviewService().update_property_address(
+                    lead.id,
+                    property_street='717 W Bittersweet Pl',
+                    address_2='Unit L2',
+                    set_address_2=True,
+                    actor='tester',
+                )
+
+            refreshed = db.session.get(Lead, lead.id)
+            assert refreshed.address_2 == 'Unit L2'
+            assert refreshed.county_assessor_pin is None
+            assert refreshed.has_property_match is False
+            assert refreshed.most_recent_sale is None

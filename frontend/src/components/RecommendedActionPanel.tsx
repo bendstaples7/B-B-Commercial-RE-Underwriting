@@ -16,11 +16,13 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  IconButton,
   Stack,
   TextField,
   Tooltip,
   Typography,
 } from '@mui/material'
+import CloseIcon from '@mui/icons-material/Close'
 import BlockIcon from '@mui/icons-material/Block'
 import AddTaskIcon from '@mui/icons-material/AddTask'
 import PhoneIcon from '@mui/icons-material/Phone'
@@ -322,42 +324,55 @@ export function RecommendedActionPanel({
   const mailHoldAlert = recentSaleHoldSignal ? (
     <Alert
       severity="warning"
-      sx={{ mb: 2 }}
+      sx={{
+        mb: 2,
+        alignItems: 'center',
+        '& .MuiAlert-message': {
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          minWidth: 0,
+        },
+        '& .MuiAlert-action': {
+          pt: 0,
+          alignItems: 'center',
+          mr: 0,
+        },
+      }}
       data-testid="recent-sale-mail-hold"
       action={
         onDismissRecentSale ? (
-          <Button
-            color="inherit"
-            size="small"
-            disabled={dismissSalePending}
-            onClick={async () => {
-              setActionError(null)
-              setDismissSalePending(true)
-              try {
-                await onDismissRecentSale()
-              } catch (err) {
-                setActionError(
-                  err instanceof Error ? err.message : 'Could not dismiss recent sale.',
-                )
-              } finally {
-                setDismissSalePending(false)
-              }
-            }}
-            data-testid="dismiss-recent-sale"
-          >
-            {dismissSalePending ? 'Clearing…' : "Not this unit's sale"}
-          </Button>
+          <Tooltip title="Dismiss — sale is for a different unit or PIN">
+            <span>
+              <IconButton
+                color="inherit"
+                size="small"
+                aria-label="Dismiss"
+                disabled={dismissSalePending}
+                onClick={async () => {
+                  setActionError(null)
+                  setDismissSalePending(true)
+                  try {
+                    await onDismissRecentSale()
+                  } catch (err) {
+                    setActionError(
+                      err instanceof Error ? err.message : 'Could not dismiss recent sale.',
+                    )
+                  } finally {
+                    setDismissSalePending(false)
+                  }
+                }}
+                data-testid="dismiss-recent-sale"
+              >
+                <CloseIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
         ) : undefined
       }
     >
-      Recent sale detected. Deprioritized for the recent-sale hold
-      {mailEligibleDate
-        ? ` until ${formatDateOnly(mailEligibleDate)}.`
-        : ' until the two-year hold ends.'}
-      {' '}When the hold expires, the lead moves to Skip Trace for active work.
-      {onDismissRecentSale
-        ? ' If this sale is for a different condo unit or PIN, dismiss it.'
-        : null}
+      Recent sale hold
+      {mailEligibleDate ? ` until ${formatDateOnly(mailEligibleDate)}` : ''}
     </Alert>
   ) : mailIneligibleReason === 'mail_cadence' ? (
     <Alert severity="warning" sx={{ mb: 2 }} data-testid="mail-cadence-hold">
