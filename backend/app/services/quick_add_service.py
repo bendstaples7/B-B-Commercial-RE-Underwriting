@@ -9,6 +9,7 @@ from app import db
 from app.models import Lead, LeadTimelineEntry
 from app.services.gis.routing import parse_city_state_zip_from_address
 from app.services.google_sheets_importer import GoogleSheetsImporter
+from app.services.deal_source_service import DealSourceService
 from app.services.helpers.deal_source import DEAL_SOURCE_OPTIONS
 from app.services.helpers.sql_like import escape_like_pattern
 from app.services.hubspot_writeback_service import DEFAULT_QUICK_ADD_DEAL_SOURCE
@@ -254,7 +255,9 @@ class QuickAddService:
         resolved_kind = (capture_kind or '').strip().lower()
         if resolved_kind not in ('', 'property', 'lead'):
             raise ValueError('capture_kind must be property or lead')
-        resolved_deal_source = (deal_source or '').strip() or DEFAULT_QUICK_ADD_DEAL_SOURCE
+        resolved_deal_source = (
+            DealSourceService().ensure_registered(deal_source) or DEFAULT_QUICK_ADD_DEAL_SOURCE
+        )
         resolved_status = _resolve_quick_add_status(lead_status)
         provenance = 'manual' if resolved_kind == 'lead' else QUICK_ADD_SOURCE
         capture_label = 'Lead capture' if resolved_kind == 'lead' else 'Walk-by'

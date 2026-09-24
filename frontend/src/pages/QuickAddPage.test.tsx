@@ -57,6 +57,19 @@ vi.mock('@/services/contactApi', () => ({
   },
 }))
 
+vi.mock('@/services/dealSourcesApi', () => ({
+  default: {
+    list: vi.fn().mockResolvedValue([
+      { name: 'Driving For Dollars', is_builtin: true },
+      { name: 'Referral', is_builtin: true },
+      { name: 'Direct Mail', is_builtin: true },
+      { name: 'CoStar', is_builtin: true },
+      { name: 'Other', is_builtin: true },
+    ]),
+    create: vi.fn(),
+  },
+}))
+
 const { navigateMock } = vi.hoisted(() => ({
   navigateMock: vi.fn(),
 }))

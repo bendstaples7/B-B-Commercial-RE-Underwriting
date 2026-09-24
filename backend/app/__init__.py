@@ -644,7 +644,10 @@ def create_app(config_name='development'):
 
     from app.controllers.channel_roi_controller import channel_roi_bp
     app.register_blueprint(channel_roi_bp, url_prefix='/api/marketing/channel-roi')
-    
+
+    from app.controllers.deal_sources_controller import deal_sources_bp
+    app.register_blueprint(deal_sources_bp, url_prefix='/api/deal-sources')
+
     from app.controllers.condo_filter_controller import condo_filter_bp
     app.register_blueprint(condo_filter_bp, url_prefix='/api/condo-filter')
     

@@ -529,18 +529,36 @@ class TestQuickAddEndpoint:
             )
             assert response.status_code == 400
 
-    def test_invalid_deal_source_rejected(self, quick_add_client, app):
+    def test_oversized_deal_source_rejected(self, quick_add_client, app):
         with app.app_context():
             response = quick_add_client.post(
                 '/api/leads/quick-add',
                 headers=_AUTH_HEADERS,
                 data=json.dumps({
                     'property_street': '123 Bad Source St',
-                    'deal_source': 'Not A Real Source',
+                    'deal_source': 'x' * 300,
                 }),
                 content_type='application/json',
             )
             assert response.status_code == 400
+
+    def test_custom_facebook_ad_deal_source_accepted(self, quick_add_client, app):
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '456 Facebook Ad St, Chicago, IL',
+                    'deal_source': 'Facebook Ad',
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 201
+            body = response.get_json()
+            assert body['deal_source'] == 'Facebook Ad'
+            lead = db.session.get(Lead, body['lead_id'])
+            assert lead is not None
+            assert lead.deal_source == 'Facebook Ad'
 
     def test_costar_deal_source_accepted(self, quick_add_client, app):
         with app.app_context():

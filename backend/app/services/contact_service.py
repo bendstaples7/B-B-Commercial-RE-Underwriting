@@ -18,7 +18,7 @@ from app.models.property_contact import PropertyContact
 from app.models.lead import Property
 from app.exceptions import ResourceNotFoundError, ConflictError, ValidationException
 from app.services.contact_backfill import phone_digits, split_phone_field, split_email_field
-from app.services.helpers.deal_source import DEAL_SOURCE_OPTIONS
+from app.services.deal_source_service import DealSourceService
 from app.services.helpers.sql_like import escape_like_pattern
 from app.services.helpers.text import strip_invisible as _strip_invisible
 
@@ -71,19 +71,20 @@ def _creating_user_id(explicit: str | None = None) -> str | None:
 
 
 def _normalize_capture_source(raw) -> str | None:
-    """Accept a HubSpot-aligned deal source, or None when blank."""
+    """Accept a builtin or custom deal source, registering customs on first use."""
     if raw is None:
         return None
     text = str(raw).strip()
     if not text:
         return None
-    if text not in DEAL_SOURCE_OPTIONS:
+    try:
+        return DealSourceService().ensure_registered(text)
+    except ValueError as exc:
         raise ValidationException(
-            f'Invalid source: {text}',
+            str(exc),
             field='source',
-            value=text,
-        )
-    return text
+            value=text[:80],
+        ) from exc
 
 
 def _normalize_capture_context(raw) -> str | None:

@@ -1880,7 +1880,9 @@ export interface QuickAddLookupResponse {
   matches: QuickAddLookupMatch[]
 }
 
-/** HubSpot-aligned deal sources for quick-add (Driving For Dollars is the walk-by default). */
+/** HubSpot-aligned deal sources for quick-add (Driving For Dollars is the walk-by default).
+ * Custom sources (Facebook Ad, etc.) are added via CaptureSourceFields → /api/deal-sources.
+ */
 export const QUICK_ADD_DEAL_SOURCES = [
   'Driving For Dollars',
   'Cityscape',
