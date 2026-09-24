@@ -168,6 +168,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
 ) {
   const [formOpen, setFormOpen] = useState(false)
   const [title, setTitle] = useState('')
+  const [taskNotes, setTaskNotes] = useState('')
   const [taskPreset, setTaskPreset] = useState<CreateTaskPresetId>('custom')
   const [duePreset, setDuePreset] = useState<FollowUpPreset>('custom')
   const [dueDate, setDueDate] = useState('')
@@ -183,15 +184,16 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
   const [followUpSubmitting, setFollowUpSubmitting] = useState(false)
   const [followUpCreated, setFollowUpCreated] = useState(false)
   const [editingTaskId, setEditingTaskId] = useState<number | null>(null)
-  const [editingField, setEditingField] = useState<'title' | 'due_date' | null>(null)
+  const [editingField, setEditingField] = useState<'title' | 'due_date' | 'notes' | null>(null)
   const [editTitle, setEditTitle] = useState('')
   const [editDueDate, setEditDueDate] = useState('')
+  const [editNotes, setEditNotes] = useState('')
   const [editTitleError, setEditTitleError] = useState<string | null>(null)
   const [editSubmitError, setEditSubmitError] = useState<string | null>(null)
   const [editSubmitting, setEditSubmitting] = useState(false)
   const editSubmittingRef = useRef(false)
   const skipBlurSaveRef = useRef(false)
-  const editingRef = useRef<{ id: number | null; field: 'title' | 'due_date' | null }>({
+  const editingRef = useRef<{ id: number | null; field: 'title' | 'due_date' | 'notes' | null }>({
     id: null,
     field: null,
   })
@@ -219,6 +221,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     setEditSubmitError(null)
     setFormOpen(true)
     setTitle('')
+    setTaskNotes('')
     setTaskPreset('custom')
     setDuePreset('custom')
     setDueDate('')
@@ -233,6 +236,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
   const handleCloseForm = () => {
     setFormOpen(false)
     setTitle('')
+    setTaskNotes('')
     setTaskPreset('custom')
     setDuePreset('custom')
     setDueDate('')
@@ -302,6 +306,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
         title: resolvedTitle,
         task_type: taskType,
         due_date: resolvedDue,
+        notes: taskNotes.trim() || null,
       })
       onTaskCreated(newTask)
       handleCloseForm()
@@ -840,6 +845,16 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                             />
                           )}
                         </Stack>
+                        {task.notes?.trim() ? (
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            data-testid={`task-notes-${task.id}`}
+                            sx={{ display: 'block', whiteSpace: 'pre-wrap' }}
+                          >
+                            {task.notes.trim()}
+                          </Typography>
+                        ) : null}
                       </Stack>
                     }
                     secondary={
@@ -1105,6 +1120,19 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
               dateLabel="Due date"
             />
           </Box>
+
+          <TextField
+            label="Notes"
+            value={taskNotes}
+            onChange={(e) => setTaskNotes(e.target.value)}
+            fullWidth
+            size="small"
+            multiline
+            minRows={2}
+            sx={{ mb: 2, caretColor: 'text.primary' }}
+            placeholder="Conversation goal or what to cover"
+            inputProps={{ 'data-testid': 'task-notes-input', maxLength: 5000 }}
+          />
 
           <Stack direction="row" spacing={1} justifyContent="flex-end">
             <Button

@@ -1406,6 +1406,7 @@ export const commandCenterService = {
       acquisition_date?: string | null
       most_recent_sale_price?: number | null
       units?: number | null
+      lead_subtype?: 'residential' | 'mixed_use' | 'commercial' | null
       property_type?: string | null
     },
   ): Promise<{
@@ -1415,6 +1416,7 @@ export const commandCenterService = {
     acquisition_date: string | null
     most_recent_sale_price: number | null
     units: number | null
+    lead_subtype?: string | null
     property_type: string | null
     lead_score: number | null
     timeline_entry: LeadTimelineEntry | null
@@ -1474,10 +1476,11 @@ export const commandCenterService = {
     api.post(`/leads/${leadId}/sale-date-verification`).then(r => r.data),
 }
 
+type LeadTaskWrite = { title?: string; task_type?: string; due_date?: string | null; notes?: string | null }
 export const leadTaskService = {
-  createTask: (leadId: number, data: { title: string; task_type?: string; due_date?: string | null }): Promise<LeadTask> =>
+  createTask: (leadId: number, data: LeadTaskWrite & { title: string }): Promise<LeadTask> =>
     api.post(`/leads/${leadId}/tasks`, data).then(r => r.data),
-  updateTask: (leadId: number, taskId: number, data: { title?: string; due_date?: string | null }): Promise<LeadTask> =>
+  updateTask: (leadId: number, taskId: number, data: LeadTaskWrite): Promise<LeadTask> =>
     api.patch(`/leads/${leadId}/tasks/${taskId}`, data).then(r => r.data),
   completeTask: (leadId: number, taskId: number): Promise<LeadTask> =>
     api.post(`/leads/${leadId}/tasks/${taskId}/complete`).then(r => r.data),

@@ -143,6 +143,9 @@ from app.models.facebook_campaign_lead_attribution import FacebookCampaignLeadAt
 # Deal / capture source catalog (custom Source dropdown values)
 from app.models.deal_source_option import DealSourceOption
 
+# Per-lead unit inventory (Quick Add / CC)
+from app.models.lead_unit import LeadUnit
+
 # CRM activity dashboard goals
 from app.models.user_activity_goal import UserActivityGoal
 
@@ -265,6 +268,8 @@ __all__ = [
     'FacebookCampaignLeadAttribution',
     # Deal / capture source catalog
     'DealSourceOption',
+    # Per-lead unit inventory
+    'LeadUnit',
     # CRM activity dashboard
     'UserActivityGoal',
 ]

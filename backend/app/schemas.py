@@ -1606,6 +1606,7 @@ class LeadTaskSchema(Schema):
     title = fields.String(dump_only=True)
     status = fields.String(dump_only=True)
     due_date = fields.Date(dump_only=True, allow_none=True)
+    notes = fields.String(dump_only=True, allow_none=True)
     created_at = fields.DateTime(dump_only=True)
     completed_at = fields.DateTime(dump_only=True, allow_none=True)
     created_by = fields.String(dump_only=True)
@@ -1620,12 +1621,14 @@ class LeadTaskCreateSchema(RequestSchema):
         validate=validate.OneOf(VALID_TASK_TYPES),
     )
     due_date = fields.Date(allow_none=True, load_default=None)
+    notes = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=5000))
 
 
 class LeadTaskUpdateSchema(RequestSchema):
     """Validation schema for updating a LeadTask (partial update)."""
     title = fields.String(validate=validate.Length(min=1, max=255))
     due_date = fields.Date(allow_none=True)
+    notes = fields.String(allow_none=True, validate=validate.Length(max=5000))
 
 
 class LeadTaskCompleteSchema(RequestSchema):
@@ -1745,6 +1748,10 @@ class LeadPropertyOverviewUpdateSchema(RequestSchema):
     units = fields.Integer(
         allow_none=True, validate=validate.Range(min=0),
     )
+    lead_subtype = fields.String(
+        allow_none=True,
+        validate=validate.OneOf(['residential', 'mixed_use', 'commercial']),
+    )
     property_type = fields.String(
         allow_none=True, validate=validate.Length(max=50),
     )
@@ -1753,7 +1760,8 @@ class LeadPropertyOverviewUpdateSchema(RequestSchema):
     def require_one_field(self, data, **kwargs):
         keys = (
             'assessed_value', 'asking_price', 'most_recent_sale',
-            'acquisition_date', 'most_recent_sale_price', 'units', 'property_type',
+            'acquisition_date', 'most_recent_sale_price', 'units',
+            'lead_subtype', 'property_type',
         )
         if not any(k in data for k in keys):
             raise ValidationError('Provide at least one property overview field.')
@@ -1834,7 +1842,11 @@ class ReactivateLeadSchema(RequestSchema):
 
 class QuickAddSchema(RequestSchema):
     """Validation schema for POST /api/leads/quick-add."""
-    property_street = fields.String(required=True, validate=validate.Length(min=1, max=500))
+    property_street = fields.String(
+        allow_none=True,
+        load_default=None,
+        validate=validate.Length(max=500),
+    )
     note = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=5000))
     context = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=5000))
     capture_kind = fields.String(
@@ -1854,6 +1866,18 @@ class QuickAddSchema(RequestSchema):
         cleaned = raw.strip().lower()
         data['capture_kind'] = cleaned or None
         return data
+
+    @validates_schema
+    def require_street_or_locality(self, data, **kwargs):
+        street = (data.get('property_street') or '').strip()
+        city = (data.get('property_city') or '').strip()
+        state = (data.get('property_state') or '').strip()
+        zip_code = (data.get('property_zip') or '').strip()
+        if not street and not (city or state or zip_code):
+            raise ValidationError(
+                'Enter a property address, or at least a city, state, or ZIP',
+                field_name='property_street',
+            )
 
     priority = fields.String(
         allow_none=True,
@@ -1901,6 +1925,17 @@ class QuickAddSchema(RequestSchema):
         load_default=None,
         validate=validate.OneOf(VALID_LEAD_STATUSES),
     )
+    units = fields.Integer(allow_none=True, load_default=None, validate=validate.Range(min=0, max=5000))
+    asking_price = fields.Float(allow_none=True, load_default=None, validate=validate.Range(min=0))
+    bedrooms = fields.Integer(allow_none=True, load_default=None, validate=validate.Range(min=0, max=500))
+    bathrooms = fields.Float(allow_none=True, load_default=None, validate=validate.Range(min=0, max=500))
+    lead_subtype = fields.String(
+        allow_none=True,
+        load_default=None,
+        validate=validate.OneOf(['residential', 'mixed_use', 'commercial']),
+    )
+    lead_units = fields.List(fields.Dict(), allow_none=True, load_default=None)
+    next_task = fields.Dict(allow_none=True, load_default=None)
 
 
 class QuickAddLookupSchema(RequestSchema):

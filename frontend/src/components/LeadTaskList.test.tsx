@@ -424,6 +424,7 @@ describe('LeadTaskList', () => {
           title: 'Call owner',
           task_type: 'custom',
           due_date: null,
+        notes: null,
         })
       })
     })
@@ -455,6 +456,7 @@ describe('LeadTaskList', () => {
           title: 'Follow up call',
           task_type: 'call_owner_today',
           due_date: null,
+        notes: null,
         })
       })
     })
@@ -486,6 +488,7 @@ describe('LeadTaskList', () => {
           title: 'Email owner',
           task_type: 'custom',
           due_date: null,
+        notes: null,
         })
       })
     })
@@ -517,6 +520,7 @@ describe('LeadTaskList', () => {
           title: 'Add to mail queue',
           task_type: 'add_to_mail_batch',
           due_date: null,
+        notes: null,
         })
       })
     })
@@ -547,6 +551,7 @@ describe('LeadTaskList', () => {
           title: 'Task with date',
           task_type: 'custom',
           due_date: '2025-06-15',
+        notes: null,
         })
       })
     })

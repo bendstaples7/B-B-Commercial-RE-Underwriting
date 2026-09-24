@@ -118,6 +118,40 @@ export const leadService = {
     return response.data
   },
 
+  async replaceLeadUnits(
+    leadId: number,
+    data: {
+      units: Array<{
+        unit_label?: string
+        unit_type?: string
+        beds?: number | null
+        baths?: number | null
+        sqft?: number | null
+        current_rent?: number | null
+        sort_order?: number
+      }>
+      lead_subtype?: 'residential' | 'mixed_use' | 'commercial' | null
+    },
+  ): Promise<{
+    lead_id: number
+    lead_subtype: string | null
+    units: number | null
+    lead_units: Array<{
+      id: number
+      lead_id: number
+      unit_label: string
+      unit_type: string
+      beds?: number | null
+      baths?: number | null
+      sqft?: number | null
+      current_rent?: number | null
+      sort_order?: number
+    }>
+  }> {
+    const response = await api.put(`/leads/${leadId}/units`, data)
+    return response.data
+  },
+
   async lookupQuickAdd(q: string, signal?: AbortSignal): Promise<QuickAddLookupResponse> {
     const response = await api.get<QuickAddLookupResponse>('/leads/quick-add/lookup', {
       params: { q },

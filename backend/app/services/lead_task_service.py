@@ -247,12 +247,21 @@ class LeadTaskService:
                 reason='call_workflow_started',
             )
 
+        notes_raw = data.get('notes')
+        notes = (str(notes_raw).strip() if notes_raw is not None else '') or None
+        if notes and len(notes) > 5000:
+            raise LeadTaskValidationError(
+                'Task notes must be 5000 characters or fewer.',
+                field='notes',
+            )
+
         task = LeadTask(
             lead_id=lead_id,
             task_type=task_type,
             title=title,
             status='open',
             due_date=data.get('due_date'),
+            notes=notes,
             created_by=actor,
         )
         db.session.add(task)

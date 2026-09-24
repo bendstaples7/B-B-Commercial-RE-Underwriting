@@ -230,7 +230,7 @@ class QuickAddService:
         self,
         *,
         user_id: str,
-        property_street: str,
+        property_street: str | None = None,
         note: str | None = None,
         context: str | None = None,
         priority: str | None = None,
@@ -244,11 +244,23 @@ class QuickAddService:
         property_zip: str | None = None,
         capture_kind: str | None = None,
         lead_status: str | None = None,
+        units: int | None = None,
+        asking_price: float | None = None,
+        bedrooms: int | None = None,
+        bathrooms: float | None = None,
+        lead_subtype: str | None = None,
+        lead_units: list | None = None,
+        next_task: dict | None = None,
     ) -> tuple[Lead, bool]:
         """Create or update a lead from a quick-add submission."""
-        street = property_street.strip()
-        if not street:
-            raise ValueError('property_street is required')
+        street = (property_street or '').strip()
+        city_in = (property_city or '').strip() or None
+        state_in = (property_state or '').strip() or None
+        zip_in = (property_zip or '').strip() or None
+        if not street and not (city_in or state_in or zip_in):
+            raise ValueError(
+                'Enter a property address, or at least a city, state, or ZIP'
+            )
 
         now = datetime.now(timezone.utc)
         identified_on = date_identified or now.date()
@@ -261,8 +273,11 @@ class QuickAddService:
         resolved_status = _resolve_quick_add_status(lead_status)
         provenance = 'manual' if resolved_kind == 'lead' else QUICK_ADD_SOURCE
         capture_label = 'Lead capture' if resolved_kind == 'lead' else 'Walk-by'
+        locality = ', '.join(
+            part for part in (city_in, state_in, zip_in) if part
+        )
         walk_by_context = build_walk_by_context_line(
-            property_street=street,
+            property_street=street or locality or 'Address TBD',
             capture_location_label=capture_location_label,
             captured_at=now,
             label=capture_label,
@@ -284,38 +299,43 @@ class QuickAddService:
 
         from app.services.property_address_service import complete_property_address_fields
 
-        # Cook street-only GIS only when situs is blank/IL — never for out-of-state.
-        state_norm = (property_state or '').strip().upper()
-        city_blank = not (property_city or '').strip()
-        try_gis = (not state_norm or state_norm == 'IL') and (
+        # Cook street-only GIS only when we have a street and situs is blank/IL.
+        state_norm = (state_in or '').strip().upper()
+        city_blank = not city_in
+        try_gis = bool(street) and (not state_norm or state_norm == 'IL') and (
             city_blank or not state_norm
         )
-        completed = complete_property_address_fields(
-            street,
-            property_city,
-            property_state,
-            property_zip,
-            try_gis=try_gis,
-        )
-        street = completed.get('property_street') or street
-        city = completed.get('property_city')
-        state = completed.get('property_state')
-        zip_code = completed.get('property_zip')
+        if street:
+            completed = complete_property_address_fields(
+                street,
+                city_in,
+                state_in,
+                zip_in,
+                try_gis=try_gis,
+            )
+            street = completed.get('property_street') or street
+            city = completed.get('property_city') or city_in
+            state = completed.get('property_state') or state_in
+            zip_code = completed.get('property_zip') or zip_in
+        else:
+            city, state, zip_code = city_in, state_in, zip_in
 
-        existing = self._importer._find_duplicate(  # noqa: SLF001
-            {
-                'property_street': street,
-                'property_city': city,
-                'property_state': state,
-                'property_zip': zip_code,
-            },
-            owner_user_id=user_id,
-        )
+        existing = None
+        if street:
+            existing = self._importer._find_duplicate(  # noqa: SLF001
+                {
+                    'property_street': street,
+                    'property_city': city,
+                    'property_state': state,
+                    'property_zip': zip_code,
+                },
+                owner_user_id=user_id,
+            )
         created = existing is None
 
         if created:
             payload: dict[str, Any] = {
-                'property_street': street,
+                'property_street': street or None,
                 'source': provenance,
                 'deal_source': resolved_deal_source,
                 'deal_description': capture_description,
@@ -330,6 +350,16 @@ class QuickAddService:
                 payload['property_zip'] = zip_code
             if manual_priority is not None:
                 payload['manual_priority'] = manual_priority
+            if units is not None:
+                payload['units'] = units
+            if asking_price is not None:
+                payload['asking_price'] = asking_price
+            if bedrooms is not None:
+                payload['bedrooms'] = bedrooms
+            if bathrooms is not None:
+                payload['bathrooms'] = bathrooms
+            if lead_subtype:
+                payload['lead_subtype'] = lead_subtype
             # Initial schema keeps owner_first_name NOT NULL. A walk-by often
             # has no owner yet; store '' instead of omitting the column.
             if not (payload.get('owner_first_name') or '').strip():
@@ -394,6 +424,24 @@ class QuickAddService:
             'capture_latitude': capture_latitude,
             'capture_longitude': capture_longitude,
         }
+        # Property facts on create/update (fill blanks or overwrite when provided).
+        if units is not None:
+            lead.units = units
+        if asking_price is not None:
+            lead.asking_price = asking_price
+        if bedrooms is not None:
+            lead.bedrooms = bedrooms
+        if bathrooms is not None:
+            lead.bathrooms = bathrooms
+        if lead_subtype:
+            lead.lead_subtype = lead_subtype
+
+        if lead_units is not None:
+            from app.services.lead_unit_service import replace_lead_units
+            replace_lead_units(lead.id, lead_units)
+            if lead.units is None and lead_units:
+                lead.units = len(lead_units)
+
         db.session.flush()
         self._add_timeline_entries(
             lead_id=lead.id,
@@ -405,6 +453,38 @@ class QuickAddService:
             capture_kind=resolved_kind,
         )
         db.session.commit()
+
+        # Follow-up task when caller supplied next_task (same LeadTaskService as CC).
+        if created and next_task and isinstance(next_task, dict):
+            title = (next_task.get('title') or '').strip()
+            if title:
+                from app.services.lead_task_service import LeadTaskService
+                lead_id_for_task = lead.id
+                due_raw = next_task.get('due_date')
+                due_date = due_raw
+                if isinstance(due_raw, str) and due_raw.strip():
+                    try:
+                        due_date = date.fromisoformat(due_raw.strip()[:10])
+                    except ValueError:
+                        due_date = None
+                try:
+                    LeadTaskService().create(
+                        lead_id_for_task,
+                        {
+                            'title': title,
+                            'task_type': next_task.get('task_type') or 'custom',
+                            'due_date': due_date,
+                            'notes': next_task.get('notes'),
+                        },
+                        actor=user_id or 'quick_add',
+                    )
+                except Exception:
+                    logger.exception(
+                        'Could not create next task for quick-add lead %s',
+                        lead_id_for_task,
+                    )
+                    db.session.rollback()
+                    lead = db.session.get(Lead, lead_id_for_task) or lead
 
         if created and lead.lead_status == QUICK_ADD_STATUS:
             try:
