@@ -260,16 +260,17 @@ class LeadIngestionService:
         }
 
         try:
-            from app.services.lead_merge_utils import situs_unit_token
+            from app.services.lead_merge_utils import situs_unit_token_from_parts
 
             pin_for_lookup = (
                 (lead.county_assessor_pin or '').strip()
                 or (pin_hint or '').strip()
                 or None
             )
-            unit_token = situs_unit_token(lead.property_street or '')
-            if not unit_token:
-                unit_token = situs_unit_token(getattr(lead, 'address_2', None) or '')
+            unit_token = situs_unit_token_from_parts(
+                lead.property_street,
+                getattr(lead, 'address_2', None),
+            )
             # Cook / county parcel address tables strip unit designators. Address
             # lookup then returns an arbitrary PIN in a condo stack (e.g. 3 PINs
             # at 717 W Bittersweet) and Cook enrichment stamps that unit's sale

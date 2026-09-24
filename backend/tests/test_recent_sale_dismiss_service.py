@@ -56,3 +56,71 @@ def test_dismiss_incorrect_recent_sale_clears_sale_and_hold(app):
         assert result['pin_cleared'] is True
         assert hold_id in result['completed_hold_task_ids']
         assert db.session.get(LeadTask, hold_id).status == 'completed'
+
+
+def test_dismiss_sfh_without_unit_keeps_pin_for_not_this_unit(app):
+    """Accidental Wrong unit on SFH clears sale/hold but not a trusted PIN."""
+    with app.app_context():
+        lead = Lead(
+            property_street='100 N Main St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            county_assessor_pin='14123456789000',
+            has_property_match=True,
+            most_recent_sale=(date.today() - timedelta(days=30)).isoformat(),
+            acquisition_date=date.today() - timedelta(days=30),
+            most_recent_sale_price=400000,
+            lead_status='skip_trace',
+            needs_skip_trace=False,
+            owner_first_name='',
+            owner_user_id='user-test',
+        )
+        db.session.add(lead)
+        db.session.commit()
+        lead_id = lead.id
+
+        result = dismiss_incorrect_recent_sale(
+            db.session.get(Lead, lead_id),
+            actor='tester',
+            reason='not_this_unit',
+            clear_pin=True,
+        )
+
+        refreshed = db.session.get(Lead, lead_id)
+        assert refreshed.most_recent_sale is None
+        assert refreshed.county_assessor_pin == '14123456789000'
+        assert refreshed.has_property_match is True
+        assert result['pin_cleared'] is False
+
+
+def test_dismiss_clears_pin_from_address_2_unit(app):
+    with app.app_context():
+        lead = Lead(
+            property_street='717 W Bittersweet Pl',
+            address_2='Unit L2',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60613',
+            county_assessor_pin='14163050211081',
+            has_property_match=True,
+            most_recent_sale=(date.today() - timedelta(days=30)).isoformat(),
+            lead_status='skip_trace',
+            needs_skip_trace=False,
+            owner_first_name='',
+            owner_user_id='user-test',
+        )
+        db.session.add(lead)
+        db.session.commit()
+        lead_id = lead.id
+
+        result = dismiss_incorrect_recent_sale(
+            db.session.get(Lead, lead_id),
+            actor='tester',
+            reason='not_this_unit',
+            clear_pin=True,
+        )
+
+        refreshed = db.session.get(Lead, lead_id)
+        assert refreshed.county_assessor_pin is None
+        assert result['pin_cleared'] is True

@@ -816,10 +816,8 @@ describe('RecommendedActionPanel', () => {
       expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
         formatDateOnly('2027-03-31'),
       )
-      expect(screen.getByTestId('dismiss-recent-sale')).toHaveAttribute(
-        'aria-label',
-        'Dismiss',
-      )
+      expect(screen.getByTestId('dismiss-recent-sale')).toHaveTextContent('Wrong unit')
+      vi.spyOn(window, 'confirm').mockReturnValue(true)
       await user.click(screen.getByTestId('dismiss-recent-sale'))
       expect(onDismissRecentSale).toHaveBeenCalled()
       expect(screen.getByRole('button', { name: 'Adjust for Recent Sale' })).toBeInTheDocument()

@@ -860,10 +860,20 @@ describe('PropertySidebar prior-owner stale contacts', () => {
 })
 
 describe('PropertySidebar address line 2', () => {
-  it('shows address_2 under the Address block (not a separate Additional Address row)', () => {
+  it('shows unit-style address_2 under the Address block', () => {
     renderSidebar(makePayload({ address_2: 'Unit L2' }))
 
     expect(screen.getByTestId('sidebar-property-address')).toHaveTextContent('Unit L2')
     expect(screen.queryByText('Additional Address')).not.toBeInTheDocument()
+  })
+
+  it('keeps full-street address_2 as Additional Address', () => {
+    renderSidebar(makePayload({ address_2: '456 Secondary Ave Chicago IL 60618' }))
+
+    expect(screen.getByTestId('sidebar-property-address')).not.toHaveTextContent(
+      '456 Secondary Ave',
+    )
+    expect(screen.getByText('Additional Address')).toBeInTheDocument()
+    expect(screen.getByText('456 Secondary Ave Chicago IL 60618')).toBeInTheDocument()
   })
 })

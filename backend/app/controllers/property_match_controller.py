@@ -122,7 +122,7 @@ def update_property_address(lead_id: int):
         'actor': actor,
     }
     if 'address_2' in raw:
-        kwargs['address_2'] = raw.get('address_2')
+        kwargs['address_2'] = data.get('address_2')
         kwargs['set_address_2'] = True
     return jsonify(_match_svc.update_property_address(lead_id, **kwargs)), 200
 

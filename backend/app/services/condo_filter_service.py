@@ -270,9 +270,12 @@ class CondoFilterService:
 
         # Unit marker detection
         has_unit = any(
-            has_unit_marker(lead.property_street)
+            has_unit_marker(
+                lead.property_street,
+                getattr(lead, 'address_2', None),
+            )
             for lead in group_leads
-            if lead.property_street
+            if lead.property_street or getattr(lead, 'address_2', None)
         )
 
         # Condo language detection

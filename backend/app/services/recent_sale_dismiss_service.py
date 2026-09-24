@@ -68,7 +68,7 @@ def dismiss_incorrect_recent_sale(
     PIN, completes open ``recent_sale_hold`` tasks, and re-enables skip-trace
     work when the lead is still in the skip-trace pipeline.
     """
-    from app.services.lead_merge_utils import situs_unit_token
+    from app.services.lead_merge_utils import situs_unit_token_from_parts
     from app.services.lead_refresh import refresh_lead_scoring
     from app.services.skip_trace_enqueue import SkipTraceEnqueue
 
@@ -89,11 +89,13 @@ def dismiss_incorrect_recent_sale(
     lead.acquisition_date = None
     lead.most_recent_sale_price = None
     pin_cleared = False
-    if clear_pin and (
-        situs_unit_token(lead.property_street or '')
-        or situs_unit_token(getattr(lead, 'address_2', None) or '')
-        or reason in ('not_this_unit', 'wrong_pin_sale')
-    ):
+    unit_token = situs_unit_token_from_parts(
+        lead.property_street,
+        getattr(lead, 'address_2', None),
+    )
+    # Clear PIN when the situs names a unit, or the caller explicitly says
+    # the PIN itself is wrong — not for a bare accidental dismiss on SFH.
+    if clear_pin and (unit_token or reason == 'wrong_pin_sale'):
         if lead.county_assessor_pin:
             pin_cleared = True
         lead.county_assessor_pin = None
@@ -143,7 +145,6 @@ def dismiss_incorrect_recent_sale(
                 'Could not enqueue skip trace after dismissing sale for lead %s',
                 lead.id,
             )
-            db.session.rollback()
 
     refresh_lead_scoring(lead.id)
     db.session.refresh(lead)

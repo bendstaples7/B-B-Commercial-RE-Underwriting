@@ -23,6 +23,7 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import { useQueryClient } from '@tanstack/react-query'
 import { AppSnackbar } from '@/components/AppSnackbar'
 import { PropertyAddressEditDialog } from '@/components/PropertyAddressEditDialog'
+import { isUnitStyleAddressLine } from '@/utils/placesAddress'
 import type {
   CommandCenterPayload,
   LeadPhone,
@@ -627,6 +628,16 @@ export function PropertySidebar({
       )}
 
       <SidebarSection title="Property">
+        {(() => {
+          const address2 = commandCenterData.address_2?.trim() || ''
+          const unitLine = address2 && isUnitStyleAddressLine(address2) ? address2 : null
+          const additionalLine = address2 && !unitLine ? address2 : null
+          const hasPrimary =
+            Boolean(commandCenterData.property_street)
+            || Boolean(unitLine)
+            || Boolean(commandCenterData.property_city)
+          return (
+            <>
         <SidebarLabeledContent label="Address" testId="sidebar-property-address">
           <Box
             sx={{
@@ -644,32 +655,23 @@ export function PropertySidebar({
                 fontWeight: 600,
                 whiteSpace: 'pre-line',
                 wordBreak: 'break-word',
-                color:
-                  commandCenterData.property_street ||
-                  commandCenterData.address_2 ||
-                  commandCenterData.property_city
-                    ? 'text.primary'
-                    : 'text.disabled',
+                color: hasPrimary ? 'text.primary' : 'text.disabled',
               }}
             >
-              {commandCenterData.property_street ||
-              commandCenterData.address_2 ||
-              commandCenterData.property_city ? (
+              {hasPrimary ? (
                 <>
                   {commandCenterData.property_street}
-                  {commandCenterData.address_2 ? (
+                  {unitLine ? (
                     <>
                       {commandCenterData.property_street ? '\n' : ''}
-                      {commandCenterData.address_2}
+                      {unitLine}
                     </>
                   ) : null}
                   {(commandCenterData.property_city ||
                     commandCenterData.property_state ||
                     commandCenterData.property_zip) && (
                     <>
-                      {commandCenterData.property_street || commandCenterData.address_2
-                        ? '\n'
-                        : ''}
+                      {commandCenterData.property_street || unitLine ? '\n' : ''}
                       {[
                         commandCenterData.property_city,
                         commandCenterData.property_state,
@@ -697,6 +699,12 @@ export function PropertySidebar({
             </Tooltip>
           </Box>
         </SidebarLabeledContent>
+        {additionalLine ? (
+          <SidebarRow label="Additional Address" value={additionalLine} />
+        ) : null}
+            </>
+          )
+        })()}
         <SidebarRow label="Type" value={commandCenterData.property_type} />
         {(() => {
           const facts = commandCenterData.note_property_facts

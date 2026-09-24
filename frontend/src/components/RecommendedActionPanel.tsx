@@ -16,13 +16,11 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  IconButton,
   Stack,
   TextField,
   Tooltip,
   Typography,
 } from '@mui/material'
-import CloseIcon from '@mui/icons-material/Close'
 import BlockIcon from '@mui/icons-material/Block'
 import AddTaskIcon from '@mui/icons-material/AddTask'
 import PhoneIcon from '@mui/icons-material/Phone'
@@ -328,46 +326,43 @@ export function RecommendedActionPanel({
         mb: 2,
         alignItems: 'center',
         '& .MuiAlert-message': {
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
           minWidth: 0,
         },
         '& .MuiAlert-action': {
           pt: 0,
           alignItems: 'center',
           mr: 0,
+          flexShrink: 0,
         },
       }}
       data-testid="recent-sale-mail-hold"
       action={
         onDismissRecentSale ? (
-          <Tooltip title="Dismiss — sale is for a different unit or PIN">
-            <span>
-              <IconButton
-                color="inherit"
-                size="small"
-                aria-label="Dismiss"
-                disabled={dismissSalePending}
-                onClick={async () => {
-                  setActionError(null)
-                  setDismissSalePending(true)
-                  try {
-                    await onDismissRecentSale()
-                  } catch (err) {
-                    setActionError(
-                      err instanceof Error ? err.message : 'Could not dismiss recent sale.',
-                    )
-                  } finally {
-                    setDismissSalePending(false)
-                  }
-                }}
-                data-testid="dismiss-recent-sale"
-              >
-                <CloseIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
+          <Button
+            color="inherit"
+            size="small"
+            disabled={dismissSalePending}
+            onClick={async () => {
+              const ok = window.confirm(
+                'Clear this sale and PIN? Only if the sale belongs to a different condo unit or PIN.',
+              )
+              if (!ok) return
+              setActionError(null)
+              setDismissSalePending(true)
+              try {
+                await onDismissRecentSale()
+              } catch (err) {
+                setActionError(
+                  err instanceof Error ? err.message : 'Could not dismiss recent sale.',
+                )
+              } finally {
+                setDismissSalePending(false)
+              }
+            }}
+            data-testid="dismiss-recent-sale"
+          >
+            {dismissSalePending ? 'Clearing…' : 'Wrong unit'}
+          </Button>
         ) : undefined
       }
     >

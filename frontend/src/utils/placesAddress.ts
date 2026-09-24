@@ -43,6 +43,40 @@ export function extractUnitToken(street: string | null | undefined): string {
   return ''
 }
 
+/**
+ * Canonical FE counterpart to backend ``situs_unit_token_from_parts``:
+ * street first, then address line 2.
+ */
+export function extractUnitTokenFromParts(
+  street: string | null | undefined,
+  address2: string | null | undefined,
+): string {
+  return extractUnitToken(street) || extractUnitToken(address2)
+}
+
+/**
+ * True when ``address_2`` looks like Apt/Unit/Suite (situs line 2), not a
+ * HubSpot-style full secondary street that belongs under Additional Address.
+ */
+const FULL_STREET_HINT_RE =
+  /^\d+\s+\S.+\b(?:ave|avenue|st|street|blvd|rd|road|dr|drive|ln|lane|ct|court|pl|place|way|ter|terrace)\b/i
+
+export function isUnitStyleAddressLine(value: string | null | undefined): boolean {
+  const raw = (value || '').trim()
+  if (!raw) return false
+  const lines = raw.split(/[\n;]+/).map((s) => s.trim()).filter(Boolean)
+  if (!lines.length) return false
+  // Any full-street line → treat the whole field as additional address.
+  if (lines.some((line) => FULL_STREET_HINT_RE.test(line))) {
+    return false
+  }
+  return lines.some(
+    (line) =>
+      Boolean(extractUnitToken(line))
+      || /^(?:unit|apt|apartment|suite|ste|#|fl|floor|c\/o|attn|attention)\b/i.test(line),
+  )
+}
+
 /** Format a unit token for appending to a street (e.g. l2 → Unit L2). */
 export function formatUnitSuffix(token: string): string {
   const cleaned = token.replace(/[^a-z0-9-]/gi, '')

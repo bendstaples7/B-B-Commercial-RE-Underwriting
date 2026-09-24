@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   extractUnitToken,
+  extractUnitTokenFromParts,
   formatUnitSuffix,
+  isUnitStyleAddressLine,
   streetLineFromPlacesComponents,
 } from './placesAddress'
 
@@ -17,6 +19,28 @@ describe('extractUnitToken', () => {
 
   it('ignores building-only streets', () => {
     expect(extractUnitToken('717 West Bittersweet Place')).toBe('')
+  })
+})
+
+describe('extractUnitTokenFromParts', () => {
+  it('falls back to address line 2', () => {
+    expect(extractUnitTokenFromParts('717 W Bittersweet Pl', 'Unit L2')).toBe('l2')
+  })
+
+  it('prefers street when both present', () => {
+    expect(extractUnitTokenFromParts('717 W Bittersweet Pl Apt 3', 'Unit L2')).toBe('3')
+  })
+})
+
+describe('isUnitStyleAddressLine', () => {
+  it('treats apt/unit lines as situs line 2', () => {
+    expect(isUnitStyleAddressLine('Unit L2')).toBe(true)
+    expect(isUnitStyleAddressLine('Apt 3')).toBe(true)
+  })
+
+  it('treats full secondary streets as additional address', () => {
+    expect(isUnitStyleAddressLine('456 Secondary Ave Chicago IL 60618')).toBe(false)
+    expect(isUnitStyleAddressLine('2041 W Cuyler Ave')).toBe(false)
   })
 })
 
