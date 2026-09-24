@@ -202,6 +202,8 @@ _SITUS_UNIT_RE = re.compile(
 
 def situs_unit_token(street: Optional[str]) -> str:
     """Comparable unit token (A-30 and # A-30 → a30). Empty when none."""
+    if not isinstance(street, str):
+        return ''
     line = (street_line_from_address(street) or street or '').strip()
     if not line:
         return ''

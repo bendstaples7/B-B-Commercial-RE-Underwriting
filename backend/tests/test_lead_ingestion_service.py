@@ -1077,6 +1077,7 @@ def test_property_7_gis_no_match_sets_false(prior_has_match, gis_result):
     # Build a mock lead with a prior has_property_match state
     lead = MagicMock()
     lead.property_street = "123 Test St"
+    lead.address_2 = None
     lead.county_assessor_pin = None
     lead.has_property_match = prior_has_match
     lead.needs_skip_trace = False
