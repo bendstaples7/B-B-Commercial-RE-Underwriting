@@ -1837,7 +1837,6 @@ def replace_lead_units(lead_id: int):
     Optional: lead_subtype on the same body.
     """
     from app import db
-    from app.models.lead_unit import LEAD_SUBTYPES
     from app.services.lead_unit_service import replace_lead_units as replace_units
 
     lead, denied = _load_authorized_lead(lead_id)
