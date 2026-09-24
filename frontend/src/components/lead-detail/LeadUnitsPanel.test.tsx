@@ -51,6 +51,16 @@ describe('LeadUnitsPanel', () => {
       target: { value: 'Edited Unit A' },
     })
     fireEvent.click(screen.getByTestId('cc-lead-units-save'))
+    expect(leadService.replaceLeadUnits).toHaveBeenCalledWith(1, {
+      lead_subtype: null,
+      units: [
+        expect.objectContaining({
+          unit_label: 'Edited Unit A',
+          unit_type: 'residential',
+          sort_order: 0,
+        }),
+      ],
+    })
 
     rerender(
       <LeadUnitsPanel leadId={2} commandCenterData={commandCenterData(2, 'Unit B')} />,
