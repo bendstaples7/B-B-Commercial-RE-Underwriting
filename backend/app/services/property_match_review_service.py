@@ -1280,12 +1280,17 @@ class PropertyMatchReviewService:
         property_city: str | None = None,
         property_state: str | None = None,
         property_zip: str | None = None,
+        address_2: str | None = None,
+        set_address_2: bool = False,
         actor: str = 'anonymous',
     ) -> dict:
+        from app.services.lead_merge_utils import situs_unit_token_from_parts
+
         lead = db.session.get(Lead, lead_id)
         if lead is None:
             raise ValueError(f'Lead {lead_id} not found')
 
+        prev_unit = situs_unit_token_from_parts(lead.property_street, lead.address_2)
         if property_street is not None:
             lead.property_street = property_street
         if property_city is not None:
@@ -1294,7 +1299,20 @@ class PropertyMatchReviewService:
             lead.property_state = property_state
         if property_zip is not None:
             lead.property_zip = property_zip
-        lead.has_property_match = False
+        if set_address_2:
+            lead.address_2 = (address_2 or '').strip() or None
+
+        new_unit = situs_unit_token_from_parts(lead.property_street, lead.address_2)
+        # Unit added/changed: prior building-level PIN/sale is untrusted.
+        if new_unit and new_unit != prev_unit:
+            lead.county_assessor_pin = None
+            lead.has_property_match = False
+            lead.most_recent_sale = None
+            lead.acquisition_date = None
+            lead.most_recent_sale_price = None
+        else:
+            lead.has_property_match = False
+
         from app.services.property_address_service import complete_property_address
         complete_property_address(
             lead,
@@ -1304,6 +1322,14 @@ class PropertyMatchReviewService:
         )
         db.session.add(lead)
         db.session.commit()
+
+        if new_unit and new_unit != prev_unit:
+            from app.services.recent_sale_dismiss_service import (
+                clear_recent_sale_hold_tasks,
+            )
+            clear_recent_sale_hold_tasks(lead_id, actor=actor, reason='unit_address_edit')
+            from app.services.lead_refresh import refresh_lead_scoring
+            refresh_lead_scoring(lead_id)
 
         preview = self.preview_match(lead_id)
         preview['lead_id'] = lead_id

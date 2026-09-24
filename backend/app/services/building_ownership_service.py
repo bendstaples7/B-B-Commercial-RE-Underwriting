@@ -375,7 +375,10 @@ class BuildingOwnershipService:
                     assessor_class = row['property_class']
                     break
 
-        has_unit = has_unit_marker(lead.property_street)
+        has_unit = has_unit_marker(
+            lead.property_street,
+            getattr(lead, 'address_2', None),
+        )
         has_condo_lang = (
             has_condo_language(lead.property_type, assessor_class)
             or any(row.get('is_condo_class') for row in assessor_pins)

@@ -678,6 +678,50 @@ class TestGISEnrichment:
             assert lead.has_property_match is True
             assert 'GIS match not found' not in (lead.notes or '')
 
+    def test_unit_situs_skips_address_only_pin_match(self, app):
+        """Condo unit streets must not auto-pick an arbitrary building PIN."""
+        with app.app_context():
+            lead = Property(
+                property_street='717 W Bittersweet Pl L2',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60613',
+                owner_user_id=USER_ID,
+                county_assessor_pin=None,
+            )
+            db.session.add(lead)
+            db.session.flush()
+            connector = _make_mock_connector(parcel=_make_gis_parcel())
+            svc = _make_service(gis_registry={'cook_county_il': connector})
+            outcome = svc._enrich_with_gis(
+                lead, connector, import_job_id=1, is_creation=False,
+            )
+            assert outcome.get('skipped_unit_address_lookup') is True
+            assert outcome['match_found'] is False
+            assert lead.county_assessor_pin is None
+            assert lead.has_property_match is not True
+            connector.lookup_by_address.assert_not_called()
+
+    def test_unit_situs_still_matches_when_pin_known(self, app):
+        with app.app_context():
+            lead = Property(
+                property_street='717 W Bittersweet Pl Unit L2',
+                owner_user_id=USER_ID,
+                county_assessor_pin='14163050211081',
+            )
+            db.session.add(lead)
+            db.session.flush()
+            connector = _make_mock_connector(parcel=_make_gis_parcel(
+                county_assessor_pin='14163050211081',
+            ))
+            svc = _make_service(gis_registry={'cook_county_il': connector})
+            outcome = svc._enrich_with_gis(
+                lead, connector, import_job_id=1, is_creation=False,
+            )
+            assert outcome['match_found'] is True
+            connector.lookup_by_address.assert_not_called()
+            connector.lookup_by_pin.assert_called()
+
     def test_match_found_sets_has_property_match_true(self, app):
         """Req 8.3: has_property_match set to True when match found."""
         with app.app_context():
@@ -1033,6 +1077,7 @@ def test_property_7_gis_no_match_sets_false(prior_has_match, gis_result):
     # Build a mock lead with a prior has_property_match state
     lead = MagicMock()
     lead.property_street = "123 Test St"
+    lead.address_2 = None
     lead.county_assessor_pin = None
     lead.has_property_match = prior_has_match
     lead.needs_skip_trace = False

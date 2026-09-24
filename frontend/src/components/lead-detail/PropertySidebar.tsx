@@ -19,8 +19,11 @@ import EmailIcon from '@mui/icons-material/Email'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import RefreshIcon from '@mui/icons-material/Refresh'
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import { useQueryClient } from '@tanstack/react-query'
 import { AppSnackbar } from '@/components/AppSnackbar'
+import { PropertyAddressEditDialog } from '@/components/PropertyAddressEditDialog'
+import { isUnitStyleAddressLine } from '@/utils/placesAddress'
 import type {
   CommandCenterPayload,
   LeadPhone,
@@ -37,7 +40,7 @@ import {
   formatAssessorBedsBaths,
   formatNoteUnitMixLabel,
 } from '@/utils/notePropertyFacts'
-import { commandCenterService } from '@/services/api'
+import { commandCenterService, propertyMatchService } from '@/services/api'
 import {
   CopyablePin,
 } from '@/components/lead-detail/PinLookupControl'
@@ -254,6 +257,7 @@ export function PropertySidebar({
   const [saleVerifyPending, setSaleVerifyPending] = useState(false)
   const [saleVerifyMessage, setSaleVerifyMessage] = useState<string | null>(null)
   const [sidebarSnack, setSidebarSnack] = useState<string | null>(null)
+  const [addressEditOpen, setAddressEditOpen] = useState(false)
   const pinMissing = !String(commandCenterData.county_assessor_pin || '').trim()
   type SidebarExtras = {
     phones?: LeadPhone[]
@@ -625,32 +629,83 @@ export function PropertySidebar({
       )}
 
       <SidebarSection title="Property">
-        {(commandCenterData.property_street || commandCenterData.property_city) && (
-          <SidebarRow
-            label="Address"
-            value={
-              <>
-                {commandCenterData.property_street}
-                {(commandCenterData.property_city ||
-                  commandCenterData.property_state ||
-                  commandCenterData.property_zip) && (
-                  <>
-                    {commandCenterData.property_street ? '\n' : ''}
-                    {[
-                      commandCenterData.property_city,
-                      commandCenterData.property_state,
-                      commandCenterData.property_zip,
-                    ]
-                      .filter(Boolean)
-                      .join(', ')}
-                  </>
-                )}
-              </>
-            }
-            valueFontWeight={600}
-            testId="sidebar-property-address"
-          />
-        )}
+        {(() => {
+          const address2 = commandCenterData.address_2?.trim() || ''
+          const unitLine = address2 && isUnitStyleAddressLine(address2) ? address2 : null
+          const additionalLine = address2 && !unitLine ? address2 : null
+          const hasPrimary =
+            Boolean(commandCenterData.property_street)
+            || Boolean(unitLine)
+            || Boolean(commandCenterData.property_city)
+          return (
+            <>
+        <SidebarLabeledContent label="Address" testId="sidebar-property-address">
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: stacked ? 'flex-start' : 'flex-end',
+              gap: 0.5,
+              textAlign: stacked ? 'left' : 'right',
+            }}
+          >
+            <Typography
+              variant="body2"
+              component="div"
+              sx={{
+                fontWeight: 600,
+                whiteSpace: 'pre-line',
+                wordBreak: 'break-word',
+                color: hasPrimary ? 'text.primary' : 'text.disabled',
+              }}
+            >
+              {hasPrimary ? (
+                <>
+                  {commandCenterData.property_street}
+                  {unitLine ? (
+                    <>
+                      {commandCenterData.property_street ? '\n' : ''}
+                      {unitLine}
+                    </>
+                  ) : null}
+                  {(commandCenterData.property_city ||
+                    commandCenterData.property_state ||
+                    commandCenterData.property_zip) && (
+                    <>
+                      {commandCenterData.property_street || unitLine ? '\n' : ''}
+                      {[
+                        commandCenterData.property_city,
+                        commandCenterData.property_state,
+                        commandCenterData.property_zip,
+                      ]
+                        .filter(Boolean)
+                        .join(', ')}
+                    </>
+                  )}
+                </>
+              ) : (
+                'None'
+              )}
+            </Typography>
+            <Tooltip title="Edit property address">
+              <IconButton
+                size="small"
+                aria-label="Edit property address"
+                onClick={() => setAddressEditOpen(true)}
+                data-testid="sidebar-edit-property-address"
+                sx={{ mt: -0.25 }}
+              >
+                <EditOutlinedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        </SidebarLabeledContent>
+        {additionalLine ? (
+          <SidebarRow label="Additional Address" value={additionalLine} />
+        ) : null}
+            </>
+          )
+        })()}
         <SidebarRow label="Type" value={commandCenterData.property_type} />
         {(() => {
           const facts = commandCenterData.note_property_facts
@@ -901,7 +956,6 @@ export function PropertySidebar({
             {commandCenterData.deal_description || '—'}
           </Typography>
         </SidebarLabeledContent>
-        {data.address_2 && <SidebarRow label="Additional Address" value={data.address_2} />}
       </SidebarSection>
 
       {showRelatedProperties && (
@@ -1195,6 +1249,29 @@ export function PropertySidebar({
     />
   )
 
+  const addressEditDialog = (
+    <PropertyAddressEditDialog
+      open={addressEditOpen}
+      row={{
+        id: commandCenterData.id,
+        property_street: commandCenterData.property_street,
+        address_2: commandCenterData.address_2,
+        property_city: commandCenterData.property_city,
+        property_state: commandCenterData.property_state,
+        property_zip: commandCenterData.property_zip,
+      }}
+      onClose={() => setAddressEditOpen(false)}
+      saveLabel="Save address"
+      onSave={async (data) => {
+        await propertyMatchService.updateAddress(commandCenterData.id, data)
+        setSidebarSnack('Property address updated')
+        await queryClient.invalidateQueries({
+          queryKey: ['commandCenter', commandCenterData.id],
+        })
+      }}
+    />
+  )
+
   if (variant === 'inline') {
     const ownerSummary = ownerEntries[0]?.name
     const sectionTitle = hideContactSection ? 'More property details' : 'Property & contacts'
@@ -1227,6 +1304,7 @@ export function PropertySidebar({
           <AccordionDetails id="property-contacts-content" sx={{ pt: 0 }}>{sections}</AccordionDetails>
         </Accordion>
         {snackbar}
+        {addressEditDialog}
       </>
     )
   }
@@ -1252,6 +1330,7 @@ export function PropertySidebar({
         {sections}
       </Paper>
       {snackbar}
+      {addressEditDialog}
     </>
   )
 }

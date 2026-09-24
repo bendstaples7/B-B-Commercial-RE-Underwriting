@@ -26,6 +26,7 @@ export const propertyMatchService = {
     leadId: number,
     data: {
       property_street?: string
+      address_2?: string | null
       property_city?: string
       property_state?: string
       property_zip?: string

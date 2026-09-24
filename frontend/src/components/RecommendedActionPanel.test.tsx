@@ -795,6 +795,7 @@ describe('RecommendedActionPanel', () => {
     })
 
     it('explains a recent-sale hold and grays out Add to Mail Queue', async () => {
+      const onDismissRecentSale = vi.fn().mockResolvedValue(undefined)
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('hold')}
@@ -805,18 +806,20 @@ describe('RecommendedActionPanel', () => {
           mailIneligibleReason="recently_sold"
           mailEligibleDate="2027-03-31"
           onAction={vi.fn()}
+          onDismissRecentSale={onDismissRecentSale}
         />,
       )
 
       expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
-        'Deprioritized for the recent-sale hold',
-      )
-      expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
-        'moves to Skip Trace for active work',
+        'Recent sale hold',
       )
       expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
         formatDateOnly('2027-03-31'),
       )
+      expect(screen.getByTestId('dismiss-recent-sale')).toHaveTextContent('Wrong unit')
+      vi.spyOn(window, 'confirm').mockReturnValue(true)
+      await user.click(screen.getByTestId('dismiss-recent-sale'))
+      expect(onDismissRecentSale).toHaveBeenCalled()
       expect(screen.getByRole('button', { name: 'Adjust for Recent Sale' })).toBeInTheDocument()
       expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeDisabled()
       // Disabled buttons have pointer-events:none — hover the Tooltip's wrapping span.
@@ -1274,7 +1277,8 @@ describe('RecommendedActionPanel', () => {
       />,
     )
     expect(screen.getByTestId('ra-label')).toHaveTextContent('Recent-sale hold')
-    expect(screen.getByText(/moves to Skip Trace/i)).toBeInTheDocument()
+    expect(screen.getByTestId('ra-explanation')).toHaveTextContent(/moves to Skip Trace/i)
+    expect(screen.getByTestId('recent-sale-mail-hold')).toBeInTheDocument()
     expect(screen.queryByText('Deprioritized')).not.toBeInTheDocument()
     expect(screen.queryByText('Parked from active queues.')).not.toBeInTheDocument()
   })

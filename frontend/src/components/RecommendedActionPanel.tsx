@@ -232,6 +232,8 @@ export interface RecommendedActionPanelProps {
   onAction: (action: string) => Promise<void>
   /** Park lead with optional reason (universal Deprioritize / Confirm deprioritize). */
   onDeprioritize?: (reason: string) => Promise<void>
+  /** Clear a false-positive recent sale (wrong unit / wrong PIN) and lift hold. */
+  onDismissRecentSale?: () => Promise<void>
   onCreateTask?: () => void
 }
 
@@ -268,6 +270,7 @@ export function RecommendedActionPanel({
   needsEntityResearch = false,
   onAction,
   onDeprioritize,
+  onDismissRecentSale,
   onCreateTask,
 }: RecommendedActionPanelProps) {
   const [actionError, setActionError] = useState<string | null>(null)
@@ -277,6 +280,7 @@ export function RecommendedActionPanel({
   const [deprioritizeOpen, setDeprioritizeOpen] = useState(false)
   const [deprioritizeReason, setDeprioritizeReason] = useState('')
   const [deprioritizePending, setDeprioritizePending] = useState(false)
+  const [dismissSalePending, setDismissSalePending] = useState(false)
 
   const isDNC = leadStatus === 'do_not_contact'
   const isInMailBatch = mailQueueStatus === 'queued'
@@ -311,13 +315,59 @@ export function RecommendedActionPanel({
   const panelSx = embedded
     ? { p: 0, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }
     : { p: 2, border: 1, borderColor: 'divider', borderRadius: 1, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }
-  const mailHoldAlert = mailIneligibleReason === 'recently_sold' ? (
-    <Alert severity="warning" sx={{ mb: 2 }} data-testid="recent-sale-mail-hold">
-      Recent sale detected. Deprioritized for the recent-sale hold
-      {mailEligibleDate
-        ? ` until ${formatDateOnly(mailEligibleDate)}.`
-        : ' until the two-year hold ends.'}
-      {' '}When the hold expires, the lead moves to Skip Trace for active work.
+  const recentSaleHoldSignal = (
+    mailIneligibleReason === 'recently_sold'
+    || recommendedAction?.winning_rule === 'recent_sale_hold'
+  )
+  const mailHoldAlert = recentSaleHoldSignal ? (
+    <Alert
+      severity="warning"
+      sx={{
+        mb: 2,
+        alignItems: 'center',
+        '& .MuiAlert-message': {
+          minWidth: 0,
+        },
+        '& .MuiAlert-action': {
+          pt: 0,
+          alignItems: 'center',
+          mr: 0,
+          flexShrink: 0,
+        },
+      }}
+      data-testid="recent-sale-mail-hold"
+      action={
+        onDismissRecentSale ? (
+          <Button
+            color="inherit"
+            size="small"
+            disabled={dismissSalePending}
+            onClick={async () => {
+              const ok = window.confirm(
+                'Clear this sale and PIN? Only if the sale belongs to a different condo unit or PIN.',
+              )
+              if (!ok) return
+              setActionError(null)
+              setDismissSalePending(true)
+              try {
+                await onDismissRecentSale()
+              } catch (err) {
+                setActionError(
+                  err instanceof Error ? err.message : 'Could not dismiss recent sale.',
+                )
+              } finally {
+                setDismissSalePending(false)
+              }
+            }}
+            data-testid="dismiss-recent-sale"
+          >
+            {dismissSalePending ? 'Clearing…' : 'Wrong unit'}
+          </Button>
+        ) : undefined
+      }
+    >
+      Recent sale hold
+      {mailEligibleDate ? ` until ${formatDateOnly(mailEligibleDate)}` : ''}
     </Alert>
   ) : mailIneligibleReason === 'mail_cadence' ? (
     <Alert severity="warning" sx={{ mb: 2 }} data-testid="mail-cadence-hold">

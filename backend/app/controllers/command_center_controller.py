@@ -1949,6 +1949,25 @@ def update_property_overview(lead_id: int):
             ptype = ptype.strip() or None
         _set('property_type', ptype)
 
+    sale_cleared = (
+        'most_recent_sale' in changed
+        and changed['most_recent_sale']['new'] is None
+    ) or (
+        'acquisition_date' in changed
+        and changed['acquisition_date']['new'] is None
+        and not lead.most_recent_sale
+    )
+    if sale_cleared:
+        from app.services.recent_sale_dismiss_service import (
+            clear_recent_sale_hold_tasks,
+        )
+        clear_recent_sale_hold_tasks(
+            lead_id,
+            actor=actor,
+            reason='sale_date_cleared',
+            commit=False,
+        )
+
     entry = None
     if changed:
         parts = []
@@ -2230,6 +2249,43 @@ def adjust_for_recent_sale(lead_id: int):
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 409
 
+    return jsonify(result), 200
+
+
+@command_center_bp.route('/<int:lead_id>/dismiss-recent-sale', methods=['POST'])
+@handle_errors
+@require_auth
+def dismiss_recent_sale(lead_id: int):
+    """Clear a false-positive recent sale (wrong unit / wrong PIN) and lift hold."""
+    lead, denied = _load_authorized_lead(lead_id)
+    if denied is not None:
+        return denied
+
+    raw_body = request.get_data(cache=True)
+    if not raw_body:
+        data = {}
+    else:
+        data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Request body must be a JSON object'}), 400
+
+    reason = data.get('reason') or 'not_this_unit'
+    if not isinstance(reason, str) or not reason.strip():
+        reason = 'not_this_unit'
+    clear_pin = data.get('clear_pin')
+    if clear_pin is None:
+        clear_pin = True
+
+    from app.services.recent_sale_dismiss_service import dismiss_incorrect_recent_sale
+
+    result = dismiss_incorrect_recent_sale(
+        lead,
+        actor=getattr(g, 'user_id', 'anonymous'),
+        reason=reason.strip()[:80],
+        clear_pin=bool(clear_pin),
+    )
     return jsonify(result), 200
 
 

@@ -202,6 +202,8 @@ _SITUS_UNIT_RE = re.compile(
 
 def situs_unit_token(street: Optional[str]) -> str:
     """Comparable unit token (A-30 and # A-30 → a30). Empty when none."""
+    if not isinstance(street, str):
+        return ''
     line = (street_line_from_address(street) or street or '').strip()
     if not line:
         return ''
@@ -213,6 +215,18 @@ def situs_unit_token(street: Optional[str]) -> str:
     if token.isdigit():
         return str(int(token))
     return token
+
+
+def situs_unit_token_from_parts(
+    street: Optional[str] = None,
+    address_2: Optional[str] = None,
+) -> str:
+    """Canonical situs unit token from street and/or address line 2.
+
+    Prefer a token found on the street line; fall back to ``address_2`` so
+    Apt/Unit stored on line 2 still gates GIS and condo unit logic.
+    """
+    return situs_unit_token(street) or situs_unit_token(address_2)
 
 
 _UNIT_NUMBER_SUFFIX_RE = re.compile(r'^(\d+)([a-z]*)$')

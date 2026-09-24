@@ -25,6 +25,7 @@ class AddressUpdateSchema(Schema):
     property_city = fields.Str(load_default=None)
     property_state = fields.Str(load_default=None)
     property_zip = fields.Str(load_default=None)
+    address_2 = fields.Str(load_default=None, allow_none=True)
 
 
 class OverrideSchema(Schema):
@@ -110,9 +111,20 @@ def update_property_address(lead_id: int):
     _lead, err = load_authorized_lead(lead_id)
     if err is not None:
         return err
-    data = AddressUpdateSchema().load(request.get_json() or {})
+    raw = request.get_json() or {}
+    data = AddressUpdateSchema().load(raw)
     actor = getattr(g, 'user_id', 'anonymous')
-    return jsonify(_match_svc.update_property_address(lead_id, actor=actor, **data)), 200
+    kwargs = {
+        'property_street': data.get('property_street'),
+        'property_city': data.get('property_city'),
+        'property_state': data.get('property_state'),
+        'property_zip': data.get('property_zip'),
+        'actor': actor,
+    }
+    if 'address_2' in raw:
+        kwargs['address_2'] = data.get('address_2')
+        kwargs['set_address_2'] = True
+    return jsonify(_match_svc.update_property_address(lead_id, **kwargs)), 200
 
 
 @property_match_bp.route('/building-ownership/backfill', methods=['POST'])

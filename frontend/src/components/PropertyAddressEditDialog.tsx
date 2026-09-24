@@ -8,18 +8,57 @@ import {
   DialogTitle,
   TextField,
 } from '@mui/material'
-import type { QueueRow } from '@/types'
+import { extractUnitToken, formatUnitSuffix } from '@/utils/placesAddress'
+
+export type PropertyAddressFields = {
+  id?: number
+  property_street?: string | null
+  address_2?: string | null
+  property_city?: string | null
+  property_state?: string | null
+  property_zip?: string | null
+}
 
 export interface PropertyAddressEditDialogProps {
   open: boolean
-  row: QueueRow | null
+  /** Lead / queue row with current situs fields (id optional for tests). */
+  row: PropertyAddressFields | null
   onClose: () => void
   onSave: (data: {
     property_street: string
+    address_2: string | null
     property_city: string
     property_state: string
     property_zip: string
   }) => Promise<void>
+  /** Primary button label — queue flow previews a match; CC just saves. */
+  saveLabel?: string
+}
+
+/** Peel a trailing apt/unit off street into address line 2 when line 2 is empty. */
+export function splitStreetAndAddress2(
+  street: string | null | undefined,
+  address2: string | null | undefined,
+): { street: string; address2: string } {
+  const line2 = (address2 || '').trim()
+  const raw = (street || '').trim()
+  if (!raw) return { street: '', address2: line2 }
+  if (line2) return { street: raw, address2: line2 }
+
+  const token = extractUnitToken(raw)
+  if (!token) return { street: raw, address2: '' }
+
+  // Strip the matched unit suffix from the street for the line-1 field.
+  const stripped = raw
+    .replace(
+      /(?:\s+(?:unit|apt|apartment|suite|ste|fl|floor)\s*[#.]?\s*[a-z0-9-]+|\s+#[\s]*[a-z0-9-]+|\s+(?:[a-z]\d+[a-z0-9-]*|\d+[a-z][a-z0-9-]*))\s*$/i,
+      '',
+    )
+    .trim()
+  if (!stripped || stripped === raw) {
+    return { street: raw, address2: formatUnitSuffix(token) }
+  }
+  return { street: stripped, address2: formatUnitSuffix(token) }
 }
 
 export function PropertyAddressEditDialog({
@@ -27,8 +66,10 @@ export function PropertyAddressEditDialog({
   row,
   onClose,
   onSave,
+  saveLabel = 'Save and preview',
 }: PropertyAddressEditDialogProps) {
   const [street, setStreet] = useState('')
+  const [address2, setAddress2] = useState('')
   const [city, setCity] = useState('')
   const [state, setState] = useState('')
   const [zip, setZip] = useState('')
@@ -37,13 +78,23 @@ export function PropertyAddressEditDialog({
 
   useEffect(() => {
     if (!open || !row) return
-    setStreet(row.property_street ?? '')
+    const split = splitStreetAndAddress2(row.property_street, row.address_2)
+    setStreet(split.street)
+    setAddress2(split.address2)
     setCity(row.property_city ?? '')
     setState(row.property_state ?? 'IL')
     setZip(row.property_zip ?? '')
     setError(null)
     setSaving(false)
-  }, [open, row?.id])
+  }, [
+    open,
+    row?.id,
+    row?.property_street,
+    row?.address_2,
+    row?.property_city,
+    row?.property_state,
+    row?.property_zip,
+  ])
 
   const handleSave = async () => {
     if (!street.trim()) {
@@ -68,6 +119,7 @@ export function PropertyAddressEditDialog({
     try {
       await onSave({
         property_street: street.trim(),
+        address_2: address2.trim() || null,
         property_city: city.trim(),
         property_state: normalizedState,
         property_zip: normalizedZip,
@@ -90,6 +142,17 @@ export function PropertyAddressEditDialog({
           fullWidth
           margin="dense"
           required
+          inputProps={{ 'data-testid': 'property-address-street-input' }}
+        />
+        <TextField
+          label="Address line 2"
+          value={address2}
+          onChange={(e) => setAddress2(e.target.value)}
+          fullWidth
+          margin="dense"
+          placeholder="Apt / Unit / Suite"
+          helperText="Apartment or condo unit (e.g. Unit L2, Apt 3)."
+          inputProps={{ 'data-testid': 'property-address-line2-input' }}
         />
         <TextField
           label="City"
@@ -97,6 +160,7 @@ export function PropertyAddressEditDialog({
           onChange={(e) => setCity(e.target.value)}
           fullWidth
           margin="dense"
+          inputProps={{ 'data-testid': 'property-address-city-input' }}
         />
         <TextField
           label="State"
@@ -104,7 +168,7 @@ export function PropertyAddressEditDialog({
           onChange={(e) => setState(e.target.value.toUpperCase())}
           fullWidth
           margin="dense"
-          inputProps={{ maxLength: 2 }}
+          inputProps={{ maxLength: 2, 'data-testid': 'property-address-state-input' }}
         />
         <TextField
           label="ZIP"
@@ -112,14 +176,19 @@ export function PropertyAddressEditDialog({
           onChange={(e) => setZip(e.target.value.replace(/[^\d-]/g, ''))}
           fullWidth
           margin="dense"
-          inputProps={{ maxLength: 10 }}
+          inputProps={{ maxLength: 10, 'data-testid': 'property-address-zip-input' }}
         />
         {error && <Alert severity="error" sx={{ mt: 1 }}>{error}</Alert>}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={saving}>Cancel</Button>
-        <Button onClick={handleSave} variant="contained" disabled={saving}>
-          {saving ? 'Saving…' : 'Save and preview'}
+        <Button
+          onClick={handleSave}
+          variant="contained"
+          disabled={saving}
+          data-testid="property-address-save"
+        >
+          {saving ? 'Saving…' : saveLabel}
         </Button>
       </DialogActions>
     </Dialog>

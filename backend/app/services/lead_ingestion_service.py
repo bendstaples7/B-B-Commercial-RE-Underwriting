@@ -260,17 +260,37 @@ class LeadIngestionService:
         }
 
         try:
-            # Primary lookup: by address
-            parcel = connector.lookup_by_address(lead.property_street or '')
+            from app.services.lead_merge_utils import situs_unit_token_from_parts
 
-            # Fallback: by PIN when address lookup returns nothing
             pin_for_lookup = (
                 (lead.county_assessor_pin or '').strip()
                 or (pin_hint or '').strip()
                 or None
             )
-            if parcel is None and pin_for_lookup:
-                parcel = connector.lookup_by_pin(pin_for_lookup)
+            unit_token = situs_unit_token_from_parts(
+                lead.property_street,
+                getattr(lead, 'address_2', None),
+            )
+            # Cook / county parcel address tables strip unit designators. Address
+            # lookup then returns an arbitrary PIN in a condo stack (e.g. 3 PINs
+            # at 717 W Bittersweet) and Cook enrichment stamps that unit's sale
+            # onto the wrong door. Require an explicit PIN when a unit is named.
+            if unit_token and not pin_for_lookup:
+                parcel = None
+                outcome['skipped_unit_address_lookup'] = True
+                logger.info(
+                    "GIS address lookup skipped for unit situs lead_id=%s unit=%s street=%r",
+                    getattr(lead, 'id', None),
+                    unit_token,
+                    lead.property_street,
+                )
+            else:
+                # Primary lookup: by address (or PIN when unit + pin known)
+                parcel = None
+                if not unit_token:
+                    parcel = connector.lookup_by_address(lead.property_street or '')
+                if parcel is None and pin_for_lookup:
+                    parcel = connector.lookup_by_pin(pin_for_lookup)
 
             if parcel is None:
                 # No match found (Requirement 8.4). Re-import must not reopen

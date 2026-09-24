@@ -133,6 +133,7 @@ export function MissingPropertyMatchQueue() {
 
   const handleSaveAddress = async (address: {
     property_street: string
+    address_2: string | null
     property_city: string
     property_state: string
     property_zip: string

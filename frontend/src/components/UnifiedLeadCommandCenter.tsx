@@ -2512,6 +2512,18 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                     recommended_action: result.recommended_action,
                   })
                 }}
+                onDismissRecentSale={async () => {
+                  await leadService.dismissRecentSale(leadId, {
+                    reason: 'not_this_unit',
+                    clear_pin: true,
+                  })
+                  setActivitySnackbar({
+                    open: true,
+                    message: 'Recent sale cleared — pick the correct unit PIN if needed',
+                  })
+                  await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+                  await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+                }}
                 onCreateTask={handleCreateTask}
               />
             </Paper>

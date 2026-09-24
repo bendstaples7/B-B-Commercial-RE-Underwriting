@@ -26,6 +26,7 @@ vi.mock('@/services/propertyMatchApi', () => ({
   propertyMatchService: {
     preview: vi.fn(),
     approve: vi.fn(),
+    updateAddress: vi.fn().mockResolvedValue({}),
   },
   buildingOwnershipService: {
     analyze: vi.fn().mockResolvedValue({}),
@@ -416,6 +417,12 @@ describe('PropertySidebar always-visible sale and PIN', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('offers edit control for property address', () => {
+    renderSidebar(makePayload())
+    expect(screen.getByTestId('sidebar-edit-property-address')).toBeInTheDocument()
+    expect(screen.getByTestId('sidebar-property-address')).toHaveTextContent('123 Test St')
   })
 
   it('shows None for missing Most Recent Sale and PIN lookup hint when PIN missing', () => {
@@ -852,12 +859,21 @@ describe('PropertySidebar prior-owner stale contacts', () => {
   })
 })
 
-describe('PropertySidebar Other Addresses placement', () => {
-  it('does not render Other Addresses in the sidebar (lives on Info instead)', () => {
-    renderSidebar(makePayload({ address_2: '456 Secondary Ave' }))
+describe('PropertySidebar address line 2', () => {
+  it('shows unit-style address_2 under the Address block', () => {
+    renderSidebar(makePayload({ address_2: 'Unit L2' }))
 
-    expect(screen.getAllByText('Additional Address')).toHaveLength(1)
-    expect(screen.getAllByText('456 Secondary Ave')).toHaveLength(1)
-    expect(screen.queryByText('Other Addresses')).not.toBeInTheDocument()
+    expect(screen.getByTestId('sidebar-property-address')).toHaveTextContent('Unit L2')
+    expect(screen.queryByText('Additional Address')).not.toBeInTheDocument()
+  })
+
+  it('keeps full-street address_2 as Additional Address', () => {
+    renderSidebar(makePayload({ address_2: '456 Secondary Ave Chicago IL 60618' }))
+
+    expect(screen.getByTestId('sidebar-property-address')).not.toHaveTextContent(
+      '456 Secondary Ave',
+    )
+    expect(screen.getByText('Additional Address')).toBeInTheDocument()
+    expect(screen.getByText('456 Secondary Ave Chicago IL 60618')).toBeInTheDocument()
   })
 })

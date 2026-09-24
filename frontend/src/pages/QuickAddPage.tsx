@@ -63,6 +63,7 @@ import { formatDateOnly } from '@/utils/formatters'
 import { CaptureSourceFields } from '@/components/CaptureSourceFields'
 import { CONTACT_ROLE_OPTIONS } from '@/components/ContactFormModal'
 import { contactService } from '@/services/contactApi'
+import { streetLineFromPlacesComponents } from '@/utils/placesAddress'
 
 type Priority = 'high' | 'medium' | 'low'
 
@@ -392,8 +393,14 @@ export function QuickAddPage() {
   const handleSelect = (description: string, placeId: string) => {
     // Show the suggestion immediately; replace with street-line once details load
     // so we never submit the full Places description (city/state/ZIP duplicated).
+    // Keep the typed value so a condo unit (L2 / Apt 3) survives when Places
+    // suggestions omit subpremise.
     const requestId = ++placesRequestIdRef.current
-    const streetGuess = description.split(',')[0]?.trim() || description
+    const typedBeforeSelect = address
+    const streetGuess = streetLineFromPlacesComponents([], {
+      priorStreet: typedBeforeSelect,
+      descriptionFallback: description,
+    })
     setAddress(streetGuess, false)
     setParsedAddress({ city: null, state: null, zip: null })
     localityFromPlacesRef.current = false
@@ -426,9 +433,10 @@ export function QuickAddPage() {
             result?.address_components ?? []
           const find = (type: string) =>
             components.find((c) => c.types.includes(type))
-          const streetNumber = find('street_number')?.long_name
-          const route = find('route')?.long_name
-          const streetLine = [streetNumber, route].filter(Boolean).join(' ').trim()
+          const streetLine = streetLineFromPlacesComponents(components, {
+            priorStreet: typedBeforeSelect,
+            descriptionFallback: description,
+          })
           if (streetLine) {
             setAddress(streetLine, false)
           }

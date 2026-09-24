@@ -190,6 +190,9 @@ const BuildingOwnershipLookbookPage = lazyWithRetry(
 const CcPinDeprioritizeLookbookPage = lazyWithRetry(
   () => import('./pages/lookbook/CcPinDeprioritizeLookbookPage'),
 )
+const CondoUnitAddressLookbookPage = lazyWithRetry(
+  () => import('./pages/lookbook/CondoUnitAddressLookbookPage'),
+)
 const SameAddressMergeLookbookPage = lazyWithRetry(
   () => import('./pages/lookbook/SameAddressMergeLookbookPage'),
 )
@@ -2651,6 +2654,12 @@ function App() {
             <Route
               path="/lookbook/cc-pin-deprioritize"
               element={<CcPinDeprioritizeLookbookPage />}
+            />
+          )}
+          {import.meta.env.DEV && (
+            <Route
+              path="/lookbook/condo-unit-address"
+              element={<CondoUnitAddressLookbookPage />}
             />
           )}
           {import.meta.env.DEV && (
