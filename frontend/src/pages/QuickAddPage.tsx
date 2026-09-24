@@ -718,7 +718,7 @@ export function QuickAddPage() {
         {mapsAvailability === 'unavailable' && (
           <Alert severity="warning" sx={{ mt: 1 }} data-testid="quick-add-maps-unavailable">
             Google address suggestions are unavailable (Maps API key not loaded). You can still
-            enter a full street address and save.
+            enter a street or just city / state / ZIP and save.
           </Alert>
         )}
         {status === 'OK' && data.length > 0 && (
