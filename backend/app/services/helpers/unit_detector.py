@@ -19,9 +19,9 @@ _HASH_UNIT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Pattern for trailing alphanumeric unit suffix (e.g., "123 main st 1a")
+# Pattern for trailing alphanumeric unit suffix (e.g., "123 main st 1a", "… Place L2")
 _TRAILING_UNIT_SUFFIX_PATTERN = re.compile(
-    r'\s+\d+[a-zA-Z]\s*$',
+    r'\s+(?:\d+[a-zA-Z][a-zA-Z0-9-]*|[a-zA-Z]\d+[a-zA-Z0-9-]*)\s*$',
 )
 
 
@@ -31,7 +31,7 @@ def has_unit_marker(address: str) -> bool:
     Patterns detected (case-insensitive):
     - "unit", "apt", "apartment", "suite", "ste" followed by a value
     - "#" followed by a value
-    - Trailing alphanumeric suffix pattern (e.g., "1a", "2b", "3n")
+    - Trailing alphanumeric suffix pattern (e.g. "1a", "2b", "L2")
 
     Parameters
     ----------

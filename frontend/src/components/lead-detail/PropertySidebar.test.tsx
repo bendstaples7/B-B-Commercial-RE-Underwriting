@@ -26,6 +26,7 @@ vi.mock('@/services/propertyMatchApi', () => ({
   propertyMatchService: {
     preview: vi.fn(),
     approve: vi.fn(),
+    updateAddress: vi.fn().mockResolvedValue({}),
   },
   buildingOwnershipService: {
     analyze: vi.fn().mockResolvedValue({}),
@@ -416,6 +417,12 @@ describe('PropertySidebar always-visible sale and PIN', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('offers edit control for property address', () => {
+    renderSidebar(makePayload())
+    expect(screen.getByTestId('sidebar-edit-property-address')).toBeInTheDocument()
+    expect(screen.getByTestId('sidebar-property-address')).toHaveTextContent('123 Test St')
   })
 
   it('shows None for missing Most Recent Sale and PIN lookup hint when PIN missing', () => {

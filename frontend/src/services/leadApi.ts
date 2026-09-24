@@ -73,6 +73,27 @@ export const leadService = {
     return response.data
   },
 
+  async dismissRecentSale(
+    leadId: number,
+    options?: { reason?: string; clear_pin?: boolean },
+  ): Promise<{
+    lead_id: number
+    cleared_sale: boolean
+    pin_cleared: boolean
+    completed_hold_task_ids: number[]
+    lead_status: string | null
+    recommended_action: string | null
+    needs_skip_trace: boolean
+    most_recent_sale: string | null
+    county_assessor_pin: string | null
+  }> {
+    const response = await api.post(`/leads/${leadId}/dismiss-recent-sale`, {
+      reason: options?.reason ?? 'not_this_unit',
+      clear_pin: options?.clear_pin ?? true,
+    })
+    return response.data
+  },
+
   /**
    * Catalog of analyst findings that bump structured motivation / lead_score.
    */
