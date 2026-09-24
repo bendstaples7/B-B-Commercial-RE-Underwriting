@@ -62,22 +62,33 @@ export function LeadUnitsPanel({
   }, [leadId])
 
   const handleSave = async () => {
+    const saveLeadId = leadId
+    const payload = {
+      units: serializeLeadUnitDrafts(drafts),
+      lead_subtype: subtype || null,
+    }
     setSaving(true)
     setError(null)
     try {
-      const result = await leadService.replaceLeadUnits(leadId, {
-        units: serializeLeadUnitDrafts(drafts),
-        lead_subtype: subtype || null,
-      })
+      const result = await leadService.replaceLeadUnits(saveLeadId, payload)
+      // Stale response after queue navigation must not overwrite the new lead.
+      if (lastLeadIdRef.current !== saveLeadId) {
+        return
+      }
       setDrafts(leadUnitDraftsFromApi(result.lead_units))
       setSubtype((result.lead_subtype as LeadSubtype | null | undefined) || '')
       dirtyRef.current = false
       setDirty(false)
       await onSaved?.()
     } catch (err) {
+      if (lastLeadIdRef.current !== saveLeadId) {
+        return
+      }
       setError(err instanceof Error ? err.message : 'Failed to save units')
     } finally {
-      setSaving(false)
+      if (lastLeadIdRef.current === saveLeadId) {
+        setSaving(false)
+      }
     }
   }
 

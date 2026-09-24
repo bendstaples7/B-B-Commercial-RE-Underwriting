@@ -562,7 +562,6 @@ export function QuickAddPage() {
     setNextTaskDuePreset('3')
     setNextTaskDueDate('')
     setNextTaskNotes('')
-    setNextTaskError('')
     setSuccessResult(null)
     setExistingActionFeedback(null)
     setAddressError('')

@@ -47,7 +47,7 @@ class TestReplaceLeadUnitsValidation:
                     {'unit_label': 'A', 'baths': 'NaN'},
                 ])
 
-    def test_reject_preserves_existing_inventory(self, app, lead):
+    def test_rejects_validation_error_preserves_existing_inventory(self, app, lead):
         with app.app_context():
             replace_lead_units(lead, [
                 {'unit_label': 'Existing', 'unit_type': 'residential'},

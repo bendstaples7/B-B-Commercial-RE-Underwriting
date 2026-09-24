@@ -723,6 +723,7 @@ class TestQuickAddEndpoint:
             assert task.notes == 'Confirm street address'
 
     def test_malformed_lead_units_returns_validation_error(self, quick_add_client, app):
+        """QuickAddSchema keeps lead_units; replace_lead_units ValueError → 400."""
         with app.app_context():
             response = quick_add_client.post(
                 '/api/leads/quick-add',
@@ -736,7 +737,12 @@ class TestQuickAddEndpoint:
                 content_type='application/json',
             )
             assert response.status_code == 400
-            assert response.get_json()['message'] == 'beds/sqft must be integers'
+            body = response.get_json()
+            # Service ValueError (not marshmallow messages) after schema load.
+            assert body.get('message') == 'beds/sqft must be integers'
+            assert Lead.query.filter_by(
+                property_street='89 Bad Units Ave, Chicago, IL',
+            ).count() == 0
 
     def test_requires_address(self, quick_add_client, app):
         with app.app_context():
