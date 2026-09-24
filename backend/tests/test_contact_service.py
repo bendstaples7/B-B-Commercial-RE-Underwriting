@@ -94,13 +94,25 @@ class TestCreateContact:
             assert contact.capture_context == "Met at a broker open house"
             assert contact.notes == "Prefers text"
 
-    def test_create_rejects_unknown_source(self, app):
+    def test_create_registers_custom_source(self, app):
+        """Unknown capture sources are registered and stored (creatable catalog)."""
+        with app.app_context():
+            service = ContactService()
+            contact = service.create_contact({
+                "first_name": "Rita",
+                "source": "Random blog",
+            })
+            assert contact.source == "Random blog"
+            from app.models.deal_source_option import DealSourceOption
+            assert DealSourceOption.query.filter_by(name="Random blog").first() is not None
+
+    def test_create_rejects_blank_oversized_source(self, app):
         with app.app_context():
             service = ContactService()
             with pytest.raises(ValidationException):
                 service.create_contact({
                     "first_name": "Rita",
-                    "source": "Random blog",
+                    "source": "x" * 300,
                 })
 
     def test_create_manual_phone_defaults_confidence_90(self, app):

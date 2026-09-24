@@ -39,7 +39,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 # Expected final head revision after a complete upgrade.
-_EXPECTED_HEAD = "mail_attr_20260919"
+_EXPECTED_HEAD = "deal_src_20260924"
 
 # Key application tables that must be created by the chain on upgrade
 # and must be absent after a full downgrade to base.
