@@ -57,6 +57,19 @@ vi.mock('@/services/contactApi', () => ({
   },
 }))
 
+vi.mock('@/services/dealSourcesApi', () => ({
+  default: {
+    list: vi.fn().mockResolvedValue([
+      { name: 'Driving For Dollars', is_builtin: true },
+      { name: 'Referral', is_builtin: true },
+      { name: 'Direct Mail', is_builtin: true },
+      { name: 'CoStar', is_builtin: true },
+      { name: 'Other', is_builtin: true },
+    ]),
+    create: vi.fn(),
+  },
+}))
+
 const { navigateMock } = vi.hoisted(() => ({
   navigateMock: vi.fn(),
 }))
@@ -127,7 +140,7 @@ describe('QuickAddPage fullscreen dialog', () => {
     expect(screen.getByTestId('quick-add-dialog')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Quick Add' })).toBeInTheDocument()
     expect(screen.getByTestId('quick-add-close')).toBeInTheDocument()
-    expect(screen.getByLabelText('Property address')).toBeInTheDocument()
+    expect(screen.getByLabelText('Property street')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument()
   })
 
@@ -135,7 +148,7 @@ describe('QuickAddPage fullscreen dialog', () => {
     mapsState.availability = 'loading'
     renderPage()
     expect(screen.queryByTestId('quick-add-maps-unavailable')).not.toBeInTheDocument()
-    expect(screen.getByLabelText('Property address')).toBeInTheDocument()
+    expect(screen.getByLabelText('Property street')).toBeInTheDocument()
   })
 
   it('warns when the Maps API key is unavailable', () => {
@@ -240,7 +253,7 @@ describe('QuickAddPage deprioritized matches', () => {
       }),
     ).toBeInTheDocument()
 
-    fireEvent.change(screen.getByLabelText('Property address'), {
+    fireEvent.change(screen.getByLabelText('Property street'), {
       target: { value: '456 Other St' },
     })
 
@@ -255,7 +268,7 @@ describe('QuickAddPage deprioritized matches', () => {
     vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
     renderPage()
 
-    fireEvent.change(screen.getByLabelText('Property address'), {
+    fireEvent.change(screen.getByLabelText('Property street'), {
       target: { value: '123 Main St, Chicago, IL 60601' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Save to Skip Trace' }))
@@ -277,7 +290,7 @@ describe('QuickAddPage deprioritized matches', () => {
     vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
     renderPage()
 
-    fireEvent.change(screen.getByLabelText('Property address'), {
+    fireEvent.change(screen.getByLabelText('Property street'), {
       target: { value: '88 Status Ave' },
     })
     fireEvent.mouseDown(screen.getByLabelText('Pipeline status'))
@@ -294,6 +307,41 @@ describe('QuickAddPage deprioritized matches', () => {
         }),
       )
     })
+  })
+
+  it('shows missing next-task title errors on the next-task title field', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    renderPage()
+
+    fireEvent.change(screen.getByLabelText('Property street'), {
+      target: { value: '90 Task Error Ave' },
+    })
+    fireEvent.mouseDown(screen.getByLabelText('Pipeline status'))
+    fireEvent.click(screen.getByRole('option', { name: 'Negotiating Remote' }))
+    fireEvent.click(screen.getByTestId('quick-add-next-task-toggle'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save as Negotiating Remote' }))
+
+    expect(screen.getByText('Next task needs a title')).toBeInTheDocument()
+    expect(screen.getByTestId('quick-add-next-task-title')).toHaveAttribute('aria-invalid', 'true')
+    expect(leadService.quickAdd).not.toHaveBeenCalled()
+  })
+
+  it('preserves manually entered locality when replacing or clearing the street', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    renderPage()
+
+    fireEvent.change(screen.getByLabelText('Property street'), {
+      target: { value: '123 Old St' },
+    })
+    fireEvent.change(screen.getByTestId('quick-add-city'), { target: { value: 'Chicago' } })
+    fireEvent.change(screen.getByTestId('quick-add-street'), {
+      target: { value: '456 New St' },
+    })
+    expect(screen.getByTestId('quick-add-city')).toHaveValue('Chicago')
+
+    fireEvent.change(screen.getByTestId('quick-add-city'), { target: { value: 'Evanston' } })
+    fireEvent.change(screen.getByTestId('quick-add-street'), { target: { value: '' } })
+    expect(screen.getByTestId('quick-add-city')).toHaveValue('Evanston')
   })
 
   it('links every person on the same form and does not offer a lead tab', async () => {
@@ -449,14 +497,30 @@ describe('QuickAddPage deprioritized matches', () => {
     expect(leadService.quickAdd).not.toHaveBeenCalled()
   })
 
-  it('blocks a blank address before calling the api', () => {
+  it('blocks when street and locality are both blank', () => {
     vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
     renderPage()
-    fireEvent.change(screen.getByLabelText('Property address'), { target: { value: '   ' } })
+    fireEvent.change(screen.getByLabelText('Property street'), { target: { value: '   ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save to Skip Trace' }))
-    expect(screen.getByText(/property address is required/i)).toBeInTheDocument()
+    expect(screen.getByText(/enter a property address, or at least a city, state, or zip/i)).toBeInTheDocument()
     expect(leadService.quickAdd).not.toHaveBeenCalled()
     expect(contactService.createContact).not.toHaveBeenCalled()
+  })
+
+  it('allows save with city only and no street', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    renderPage()
+    fireEvent.change(screen.getByLabelText('Property street'), { target: { value: '' } })
+    fireEvent.change(screen.getByTestId('quick-add-city'), { target: { value: 'Chicago' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save to Skip Trace' }))
+    await vi.waitFor(() => {
+      expect(leadService.quickAdd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          property_street: null,
+          property_city: 'Chicago',
+        }),
+      )
+    })
   })
 
   it('keeps the property when a person cannot be saved', async () => {

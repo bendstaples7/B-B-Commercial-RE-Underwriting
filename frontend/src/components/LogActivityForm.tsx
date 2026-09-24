@@ -397,6 +397,8 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       editTask ? nextStepTypeFromTask(editTask.task) : 'call_owner_today',
     )
     const [customTaskTitle, setCustomTaskTitle] = useState(() => editTask?.task.title ?? '')
+    const [editTaskNotes, setEditTaskNotes] = useState(() => editTask?.task.notes ?? '')
+    const [followUpNotes, setFollowUpNotes] = useState('')
 
     const [outcomeError, setOutcomeError] = useState<string | null>(null)
     const [durationError, setDurationError] = useState<string | null>(null)
@@ -470,6 +472,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
         title,
         due_date: dueDate,
         task_type,
+        notes: followUpNotes.trim() || null,
       }
     }
 
@@ -480,6 +483,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
       setNextStepExpanded(false)
       setNextStepType('call_owner_today')
       setCustomTaskTitle('')
+      setFollowUpNotes('')
       setCompleteTask(true)
     }
 
@@ -813,8 +817,10 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
           nextStepType,
           nextStepType === 'custom' ? customTaskTitle : '',
         )
-        const payload: { title?: string; due_date: string } = { due_date: due }
+        const notesValue = editTaskNotes.trim() || null
+        const payload: { title?: string; due_date: string; notes?: string | null } = { due_date: due }
         if (title !== task.title) payload.title = title
+        if (notesValue !== (task.notes ?? null)) payload.notes = notesValue
         const updated = await leadTaskService.updateTask(leadId, task.id, payload)
         onTaskUpdated?.({
           ...task,
@@ -826,6 +832,7 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
           created_by: updated.created_by ?? task.created_by,
           title: updated.title ?? title,
           due_date: updated.due_date !== undefined ? updated.due_date : due,
+          notes: updated.notes !== undefined ? updated.notes : notesValue,
         })
       } catch (err) {
         setSubmitError(
@@ -868,6 +875,8 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
         onCustomTaskTitleChange={setCustomTaskTitle}
         hideCompleteTask={isEditingTask}
         lockFollowUp={isEditingTask}
+        taskNotes={isEditingTask ? editTaskNotes : createFollowUp ? followUpNotes : undefined}
+        onTaskNotesChange={isEditingTask ? setEditTaskNotes : createFollowUp ? setFollowUpNotes : undefined}
       />
     )
 

@@ -1841,7 +1841,7 @@ export interface HubSpotConfig {
 }
 
 export interface QuickAddPayload {
-  property_street: string
+  property_street?: string | null
   note?: string | null
   context?: string | null
   capture_kind?: 'property' | 'lead' | null
@@ -1855,12 +1855,32 @@ export interface QuickAddPayload {
   property_city?: string | null
   property_state?: string | null
   property_zip?: string | null
+  units?: number | null
+  asking_price?: number | null
+  bedrooms?: number | null
+  bathrooms?: number | null
+  lead_subtype?: 'residential' | 'mixed_use' | 'commercial' | null
+  lead_units?: Array<{
+    unit_label?: string
+    unit_type?: string
+    beds?: number | null
+    baths?: number | null
+    sqft?: number | null
+    current_rent?: number | null
+    sort_order?: number
+  }> | null
+  next_task?: {
+    title: string
+    task_type?: string
+    due_date?: string | null
+    notes?: string | null
+  } | null
 }
 
 export interface QuickAddResponse {
   lead_id: number
   created: boolean
-  property_street: string
+  property_street: string | null
   lead_status: string
   deal_source: string
   date_identified: string | null
@@ -1880,7 +1900,9 @@ export interface QuickAddLookupResponse {
   matches: QuickAddLookupMatch[]
 }
 
-/** HubSpot-aligned deal sources for quick-add (Driving For Dollars is the walk-by default). */
+/** HubSpot-aligned deal sources for quick-add (Driving For Dollars is the walk-by default).
+ * Custom sources (Facebook Ad, etc.) are added via CaptureSourceFields → /api/deal-sources.
+ */
 export const QUICK_ADD_DEAL_SOURCES = [
   'Driving For Dollars',
   'Cityscape',
@@ -2080,6 +2102,7 @@ export interface LeadTask {
   title: string;
   status: LeadTaskStatus;
   due_date: string | null;
+  notes?: string | null;
   created_at: string;
   completed_at: string | null;
   created_by: string;
@@ -2415,6 +2438,20 @@ export interface CommandCenterPayload {
   lead_status: LeadStatus;
   lead_category?: string;
   lead_category_locked?: boolean;
+  /** User-set subtype (residential / mixed_use / commercial). */
+  lead_subtype?: 'residential' | 'mixed_use' | 'commercial' | null;
+  /** Per-unit inventory (not multifamily Deal rent roll). */
+  lead_units?: Array<{
+    id: number
+    lead_id: number
+    unit_label: string
+    unit_type: string
+    beds?: number | null
+    baths?: number | null
+    sqft?: number | null
+    current_rent?: number | null
+    sort_order?: number
+  }>;
   /** Same-building other leads (not other buildings in a portfolio). */
   same_address_leads?: SameAddressLeadSummary[];
   review_required?: boolean;
@@ -2570,6 +2607,7 @@ export interface LogCallFollowUpPayload {
   title: string;
   due_date: string;
   task_type?: string;
+  notes?: string | null;
 }
 
 export interface LogCallPayload {

@@ -6,6 +6,8 @@ import re
 # Keep in sync with frontend QUICK_ADD_DEAL_SOURCES and HubSpot deal_source enum.
 # ``Listsource`` is the Master Skip Tracing list value; HubSpot often leaves
 # deal_source blank and parks that text in description instead.
+# Custom sources (e.g. Facebook Ad) live in ``deal_source_options`` and are
+# listed alongside these builtins by ``DealSourceService``.
 DEAL_SOURCE_OPTIONS: tuple[str, ...] = (
     'Driving For Dollars',
     'Cityscape',
@@ -16,6 +18,8 @@ DEAL_SOURCE_OPTIONS: tuple[str, ...] = (
     'Listsource',
     'Other',
 )
+
+DEAL_SOURCE_MAX_LENGTH = 255
 
 _COSTAR_RE = re.compile(r'co[\s_-]*star', re.IGNORECASE)
 _LISTSOURCE_RE = re.compile(r'\blist[\s_-]*source\b', re.IGNORECASE)
@@ -30,7 +34,44 @@ _EXACT_ALIASES.update({
     'list-source': 'Listsource',
 })
 
+_BUILTIN_LOWER = frozenset(_EXACT_ALIASES.keys())
+
 _PROVENANCE_SOURCES = frozenset({'hubspot_import', 'google_sheets', 'manual'})
+
+
+def normalize_deal_source_label(raw: str | None) -> str | None:
+    """Strip and collapse internal whitespace; return None when blank."""
+    if raw is None:
+        return None
+    text = ' '.join(str(raw).split())
+    return text or None
+
+
+def builtin_deal_source(raw: str | None) -> str | None:
+    """Return the canonical builtin label when *raw* matches a known option."""
+    text = normalize_deal_source_label(raw)
+    if not text:
+        return None
+    return _EXACT_ALIASES.get(text.lower())
+
+
+def is_builtin_deal_source(raw: str | None) -> bool:
+    text = normalize_deal_source_label(raw)
+    if not text:
+        return False
+    return text.lower() in _BUILTIN_LOWER
+
+
+def hubspot_deal_source_for_writeback(raw: str | None) -> str:
+    """Map a local deal_source to a HubSpot enum-safe value.
+
+    Custom sources (Facebook Ad, etc.) are not HubSpot enum members — write
+    ``Other`` so push does not fail while the local column keeps the real label.
+    """
+    builtin = builtin_deal_source(raw)
+    if builtin:
+        return builtin
+    return 'Other'
 
 
 def normalize_imported_source_to_deal_source(raw: str | None) -> str | None:

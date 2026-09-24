@@ -140,6 +140,12 @@ from app.models.channel_roi_config import ChannelRoiConfig
 from app.models.facebook_ad_campaign import FacebookAdCampaign
 from app.models.facebook_campaign_lead_attribution import FacebookCampaignLeadAttribution
 
+# Deal / capture source catalog (custom Source dropdown values)
+from app.models.deal_source_option import DealSourceOption
+
+# Per-lead unit inventory (Quick Add / CC)
+from app.models.lead_unit import LeadUnit
+
 # CRM activity dashboard goals
 from app.models.user_activity_goal import UserActivityGoal
 
@@ -260,6 +266,10 @@ __all__ = [
     'ChannelRoiConfig',
     'FacebookAdCampaign',
     'FacebookCampaignLeadAttribution',
+    # Deal / capture source catalog
+    'DealSourceOption',
+    # Per-lead unit inventory
+    'LeadUnit',
     # CRM activity dashboard
     'UserActivityGoal',
 ]

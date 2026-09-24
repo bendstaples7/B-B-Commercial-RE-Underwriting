@@ -94,14 +94,56 @@ class TestCreateContact:
             assert contact.capture_context == "Met at a broker open house"
             assert contact.notes == "Prefers text"
 
-    def test_create_rejects_unknown_source(self, app):
+    def test_create_registers_custom_source(self, app):
+        """Unknown capture sources are registered and stored (creatable catalog)."""
+        with app.test_request_context():
+            from flask import g
+            g.user_id = 'source-creator'
+            service = ContactService()
+            contact = service.create_contact({
+                "first_name": "Rita",
+                "source": "Random blog",
+            })
+            assert contact.source == "Random blog"
+            from app.models.deal_source_option import DealSourceOption
+            option = DealSourceOption.query.filter_by(name="Random blog").first()
+            assert option is not None
+            assert option.created_by == 'source-creator'
+
+    def test_create_rejects_oversized_source(self, app):
         with app.app_context():
             service = ContactService()
             with pytest.raises(ValidationException):
                 service.create_contact({
                     "first_name": "Rita",
-                    "source": "Random blog",
+                    "source": "x" * 300,
                 })
+
+    def test_create_rejects_blank_source(self, app):
+        """Whitespace-only source normalizes to None (not stored)."""
+        with app.app_context():
+            service = ContactService()
+            contact = service.create_contact({
+                "first_name": "Rita",
+                "source": "   ",
+            })
+            assert contact.source is None
+
+    def test_create_registers_custom_source_with_creator(self, app):
+        with app.app_context():
+            with app.test_request_context():
+                from flask import g
+                g.user_id = 'creator-user-1'
+                service = ContactService()
+                contact = service.create_contact({
+                    "first_name": "Rita",
+                    "source": "Yard Sign Blog",
+                })
+            assert contact.source == "Yard Sign Blog"
+            from app.models.deal_source_option import DealSourceOption
+            row = DealSourceOption.query.filter_by(name="Yard Sign Blog").first()
+            assert row is not None
+            assert row.created_by == 'creator-user-1'
 
     def test_create_manual_phone_defaults_confidence_90(self, app):
         """Manual create stores confidence 90 and source manual when omitted."""

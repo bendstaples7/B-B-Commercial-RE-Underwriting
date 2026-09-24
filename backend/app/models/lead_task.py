@@ -28,6 +28,8 @@ class LeadTask(db.Model):
     ), nullable=False, default='open', index=True)
 
     due_date = db.Column(db.Date, nullable=True)
+    # Conversation goal / next-step notes (editable on create and pencil edit).
+    notes = db.Column(db.Text, nullable=True)
     # Stable machine-owned workflow identity; titles remain editable display text.
     workflow_key = db.Column(db.String(50), nullable=True, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)

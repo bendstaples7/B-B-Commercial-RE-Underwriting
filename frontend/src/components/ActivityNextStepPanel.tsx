@@ -52,6 +52,9 @@ export interface ActivityNextStepPanelProps {
   /** Hide complete-task; keep due-date controls always visible (edit-task overlay). */
   hideCompleteTask?: boolean
   lockFollowUp?: boolean
+  /** Conversation notes on the task (create / pencil edit). */
+  taskNotes?: string
+  onTaskNotesChange?: (value: string) => void
 }
 
 export function ActivityNextStepPanel({
@@ -76,6 +79,8 @@ export function ActivityNextStepPanel({
   onCustomTaskTitleChange,
   hideCompleteTask = false,
   lockFollowUp = false,
+  taskNotes,
+  onTaskNotesChange,
 }: ActivityNextStepPanelProps) {
   return (
     <Box
@@ -228,6 +233,21 @@ export function ActivityNextStepPanel({
             onCustomDueDateChange={onCustomDueDateChange}
           />
         </Box>
+      )}
+
+      {onTaskNotesChange != null && (createFollowUp || lockFollowUp) && (
+        <TextField
+          label="Task notes"
+          value={taskNotes ?? ''}
+          onChange={(e) => onTaskNotesChange(e.target.value)}
+          fullWidth
+          size="small"
+          multiline
+          minRows={2}
+          sx={{ mt: 1.5, caretColor: 'text.primary' }}
+          placeholder="Conversation goal or what to cover"
+          inputProps={{ 'data-testid': 'activity-task-notes', maxLength: 5000 }}
+        />
       )}
     </Box>
   )
