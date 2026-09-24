@@ -192,7 +192,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
   const [editSubmitting, setEditSubmitting] = useState(false)
   const editSubmittingRef = useRef(false)
   const skipBlurSaveRef = useRef(false)
-  const editingRef = useRef<{ id: number | null; field: 'title' | 'due_date' | 'notes' | null }>({
+  const editingRef = useRef<{ id: number | null; field: 'title' | 'due_date' | null }>({
     id: null,
     field: null,
   })
