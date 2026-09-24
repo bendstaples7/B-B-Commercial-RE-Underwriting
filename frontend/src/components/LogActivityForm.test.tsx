@@ -407,6 +407,7 @@ describe('LogActivityForm — mode="note"', () => {
     expect(screen.getByRole('checkbox', { name: /Create a follow-up task/i })).toBeChecked()
 
     await user.type(screen.getByTestId('note-body-input'), 'Owner called back')
+    await user.type(screen.getByTestId('activity-task-notes'), 'Ask about timeline')
     await user.click(screen.getByTestId('note-save-btn'))
 
     await waitFor(() => {
@@ -415,7 +416,10 @@ describe('LogActivityForm — mode="note"', () => {
         expect.objectContaining({
           body: 'Owner called back',
           complete_task_id: 7,
-          follow_up: expect.objectContaining({ title: 'Follow up call' }),
+          follow_up: expect.objectContaining({
+            title: 'Follow up call',
+            notes: 'Ask about timeline',
+          }),
         }),
       )
     })

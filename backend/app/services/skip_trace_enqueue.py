@@ -206,7 +206,8 @@ class SkipTraceEnqueue:
             if due_date is not None:
                 existing.due_date = due_date
             if notes is not None:
-                existing.notes = notes
+                notes_text = notes.strip() if isinstance(notes, str) else str(notes).strip()
+                existing.notes = notes_text or None
             db.session.commit()
             logger.info(
                 "SkipTraceEnqueue: open skip_trace_owner task already exists "

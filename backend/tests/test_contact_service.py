@@ -96,7 +96,9 @@ class TestCreateContact:
 
     def test_create_registers_custom_source(self, app):
         """Unknown capture sources are registered and stored (creatable catalog)."""
-        with app.app_context():
+        with app.test_request_context():
+            from flask import g
+            g.user_id = 'source-creator'
             service = ContactService()
             contact = service.create_contact({
                 "first_name": "Rita",
@@ -104,7 +106,9 @@ class TestCreateContact:
             })
             assert contact.source == "Random blog"
             from app.models.deal_source_option import DealSourceOption
-            assert DealSourceOption.query.filter_by(name="Random blog").first() is not None
+            option = DealSourceOption.query.filter_by(name="Random blog").first()
+            assert option is not None
+            assert option.created_by == 'source-creator'
 
     def test_create_rejects_oversized_source(self, app):
         with app.app_context():

@@ -13,16 +13,23 @@ vi.mock('@/services/dealSourcesApi', () => ({
 }))
 
 describe('CaptureSourceFields', () => {
+  let catalog: Array<{ name: string; is_builtin: boolean; created?: boolean }>
+
   beforeEach(() => {
-    vi.mocked(dealSourcesApi.list).mockResolvedValue([
+    catalog = [
       { name: 'Driving For Dollars', is_builtin: true },
       { name: 'Referral', is_builtin: true },
       { name: 'Direct Mail', is_builtin: true },
-    ])
-    vi.mocked(dealSourcesApi.create).mockResolvedValue({
-      name: 'Facebook Ad',
-      is_builtin: false,
-      created: true,
+    ]
+    vi.mocked(dealSourcesApi.list).mockImplementation(async () => catalog)
+    vi.mocked(dealSourcesApi.create).mockImplementation(async (name: string) => {
+      const created = {
+        name,
+        is_builtin: false,
+        created: true,
+      }
+      catalog = [...catalog, created]
+      return created
     })
   })
 

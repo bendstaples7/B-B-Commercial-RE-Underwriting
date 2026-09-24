@@ -722,6 +722,22 @@ class TestQuickAddEndpoint:
             assert task.due_date == date.today()
             assert task.notes == 'Confirm street address'
 
+    def test_malformed_lead_units_returns_validation_error(self, quick_add_client, app):
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '89 Bad Units Ave, Chicago, IL',
+                    'lead_units': [
+                        {'unit_label': 'Unit 1', 'beds': 1.5},
+                    ],
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 400
+            assert response.get_json()['message'] == 'beds/sqft must be integers'
+
     def test_requires_address(self, quick_add_client, app):
         with app.app_context():
             response = quick_add_client.post(

@@ -16,6 +16,7 @@ from marshmallow import ValidationError
 from app.api_utils import require_auth
 from app.exceptions import RealEstateAnalysisException
 from app.models import Lead, LeadTask, LeadTimelineEntry
+from app.models.lead_unit import LEAD_SUBTYPES
 from app.schemas import (
     LeadTaskCreateSchema, LeadTaskUpdateSchema, LeadTaskSnoozeSchema,
     LogNoteSchema, LogCallSchema, LeadStatusUpdateSchema, LeadCategoryUpdateSchema,

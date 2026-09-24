@@ -104,6 +104,7 @@ class TestDealSourcesApi:
             assert response.status_code == 400
             body = response.get_json()
             assert 'string' in (body.get('message') or body.get('error') or '').lower()
+            assert DealSourceOption.query.filter_by(name="['Facebook']").first() is None
 
 
 class TestQuickAddCustomDealSource:

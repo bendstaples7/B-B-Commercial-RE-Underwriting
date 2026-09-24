@@ -456,6 +456,33 @@ describe('LeadTaskList', () => {
       })
     })
 
+    it('passes typed task notes when creating a task', async () => {
+      const newTask = makeTask(100, { title: 'Call owner', notes: 'Ask about rent roll' })
+      mockCreateTask.mockResolvedValue(newTask)
+
+      render(
+        <LeadTaskList
+          leadId={42}
+          tasks={[]}
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      await user.click(screen.getByTestId('open-task-form-btn'))
+      await user.type(screen.getByTestId('task-title-input'), 'Call owner')
+      await user.type(screen.getByTestId('task-notes-input'), 'Ask about rent roll')
+      await user.click(screen.getByTestId('save-task-btn'))
+
+      await waitFor(() => {
+        expect(mockCreateTask).toHaveBeenCalledWith(42, {
+          title: 'Call owner',
+          task_type: 'custom',
+          due_date: null,
+          notes: 'Ask about rent roll',
+        })
+      })
+    })
+
     it('creates call_owner_today task when Schedule call is selected', async () => {
       const newTask = makeTask(101, {
         title: 'Follow up call',
@@ -755,11 +782,15 @@ describe('LeadTaskList', () => {
 
       await user.click(screen.getByTestId('open-task-form-btn'))
       await user.type(screen.getByTestId('task-title-input'), 'New Task')
+      await user.type(screen.getByTestId('task-notes-input'), 'Call about leases')
       await user.click(screen.getByTestId('save-task-btn'))
 
       await waitFor(() => {
         expect(onOptimisticTaskCreate).toHaveBeenCalledTimes(1)
       })
+      expect(onOptimisticTaskCreate.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ notes: 'Call about leases' }),
+      )
       expect(onOptimisticTaskRevert).not.toHaveBeenCalled()
     })
   })

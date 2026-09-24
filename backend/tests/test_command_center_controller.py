@@ -1210,6 +1210,37 @@ class TestLeadFindings:
             assert response.status_code == 400
 
 
+class TestReplaceLeadUnits:
+    def test_rejects_non_object_body(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '12 Units Body St')
+            response = client.put(
+                f'/api/leads/{lead.id}/units',
+                data=json.dumps([]),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 400
+            assert response.get_json()['message'] == 'JSON body must be an object'
+
+    def test_rejects_duplicate_unit_labels(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '12 Units Duplicate St')
+            response = client.put(
+                f'/api/leads/{lead.id}/units',
+                data=json.dumps({
+                    'units': [
+                        {'unit_label': 'Unit 1'},
+                        {'unit_label': ' unit 1 '},
+                    ],
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 400
+            assert response.get_json()['message'] == 'Duplicate unit label: unit 1'
+
+
 class TestUpdatePropertyOverview:
     def test_updates_units_type_value_and_sale(self, client, app):
         with app.app_context():
@@ -2252,6 +2283,7 @@ class TestCreateTask:
                         'title': 'Run skip trace',
                         'task_type': 'skip_trace_owner',
                         'due_date': '2026-08-15',
+                        'notes': 'Look up owner phone first',
                     }),
                     content_type='application/json',
                     headers=_AUTH_HEADERS,
@@ -2260,8 +2292,10 @@ class TestCreateTask:
             assert response.status_code == 201
             data = json.loads(response.data)
             assert data['due_date'] == '2026-08-15'
+            assert data['notes'] == 'Look up owner phone first'
             task = LeadTask.query.filter_by(lead_id=lead.id, task_type='skip_trace_owner').one()
             assert task.due_date == date(2026, 8, 15)
+            assert task.notes == 'Look up owner phone first'
             recompute.assert_not_called()
             refresh_scoring.assert_called_once_with(lead.id)
 

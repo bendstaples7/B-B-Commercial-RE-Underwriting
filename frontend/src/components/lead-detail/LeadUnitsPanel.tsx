@@ -1,7 +1,7 @@
 /**
  * Command Center unit-mix editor — wraps LeadUnitsEditor + PUT /units.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Alert, Box, Button, CircularProgress } from '@mui/material'
 import { leadService } from '@/services/leadApi'
 import type { CommandCenterPayload } from '@/types'
@@ -33,6 +33,8 @@ export function LeadUnitsPanel({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
+  const dirtyRef = useRef(false)
+  const lastLeadIdRef = useRef(leadId)
 
   // Remount-safe sync from server: skip while the user has unsaved edits so
   // other Command Center mutations (which invalidate the same query) do not
@@ -46,6 +48,12 @@ export function LeadUnitsPanel({
 
   // Lead switch always resets drafts even if the prior lead was dirty.
   useEffect(() => {
+    if (leadId !== lastLeadIdRef.current) {
+      lastLeadIdRef.current = leadId
+      dirtyRef.current = false
+    } else if (dirtyRef.current) {
+      return
+    }
     setDrafts(leadUnitDraftsFromApi(commandCenterData.lead_units))
     setSubtype((commandCenterData.lead_subtype as LeadSubtype | null | undefined) || '')
     setDirty(false)
@@ -57,10 +65,13 @@ export function LeadUnitsPanel({
     setSaving(true)
     setError(null)
     try {
-      await leadService.replaceLeadUnits(leadId, {
+      const result = await leadService.replaceLeadUnits(leadId, {
         units: serializeLeadUnitDrafts(drafts),
         lead_subtype: subtype || null,
       })
+      setDrafts(leadUnitDraftsFromApi(result.lead_units))
+      setSubtype((result.lead_subtype as LeadSubtype | null | undefined) || '')
+      dirtyRef.current = false
       setDirty(false)
       await onSaved?.()
     } catch (err) {
@@ -81,11 +92,13 @@ export function LeadUnitsPanel({
         units={drafts}
         onChange={(next) => {
           setDrafts(next)
+          dirtyRef.current = true
           setDirty(true)
         }}
         subtype={subtype}
         onSubtypeChange={(next) => {
           setSubtype(next)
+          dirtyRef.current = true
           setDirty(true)
         }}
         disabled={saving}

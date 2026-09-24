@@ -497,6 +497,7 @@ export function QuickAddPage() {
         setNextTaskError('Next task needs a title')
         return
       }
+      setNextTaskError('')
       const { title: resolvedTitle, task_type: taskType } = resolveCreateTaskPayload(
         nextTaskPreset,
         titleForValidation,
@@ -561,6 +562,7 @@ export function QuickAddPage() {
     setNextTaskDuePreset('3')
     setNextTaskDueDate('')
     setNextTaskNotes('')
+    setNextTaskError('')
     setSuccessResult(null)
     setExistingActionFeedback(null)
     setAddressError('')
@@ -698,19 +700,19 @@ export function QuickAddPage() {
           label="Property street (optional)"
           value={address}
           onChange={(e) => {
+            const nextAddress = e.target.value
             placesRequestIdRef.current += 1
             coordSourceRef.current = null
-            const nextStreet = e.target.value
-            setAddress(nextStreet)
+            setAddress(nextAddress)
             setExistingActionFeedback(null)
             // Keep locality when clearing street (city/ZIP-only capture).
             // Clear Places-sourced locality when replacing with a new street.
-            if (nextStreet.trim() && localityFromPlacesRef.current) {
+            if (nextAddress.trim() && localityFromPlacesRef.current) {
               setParsedAddress({ city: null, state: null, zip: null })
               localityFromPlacesRef.current = false
               setCoords(null)
             }
-            if (nextStreet.trim() || parsedAddress.city || parsedAddress.state || parsedAddress.zip) {
+            if (nextAddress.trim() || parsedAddress.city || parsedAddress.state || parsedAddress.zip) {
               setAddressError('')
             }
           }}
@@ -1189,7 +1191,10 @@ export function QuickAddPage() {
             clickable
             color={nextTaskEnabled ? 'primary' : 'default'}
             variant={nextTaskEnabled ? 'filled' : 'outlined'}
-            onClick={() => setNextTaskEnabled((v) => !v)}
+            onClick={() => {
+              setNextTaskEnabled((v) => !v)
+              setNextTaskError('')
+            }}
             sx={{ mb: 2, cursor: 'pointer' }}
             data-testid="quick-add-next-task-toggle"
           />
@@ -1206,6 +1211,7 @@ export function QuickAddPage() {
                     const prevDefault = getCreateTaskPreset(nextTaskPreset).defaultTitle
                     const nextDefault = getCreateTaskPreset(next).defaultTitle
                     setNextTaskPreset(next)
+                    setNextTaskError('')
                     if (nextDefault && (!nextTaskTitle.trim() || nextTaskTitle.trim() === prevDefault)) {
                       setNextTaskTitle(nextDefault)
                     } else if (!nextDefault && nextTaskTitle.trim() === prevDefault) {

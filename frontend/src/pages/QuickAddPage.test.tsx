@@ -309,6 +309,41 @@ describe('QuickAddPage deprioritized matches', () => {
     })
   })
 
+  it('shows missing next-task title errors on the next-task title field', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    renderPage()
+
+    fireEvent.change(screen.getByLabelText('Property street'), {
+      target: { value: '90 Task Error Ave' },
+    })
+    fireEvent.mouseDown(screen.getByLabelText('Pipeline status'))
+    fireEvent.click(screen.getByRole('option', { name: 'Negotiating Remote' }))
+    fireEvent.click(screen.getByTestId('quick-add-next-task-toggle'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save as Negotiating Remote' }))
+
+    expect(screen.getByText('Next task needs a title')).toBeInTheDocument()
+    expect(screen.getByTestId('quick-add-next-task-title')).toHaveAttribute('aria-invalid', 'true')
+    expect(leadService.quickAdd).not.toHaveBeenCalled()
+  })
+
+  it('preserves manually entered locality when replacing or clearing the street', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    renderPage()
+
+    fireEvent.change(screen.getByLabelText('Property street'), {
+      target: { value: '123 Old St' },
+    })
+    fireEvent.change(screen.getByTestId('quick-add-city'), { target: { value: 'Chicago' } })
+    fireEvent.change(screen.getByTestId('quick-add-street'), {
+      target: { value: '456 New St' },
+    })
+    expect(screen.getByTestId('quick-add-city')).toHaveValue('Chicago')
+
+    fireEvent.change(screen.getByTestId('quick-add-city'), { target: { value: 'Evanston' } })
+    fireEvent.change(screen.getByTestId('quick-add-street'), { target: { value: '' } })
+    expect(screen.getByTestId('quick-add-city')).toHaveValue('Evanston')
+  })
+
   it('links every person on the same form and does not offer a lead tab', async () => {
     vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
     vi.mocked(contactService.createContact)

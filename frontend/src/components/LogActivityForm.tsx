@@ -875,8 +875,8 @@ export const LogActivityForm = forwardRef<LogActivityFormHandle, LogActivityForm
         onCustomTaskTitleChange={setCustomTaskTitle}
         hideCompleteTask={isEditingTask}
         lockFollowUp={isEditingTask}
-        taskNotes={isEditingTask ? editTaskNotes : followUpNotes}
-        onTaskNotesChange={isEditingTask ? setEditTaskNotes : setFollowUpNotes}
+        taskNotes={isEditingTask ? editTaskNotes : createFollowUp ? followUpNotes : undefined}
+        onTaskNotesChange={isEditingTask ? setEditTaskNotes : createFollowUp ? setFollowUpNotes : undefined}
       />
     )
 

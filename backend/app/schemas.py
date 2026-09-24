@@ -1,6 +1,7 @@
 """Marshmallow schemas for request validation."""
 from marshmallow import Schema, fields, validate, ValidationError, validates_schema, validates, EXCLUDE, pre_load
 from datetime import datetime
+from app.models.lead_unit import LEAD_SUBTYPES
 from app.services.helpers.deal_source import DEAL_SOURCE_MAX_LENGTH
 from app.models.lead_unit import LEAD_SUBTYPES
 
