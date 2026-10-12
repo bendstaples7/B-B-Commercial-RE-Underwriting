@@ -309,7 +309,7 @@ describe('QuickAddPage deprioritized matches', () => {
     })
   })
 
-  it('shows missing next-task title errors on the next-task title field', async () => {
+  it('uses the command-center follow-up panel when a next task is included', async () => {
     vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
     renderPage()
 
@@ -318,12 +318,66 @@ describe('QuickAddPage deprioritized matches', () => {
     })
     fireEvent.mouseDown(screen.getByLabelText('Pipeline status'))
     fireEvent.click(screen.getByRole('option', { name: 'Negotiating Remote' }))
-    fireEvent.click(screen.getByTestId('quick-add-next-task-toggle'))
+    expect(screen.getByTestId('activity-next-step-actions')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', { name: /Create a follow-up task/i }))
+    fireEvent.click(screen.getByTestId('follow-up-custom'))
+    fireEvent.change(screen.getByTestId('follow-up-custom-date'), {
+      target: { value: '2026-11-05' },
+    })
+    fireEvent.change(screen.getByTestId('activity-task-notes'), {
+      target: { value: 'Ask about seller timeline' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Save as Negotiating Remote' }))
 
-    expect(screen.getByText('Next task needs a title')).toBeInTheDocument()
-    expect(screen.getByTestId('quick-add-next-task-title')).toHaveAttribute('aria-invalid', 'true')
+    await waitFor(() => {
+      expect(leadService.quickAdd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          next_task: expect.objectContaining({
+            title: 'Follow up call',
+            task_type: 'call_owner_today',
+            due_date: '2026-11-05',
+            notes: 'Ask about seller timeline',
+          }),
+        }),
+      )
+    })
+  })
+
+  it('requires a title for custom follow-up tasks', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    renderPage()
+
+    fireEvent.change(screen.getByLabelText('Property street'), {
+      target: { value: '92 Custom Task Ave' },
+    })
+    fireEvent.mouseDown(screen.getByLabelText('Pipeline status'))
+    fireEvent.click(screen.getByRole('option', { name: 'Negotiating Remote' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /Create a follow-up task/i }))
+    fireEvent.click(screen.getByTestId('change-next-step-btn'))
+    fireEvent.mouseDown(screen.getByLabelText('Task type'))
+    fireEvent.click(screen.getByRole('option', { name: 'Custom' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save as Negotiating Remote' }))
+
+    expect(await screen.findByText('Next task needs a title.')).toBeInTheDocument()
     expect(leadService.quickAdd).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByTestId('next-step-custom-title'), {
+      target: { value: 'Review rent roll' },
+    })
+    expect(screen.queryByText('Next task needs a title.')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save as Negotiating Remote' }))
+
+    await waitFor(() => {
+      expect(leadService.quickAdd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          next_task: expect.objectContaining({
+            title: 'Review rent roll',
+            task_type: 'custom',
+          }),
+        }),
+      )
+    })
   })
 
   it('preserves manually entered locality when replacing or clearing the street', async () => {
@@ -497,14 +551,21 @@ describe('QuickAddPage deprioritized matches', () => {
     expect(leadService.quickAdd).not.toHaveBeenCalled()
   })
 
-  it('blocks when street and locality are both blank', () => {
+  it('saves when street and locality are both blank', async () => {
     vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
     renderPage()
     fireEvent.change(screen.getByLabelText('Property street'), { target: { value: '   ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save to Skip Trace' }))
-    expect(screen.getByText(/enter a property address, or at least a city, state, or zip/i)).toBeInTheDocument()
-    expect(leadService.quickAdd).not.toHaveBeenCalled()
-    expect(contactService.createContact).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(leadService.quickAdd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          property_street: null,
+          property_city: null,
+          property_state: null,
+          property_zip: null,
+        }),
+      )
+    })
   })
 
   it('allows save with city only and no street', async () => {

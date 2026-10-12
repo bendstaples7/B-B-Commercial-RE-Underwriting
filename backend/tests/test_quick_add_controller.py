@@ -744,15 +744,21 @@ class TestQuickAddEndpoint:
                 property_street='89 Bad Units Ave, Chicago, IL',
             ).count() == 0
 
-    def test_requires_address(self, quick_add_client, app):
+    def test_blank_address_creates_lead(self, quick_add_client, app):
         with app.app_context():
             response = quick_add_client.post(
                 '/api/leads/quick-add',
                 headers=_AUTH_HEADERS,
-                data=json.dumps({'property_street': '  '}),
+                data=json.dumps({
+                    'property_street': '  ',
+                    'note': 'Seller, no address yet',
+                }),
                 content_type='application/json',
             )
-            assert response.status_code == 400
+            assert response.status_code == 201, response.get_json()
+            lead = db.session.get(Lead, response.get_json()['lead_id'])
+            assert lead is not None
+            assert not (lead.property_street or '').strip()
 
     def test_requires_auth(self, quick_add_client, app):
         with app.app_context():

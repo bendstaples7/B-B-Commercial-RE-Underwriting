@@ -257,11 +257,6 @@ class QuickAddService:
         city_in = (property_city or '').strip() or None
         state_in = (property_state or '').strip() or None
         zip_in = (property_zip or '').strip() or None
-        if not street and not (city_in or state_in or zip_in):
-            raise ValueError(
-                'Enter a property address, or at least a city, state, or ZIP'
-            )
-
         now = datetime.now(timezone.utc)
         identified_on = date_identified or now.date()
         resolved_kind = (capture_kind or '').strip().lower()
