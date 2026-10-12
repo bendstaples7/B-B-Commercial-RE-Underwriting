@@ -25,6 +25,7 @@ from datetime import datetime
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 revision = 'k1l2m3n4o5p6'
 down_revision = 'j0k1l2m3n4o5'
@@ -36,20 +37,28 @@ logger = logging.getLogger('alembic.runtime.migration')
 
 def upgrade():
     # ------------------------------------------------------------------
-    # 1. Enum types are created implicitly by the op.create_table() calls
-    # below.  Each enum (contact_role_enum, phone_label_enum,
-    # email_label_enum, property_contact_role_enum) is used by exactly one
-    # table, so SQLAlchemy emits its CREATE TYPE exactly once before the
-    # owning table.
-    #
-    # NOTE: do NOT create these types explicitly here.  ``create_type=False``
-    # is not honoured by op.create_table() in this SQLAlchemy/Alembic version
-    # (it emits the CREATE TYPE regardless), so an explicit create here — or
-    # the historical ``sa.Enum(...).create(checkfirst=True)`` — produced a
-    # duplicate ``CREATE TYPE`` and aborted the fresh-DB upgrade with
-    # ``DuplicateObject``.  Letting create_table own the creation keeps it to
-    # a single emission.
+    # 1. Create enum types before referencing them in table DDL.
+    # SQLAlchemy 2.1 no longer creates these named types implicitly when the
+    # table column uses create_type=False, so the fresh-DB migration gate must
+    # create them explicitly and let the table columns reference existing types.
     # ------------------------------------------------------------------
+    bind = op.get_bind()
+    postgresql.ENUM(
+        'owner', 'property_manager', 'attorney', 'family_member', 'other',
+        name='contact_role_enum',
+    ).create(bind, checkfirst=True)
+    postgresql.ENUM(
+        'mobile', 'home', 'work', 'other',
+        name='phone_label_enum',
+    ).create(bind, checkfirst=True)
+    postgresql.ENUM(
+        'personal', 'work', 'other',
+        name='email_label_enum',
+    ).create(bind, checkfirst=True)
+    postgresql.ENUM(
+        'owner', 'property_manager', 'attorney', 'family_member', 'other',
+        name='property_contact_role_enum',
+    ).create(bind, checkfirst=True)
 
     # ------------------------------------------------------------------
     # 2. Create contacts table
@@ -61,7 +70,7 @@ def upgrade():
         sa.Column('last_name', sa.String(128), nullable=True),
         sa.Column(
             'role',
-            sa.Enum(
+            postgresql.ENUM(
                 'owner', 'property_manager', 'attorney', 'family_member', 'other',
                 name='contact_role_enum',
                 create_type=False
@@ -86,7 +95,7 @@ def upgrade():
         sa.Column('value', sa.String(50), nullable=False),
         sa.Column(
             'label',
-            sa.Enum(
+            postgresql.ENUM(
                 'mobile', 'home', 'work', 'other',
                 name='phone_label_enum',
                 create_type=False
@@ -117,7 +126,7 @@ def upgrade():
         sa.Column('value', sa.String(255), nullable=False),
         sa.Column(
             'label',
-            sa.Enum(
+            postgresql.ENUM(
                 'personal', 'work', 'other',
                 name='email_label_enum',
                 create_type=False
@@ -154,7 +163,7 @@ def upgrade():
         sa.Column('contact_id', sa.Integer(), nullable=False),
         sa.Column(
             'role',
-            sa.Enum(
+            postgresql.ENUM(
                 'owner', 'property_manager', 'attorney', 'family_member', 'other',
                 name='property_contact_role_enum',
                 create_type=False
@@ -190,7 +199,7 @@ def upgrade():
     # ------------------------------------------------------------------
     # 6. Data migration — raw SQL via op.get_bind()
     # ------------------------------------------------------------------
-    conn = op.get_bind()
+    conn = bind
     now = datetime.utcnow()
 
     contacts_created = 0
@@ -366,7 +375,8 @@ def downgrade():
     op.drop_table('contacts')
 
     # Drop enum types
-    sa.Enum(name='property_contact_role_enum').drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name='email_label_enum').drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name='phone_label_enum').drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name='contact_role_enum').drop(op.get_bind(), checkfirst=True)
+    bind = op.get_bind()
+    postgresql.ENUM(name='property_contact_role_enum').drop(bind, checkfirst=True)
+    postgresql.ENUM(name='email_label_enum').drop(bind, checkfirst=True)
+    postgresql.ENUM(name='phone_label_enum').drop(bind, checkfirst=True)
+    postgresql.ENUM(name='contact_role_enum').drop(bind, checkfirst=True)
