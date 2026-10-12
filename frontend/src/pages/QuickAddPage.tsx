@@ -494,6 +494,10 @@ export function QuickAddPage() {
         setFollowUpError('Choose a follow-up date.')
         return
       }
+      if (nextStepType === 'custom' && !customTaskTitle.trim()) {
+        setFollowUpError('Next task needs a title.')
+        return
+      }
       const { title, task_type } = resolveCreateTaskPayload(
         nextStepType,
         nextStepType === 'custom' ? customTaskTitle : '',
@@ -1194,9 +1198,19 @@ export function QuickAddPage() {
             nextStepExpanded={nextStepExpanded}
             onToggleNextStepExpanded={() => setNextStepExpanded((expanded) => !expanded)}
             nextStepType={nextStepType}
-            onNextStepTypeChange={setNextStepType}
+            onNextStepTypeChange={(value) => {
+              setNextStepType(value)
+              if (followUpError === 'Next task needs a title.' && value !== 'custom') {
+                setFollowUpError(null)
+              }
+            }}
             customTaskTitle={customTaskTitle}
-            onCustomTaskTitleChange={setCustomTaskTitle}
+            onCustomTaskTitleChange={(value) => {
+              setCustomTaskTitle(value)
+              if (followUpError === 'Next task needs a title.' && value.trim()) {
+                setFollowUpError(null)
+              }
+            }}
             taskNotes={createFollowUp ? followUpNotes : undefined}
             onTaskNotesChange={createFollowUp ? setFollowUpNotes : undefined}
           />

@@ -320,6 +320,13 @@ describe('QuickAddPage deprioritized matches', () => {
     fireEvent.click(screen.getByRole('option', { name: 'Negotiating Remote' }))
     expect(screen.getByTestId('activity-next-step-actions')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('checkbox', { name: /Create a follow-up task/i }))
+    fireEvent.click(screen.getByTestId('follow-up-custom'))
+    fireEvent.change(screen.getByTestId('follow-up-custom-date'), {
+      target: { value: '2026-11-05' },
+    })
+    fireEvent.change(screen.getByTestId('activity-task-notes'), {
+      target: { value: 'Ask about seller timeline' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Save as Negotiating Remote' }))
 
     await waitFor(() => {
@@ -328,6 +335,45 @@ describe('QuickAddPage deprioritized matches', () => {
           next_task: expect.objectContaining({
             title: 'Follow up call',
             task_type: 'call_owner_today',
+            due_date: '2026-11-05',
+            notes: 'Ask about seller timeline',
+          }),
+        }),
+      )
+    })
+  })
+
+  it('requires a title for custom follow-up tasks', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    renderPage()
+
+    fireEvent.change(screen.getByLabelText('Property street'), {
+      target: { value: '92 Custom Task Ave' },
+    })
+    fireEvent.mouseDown(screen.getByLabelText('Pipeline status'))
+    fireEvent.click(screen.getByRole('option', { name: 'Negotiating Remote' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /Create a follow-up task/i }))
+    fireEvent.click(screen.getByTestId('change-next-step-btn'))
+    fireEvent.mouseDown(screen.getByLabelText('Task type'))
+    fireEvent.click(screen.getByRole('option', { name: 'Custom' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save as Negotiating Remote' }))
+
+    expect(await screen.findByText('Next task needs a title.')).toBeInTheDocument()
+    expect(leadService.quickAdd).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByTestId('next-step-custom-title'), {
+      target: { value: 'Review rent roll' },
+    })
+    expect(screen.queryByText('Next task needs a title.')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save as Negotiating Remote' }))
+
+    await waitFor(() => {
+      expect(leadService.quickAdd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          next_task: expect.objectContaining({
+            title: 'Review rent roll',
+            task_type: 'custom',
           }),
         }),
       )
