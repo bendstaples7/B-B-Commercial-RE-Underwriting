@@ -51,12 +51,13 @@ function Install-SyncTask {
     $taskName = "BBAnalyzer - Sync from Prod"
     $dupName  = "BBAnalyzer - Sync Local DB from Production"
     $launcher = Join-Path (Split-Path $SCRIPT_PATH) "sync-from-prod-hidden.vbs"
+    $launcherArgs = "//B //Nologo `"$launcher`""
     $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-    $actionOk = $existing -and ($existing.Actions[0].Execute -match 'wscript') -and ($existing.Actions[0].Arguments -like '*sync-from-prod-hidden.vbs*')
+    $actionOk = $existing -and ($existing.Actions[0].Execute -match 'wscript') -and ($existing.Actions[0].Arguments -eq $launcherArgs)
     if (-not ($existing -and $existing.Settings.Hidden -and $actionOk)) {
         $action   = New-ScheduledTaskAction `
             -Execute "wscript.exe" `
-            -Argument "//B //Nologo `"$launcher`""
+            -Argument $launcherArgs
         $triggers = @(
             (New-ScheduledTaskTrigger -Daily -At "02:00"),
             (New-ScheduledTaskTrigger -AtLogOn)
@@ -165,9 +166,9 @@ Log "=== prod to local sync starting ==="
 Log "Dumping $VPS_DB_NAME from $VPS_HOST ..."
 
 $sshArgs = @(
-    "-i", $VPS_SSH_KEY,
+    "-i", "`"$VPS_SSH_KEY`"",
     "-o", "StrictHostKeyChecking=yes",
-    "-o", "UserKnownHostsFile=$VPS_KNOWN_HOSTS_FILE",
+    "-o", "`"UserKnownHostsFile=$VPS_KNOWN_HOSTS_FILE`"",
     "-o", "BatchMode=yes",
     "${VPS_USER}@${VPS_HOST}",
     "pg_dump -U $VPS_DB_USER -h localhost -Fc $VPS_DB_NAME"
@@ -226,7 +227,7 @@ $restoreProc = Start-Process -FilePath $PG_RESTORE -ArgumentList @(
     "-d", $LOCAL_DB_NAME,
     "--no-owner", "--no-acl",
     "-j", "4",
-    $DUMP_FILE
+    "`"$DUMP_FILE`""
 ) -RedirectStandardError $restoreErr -Wait -PassThru -NoNewWindow
 $restoreExit = $restoreProc.ExitCode
 [System.Environment]::SetEnvironmentVariable("PGPASSWORD", $null, "Process")
