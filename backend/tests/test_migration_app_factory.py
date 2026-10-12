@@ -325,7 +325,7 @@ def test_superuser_guard_still_runs_for_psycopg2_driver_scheme():
     row = MagicMock()
     row.fetchone.return_value = (False,)
 
-    with patch('app.db.session.execute', return_value=row) as execute:
+    with app.app_context(), patch('app.db.session.execute', return_value=row) as execute:
         _assert_not_superuser(app)
 
     execute.assert_called_once()
