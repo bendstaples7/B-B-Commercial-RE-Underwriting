@@ -47,6 +47,8 @@ import enum as _enum_module
 import sqlalchemy as sa
 from sqlalchemy import create_engine, text
 
+from scripts.preflight_dedup_migration import postgres_engine_url
+
 
 # ---------------------------------------------------------------------------
 # Registry of (pg_type_name, Python_enum_class) pairs to validate.
@@ -114,7 +116,7 @@ def main() -> int:
         print(f"ERROR: Could not import model enums: {exc}", file=sys.stderr)
         return 1
 
-    engine = create_engine(db_url)
+    engine = create_engine(postgres_engine_url(db_url))
     drift_count = 0
 
     try:
