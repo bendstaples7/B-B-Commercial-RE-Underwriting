@@ -5,6 +5,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[2]
 _PATH = _ROOT / 'scripts' / 'inject_google_maps_browser_key.py'
 
@@ -117,7 +119,10 @@ def test_main_reads_backend_env_through_dist_release_symlink(tmp_path: Path, mon
         'GOOGLE_MAPS_API_KEY=AIzaSyFromServerEnv\n',
         encoding='utf-8',
     )
-    (app / 'frontend' / 'dist').symlink_to(release, target_is_directory=True)
+    try:
+        (app / 'frontend' / 'dist').symlink_to(release, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f'symlink not permitted here: {exc}')
     monkeypatch.delenv('APP_DIR', raising=False)
     monkeypatch.delenv('GOOGLE_MAPS_API_KEY', raising=False)
     monkeypatch.delenv('GOOGLE_MAPS_BROWSER_API_KEY', raising=False)

@@ -1,5 +1,7 @@
 Flask==3.0.0
 Flask-SQLAlchemy==3.1.1
+# 2.1 switches the default postgresql:// driver to psycopg v3, which is not installed.
+SQLAlchemy==2.0.54
 Flask-Migrate==4.1.0
 Flask-CORS==4.0.0
 psycopg2-binary==2.9.9
