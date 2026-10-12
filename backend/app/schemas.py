@@ -1869,18 +1869,6 @@ class QuickAddSchema(RequestSchema):
         data['capture_kind'] = cleaned or None
         return data
 
-    @validates_schema
-    def require_street_or_locality(self, data, **kwargs):
-        street = (data.get('property_street') or '').strip()
-        city = (data.get('property_city') or '').strip()
-        state = (data.get('property_state') or '').strip()
-        zip_code = (data.get('property_zip') or '').strip()
-        if not street and not (city or state or zip_code):
-            raise ValidationError(
-                'Enter a property address, or at least a city, state, or ZIP',
-                field_name='property_street',
-            )
-
     priority = fields.String(
         allow_none=True,
         load_default=None,

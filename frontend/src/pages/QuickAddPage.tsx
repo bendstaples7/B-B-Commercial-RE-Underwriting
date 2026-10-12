@@ -27,14 +27,13 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { FollowUpHorizonControls } from '@/components/FollowUpHorizonControls'
+import { ActivityNextStepPanel } from '@/components/ActivityNextStepPanel'
 import {
-  CREATE_TASK_PRESETS,
-  getCreateTaskPreset,
   resolveCreateTaskPayload,
   type CreateTaskPresetId,
 } from '@/utils/createTaskPresets'
 import {
+  followUpDueForPreset,
   resolveFollowUpDueDate,
   type FollowUpPreset,
 } from '@/utils/followUpPresets'
@@ -145,8 +144,7 @@ export function QuickAddPage() {
   const [dealSource, setDealSource] = useState<string>(QUICK_ADD_DEAL_SOURCES[0])
   const [pipelineStatus, setPipelineStatus] = useState<LeadStatus>('skip_trace')
   const [dateIdentified, setDateIdentified] = useState(todayIsoDate)
-  const [addressError, setAddressError] = useState('')
-  const [nextTaskError, setNextTaskError] = useState('')
+  const [followUpError, setFollowUpError] = useState<string | null>(null)
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
   const [gpsLabel, setGpsLabel] = useState<string | null>(null)
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null)
@@ -168,12 +166,13 @@ export function QuickAddPage() {
   const [bathrooms, setBathrooms] = useState('')
   const [leadSubtype, setLeadSubtype] = useState<LeadSubtype | ''>('')
   const [leadUnitDrafts, setLeadUnitDrafts] = useState<LeadUnitDraft[]>([])
-  const [nextTaskEnabled, setNextTaskEnabled] = useState(false)
-  const [nextTaskPreset, setNextTaskPreset] = useState<CreateTaskPresetId>('custom')
-  const [nextTaskTitle, setNextTaskTitle] = useState('')
-  const [nextTaskDuePreset, setNextTaskDuePreset] = useState<FollowUpPreset>('3')
-  const [nextTaskDueDate, setNextTaskDueDate] = useState('')
-  const [nextTaskNotes, setNextTaskNotes] = useState('')
+  const [createFollowUp, setCreateFollowUp] = useState(false)
+  const [nextStepExpanded, setNextStepExpanded] = useState(false)
+  const [nextStepType, setNextStepType] = useState<CreateTaskPresetId>('call_owner_today')
+  const [customTaskTitle, setCustomTaskTitle] = useState('')
+  const [followUpPreset, setFollowUpPreset] = useState<FollowUpPreset>('3')
+  const [customDueDate, setCustomDueDate] = useState('')
+  const [followUpNotes, setFollowUpNotes] = useState('')
   const [successResult, setSuccessResult] = useState<SavedQuickAdd | null>(null)
   const [existingActionFeedback, setExistingActionFeedback] = useState<{
     severity: 'success' | 'warning' | 'error'
@@ -211,11 +210,9 @@ export function QuickAddPage() {
     if (mapsLoaded) init()
   }, [mapsLoaded, init])
 
-  const addressHelperText = addressError
-    ? addressError
-    : !mapsLoaded || !ready
-      ? 'Street optional if you have city, state, or ZIP — suggestions load when Maps is ready'
-      : 'Street optional if you know city / state / ZIP. Start typing for Google suggestions'
+  const addressHelperText = !mapsLoaded || !ready
+    ? 'Optional. Suggestions load when Maps is ready'
+    : 'Optional. Start typing for Google suggestions'
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -407,7 +404,6 @@ export function QuickAddPage() {
     coordSourceRef.current = 'place-pending'
     setCoords(null)
     clearSuggestions()
-    setAddressError('')
     try {
       const service = new (window as any).google.maps.places.PlacesService(
         document.createElement('div'),
@@ -473,11 +469,6 @@ export function QuickAddPage() {
     const city = (parsedAddress.city || '').trim()
     const state = (parsedAddress.state || '').trim()
     const zip = (parsedAddress.zip || '').trim()
-    if (!street && !(city || state || zip)) {
-      setAddressError('Enter a property address, or at least a city, state, or ZIP')
-      setNextTaskError('')
-      return
-    }
     const incompletePerson = people.some(
       (person) => !person.firstName.trim() && !person.lastName.trim(),
     )
@@ -486,8 +477,7 @@ export function QuickAddPage() {
       return
     }
     setPeopleError('')
-    setAddressError('')
-    setNextTaskError('')
+    setFollowUpError(null)
     const namedPeople = people.filter(
       (person) => person.firstName.trim() || person.lastName.trim(),
     )
@@ -498,23 +488,21 @@ export function QuickAddPage() {
       return Number.isFinite(n) ? n : null
     }
     let next_task: QuickAddPayload['next_task'] = null
-    if (pipelineStatus !== 'skip_trace' && nextTaskEnabled) {
-      const preset = getCreateTaskPreset(nextTaskPreset)
-      const titleForValidation = nextTaskTitle.trim() || preset.defaultTitle || ''
-      if (!titleForValidation) {
-        setNextTaskError('Next task needs a title')
+    if (pipelineStatus !== 'skip_trace' && createFollowUp) {
+      const due = resolveFollowUpDueDate(followUpPreset, customDueDate)
+      if (!due) {
+        setFollowUpError('Choose a follow-up date.')
         return
       }
-      setNextTaskError('')
-      const { title: resolvedTitle, task_type: taskType } = resolveCreateTaskPayload(
-        nextTaskPreset,
-        titleForValidation,
+      const { title, task_type } = resolveCreateTaskPayload(
+        nextStepType,
+        nextStepType === 'custom' ? customTaskTitle : '',
       )
       next_task = {
-        title: resolvedTitle,
-        task_type: taskType,
-        due_date: resolveFollowUpDueDate(nextTaskDuePreset, nextTaskDueDate),
-        notes: nextTaskNotes.trim() || null,
+        title,
+        task_type,
+        due_date: due,
+        notes: followUpNotes.trim() || null,
       }
     }
     const serializedUnits = leadUnitDrafts.length
@@ -564,15 +552,16 @@ export function QuickAddPage() {
     setBathrooms('')
     setLeadSubtype('')
     setLeadUnitDrafts([])
-    setNextTaskEnabled(false)
-    setNextTaskPreset('custom')
-    setNextTaskTitle('')
-    setNextTaskDuePreset('3')
-    setNextTaskDueDate('')
-    setNextTaskNotes('')
+    setCreateFollowUp(false)
+    setNextStepExpanded(false)
+    setNextStepType('call_owner_today')
+    setCustomTaskTitle('')
+    setFollowUpPreset('3')
+    setCustomDueDate('')
+    setFollowUpNotes('')
+    setFollowUpError(null)
     setSuccessResult(null)
     setExistingActionFeedback(null)
-    setAddressError('')
     localityFromPlacesRef.current = false
     setParsedAddress({ city: null, state: null, zip: null })
     quickAddMutation.reset()
@@ -606,7 +595,11 @@ export function QuickAddPage() {
     setPeopleError('')
   }
 
-  const intro = 'Save a lead even when the full street is unknown — city, state, or ZIP is enough. Add people, source, property facts, and a follow-up when you already know the pipeline stage.'
+  const intro = 'Save a lead with or without an address. Add people, source, property facts, and a follow-up when you already know the pipeline stage.'
+  const followUpDuePreview =
+    createFollowUp && followUpPreset !== 'custom'
+      ? followUpDueForPreset(followUpPreset)
+      : null
 
   const dialogTitle = 'Quick Add'
 
@@ -718,18 +711,14 @@ export function QuickAddPage() {
               localityFromPlacesRef.current = false
               setCoords(null)
             }
-            if (nextAddress.trim() || parsedAddress.city || parsedAddress.state || parsedAddress.zip) {
-              setAddressError('')
-            }
           }}
           onKeyDown={(e) => {
             if (e.key === 'Escape') clearSuggestions()
           }}
-          error={!!addressError}
           helperText={addressHelperText}
           fullWidth
           autoComplete="off"
-          placeholder="123 Main St — or leave blank and use city / ZIP below"
+          placeholder="123 Main St"
           disabled={quickAddMutation.isPending}
           inputProps={{
             'aria-label': 'Property street',
@@ -742,7 +731,7 @@ export function QuickAddPage() {
         {mapsAvailability === 'unavailable' && (
           <Alert severity="warning" sx={{ mt: 1 }} data-testid="quick-add-maps-unavailable">
             Google address suggestions are unavailable (Maps API key not loaded). You can still
-            enter a street or just city / state / ZIP and save.
+            type an address, or leave it blank and save.
           </Alert>
         )}
         {status === 'OK' && data.length > 0 && (
@@ -796,7 +785,6 @@ export function QuickAddPage() {
           value={parsedAddress.city ?? ''}
           onChange={(e) => {
             setParsedAddress((prev) => ({ ...prev, city: e.target.value || null }))
-            setAddressError('')
           }}
           size="small"
           sx={{ flex: '1 1 140px', caretColor: 'text.primary' }}
@@ -808,7 +796,6 @@ export function QuickAddPage() {
           value={parsedAddress.state ?? ''}
           onChange={(e) => {
             setParsedAddress((prev) => ({ ...prev, state: e.target.value || null }))
-            setAddressError('')
           }}
           size="small"
           sx={{ width: 88, caretColor: 'text.primary' }}
@@ -820,7 +807,6 @@ export function QuickAddPage() {
           value={parsedAddress.zip ?? ''}
           onChange={(e) => {
             setParsedAddress((prev) => ({ ...prev, zip: e.target.value || null }))
-            setAddressError('')
           }}
           size="small"
           sx={{ width: 110, caretColor: 'text.primary' }}
@@ -1182,96 +1168,38 @@ export function QuickAddPage() {
       </FormControl>
 
       {pipelineStatus !== 'skip_trace' && (
-        <Box
-          sx={{ mt: 3, p: 2, border: 1, borderColor: 'divider', borderRadius: 1, cursor: 'auto' }}
-          data-testid="quick-add-next-task"
-        >
-          <Typography variant="subtitle2" gutterBottom>
-            Next task
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Optional. Same create flow as Open Tasks on the lead — skip-trace stage queues skip work automatically instead.
-          </Typography>
-          <Chip
-            label={nextTaskEnabled ? 'Include next task' : 'No next task'}
-            clickable
-            color={nextTaskEnabled ? 'primary' : 'default'}
-            variant={nextTaskEnabled ? 'filled' : 'outlined'}
-            onClick={() => {
-              setNextTaskEnabled((v) => !v)
-              setNextTaskError('')
+        <Box sx={{ mt: 3, cursor: 'auto' }} data-testid="quick-add-next-task">
+          <ActivityNextStepPanel
+            completableTask={null}
+            hideCompleteTask
+            completeTask={false}
+            onCompleteTaskChange={() => {}}
+            createFollowUp={createFollowUp}
+            onCreateFollowUpChange={(checked) => {
+              setCreateFollowUp(checked)
+              setFollowUpError(null)
             }}
-            sx={{ mb: 2, cursor: 'pointer' }}
-            data-testid="quick-add-next-task-toggle"
+            followUpPreset={followUpPreset}
+            customDueDate={customDueDate}
+            followUpError={followUpError}
+            followUpDuePreview={followUpDuePreview}
+            onFollowUpPresetChange={(value) => {
+              setFollowUpPreset(value)
+              setFollowUpError(null)
+            }}
+            onCustomDueDateChange={(value) => {
+              setCustomDueDate(value)
+              setFollowUpError(null)
+            }}
+            nextStepExpanded={nextStepExpanded}
+            onToggleNextStepExpanded={() => setNextStepExpanded((expanded) => !expanded)}
+            nextStepType={nextStepType}
+            onNextStepTypeChange={setNextStepType}
+            customTaskTitle={customTaskTitle}
+            onCustomTaskTitleChange={setCustomTaskTitle}
+            taskNotes={createFollowUp ? followUpNotes : undefined}
+            onTaskNotesChange={createFollowUp ? setFollowUpNotes : undefined}
           />
-          {nextTaskEnabled && (
-            <>
-              <FormControl fullWidth size="small" sx={{ mb: 2 }}>
-                <InputLabel id="quick-add-next-task-type-label">Type</InputLabel>
-                <Select
-                  labelId="quick-add-next-task-type-label"
-                  label="Type"
-                  value={nextTaskPreset}
-                  onChange={(e) => {
-                    const next = e.target.value as CreateTaskPresetId
-                    const prevDefault = getCreateTaskPreset(nextTaskPreset).defaultTitle
-                    const nextDefault = getCreateTaskPreset(next).defaultTitle
-                    setNextTaskPreset(next)
-                    setNextTaskError('')
-                    if (nextDefault && (!nextTaskTitle.trim() || nextTaskTitle.trim() === prevDefault)) {
-                      setNextTaskTitle(nextDefault)
-                    } else if (!nextDefault && nextTaskTitle.trim() === prevDefault) {
-                      setNextTaskTitle('')
-                    }
-                  }}
-                  inputProps={{ 'data-testid': 'quick-add-next-task-type' }}
-                >
-                  {CREATE_TASK_PRESETS.map((opt) => (
-                    <MenuItem key={opt.id} value={opt.id}>
-                      {opt.label}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <TextField
-                label="Title"
-                value={nextTaskTitle}
-                onChange={(e) => {
-                  setNextTaskTitle(e.target.value)
-                  if (nextTaskError) setNextTaskError('')
-                }}
-                fullWidth
-                size="small"
-                error={Boolean(nextTaskError)}
-                helperText={nextTaskError || undefined}
-                sx={{ mb: 2, caretColor: 'text.primary' }}
-                inputProps={{ maxLength: 255, 'data-testid': 'quick-add-next-task-title' }}
-              />
-              <Box sx={{ mb: 2 }}>
-                <FollowUpHorizonControls
-                  variant="list"
-                  preset={nextTaskDuePreset}
-                  customDueDate={nextTaskDueDate}
-                  onPresetChange={setNextTaskDuePreset}
-                  onCustomDueDateChange={setNextTaskDueDate}
-                  testIdPrefix="quick-add-next-task-due"
-                  dateLabel="Due date"
-                />
-              </Box>
-              <TextField
-                label="Task notes"
-                value={nextTaskNotes}
-                onChange={(e) => setNextTaskNotes(e.target.value)}
-                fullWidth
-                size="small"
-                multiline
-                minRows={2}
-                sx={{ mb: 1, caretColor: 'text.primary' }}
-                placeholder="Conversation goal or what to cover"
-                inputProps={{ 'data-testid': 'quick-add-next-task-notes' }}
-              />
-            </>
-          )}
         </Box>
       )}
 
