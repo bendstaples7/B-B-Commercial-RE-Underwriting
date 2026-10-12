@@ -17,6 +17,7 @@ from scripts.preflight_dedup_migration import (
     F9_REVISION,
     build_report,
     count_street_duplicate_clusters,
+    postgres_engine_url,
 )
 from scripts.merge_duplicate_leads import _find_dedup_merge_groups
 
@@ -26,6 +27,19 @@ integration = pytest.mark.skipif(
     not MIGRATION_TEST_DB_URL,
     reason='MIGRATION_TEST_DB_URL not set — dedup migration gate tests require PostgreSQL',
 )
+
+
+def test_postgres_engine_url_uses_installed_driver():
+    assert postgres_engine_url(
+        'postgresql://postgres:postgres@localhost:5432/migration_dedup_test_db'
+    ) == 'postgresql+psycopg2://postgres:postgres@localhost:5432/migration_dedup_test_db'
+    assert postgres_engine_url('postgres://u:p@localhost/db') == (
+        'postgresql+psycopg2://u:p@localhost/db'
+    )
+    assert postgres_engine_url('postgresql+psycopg2://u:p@localhost/db') == (
+        'postgresql+psycopg2://u:p@localhost/db'
+    )
+    assert postgres_engine_url('sqlite://') == 'sqlite://'
 
 
 def _backend_dir() -> str:

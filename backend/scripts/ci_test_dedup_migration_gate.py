@@ -20,6 +20,7 @@ from scripts.preflight_dedup_migration import (  # noqa: E402
     F8_REVISION,
     F9_REVISION,
     build_report,
+    postgres_engine_url,
 )
 
 TEST_USER_ID = 'ci-dedup-gate-user'
@@ -30,7 +31,7 @@ def _database_url() -> str:
     url = os.environ.get('DATABASE_URL')
     if not url:
         raise SystemExit('DATABASE_URL is not set')
-    return url.replace('postgresql+psycopg2://', 'postgresql://')
+    return postgres_engine_url(url)
 
 
 def _sqlalchemy_database_url(db_url: str) -> str:
