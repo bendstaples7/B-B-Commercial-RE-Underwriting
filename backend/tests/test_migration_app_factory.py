@@ -52,6 +52,7 @@ def _create_app_migration(extra_env=None, config_name='testing'):
     from app import create_app
 
     env = _base_env(overrides=extra_env)
+    env.setdefault('DATABASE_URL', 'postgresql://user:pw@localhost:5432/testdb')
 
     with patch.dict(os.environ, env, clear=True):
         with patch('app._validate_and_log_database_url'):
@@ -106,7 +107,10 @@ def test_migration_context_no_auto_upgrade():
     """
     from app import create_app
 
-    env = _base_env(overrides={'SECRET_KEY': 'test-secret'})
+    env = _base_env(overrides={
+        'SECRET_KEY': 'test-secret',
+        'DATABASE_URL': 'postgresql://user:pw@localhost:5432/testdb',
+    })
 
     with patch.dict(os.environ, env, clear=True):
         with patch('app._validate_and_log_database_url'):
@@ -259,6 +263,72 @@ def test_missing_database_url_not_system_exit():
             )
         except ConfigurationError:
             pass  # correct
+
+
+def test_create_app_uses_installed_psycopg2_driver_for_plain_postgres_url():
+    """
+    Plain PostgreSQL URLs must resolve through psycopg2 because that is the
+    driver installed by backend/requirements.txt.
+    """
+    app = _create_app_migration(extra_env={
+        'SECRET_KEY': 'test-secret',
+        'DATABASE_URL': 'postgresql://user:pw@localhost:5432/testdb?sslmode=require',
+    })
+
+    assert app.config['SQLALCHEMY_DATABASE_URI'] == (
+        'postgresql+psycopg2://user:pw@localhost:5432/testdb?sslmode=require'
+    )
+
+
+def test_create_app_uses_installed_psycopg2_driver_for_postgres_alias():
+    """
+    Heroku-style postgres:// URLs should also be normalized for SQLAlchemy.
+    """
+    app = _create_app_migration(extra_env={
+        'SECRET_KEY': 'test-secret',
+        'DATABASE_URL': 'postgres://user:pw@localhost:5432/testdb',
+    })
+
+    assert app.config['SQLALCHEMY_DATABASE_URI'] == (
+        'postgresql+psycopg2://user:pw@localhost:5432/testdb'
+    )
+
+
+def test_validate_database_url_accepts_psycopg2_driver_scheme():
+    """
+    A driver-qualified psycopg2 URL is valid because psycopg2-binary is installed.
+    """
+    from app import _validate_and_log_database_url
+    from flask import Flask
+
+    app = Flask(__name__)
+    app.config['TESTING'] = False
+
+    with patch.dict(os.environ, {
+        'DATABASE_URL': 'postgresql+psycopg2://user:pw@localhost:5432/testdb',
+    }, clear=True):
+        _validate_and_log_database_url(app)
+
+
+def test_superuser_guard_still_runs_for_psycopg2_driver_scheme():
+    """
+    Normalizing to postgresql+psycopg2 must not bypass the remote DB guard.
+    """
+    from app import _assert_not_superuser
+    from flask import Flask
+
+    app = Flask(__name__)
+    app.config['TESTING'] = False
+    app.config['SQLALCHEMY_DATABASE_URI'] = (
+        'postgresql+psycopg2://user:pw@db.example.com:5432/testdb'
+    )
+    row = MagicMock()
+    row.fetchone.return_value = (False,)
+
+    with app.app_context(), patch('app.db.session.execute', return_value=row) as execute:
+        _assert_not_superuser(app)
+
+    execute.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

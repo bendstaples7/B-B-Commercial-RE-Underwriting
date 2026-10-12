@@ -77,13 +77,21 @@ def valid_pg_urls(draw):
     return f"{scheme}://{user}:{password}@{host}:{port}/{dbname}{ssl}"
 
 
+def _expected_sqlalchemy_uri(db_url):
+    if db_url.startswith('postgres://'):
+        return f"postgresql+psycopg2://{db_url[len('postgres://'):]}"
+    if db_url.startswith('postgresql://'):
+        return f"postgresql+psycopg2://{db_url[len('postgresql://'):]}"
+    return db_url
+
+
 @given(db_url=valid_pg_urls())
 @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 def test_property1_database_url_passthrough(db_url):
     """
     # Feature: cloud-database-migration, Property 1: DATABASE_URL Passthrough
-    For any valid PostgreSQL URL set as DATABASE_URL, SQLALCHEMY_DATABASE_URI
-    must equal that URL exactly.
+    For any valid PostgreSQL URL set as DATABASE_URL, SQLALCHEMY_DATABASE_URI is
+    normalized to the installed psycopg2 SQLAlchemy driver.
     """
     from app import create_app
     with patch.dict(os.environ, {'DATABASE_URL': db_url}, clear=False):
@@ -93,7 +101,7 @@ def test_property1_database_url_passthrough(db_url):
                     with patch('app.migrate.init_app'):
                         with patch('app.limiter.init_app'):
                             app = create_app('testing')
-    assert app.config['SQLALCHEMY_DATABASE_URI'] == db_url
+    assert app.config['SQLALCHEMY_DATABASE_URI'] == _expected_sqlalchemy_uri(db_url)
 
 
 # ===========================================================================
@@ -106,7 +114,7 @@ def test_property2_database_url_fallback():
     """
     # Feature: cloud-database-migration, Property 2: DATABASE_URL Fallback
     When DATABASE_URL is not set, SQLALCHEMY_DATABASE_URI must fall back to
-    'postgresql://localhost/real_estate_analysis'.
+    'postgresql+psycopg2://localhost/real_estate_analysis'.
     """
     from app import create_app
     env = {k: v for k, v in os.environ.items() if k != 'DATABASE_URL'}
@@ -117,7 +125,7 @@ def test_property2_database_url_fallback():
                     with patch('app.migrate.init_app'):
                         with patch('app.limiter.init_app'):
                             app = create_app('testing')
-    assert app.config['SQLALCHEMY_DATABASE_URI'] == 'postgresql://localhost/real_estate_analysis'
+    assert app.config['SQLALCHEMY_DATABASE_URI'] == 'postgresql+psycopg2://localhost/real_estate_analysis'
 
 
 # ===========================================================================

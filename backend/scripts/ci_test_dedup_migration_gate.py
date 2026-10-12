@@ -20,6 +20,7 @@ from scripts.preflight_dedup_migration import (  # noqa: E402
     F8_REVISION,
     F9_REVISION,
     build_report,
+    postgres_engine_url,
 )
 
 TEST_USER_ID = 'ci-dedup-gate-user'
@@ -30,7 +31,15 @@ def _database_url() -> str:
     url = os.environ.get('DATABASE_URL')
     if not url:
         raise SystemExit('DATABASE_URL is not set')
-    return url.replace('postgresql+psycopg2://', 'postgresql://')
+    return postgres_engine_url(url)
+
+
+def _sqlalchemy_database_url(db_url: str) -> str:
+    if db_url.startswith('postgres://'):
+        return f"postgresql+psycopg2://{db_url[len('postgres://'):]}"
+    if db_url.startswith('postgresql://'):
+        return f"postgresql+psycopg2://{db_url[len('postgresql://'):]}"
+    return db_url
 
 
 def _migration_env() -> dict[str, str]:
@@ -127,7 +136,7 @@ def _seed_duplicate_leads(conn: sa.Connection) -> None:
 
 def main() -> None:
     db_url = _database_url()
-    engine = sa.create_engine(db_url)
+    engine = sa.create_engine(_sqlalchemy_database_url(db_url))
 
     print('=== Dedup migration gate: upgrade to f8 ===')
     result = _run_flask_db(F8_REVISION)

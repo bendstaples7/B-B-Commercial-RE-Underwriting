@@ -72,11 +72,25 @@ class PreflightReport:
         return self.street_duplicate_clusters == 0
 
 
+def postgres_engine_url(url: str) -> str:
+    """Use the installed psycopg2 driver.
+
+    A plain postgresql:// URL makes current SQLAlchemy import psycopg (v3),
+    which this project does not install.
+    """
+    if url.startswith('postgres://'):
+        url = 'postgresql://' + url[len('postgres://'):]
+    prefix = 'postgresql://'
+    if url.startswith(prefix):
+        return 'postgresql+psycopg2://' + url[len(prefix):]
+    return url
+
+
 def _database_url() -> str:
     url = os.environ.get('DATABASE_URL')
     if not url:
         raise SystemExit('DATABASE_URL is not set')
-    return url.replace('postgresql+psycopg2://', 'postgresql://')
+    return postgres_engine_url(url)
 
 
 def _engine() -> sa.Engine:

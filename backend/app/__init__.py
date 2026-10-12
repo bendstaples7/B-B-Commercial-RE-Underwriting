@@ -240,7 +240,7 @@ def _validate_and_log_database_url(app, config_name='development'):
 
     try:
         parsed = urlparse(raw_url)
-        if parsed.scheme not in ('postgresql', 'postgres'):
+        if parsed.scheme not in ('postgresql', 'postgres', 'postgresql+psycopg2'):
             raise ValueError(f"Unsupported scheme: {parsed.scheme!r}")
     except ConfigurationError:
         raise
@@ -254,6 +254,19 @@ def _validate_and_log_database_url(app, config_name='development'):
 
     app.logger.info("Database host resolved: %s", _safe_host(raw_url))
     app.config['DB_MODE'] = 'local'
+
+
+def _sqlalchemy_database_uri(raw_url: str | None = None) -> str:
+    """Return the SQLAlchemy URI for the configured Postgres database."""
+    url = raw_url or os.getenv(
+        'DATABASE_URL',
+        'postgresql://localhost/real_estate_analysis',
+    )
+    if url.startswith('postgres://'):
+        return f"postgresql+psycopg2://{url[len('postgres://'):]}"
+    if url.startswith('postgresql://'):
+        return f"postgresql+psycopg2://{url[len('postgresql://'):]}"
+    return url
 
 
 def _assert_pool_pre_ping(app):
@@ -290,7 +303,7 @@ def _assert_not_superuser(app):
         _scheme = _urlparse(db_url).scheme
     except Exception:
         _scheme = ''
-    if _scheme not in ('postgresql', 'postgres'):
+    if _scheme not in ('postgresql', 'postgres', 'postgresql+psycopg2'):
         return  # SQLite in tests — skip
 
     # Skip for local development connections
@@ -349,7 +362,7 @@ def create_app(config_name='development'):
     app = Flask(__name__)
     
     # Load configuration
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'postgresql://localhost/real_estate_analysis')
+    app.config['SQLALCHEMY_DATABASE_URI'] = _sqlalchemy_database_uri()
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
     # Require a real SECRET_KEY — never allow the insecure default in production.
